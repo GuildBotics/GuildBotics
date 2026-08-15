@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from guildbotics.app_api.errors import AppApiError
+from guildbotics.utils.advisory_lock import LockTimeoutError
 from guildbotics.utils.fileio import workspace_root_from_config_dir
 from guildbotics.workspace.config_repository import (
     ConfigRepository,
@@ -30,6 +31,8 @@ from guildbotics.workspace.validation import SharedFileInvalidError
 
 #: Reported to the frontend when a save was composed against older content.
 CONFIG_CHANGED = "config_changed"
+#: Reported when synchronization held the same files for the whole wait.
+CONFIG_BUSY = "config_busy"
 
 
 def config_repository(config_dir: Path) -> ConfigRepository:
@@ -58,7 +61,9 @@ def guarded_config_write(
     Raises:
         AppApiError: With :data:`CONFIG_CHANGED` and status 409 when one of the
             files changed. Nothing has been written, and ``context`` carries
-            the changed path plus the current revisions.
+            the changed path plus the current revisions. With
+            :data:`CONFIG_BUSY` and status 503 when synchronization held the
+            workspace's shared files for longer than the save waited.
     """
     if not expected:
         yield
@@ -67,6 +72,16 @@ def guarded_config_write(
     try:
         with repository.guard(expected):
             yield
+    except LockTimeoutError as exc:
+        # Synchronization is writing the same files, so the save was not even
+        # compared. Nothing is wrong with what the screen holds; it is only too
+        # early to apply it.
+        raise AppApiError(
+            CONFIG_BUSY,
+            "Synchronization is still writing to this workspace, so nothing "
+            "was saved. Try again in a moment.",
+            status_code=503,
+        ) from exc
     except SharedFileInvalidError as exc:
         # The caller named something that is not a config file at all, so this
         # is a malformed request rather than a race with another machine.

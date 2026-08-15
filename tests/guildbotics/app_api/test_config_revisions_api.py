@@ -92,6 +92,22 @@ def _member_payload(config_dir: Path, revisions: dict[str, str], **overrides) ->
     return payload
 
 
+def _intelligence_payload(
+    config_dir: Path, read: dict, revisions: dict[str, str], **overrides
+) -> dict:
+    payload = {
+        "config_dir": str(config_dir),
+        "expected_revisions": revisions,
+        "model_mapping": read["model_mapping"],
+        "models": read["models"],
+        "cli_agent_mapping": read["cli_agent_mapping"],
+        "cli_agents": read["cli_agents"],
+        "brain_mapping": read["brain_mapping"],
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_a_project_read_reports_the_revision_of_every_file_it_used(
     client: TestClient, config_dir: Path
 ) -> None:
@@ -275,15 +291,7 @@ def test_an_intelligence_save_is_refused_when_the_directory_moved(
     response = client.put(
         "/config/intelligences",
         headers=AUTH_HEADERS,
-        json={
-            "config_dir": str(config_dir),
-            "expected_revisions": read["revisions"],
-            "model_mapping": read["model_mapping"],
-            "models": read["models"],
-            "cli_agent_mapping": read["cli_agent_mapping"],
-            "cli_agents": read["cli_agents"],
-            "brain_mapping": read["brain_mapping"],
-        },
+        json=_intelligence_payload(config_dir, read, read["revisions"]),
     )
 
     assert response.status_code == HTTP_CONFLICT
@@ -291,6 +299,101 @@ def test_an_intelligence_save_is_refused_when_the_directory_moved(
     assert (config_dir / "intelligences/model_mapping.yml").read_text(
         encoding="utf-8"
     ) == "default: gpt-4o\n"
+
+
+def test_an_intelligence_save_is_refused_when_a_file_was_added_to_the_directory(
+    client: TestClient, config_dir: Path
+) -> None:
+    """The screen prunes what it did not read, so a file it never saw is not
+    something it may quietly delete."""
+    read = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+    added = config_dir / "intelligences/models/openai/o9.yml"
+    added.parent.mkdir(parents=True, exist_ok=True)
+    added.write_text("model_class: x\n", encoding="utf-8")
+
+    response = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json=_intelligence_payload(config_dir, read, read["revisions"]),
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "config_changed"
+    assert added.exists()
+
+
+def test_a_member_inheriting_the_team_defaults_is_still_guarded(
+    client: TestClient, config_dir: Path
+) -> None:
+    """A member with no override directory has nothing to name file by file, and
+    an empty expectation would apply the save without any comparison at all."""
+    client.post(
+        "/config/members",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(config_dir),
+            "person_type": "",
+            "person_id": "alice",
+            "person_name": "Alice",
+            "is_active": True,
+            "github_username": "",
+            "git_email": "",
+            "roles": ["architect"],
+            "speaking_style": "concise",
+        },
+    )
+    read = client.get(
+        "/config/intelligences?person_id=alice", headers=AUTH_HEADERS
+    ).json()
+    assert read["revisions"]
+    override = config_dir / "team/members/alice/intelligences"
+    override.mkdir(parents=True)
+    (override / "native_agent_policy.yml").write_text("codex: {}\n", encoding="utf-8")
+
+    response = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json=_intelligence_payload(
+            config_dir,
+            read,
+            read["revisions"],
+            person_id="alice",
+            inherit_team_defaults=True,
+        ),
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "config_changed"
+    assert (override / "native_agent_policy.yml").exists()
+
+
+def test_an_intelligence_save_reports_where_its_directory_now_stands(
+    client: TestClient, config_dir: Path
+) -> None:
+    """The advanced editor stays open, so its second save needs this rather than
+    the revisions the screen was loaded with."""
+    read = client.get("/config/intelligences", headers=AUTH_HEADERS).json()
+
+    written = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json=_intelligence_payload(config_dir, read, read["revisions"]),
+    ).json()
+
+    assert (
+        written["revisions"]
+        == (
+            client.get("/config/intelligences", headers=AUTH_HEADERS).json()[
+                "revisions"
+            ]
+        )
+    )
+    again = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json=_intelligence_payload(config_dir, read, written["revisions"]),
+    )
+    assert again.status_code == HTTP_OK
 
 
 def test_a_save_reports_where_the_files_it_wrote_now_stand(

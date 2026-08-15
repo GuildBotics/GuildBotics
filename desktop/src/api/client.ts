@@ -1003,6 +1003,8 @@ export type HubConnection = {
   is_local: boolean;
   host_key_fingerprints: string[];
   host_key_trusted: boolean;
+  /** A key is stored for this host, and the host is offering a different one. */
+  host_key_changed: boolean;
   workspace_ids: string[];
 };
 

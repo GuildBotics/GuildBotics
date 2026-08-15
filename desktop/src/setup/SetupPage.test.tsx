@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addMemberConfig,
   ApiRequestError,
+  cloneWorkspaceFromHub,
   deleteMemberConfig,
   getCliAgentDetections,
   ensureAgentField,
@@ -91,6 +92,15 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     addMemberConfig: vi.fn(async () => configWriteResponse()),
+    cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
+    inspectHub: vi.fn(async () => ({
+      endpoint: "user@hub.local",
+      is_local: false,
+      host_key_fingerprints: [],
+      host_key_trusted: true,
+      host_key_changed: false,
+      workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
+    })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
     getCliAgentDetections: vi.fn(async () => ({
       agents: [
@@ -413,6 +423,37 @@ describe("SetupPage", () => {
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
+  });
+
+  it("takes up a copied workspace without switching to it a second time", async () => {
+    // `POST /workspace/sync/clone` already selected the copy and started its
+    // synchronization queue. Switching again would stop that queue, and a queue
+    // that does not stop in time reports the copy as blocked although it was
+    // taken.
+    const user = userEvent.setup();
+    const copied = configStatus({
+      cwd: "/copied-workspace",
+      workspace: "/copied-workspace",
+      config_dir: "/copied-workspace/.guildbotics/config",
+      project_file: "/copied-workspace/.guildbotics/config/team/project.yml",
+      project_file_exists: true,
+    });
+    vi.mocked(cloneWorkspaceFromHub).mockResolvedValue(copied);
+    vi.mocked(getConfigStatus).mockResolvedValue(copied);
+    renderSetupPage("/setup");
+    // The destination is whatever the workspace field already holds; typing a
+    // new one here would itself be an ordinary workspace switch.
+    await screen.findByLabelText("Workspace");
+
+    await user.click(screen.getByRole("button", { name: t("sync.clone.action") }));
+    await user.type(await screen.findByLabelText(t("sync.connect.endpoint")), "user@hub.local");
+    await user.click(screen.getByRole("button", { name: t("sync.connect.inspect") }));
+    await user.click(await screen.findByRole("button", { name: t("sync.clone.take") }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Workspace")).toHaveValue("/copied-workspace"),
+    );
+    expect(restartBackend).not.toHaveBeenCalled();
   });
 
   it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
@@ -3637,6 +3678,50 @@ describe("IntelligenceEditor (team default)", () => {
       "intelligences/model_mapping.yml": "m2",
       "intelligences/cli_agent_mapping.yml": "c2",
     });
+  });
+
+  it("carries the revisions its own save reported into the next one", async () => {
+    // The editor stays open after a save, so a second one composed against what
+    // it was loaded with would collide with the first and be reported as a
+    // conflict with another machine -- discarding the second edit.
+    const user = userEvent.setup();
+    // The refetch a save starts is held open, because that is the case the
+    // reply has to cover: a save that overtakes it would otherwise send the
+    // revision it has already replaced.
+    let releaseRefetch = () => {};
+    const refetched = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    let loaded = false;
+    vi.mocked(getIntelligenceConfig).mockImplementation(async () => {
+      if (loaded) {
+        await refetched;
+      }
+      loaded = true;
+      return teamIntelligenceConfig({ revisions: { "intelligences/": "tree-1" } });
+    });
+    vi.mocked(updateIntelligenceConfig).mockResolvedValue(
+      configWriteResponse({ "intelligences/": "tree-2" }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+    await saveSection(user);
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-7");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].expected_revisions).toMatchObject({
+      "intelligences/": "tree-1",
+    });
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[1][0].expected_revisions).toMatchObject({
+      "intelligences/": "tree-2",
+    });
+    releaseRefetch();
   });
 
   it("sends a model definition edit through updateIntelligenceConfig on save", async () => {

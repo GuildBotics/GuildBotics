@@ -90,6 +90,10 @@ class HubConnection(BaseModel):
     is_local: bool
     host_key_fingerprints: list[str] = Field(default_factory=list)
     host_key_trusted: bool = True
+    #: True when this device holds a key for the host but the host is offering
+    #: another one, so the screen asks the user to look again rather than
+    #: presenting a first contact.
+    host_key_changed: bool = False
     workspace_ids: list[str] = Field(default_factory=list)
 
 

@@ -46,7 +46,7 @@
 - `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`）
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
-- `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）
+- `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）、共有ファイルへの書き込みを直列化する lock（`shared_write_lock.py`）
 - `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、commit 境界（`commits.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）、Hub への接続と参加（`enrollment.py`）、queue の install（`activation.py`）
 - `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）。中身の意味は知らない
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
@@ -121,6 +121,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - commit / fetch / 自動収束 / push、first-committer-wins、後着 commit の `refs/guildbotics/rejected/<rejection_id>` への退避
 - 送信前と受信時に同じ `validate_shared_file()` を通し、通らないローカル変更は「送信できない変更」として保留、受信側で通らなければ共有データ異常として停止（検証の中身は「4.1 共有 state の書き込み」を参照）
 - `await_pushed(change_id)` の同期 barrier と `GitSyncStatus` の算出
+- 作業ツリーに触れる区間（commit と、Hub の内容の checkout）で `shared_write_lock()` を保持する。網羅範囲と理由は「4.1 共有 state の書き込み」を参照
 - Hub への接続（新規登録 / 既存 Workspace への参加 / 複製の取得）と、参加前の差分の算出
 
 禁止:
@@ -275,6 +276,9 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
 - device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
+- **directory 全体を reconcile する画面（intelligences）は、読んだファイルの revision だけでなく path 集合そのものも申告する**（`tree_revisions()` が返す `<dir>/` の entry）。読んだ時点で存在しなかったファイルには名前が無く、file 単位の比較では表せないため、他 device が足したファイルを黙って prune できてしまう。空 mapping を返すと `guarded_config_write()` が検査自体を省略する点にも注意する（team defaults を継承中の member がこれに当たる）
+- **書き込み API は「書き込み後の revision」を応答に載せる**（`ConfigWriteResponse.revisions`）。画面は保存後も開いたままで次の保存をしうるので、refetch を待たせず応答で cache を更新する。refetch 頼みだと保存が refetch を追い越したときに偽 409 になる
+- **共有ファイルへ書く側は `guildbotics/workspace/shared_write_lock.py` の `shared_write_lock()` を取る。** Config 保存は「比較〜書き込み」の全体を、同期は「Hub の内容の checkout〜commit」の全体を保持する。片方だけが慎重でも意味が無く、比較を通った保存が、その最中に採用された他 device の内容の上に着地しうる。これは Git から見れば普通のローカル書き込みなので、次の cycle で commit / push され、失われたことがどこにも残らない。network 区間では保持しない（保存が Hub を待つことになる）
 - **同期境界の検証（`guildbotics/workspace/validation.py`）に、種別ごとの意味検証を足さない。** 共有 record はすべて GuildBotics 自身がコードで形を決めて書くため、境界で field を再確認しても writer が既に保証していることの繰り返しにしかならない（それは writer の test の仕事）。利用者が書くファイル（commands、手で編集する設定）は壊れていても製品の通常経路でどの device でも同じように失敗するので、書きかけを「送信できない変更」にすると同期を下手にするだけ
 - 境界が見るのは3つだけ。**(1) 共有 root 内・サイズ上限・decode・構文**（サイズは同期が負う2つの保証の一方＝履歴を肥大させない）、**(2) `schema_version` が現在値より新しい record**（新しい build が書いたものは古い build には読めない。writer もローカルの test も捕まえられず、受け取った device にしか分からない）、**(3) `config/secrets.yml` の構造**（もう一方の保証＝Secret 値を共有履歴へ入れない）
 - 新しい共有 record を追加しても、原則として validation.py に手を入れる必要はない。`schema_version` を現在値で持たせれば世代差は自動的に検知される

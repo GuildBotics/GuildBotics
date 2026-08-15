@@ -127,6 +127,7 @@ class WorkspaceSyncService:
             is_local=False,
             host_key_fingerprints=list(host_key.fingerprints),
             host_key_trusted=host_key.trusted,
+            host_key_changed=host_key.changed,
             workspace_ids=(self._workspace_ids(location) if host_key.trusted else []),
         )
 

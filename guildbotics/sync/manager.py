@@ -46,6 +46,7 @@ from guildbotics.workspace.identity import (
     ensure_workspace_identity,
     new_uuid7,
 )
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
     SharedSchemaAheadError,
@@ -381,13 +382,19 @@ class GitSyncManager:
         conflicts = set(local_changes) & set(remote_changes)
         if conflicts and local is not None:
             self._reject(local, sorted(conflicts), local_changes, remote_changes)
-        self._repository.move_to(remote)
-        # A change held back by validation was never shareable, so it is not a
-        # rejection -- but it is still the user's work, and adopting the hub's
-        # version over it would discard an edit they were told to go and fix.
-        held = {item.path for item in self._invalid_paths}
-        self._repository.restore_from_index(sorted(set(remote_changes) - held))
-        self._commit_working_tree()
+        # Adopting the hub's content and committing what survives it is one
+        # move as far as the rest of the machine is concerned: a config save
+        # that slipped between the two would be written over content it never
+        # saw, and then committed as if the user had made that change.
+        with shared_write_lock(self._repository.workspace_root):
+            self._repository.move_to(remote)
+            # A change held back by validation was never shareable, so it is
+            # not a rejection -- but it is still the user's work, and adopting
+            # the hub's version over it would discard an edit they were told to
+            # go and fix.
+            held = {item.path for item in self._invalid_paths}
+            self._repository.restore_from_index(sorted(set(remote_changes) - held))
+            self._commit_held()
         return self._repository.head()
 
     def _reject(
@@ -444,6 +451,16 @@ class GitSyncManager:
 
     def _commit_working_tree(self) -> None:
         """Commit every shared change that validates, holding back the rest."""
+        with shared_write_lock(self._repository.workspace_root):
+            self._commit_held()
+
+    def _commit_held(self) -> None:
+        """Commit, with the workspace's shared-write lock already held.
+
+        A commit reads the working tree as one state, so a config save must not
+        be halfway through writing its files while this runs -- the commit
+        would carry part of that save and the next one the rest.
+        """
         outcome = commit_shared_changes(self._repository, device_id=self._device_id)
         self._invalid_paths = outcome.unsendable
 

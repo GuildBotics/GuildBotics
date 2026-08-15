@@ -29,14 +29,19 @@ change the same file, the sync manager's first-committer-wins rule settles it.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from guildbotics.utils.advisory_lock import held_lock
-from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
+from guildbotics.utils.fileio import get_workspace_config_dir
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import SharedFileInvalidError
+
+#: Ends a revision key that stands for a directory's set of files rather than
+#: for one file's content. A config file's path never ends in a separator, so
+#: the two forms cannot be confused for one another.
+DIRECTORY_MARK = "/"
 
 
 def blob_id(data: bytes) -> str:
@@ -94,9 +99,6 @@ class ConfigRepository:
     def __init__(self, workspace_root: Path | None = None) -> None:
         self.workspace_root = workspace_root
         self._config_dir = get_workspace_config_dir(workspace_root)
-        self._lock_path = get_workspace_local_path(
-            "run", "config-write.lock", workspace_root=workspace_root
-        )
 
     def read_config(self, relative_path: str) -> ConfigSnapshot | None:
         """Return the config file's content and revision, or None when absent.
@@ -108,7 +110,7 @@ class ConfigRepository:
         return self._snapshot(relative_path)
 
     def revisions(self, relative_paths: Iterable[str]) -> dict[str, str]:
-        """Return the current revision of each named config file.
+        """Return the current revision of each named config file or directory.
 
         A file that does not exist is reported as an empty revision rather than
         left out, so its absence is itself what a later :meth:`guard` compares
@@ -117,36 +119,28 @@ class ConfigRepository:
 
         Args:
             relative_paths (Iterable[str]): Paths relative to the config
-                directory, for example ``team/project.yml``.
+                directory, for example ``team/project.yml``. A path ending in
+                ``/`` names a directory and reads as its set of files.
         """
-        snapshots = {path: self._snapshot(path) for path in relative_paths}
-        return {
-            path: snapshot.blob_id if snapshot is not None else ""
-            for path, snapshot in snapshots.items()
-        }
+        return {path: self._revision(path) for path in relative_paths}
 
     def tree_revisions(self, relative_dir: str) -> dict[str, str]:
-        """Return revisions for every config file under ``relative_dir``.
+        """Return revisions describing a whole config directory.
 
-        Screens that reconcile a whole directory -- writing some files, pruning
-        others -- are stale if any file they read has moved since. A file
-        created under the directory afterwards is not covered: there is no path
-        to name for something that did not exist to be read.
+        Screens that reconcile a directory -- writing some files, pruning
+        others -- are stale if any file they read has changed since, and just
+        as stale if the directory now holds a file they never saw: saving would
+        prune it. One entry therefore stands for the set of paths itself, so a
+        file another device added, and a directory that did not exist at all
+        when the screen was read, are both changes there is something to
+        compare against.
 
         Args:
             relative_dir (str): A directory relative to the config directory,
                 for example ``intelligences``.
         """
-        root = self._absolute_path(relative_dir)
-        if not root.is_dir():
-            return {}
-        return self.revisions(
-            PurePosixPath(relative_dir)
-            .joinpath(path.relative_to(root).as_posix())
-            .as_posix()
-            for path in sorted(root.rglob("*"))
-            if path.is_file()
-        )
+        paths = self._tree_paths(relative_dir)
+        return self.revisions([f"{relative_dir}{DIRECTORY_MARK}", *paths])
 
     @contextmanager
     def guard(self, expected: Mapping[str, str]) -> Iterator[None]:
@@ -156,23 +150,62 @@ class ConfigRepository:
         lock, so a save that touches several files either applies completely or
         not at all.
 
+        The lock is the workspace's shared-write lock rather than one of this
+        module's own, so synchronization cannot check the hub's content out
+        over these files between the comparison and the write.
+
         Args:
             expected (Mapping[str, str]): Config-relative path to the revision
                 the caller read. A path left out is unconstrained; a path
-                mapped to an empty string must still not exist.
+                mapped to an empty string must still not exist; a path ending
+                in ``/`` constrains that directory's set of files.
 
         Raises:
             StaleConfigWriteError: When one of the files changed since it was
                 read. Nothing has been written when this is raised.
+            LockTimeoutError: When synchronization holds the workspace's
+                shared-write lock for longer than it waits.
         """
-        with held_lock(self._lock_path):
+        with shared_write_lock(self.workspace_root):
             for relative_path, expected_blob_id in expected.items():
-                current = self._snapshot(relative_path)
-                if (current.blob_id if current is not None else "") != expected_blob_id:
+                if self._revision(relative_path) != expected_blob_id:
                     raise StaleConfigWriteError(
-                        self._shared_path(relative_path), current
+                        self._shared_path(relative_path),
+                        self._snapshot(relative_path),
                     )
             yield
+
+    def _revision(self, relative_path: str) -> str:
+        """The revision of one config file, or of a directory's set of files."""
+        if relative_path.endswith(DIRECTORY_MARK):
+            return self._path_set_revision(
+                self._tree_paths(relative_path[: -len(DIRECTORY_MARK)])
+            )
+        snapshot = self._snapshot(relative_path)
+        return snapshot.blob_id if snapshot is not None else ""
+
+    def _tree_paths(self, relative_dir: str) -> list[str]:
+        """Config-relative paths of every file under ``relative_dir``, sorted."""
+        root = self._absolute_path(relative_dir)
+        if not root.is_dir():
+            return []
+        return [
+            PurePosixPath(relative_dir)
+            .joinpath(path.relative_to(root).as_posix())
+            .as_posix()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        ]
+
+    @staticmethod
+    def _path_set_revision(paths: Sequence[str]) -> str:
+        """A revision of which files exist, deliberately not of their content.
+
+        Content is already covered file by file. A directory revision that
+        moved with it as well would refuse a save whose own earlier step wrote
+        one of those files -- a conflict with nobody.
+        """
+        return blob_id("".join(f"{path}\n" for path in paths).encode())
 
     def _absolute_path(self, relative_path: str) -> Path:
         """Resolve a config-relative path, refusing anything outside config/.

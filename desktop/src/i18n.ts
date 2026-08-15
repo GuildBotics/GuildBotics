@@ -81,6 +81,9 @@ const resources = {
         hostKey: {
           title: "Confirm this machine's host key",
           body: "Select the fingerprint that matches the one shown on the hub machine. Nothing is sent until it matches.",
+          changedTitle: "This machine is offering a different host key",
+          changedBody:
+            "A key was already stored for this address, and none of the keys being offered is it. Reinstalling the hub machine does that — so does something else answering in its place. Confirm the fingerprint on the hub machine itself before selecting it.",
           confirm: "This is the one",
           compareHint: "On the hub machine, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
         },
@@ -1774,6 +1777,9 @@ const resources = {
         hostKey: {
           title: "このマシンのホスト鍵を確認してください",
           body: "Hub マシン側に表示されている fingerprint と一致するものを選んでください。一致するまで何も送信しません。",
+          changedTitle: "このマシンは以前と違うホスト鍵を提示しています",
+          changedBody:
+            "このアドレスには保存済みの鍵がありますが、提示されている鍵はどれもそれと一致しません。Hub マシンを再インストールした場合にこうなりますが、別のものが代わりに応答している場合も同じに見えます。Hub マシン自身で fingerprint を確認してから選んでください。",
           confirm: "これで合っています",
           compareHint: "Hub マシンで実行: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
         },

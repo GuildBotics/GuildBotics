@@ -158,6 +158,67 @@ def _offering(monkeypatch: pytest.MonkeyPatch, keys: dict[str, str]) -> None:
     monkeypatch.setattr(connection, "_fingerprint_of", lambda line: keys[line])
 
 
+def _stored(monkeypatch: pytest.MonkeyPatch, keys: set[tuple[str, str]]) -> None:
+    """Make ``known_hosts`` already hold these ``(type, key)`` pairs."""
+    monkeypatch.setattr(connection, "_known_host_keys", lambda endpoint: keys)
+
+
+def test_a_host_offering_a_key_this_device_stored_is_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _offering(monkeypatch, {ED25519: "SHA256:stored"})
+    _stored(monkeypatch, {("ssh-ed25519", "AAAAC3Nz")})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (True, False)
+
+
+def test_a_host_offering_a_key_other_than_the_stored_one_is_not_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Knowing the host by name is not enough. Every later connection is checked
+    against the stored key, so calling this trusted sends the caller straight
+    into an SSH call that fails on the host key -- and the fingerprints the user
+    has to compare would never be shown."""
+    _offering(monkeypatch, {ED25519: "SHA256:rotated"})
+    _stored(monkeypatch, {("ssh-ed25519", "AAAAreplaced")})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (False, True)
+    assert result.fingerprints == ("SHA256:rotated",)
+
+
+def test_a_host_no_key_is_stored_for_is_a_first_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _offering(monkeypatch, {ED25519: "SHA256:new"})
+    _stored(monkeypatch, set())
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (False, False)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("hub.local ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("|1|aGFzaA==|aGFzaA== ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("@cert-authority hub.local ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("# Host hub.local found: line 3", None),
+        ("", None),
+    ],
+)
+def test_the_comparable_part_of_a_host_key_line(
+    line: str, expected: tuple[str, str] | None
+) -> None:
+    """``ssh-keygen -F`` names the host by hash and ``ssh-keyscan`` names it
+    plainly, so only the type and the key itself compare between them."""
+    assert connection._key_material(line) == expected
+
+
 def test_trusting_stores_the_key_the_user_confirmed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

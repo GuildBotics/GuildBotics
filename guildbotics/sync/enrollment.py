@@ -52,6 +52,7 @@ from guildbotics.workspace.identity import (
     new_uuid7,
     publish_device_record,
 )
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import SharedFileInvalidError
 
 _WORKSPACE_IDENTITY_PATH = "state/workspace.json"
@@ -324,9 +325,10 @@ def _prepare(workspace_root: Path | None) -> tuple[LocalSyncRepository, CommitOu
     repository.verify_boundary()
     repository.initialize()
     ensure_workspace_identity(repository.workspace_root)
-    outcome = commit_shared_changes(
-        repository, device_id=ensure_device_identity().device_id
-    )
+    with shared_write_lock(repository.workspace_root):
+        outcome = commit_shared_changes(
+            repository, device_id=ensure_device_identity().device_id
+        )
     return repository, outcome
 
 
@@ -354,16 +356,20 @@ def _join(
             workspace_id=workspace_id,
             workspace_root=repository.workspace_root,
         )
-    repository.move_to(remote)
-    # A change held back by validation was never shareable, so the hub has no
-    # version of it that supersedes anything -- and overwriting it would throw
-    # away the edit the user was told to go and repair.
     held = {change.path for change in unsendable}
     adopted = tuple(sorted((set(hub_only) | set(differing)) - held))
-    repository.restore_from_index(list(adopted))
-    # What only this machine had is still on disk and no longer tracked, so the
-    # commit boundary picks it up again and it travels to the hub next.
-    commit_shared_changes(repository, device_id=device_id)
+    # Adopting and re-committing is one move for anything else writing these
+    # files: a config save landing between the two would be overwritten by
+    # content it never saw, and then committed as the user's own change.
+    with shared_write_lock(repository.workspace_root):
+        repository.move_to(remote)
+        # A change held back by validation was never shareable, so the hub has
+        # no version of it that supersedes anything -- and overwriting it would
+        # throw away the edit the user was told to go and repair.
+        repository.restore_from_index(list(adopted))
+        # What only this machine had is still on disk and no longer tracked, so
+        # the commit boundary picks it up again and it travels to the hub next.
+        commit_shared_changes(repository, device_id=device_id)
     if repository.head() != remote:
         repository.push()
     return EnrollmentResult(

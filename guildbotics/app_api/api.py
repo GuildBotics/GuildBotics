@@ -905,7 +905,10 @@ def create_app(
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ConfigWriteResponse(
-            intelligence={"files": [file.model_dump() for file in result.files]}
+            intelligence={"files": [file.model_dump() for file in result.files]},
+            revisions=config_repository(request.config_dir).tree_revisions(
+                intelligence_config_dir(request.person_id)
+            ),
         )
 
     @app.post(

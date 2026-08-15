@@ -551,8 +551,14 @@ export function SetupPage() {
     }
     return revisionsWritten;
   };
-  const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
-    await restartBackend(workspace);
+  const applyWorkspaceSwitch = async (
+    workspace: string,
+    switchId: number,
+    alreadySwitched = false,
+  ) => {
+    if (!alreadySwitched) {
+      await restartBackend(workspace);
+    }
     if (workspaceSwitchId.current !== switchId) {
       return;
     }
@@ -578,12 +584,12 @@ export function SetupPage() {
     await announceWorkspaceChange();
     setSaveState("saved");
   };
-  const startWorkspaceSwitch = (workspace: string) => {
+  const startWorkspaceSwitch = (workspace: string, alreadySwitched = false) => {
     const switchId = workspaceSwitchId.current + 1;
     workspaceSwitchId.current = switchId;
     setWorkspaceSwitching(true);
     setSaveState("saving");
-    void applyWorkspaceSwitch(workspace, switchId)
+    void applyWorkspaceSwitch(workspace, switchId, alreadySwitched)
       .catch((error: unknown) => {
         if (workspaceSwitchId.current === switchId) {
           if (isWorkspaceSwitchBlocked(error)) {
@@ -605,6 +611,20 @@ export function SetupPage() {
     const workspace = value.trim();
     if (workspace) {
       startWorkspaceSwitch(workspace);
+    }
+  };
+  /**
+   * Take up a workspace the backend has already switched to.
+   *
+   * Taking a copy from a hub selects it on the server and answers with the new
+   * configuration, so switching again here would stop the synchronization queue
+   * that had just been started — and a queue that does not stop within the
+   * timeout reports the copy as blocked although it was taken.
+   */
+  const adoptWorkspace = (workspace: string) => {
+    form.setFieldValue("workspaceDir", workspace);
+    if (workspace) {
+      startWorkspaceSwitch(workspace, true);
     }
   };
   const dismissPendingWorkspaceSwitch = () => {
@@ -681,6 +701,7 @@ export function SetupPage() {
               saving={saveMutation.isPending}
               onSave={saveNow}
               onWorkspaceChange={changeWorkspace}
+              onWorkspaceCloned={adoptWorkspace}
             />
           ) : null}
           {activeSection === "intelligence" ? (
@@ -912,6 +933,7 @@ function ProjectSection({
   saving,
   onSave,
   onWorkspaceChange,
+  onWorkspaceCloned,
 }: {
   form: ProjectForm;
   saveState: "idle" | "saving" | "saved" | "error";
@@ -919,6 +941,7 @@ function ProjectSection({
   saving: boolean;
   onSave: () => Promise<ConfigRevisions>;
   onWorkspaceChange: (value: string) => void;
+  onWorkspaceCloned: (workspace: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -946,7 +969,7 @@ function ProjectSection({
           <Group>
             <CloneFromHubButton
               destination={form.values.workspaceDir}
-              onCloned={(status) => onWorkspaceChange(status.workspace ?? "")}
+              onCloned={(status) => onWorkspaceCloned(status.workspace ?? "")}
             />
           </Group>
         </Stack>
@@ -1696,7 +1719,14 @@ function IntelligenceEditor({
   const hasJsonError = Object.keys(jsonErrors).length > 0;
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
-    onSuccess: () => {
+    onSuccess: (written) => {
+      // Take the revisions from the reply rather than waiting for the refetch
+      // below: this editor stays open and can be saved again immediately, and a
+      // save that overtakes the refetch would carry the revision it replaced.
+      queryClient.setQueryData<IntelligenceConfig>(
+        ["intelligence-config", personId ?? "team"],
+        (current) => (current ? { ...current, revisions: written.revisions } : current),
+      );
       queryClient.invalidateQueries({ queryKey: ["intelligence-config", personId ?? "team"] });
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
     },

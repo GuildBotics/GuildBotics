@@ -7,17 +7,32 @@ from pathlib import Path
 import pytest
 import yaml  # type: ignore
 
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import save_yaml_file
 from guildbotics.workspace.config_repository import (
     ConfigRepository,
     StaleConfigWriteError,
     blob_id,
 )
+from guildbotics.workspace.shared_write_lock import shared_write_lock_path
 from guildbotics.workspace.validation import SharedFileInvalidError
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 PROJECT = "team/project.yml"
 MODEL_MAPPING = "intelligences/model_mapping.yml"
+
+
+def shared_write_lock_is_held(workspace_root: Path | None = None) -> bool:
+    """Whether something else already holds a workspace's shared-write lock.
+
+    Taking the lock a second time is what tells us, because the lock is what
+    makes a config save and a synchronization checkout wait for each other.
+    """
+    try:
+        with held_lock(shared_write_lock_path(workspace_root), timeout=0.0):
+            return False
+    except LockTimeoutError:
+        return True
 
 
 @pytest.fixture
@@ -185,13 +200,74 @@ def test_tree_revisions_cover_every_file_under_the_directory(
 
     revisions = repository.tree_revisions("intelligences")
 
-    assert set(revisions) == {MODEL_MAPPING, "intelligences/models/openai.yml"}
+    assert set(revisions) == {
+        "intelligences/",
+        MODEL_MAPPING,
+        "intelligences/models/openai.yml",
+    }
 
 
-def test_tree_revisions_of_an_absent_directory_are_empty(
+def test_tree_revisions_of_an_absent_directory_still_state_it_is_absent(
     repository: ConfigRepository,
 ) -> None:
-    assert repository.tree_revisions("intelligences") == {}
+    """An empty mapping would be read as "nothing to compare" and skip the check."""
+    revisions = repository.tree_revisions("intelligences")
+
+    assert set(revisions) == {"intelligences/"}
+    assert revisions["intelligences/"] != ""
+
+
+def test_a_file_another_device_added_refuses_a_directory_save(
+    repository: ConfigRepository, config_dir: Path
+) -> None:
+    """The screen prunes what it did not read, so an addition it never saw is stale."""
+    write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
+    expected = repository.tree_revisions("intelligences")
+    write(config_dir, "intelligences/native_agent_policy.yml", project_yaml("codex"))
+
+    with pytest.raises(StaleConfigWriteError) as error:
+        with repository.guard(expected):
+            pytest.fail("the body must not run against superseded content")
+
+    assert error.value.relative_path == "config/intelligences"
+
+
+def test_a_directory_another_device_created_refuses_a_save(
+    repository: ConfigRepository, config_dir: Path
+) -> None:
+    """A member inheriting the team defaults has no files, and still has a position."""
+    scope = "team/members/aiko/intelligences"
+    expected = repository.tree_revisions(scope)
+    write(config_dir, f"{scope}/native_agent_policy.yml", project_yaml("codex"))
+
+    with pytest.raises(StaleConfigWriteError):
+        with repository.guard(expected):
+            pytest.fail("the body must not run against superseded content")
+
+
+def test_a_guarded_save_holds_the_workspace_shared_write_lock(
+    repository: ConfigRepository, config_dir: Path
+) -> None:
+    """Synchronization must not check content out between the compare and the write."""
+    write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    expected = repository.revisions([PROJECT])
+
+    with repository.guard(expected):
+        assert shared_write_lock_is_held()
+
+    assert not shared_write_lock_is_held()
+
+
+def test_a_directory_revision_ignores_the_content_of_its_files(
+    repository: ConfigRepository, config_dir: Path
+) -> None:
+    """Content is covered file by file, so a save's own earlier step is not a conflict."""
+    write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
+    before = repository.tree_revisions("intelligences")["intelligences/"]
+
+    write(config_dir, MODEL_MAPPING, project_yaml("claude"))
+
+    assert repository.tree_revisions("intelligences")["intelligences/"] == before
 
 
 def test_only_one_of_two_concurrent_savers_wins(

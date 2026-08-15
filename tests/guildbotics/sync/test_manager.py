@@ -6,11 +6,12 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from git import GitCommandError, Repo
 
-from guildbotics.sync.local_repository import REJECTED_REF_PREFIX
+from guildbotics.sync.local_repository import REJECTED_REF_PREFIX, LocalSyncRepository
 from guildbotics.sync.manager import SharedDataAnomaly
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
@@ -20,6 +21,7 @@ from guildbotics.utils.workspace_sync_port import (
 )
 from guildbotics.workspace.identity import WorkspaceIdentity
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device, make_device
+from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 CONFIG = "config/team/project.yml"
 #: A shared record whose syntax the boundary still refuses to send.
@@ -705,6 +707,51 @@ def test_a_burst_of_saves_becomes_one_commit(tmp_path: Path, hub: Path) -> None:
     device.manager.synchronize()
 
     assert len(list(Repo(hub).iter_commits("main"))) == before + 1
+
+
+def test_committing_the_working_tree_holds_the_shared_write_lock(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A commit reads the tree as one state, so a config save must be excluded.
+
+    Without it, a save writing several files has part of them committed here
+    and the rest in the next cycle.
+    """
+    held = _lock_state_during(monkeypatch, "commit", first.root)
+    first.write(CONFIG, "language: ja\n")
+
+    first.manager.synchronize()
+
+    assert held == [True]
+
+
+def test_adopting_the_hub_content_holds_the_shared_write_lock(
+    first: Device, second: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A save that landed here would be overwritten by content it never saw --
+    and then committed and pushed as if the user had made that change."""
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+    held = _lock_state_during(monkeypatch, "restore_from_index", second.root)
+
+    second.manager.synchronize()
+
+    assert held == [True]
+
+
+def _lock_state_during(
+    monkeypatch: pytest.MonkeyPatch, method: str, workspace_root: Path
+) -> list[bool]:
+    """Record whether the shared-write lock was held each time ``method`` ran."""
+    observed: list[bool] = []
+    original = getattr(LocalSyncRepository, method)
+
+    def spy(self: LocalSyncRepository, *args: Any, **kwargs: Any) -> Any:
+        observed.append(shared_write_lock_is_held(workspace_root))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(LocalSyncRepository, method, spy)
+    return observed
 
 
 def test_synchronize_is_serialized_between_threads(first: Device) -> None:

@@ -48,6 +48,7 @@ beforeEach(() => {
     is_local: false,
     host_key_fingerprints: [],
     host_key_trusted: true,
+    host_key_changed: false,
     workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
   });
 });

@@ -485,8 +485,20 @@ person edits by hand, so a screen can be composed against content another machin
 replaced. Reads report each file's Git blob ID; saves state the IDs they expect, and a save
 whose expectation no longer holds is refused rather than merged. Comparison and writing
 happen inside one lock covering every file the screen saves — a refusal that had already
-applied half of itself is the outcome the check exists to prevent. This applies to config
-alone; for every other shared file the first-committer-wins rule settles it.
+applied half of itself is the outcome the check exists to prevent. A screen that reconciles
+a whole directory also states the set of paths it read, so a file another device added
+under it is a change like any other rather than something the save may prune unseen. Write
+endpoints answer with the revisions their own write left behind, because the screen stays
+open and its next save must stand where that one finished. This applies to config alone;
+for every other shared file the first-committer-wins rule settles it.
+
+**The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
+by both writers of its shared files: the config save, across its comparison and its write,
+and the synchronization queue, across checking the hub's content out and committing what
+survives. Without it the comparison decides nothing — a save can land on top of content
+adopted while it was running, and since that overwrite is an ordinary local write, the next
+cycle commits and pushes it with nothing recording the other device's change as lost.
+Nothing holds the lock across the network, so a save never waits on a hub.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,

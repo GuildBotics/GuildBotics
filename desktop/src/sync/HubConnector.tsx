@@ -73,6 +73,7 @@ export function HubConnector({
       ) : null}
       {connection !== null && !connection.host_key_trusted ? (
         <HostKeyConfirmation
+          changed={connection.host_key_changed}
           fingerprints={connection.host_key_fingerprints}
           onConfirm={(fingerprint) => trust.mutate(fingerprint)}
           pending={trust.isPending}
@@ -93,21 +94,32 @@ export function HubConnector({
  * which is why the fingerprint the user selected is what gets sent back rather
  * than a bare "I confirmed" flag: the machine must not be able to answer with a
  * different key than the one that was read.
+ *
+ * A key that replaces one this device already stored is the same round trip
+ * with a different thing to say: a rebuilt hub and an impostor look identical
+ * from here, so the screen says which of the two situations it is in and leaves
+ * the judgement to the person comparing the fingerprints.
  */
 function HostKeyConfirmation({
+  changed,
   fingerprints,
   onConfirm,
   pending,
 }: {
+  changed: boolean;
   fingerprints: string[];
   onConfirm: (fingerprint: string) => void;
   pending: boolean;
 }) {
   const { t } = useTranslation();
   return (
-    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("sync.hostKey.title")}>
+    <Alert
+      color="warning"
+      icon={<TriangleAlert size={18} />}
+      title={changed ? t("sync.hostKey.changedTitle") : t("sync.hostKey.title")}
+    >
       <Stack gap="xs">
-        <Text size="sm">{t("sync.hostKey.body")}</Text>
+        <Text size="sm">{changed ? t("sync.hostKey.changedBody") : t("sync.hostKey.body")}</Text>
         <Stack gap="xs">
           {fingerprints.map((fingerprint) => (
             <Group gap="sm" key={fingerprint} wrap="nowrap">

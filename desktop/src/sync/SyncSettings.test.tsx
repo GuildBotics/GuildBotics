@@ -71,6 +71,7 @@ function connection(overrides: Partial<HubConnection> = {}): HubConnection {
     is_local: false,
     host_key_fingerprints: [],
     host_key_trusted: true,
+    host_key_changed: false,
     workspace_ids: [],
     ...overrides,
   };
@@ -163,6 +164,26 @@ describe("confirming the hub's host key", () => {
       endpoint: "user@hub.local",
       fingerprint: "SHA256:bbb",
     });
+  });
+
+  it("says a stored key was replaced rather than presenting a first contact", async () => {
+    // A rebuilt hub machine and an impostor look identical from here, so the
+    // screen says which situation it is in and leaves the judgement to the user.
+    const user = userEvent.setup();
+    vi.mocked(inspectHub).mockResolvedValue(
+      connection({
+        host_key_trusted: false,
+        host_key_changed: true,
+        host_key_fingerprints: ["SHA256:aaa"],
+      }),
+    );
+    renderSettings();
+
+    await lookUpHub(user);
+
+    expect(await screen.findByText(t("sync.hostKey.changedTitle"))).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.hostKey.title"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("sync.hostKey.confirm") })).toBeInTheDocument();
   });
 
   it("asks the user to look again when the hub offers a different key", async () => {
