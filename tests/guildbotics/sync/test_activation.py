@@ -109,14 +109,14 @@ def test_a_shared_write_reaches_the_running_queue(tmp_path: Path, hub: Path) -> 
     assert manager is not None
 
     change = write_shared_text(
-        root / ".guildbotics" / "config" / "hotkeys.yml",
+        root / ".guildbotics" / "config" / "roles" / "reviewer.yml",
         "a: b\n",
         workspace_root=root,
     )
 
     assert change is not None
     assert manager.await_pushed(change.change_id) is True
-    assert Repo(hub).git.cat_file("blob", "main:config/hotkeys.yml") == "a: b"
+    assert Repo(hub).git.cat_file("blob", "main:config/roles/reviewer.yml") == "a: b"
 
 
 def test_a_queue_that_will_not_stop_blocks_the_next_workspace(

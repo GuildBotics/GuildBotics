@@ -267,7 +267,6 @@ Live State RelayとRemote Job Relayの進捗はメモリだけに保持し、Coo
    │  ├ intelligences/
    │  ├ commands/
    │  ├ roles/
-   │  ├ hotkeys.yml
    │  └ secrets.yml                 … store ID、logical key名、世代。値は含まない
    ├ state/                          … 【Git同期】システムが残す永続状態
    │  ├ workspace.json              … Workspace IDとschema version
@@ -282,6 +281,7 @@ Live State RelayとRemote Job Relayの進捗はメモリだけに保持し、Coo
       │  ├ connection.json          … 再接続情報
       │  └ jobs/                    … 遠隔実行のローカルjournal
       ├ secrets.json                … このdeviceが保持するSecret世代。値は含まない
+      ├ hotkeys.yml                 … このマシンで空いているキーの組み合わせ
       ├ chat-cache/                 … providerから再取得可能なbounded thread message cache
       ├ debug.env                   … 許可済みの非Secretデバッグ設定だけ
       ├ run/                         … diagnostics、transcript、Config CAS用の短時間process lock
@@ -301,6 +301,13 @@ memberがIssue対応などで使うrepositoryは`local/clones/<person_id>/`へcl
 
 `local/`はローカル同期repositoryの`.gitignore`で無視する。`.env`も誤操作によるSecret混入を防ぐ目的で無視するが、
 GuildBotics自身は`.env`を読み書きしない。
+
+`hotkeys.yml`が`config/`ではなく`local/`にあるのは、ホットキーを決める制約がWorkspaceではなくマシンの性質だからである。
+ある組み合わせが空いているかは、そのOS自身の標準ショートカット、そのマシンに入っている他のアプリケーション、
+接続されているキーボードの配列で決まる。MacでOS標準を避けて選んだ組み合わせがWindowsでは標準と衝突しうるし、
+MacがCommandと呼ぶ修飾キーはWindowsではWindowsキーである。マシン間で運ぶと、利用者が選んでいない組み合わせが
+登録されることになる。抽象化した表現を共有してdeviceごとにマッピングする案も検討したが、結局どのマシンでも
+その場で空いている組み合わせを選ぶ必要があり、共有側に残る中身が無くなるため採用しない。
 
 ### 4.2 マシン全体の状態
 

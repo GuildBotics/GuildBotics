@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.errors import AppApiError
+from guildbotics.utils.workspace_sync_port import shared_relative_path
 from guildbotics.app_api.hotkeys import (
     hotkeys_file,
     load_hotkeys,
@@ -19,32 +20,33 @@ from tests.guildbotics.app_api.test_api import RuntimeStub
 
 
 @pytest.fixture
-def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    directory = tmp_path / "config"
-    directory.mkdir()
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(directory))
+def local_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This device's own corner of the workspace, which never leaves it."""
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    directory = tmp_path / ".guildbotics" / "local"
+    directory.mkdir(parents=True)
     return directory
 
 
-def test_load_returns_empty_settings_when_file_is_absent(config_dir: Path) -> None:
+def test_load_returns_empty_settings_when_file_is_absent(local_dir: Path) -> None:
     settings = load_hotkeys()
 
     assert settings.quick_run == ""
     assert settings.commands == {}
 
 
-def test_save_then_load_round_trips_assignments(config_dir: Path) -> None:
+def test_save_then_load_round_trips_assignments(local_dir: Path) -> None:
     save_hotkeys(
         HotkeySettings(quick_run="Control+Alt+G", commands={"greet": "Control+Alt+1"})
     )
 
-    assert hotkeys_file() == config_dir / "hotkeys.yml"
+    assert hotkeys_file() == local_dir / "hotkeys.yml"
     assert load_hotkeys() == HotkeySettings(
         quick_run="Control+Alt+G", commands={"greet": "Control+Alt+1"}
     )
 
 
-def test_save_drops_blank_assignments(config_dir: Path) -> None:
+def test_save_drops_blank_assignments(local_dir: Path) -> None:
     saved = save_hotkeys(
         HotkeySettings(quick_run="  ", commands={"greet": "", "other": " Command+1 "})
     )
@@ -53,18 +55,18 @@ def test_save_drops_blank_assignments(config_dir: Path) -> None:
     assert saved.commands == {"other": "Command+1"}
 
 
-def test_load_drops_blank_assignments_from_a_hand_edited_file(config_dir: Path) -> None:
+def test_load_drops_blank_assignments_from_a_hand_edited_file(local_dir: Path) -> None:
     # Otherwise the desktop is handed whitespace to register and reports it as
     # rejected, instead of simply treating the assignment as unset.
-    (config_dir / "hotkeys.yml").write_text(
+    (local_dir / "hotkeys.yml").write_text(
         "quick_run: '  '\ncommands:\n  greet: '  '\n  review: ' Control+Alt+1 '\n"
     )
 
     assert load_hotkeys() == HotkeySettings(commands={"review": "Control+Alt+1"})
 
 
-def test_load_tolerates_a_malformed_file(config_dir: Path) -> None:
-    (config_dir / "hotkeys.yml").write_text("commands: not-a-mapping\n")
+def test_load_tolerates_a_malformed_file(local_dir: Path) -> None:
+    (local_dir / "hotkeys.yml").write_text("commands: not-a-mapping\n")
 
     assert load_hotkeys() == HotkeySettings()
 
@@ -123,7 +125,7 @@ def test_rejects_a_combination_assigned_twice() -> None:
     assert raised.value.context["conflicting_assignment"] == "quick_run"
 
 
-def test_save_rejects_conflicts_before_writing(config_dir: Path) -> None:
+def test_save_rejects_conflicts_before_writing(local_dir: Path) -> None:
     with pytest.raises(AppApiError):
         save_hotkeys(
             HotkeySettings(
@@ -135,7 +137,7 @@ def test_save_rejects_conflicts_before_writing(config_dir: Path) -> None:
 
 
 def test_endpoints_round_trip_and_report_conflicts(
-    config_dir: Path, tmp_path: Path
+    local_dir: Path, tmp_path: Path
 ) -> None:
     headers = {"X-GuildBotics-Session-Token": "secret"}
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
@@ -166,7 +168,7 @@ def test_endpoints_round_trip_and_report_conflicts(
         assert conflict.json()["code"] == "hotkey_conflict"
 
 
-def test_endpoint_requires_the_session_token(config_dir: Path, tmp_path: Path) -> None:
+def test_endpoint_requires_the_session_token(local_dir: Path, tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
     with TestClient(app) as client:
         assert client.get("/hotkeys").status_code == 401
@@ -216,3 +218,12 @@ def test_put_endpoint_reports_missing_workspace(
     assert rejected.status_code == 409
     assert rejected.json()["code"] == "workspace_not_configured"
     assert not (get_template_path() / "hotkeys.yml").exists()
+
+
+def test_hotkeys_never_travel_to_another_machine(local_dir: Path) -> None:
+    """Whether a combination is free depends on that machine's own shortcuts,
+    other applications, and keyboard, so carrying the choice across would
+    register something the user never picked."""
+    save_hotkeys(HotkeySettings(quick_run="Control+Alt+G"))
+
+    assert shared_relative_path(hotkeys_file()) is None

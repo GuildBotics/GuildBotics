@@ -20,7 +20,7 @@ from guildbotics.workspace.identity import (
 from tests.guildbotics.sync.conftest import Device, make_device
 
 CONFIG = "config/team/project.yml"
-HOTKEYS = "config/hotkeys.yml"
+ROLES = "config/roles/reviewer.yml"
 
 
 @pytest.fixture
@@ -63,6 +63,13 @@ def _as_machine(tmp_path: Path, name: str) -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def _write(root: Path, relative: str, text: str) -> None:
+    """Write a shared file into an existing workspace."""
+    path = root / ".guildbotics" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _hub_file(hub: Path, path: str) -> str | None:
@@ -177,13 +184,13 @@ def test_joining_keeps_and_shares_a_file_only_this_machine_has(
 ) -> None:
     enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
     joining = _workspace(
-        tmp_path / "windows", **{CONFIG: "name: mine\n", HOTKEYS: "a: b\n"}
+        tmp_path / "windows", **{CONFIG: "name: mine\n", ROLES: "a: b\n"}
     )
 
     enrollment.enroll(str(hub), joining, record_rejection=recorder)
 
-    assert (joining / ".guildbotics" / HOTKEYS).read_text() == "a: b\n"
-    assert _hub_file(hub, HOTKEYS) == "a: b\n"
+    assert (joining / ".guildbotics" / ROLES).read_text() == "a: b\n"
+    assert _hub_file(hub, ROLES) == "a: b\n"
 
 
 def test_joining_adopts_the_hub_workspace_identifier(
@@ -285,13 +292,13 @@ def test_a_preview_reports_what_each_side_alone_holds(
         ),
     )
     joining = _workspace(
-        tmp_path / "windows", **{CONFIG: "name: mine\n", HOTKEYS: "a: b\n"}
+        tmp_path / "windows", **{CONFIG: "name: mine\n", ROLES: "a: b\n"}
     )
 
     preview = enrollment.preview_enrollment(str(hub), joining)
 
     assert "config/roles.yml" in preview.hub_only
-    assert HOTKEYS in preview.device_only
+    assert ROLES in preview.device_only
     assert CONFIG in preview.differing
 
 
@@ -335,7 +342,7 @@ def test_a_preview_and_the_join_that_follows_agree(
 ) -> None:
     enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
     joining = _workspace(
-        tmp_path / "windows", **{CONFIG: "name: mine\n", HOTKEYS: "a: b\n"}
+        tmp_path / "windows", **{CONFIG: "name: mine\n", ROLES: "a: b\n"}
     )
 
     preview = enrollment.preview_enrollment(str(hub), joining)
@@ -355,7 +362,7 @@ def test_a_device_reconnects_to_a_rebuilt_hub_without_losing_its_own_work(
     enrollment.enroll(str(hub), origin)
     other = tmp_path / "windows"
     enrollment.clone_workspace(str(hub), other)
-    (other / ".guildbotics" / HOTKEYS).write_text("a: b\n", encoding="utf-8")
+    _write(other, ROLES, "a: b\n")
 
     new_hub = tmp_path / "new-hub.git"
     Repo.init(new_hub, bare=True, initial_branch="main")
@@ -363,7 +370,7 @@ def test_a_device_reconnects_to_a_rebuilt_hub_without_losing_its_own_work(
     enrollment.enroll(str(new_hub), other, record_rejection=recorder)
 
     assert _hub_file(new_hub, CONFIG) == "name: shared\n"
-    assert _hub_file(new_hub, HOTKEYS) == "a: b\n"
+    assert _hub_file(new_hub, ROLES) == "a: b\n"
 
 
 def test_the_device_that_reconnects_keeps_synchronizing_afterwards(
@@ -375,10 +382,10 @@ def test_the_device_that_reconnects_keeps_synchronizing_afterwards(
         root, hub, device_id="device-mac", workspace_id=registered.workspace_id
     )
 
-    device.write(HOTKEYS, "a: b\n")
+    device.write(ROLES, "a: b\n")
     device.manager.synchronize()
 
-    assert _hub_file(hub, HOTKEYS) == "a: b\n"
+    assert _hub_file(hub, ROLES) == "a: b\n"
 
 
 # -- What a join must not destroy ---------------------------------------------
@@ -576,7 +583,7 @@ def test_a_workspace_still_synchronizes_after_a_failed_hub_change(
         root, hub, device_id="device-mac", workspace_id=registered.workspace_id
     )
 
-    device.write(HOTKEYS, "a: b\n")
+    device.write(ROLES, "a: b\n")
     device.manager.synchronize()
 
-    assert _hub_file(hub, HOTKEYS) == "a: b\n"
+    assert _hub_file(hub, ROLES) == "a: b\n"

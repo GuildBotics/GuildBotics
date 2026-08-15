@@ -266,7 +266,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 ### 4.1 共有 state の書き込み（Workspace Sync Port）
 
-`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。共有領域への書き込みは
+`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。**マシンの形をしたものは `local` へ置く。** 絶対パス（`clones/`）と同じ意味で、ホットキー（`local/hotkeys.yml`）もそう扱う: ある組み合わせが空いているかは OS 標準ショートカット・他アプリ・キーボード配列で決まり、Workspace ではなくマシンの性質である。共有領域への書き込みは
 `guildbotics/utils/workspace_sync_port.py` の `write_shared_*` / `delete_shared_path` / `notify_shared_state_changed` を通し、
 完了後に `ChangeSet` を Workspace Sync Port へ通知する。
 
