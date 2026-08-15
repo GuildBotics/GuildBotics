@@ -37,6 +37,9 @@ export function ShortcutsSection() {
           <Text size="sm" c="dimmed">
             {t("hotkey.settingsDescription")}
           </Text>
+          <Text size="xs" c="dimmed">
+            {t("hotkey.deviceLocal")}
+          </Text>
           <HotkeyInput
             label={t("hotkey.label")}
             value={settings.quick_run}

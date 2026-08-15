@@ -250,6 +250,15 @@ const resources = {
           abandoned: "Abandoned",
           incomplete: "Incomplete",
         },
+        rejection: {
+          title: "This change was not applied",
+          body: "Another machine's change to the same file reached the hub first. Nothing here failed, and nothing was lost: the change is kept on the machine that made it.",
+          paths: "Files",
+          sourceDevice: "Made on device",
+          id: "Recovery ID",
+          recovery:
+            "To look at what was held back, use the recovery steps in the README on that machine. It cannot be reached from here, and GuildBotics never restores it automatically.",
+        },
         eventTypes: {
           pr_create: "PR created",
           pr_merge: "PR merged",
@@ -257,6 +266,7 @@ const resources = {
           push: "Push",
           issue_create: "Issue created",
           issue_resolve: "Issue resolved",
+          sync_rejected: "Update not applied",
           external: "Event",
         },
       },
@@ -1636,6 +1646,8 @@ const resources = {
         clear: "Clear the hotkey",
         settingsTitle: "Quick run window",
         settingsDescription: "Copy the selected text, then press this key to open the run window.",
+        deviceLocal:
+          "Hotkeys belong to this machine and are not shared with your other machines: which combinations are free depends on the OS, the other applications installed, and the keyboard layout.",
         commandLabel: "Hotkey",
         commandDescription:
           "Runs this command directly. The run window opens instead when an input is missing.",
@@ -1920,6 +1932,15 @@ const resources = {
           abandoned: "打ち切り",
           incomplete: "未完了",
         },
+        rejection: {
+          title: "この変更は反映されませんでした",
+          body: "同じファイルへの別マシンの変更が先に Hub へ確定しました。失敗ではなく、内容も失われていません。変更したマシンに保持されています。",
+          paths: "対象ファイル",
+          sourceDevice: "変更元 device",
+          id: "回復用 ID",
+          recovery:
+            "保持された内容を確認するには、そのマシン上で README の回復手順を実行してください。ここからは参照できず、GuildBotics が自動で復元することもありません。",
+        },
         eventTypes: {
           pr_create: "PR 作成",
           pr_merge: "PR マージ",
@@ -1927,6 +1948,7 @@ const resources = {
           push: "Push",
           issue_create: "Issue 作成",
           issue_resolve: "Issue 解決",
+          sync_rejected: "更新が反映されませんでした",
           external: "イベント",
         },
       },
@@ -3320,6 +3342,8 @@ const resources = {
         settingsTitle: "コマンド実行ウィンドウ",
         settingsDescription:
           "選択中の文字列をコピーしてからこのキーを押すと、実行ウィンドウが開きます。",
+        deviceLocal:
+          "ホットキーはこのマシン固有の設定で、他のマシンとは共有されません。どの組み合わせが空いているかは、OS の標準ショートカット・入っている他のアプリ・キーボード配列で決まるためです。",
         commandLabel: "ホットキー",
         commandDescription:
           "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",

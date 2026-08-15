@@ -39,6 +39,7 @@ import {
   type ActivityHistoryEvent,
   type ActivityHistoryLink,
   type ActivityHistoryMember,
+  type ActivityHistoryRejection,
   type ActivityHistoryResponse,
   type ActivityHistorySession,
   type CliAgentUsage,
@@ -789,6 +790,9 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
 
 function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
   const { t } = useTranslation();
+  if (event.rejection) {
+    return <RejectionDetail rejection={event.rejection} timestamp={event.timestamp} />;
+  }
   return (
     <Stack gap="xs">
       <Group gap="xs">
@@ -816,6 +820,63 @@ function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
               : []
         }
       />
+    </Stack>
+  );
+}
+
+/**
+ * A local change the hub did not accept.
+ *
+ * This is normal operation, not an error, so it says what happened and where
+ * the held-back content still is -- and stops there. The content itself is not
+ * fetched, compared, or exported from any machine: recovery is a manual
+ * procedure on the device that made the change, which is the only one holding
+ * it.
+ */
+function RejectionDetail({
+  rejection,
+  timestamp,
+}: {
+  rejection: ActivityHistoryRejection;
+  timestamp: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Stack gap="xs">
+      <Group gap="xs">
+        <Badge color="warning" variant="light">
+          {t("activity.eventTypes.sync_rejected")}
+        </Badge>
+        <Text c="dimmed" size="xs">
+          {formatTime(timestamp)}
+        </Text>
+      </Group>
+      <Text fw={700} size="sm">
+        {t("activity.rejection.title")}
+      </Text>
+      <Text c="dimmed" size="xs">
+        {t("activity.rejection.body")}
+      </Text>
+      <Stack gap={2}>
+        <Text fw={600} size="xs">
+          {t("activity.rejection.paths")}
+        </Text>
+        {rejection.paths.map((path) => (
+          <Text className="mono-text" key={path} size="xs">
+            {path}
+          </Text>
+        ))}
+      </Stack>
+      <Text size="xs">
+        {t("activity.rejection.sourceDevice")}:{" "}
+        <span className="mono-text">{rejection.source_device_id}</span>
+      </Text>
+      <Text size="xs">
+        {t("activity.rejection.id")}: <span className="mono-text">{rejection.rejection_id}</span>
+      </Text>
+      <Text c="dimmed" size="xs">
+        {t("activity.rejection.recovery")}
+      </Text>
     </Stack>
   );
 }
