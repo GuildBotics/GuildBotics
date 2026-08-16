@@ -24,6 +24,13 @@ Three things survive that argument, and they are all this module does:
 3. **The secret key index**, which may name keys but has nowhere to put a
    value. That is the other guarantee synchronization owes: secret values must
    never enter the durable shared history.
+
+``config/secrets.yml`` is the one shared record that cannot carry a
+``schema_version``: rule 3 admits only ``store_id`` and ``keys`` at the top
+level, so stamping it would make this boundary reject the file. That is the
+right trade -- a field that has nowhere to go is how secret values are kept out
+structurally -- but it means the generation check does not cover this one file,
+and a change to its shape has to be made compatible on its own terms.
 """
 
 from __future__ import annotations
@@ -35,8 +42,10 @@ import yaml  # type: ignore
 
 from guildbotics.utils.avatar import SUPPORTED_EXTENSIONS
 from guildbotics.utils.secret_store import SECRETS_INDEX_FILENAME
-from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
-from guildbotics.workspace.identity import SHARED_RECORD_SCHEMA_VERSION
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    SHARED_ROOTS,
+)
 
 __all__ = [
     "MAX_SHARED_AVATAR_BYTES",

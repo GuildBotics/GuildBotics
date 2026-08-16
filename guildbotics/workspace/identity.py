@@ -28,10 +28,11 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
 )
 from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
-from guildbotics.utils.workspace_sync_port import dump_shared_json, write_shared_json
-
-#: Shared records move to a new schema together, without a compatibility path.
-SHARED_RECORD_SCHEMA_VERSION = 1
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    dump_shared_json,
+    write_shared_json,
+)
 
 DeviceOs = Literal["macos", "windows", "linux"]
 DeviceStatus = Literal["active", "retired"]

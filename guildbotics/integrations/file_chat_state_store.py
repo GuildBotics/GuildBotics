@@ -23,7 +23,11 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
-from guildbotics.utils.workspace_sync_port import delete_shared_path, write_shared_json
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    delete_shared_path,
+    write_shared_json,
+)
 from guildbotics.workspace.shared_write_lock import shared_write_lock
 
 
@@ -651,8 +655,16 @@ class FileConversationStateStore(ConversationStateStore):
         # Conversation control state lives in the shared ``state/`` tree while the
         # thread message cache stays device-local; the shared write helpers
         # announce only the former, so both go through one write path.
+        #
+        # The schema generation is stamped here rather than in each of the five
+        # record kinds. They are all written through this one method, so a new
+        # kind carries it without anyone remembering to add it -- and a kind
+        # that did not carry it would leave a build too old to read it no way
+        # to tell, since the reader of every field here defaults quietly.
         with self._lock:
-            write_shared_json(path, payload)
+            write_shared_json(
+                path, {"schema_version": SHARED_RECORD_SCHEMA_VERSION, **payload}
+            )
 
     def _remove(self, path: Path) -> None:
         delete_shared_path(path)

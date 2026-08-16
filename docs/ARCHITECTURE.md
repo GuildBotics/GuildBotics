@@ -475,6 +475,15 @@ the user hand-edits fails the same way on every device with or without synchroni
 Per-record semantic validators are deliberately absent; adding a shared record needs no
 change here.
 
+The generation check only reaches records that declare one, so every record written under
+`state/` stamps `SHARED_RECORD_SCHEMA_VERSION` at the point it is written — one constant, in
+`utils/workspace_sync_port.py` because the writers span layers that cannot import each other.
+A second literal would be a fault rather than a duplication: the boundary runs on the sending
+side too, so raising one kind's version alone makes the device that wrote it reject its own
+file and stop its own queue. `config/secrets.yml` is the one record that cannot carry a
+version, because the index admits nothing but `store_id` and `keys` — the same restriction
+that keeps secret values out of the history structurally.
+
 **Joining.** A device with existing content commits it first, then adopts the hub's version
 of any file both hold and sends what only it has. It is not an overwrite, and the commit
 pushed aside is kept. Joining is previewed; registering is not, because a hub with no copy

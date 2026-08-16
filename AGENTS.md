@@ -295,6 +295,9 @@ help / docstring が正であり、member コマンドの一行説明は
 - 新しい共有 record を追加しても、原則として validation.py に手を入れる必要はない。`schema_version` を現在値で持たせれば世代差は自動的に検知される
 - 読み手が壊れた入力を黙って skip する形（例: ID / timestamp 欠落の pending event）を見つけたら、**同期境界ではなく読み手を直す**。境界にチェックを足すと読み手の沈黙が温存され、同じ device 内の同じ欠陥は残る
 - 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
+- **世代の正本は `guildbotics/utils/workspace_sync_port.py` の `SHARED_RECORD_SCHEMA_VERSION` 1つだけ。** 種別ごとに定数を持たせない。境界は送信側でも同じ検査を通すので、1種別だけ版を上げると**書いた device 自身が自分の record を拒否して queue が止まる**（`ACTIVITY_EVENT_SCHEMA_VERSION` が実際にこの形だった）。`utils` に置くのは、writer が層をまたぐため（`observability` は `utils` にしか依存できない）
+- **`state/` 配下の構造化 record は全部 `schema_version` を持つ。** 母集団は `tests/guildbotics/workspace/test_shared_schema_version.py` が実際の writer を走らせて `state/` を走査することで決まる。record ではない拡張子（`.md` / `.txt`）だけが理由つきで除外され、新しい record 種別は分類しないと落ちる。付与は書き込みの choke point で行い（chat state なら `_write_json`、memory meta なら `_write_doc`）、呼び出し側に持たせない
+- **`config/secrets.yml` だけは例外で `schema_version` を持てない。** 境界の `_validate_secret_index` が top-level を `{store_id, keys}` に限定するため、付けると境界が拒否する。Secret 値の入る余地を構造的に無くすための制約なので正しい取引だが、このファイルだけ世代検知が効かない（`validation.py` の docstring に明記）
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
 - **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける

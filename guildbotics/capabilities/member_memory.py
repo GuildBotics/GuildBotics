@@ -23,6 +23,7 @@ from guildbotics.utils.fileio import (
     save_yaml_file,
 )
 from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
     notify_shared_state_changed,
     write_shared_text,
 )
@@ -573,7 +574,14 @@ class MemberMemoryService:
 
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
         doc_dir.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(doc_dir / META_FILE, _redact_meta(meta))
+        # Stamped at the write rather than by the caller, so the generation
+        # never reaches ``_changed_fields`` and is never reported as an edit
+        # the member made.
+        stamped = {
+            "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+            **_redact_meta(meta),
+        }
+        save_yaml_file(doc_dir / META_FILE, stamped)
         write_shared_text(doc_dir / BODY_FILE, _redact_secrets(body))
         (doc_dir / "assets").mkdir(exist_ok=True)
         notify_shared_state_changed("update", [doc_dir / META_FILE])

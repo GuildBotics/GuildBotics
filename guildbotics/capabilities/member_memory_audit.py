@@ -11,7 +11,10 @@ from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.timestamps import parse_iso_datetime
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    notify_shared_state_changed,
+)
 from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
@@ -214,6 +217,7 @@ class MemoryAuditStore:
             return
 
     def _bounded_line(self, item: dict[str, Any]) -> str:
+        item = {"schema_version": SHARED_RECORD_SCHEMA_VERSION, **item}
         line = json.dumps(item, ensure_ascii=False, default=str)
         size = len(line.encode("utf-8")) + 1
         if size <= self._max_file_bytes:

@@ -10,7 +10,10 @@ from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    notify_shared_state_changed,
+)
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
@@ -99,6 +102,7 @@ class RunStore:
         # values and bounds every string, whatever shape the record has.
         payload = redact_for_sharing(
             {
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
                 "recorded_at": datetime.now(UTC).isoformat(),
                 **record,
             }
