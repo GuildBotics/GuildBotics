@@ -585,6 +585,43 @@ def test_a_repeated_join_records_one_rejection(
     assert again.rejection_id is None or again.rejection_id == first.rejection_id
 
 
+def test_a_save_made_while_the_hub_is_reached_survives_as_a_rejection(
+    tmp_path: Path,
+    hub: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorder: enrollment.RejectionRecorder,
+) -> None:
+    """Reaching the hub is the one interval a writer cannot protect itself in.
+
+    The lock cannot be held across the network, so a save made there holds it
+    correctly and is still only in the working tree -- where adopting the hub's
+    version of the same file overwrites it. Uncommitted, it would not be in the
+    rejected ref either, so the user's edit would be gone with nothing saying
+    so. Committing again inside the join's own lock is what gives it a name.
+    """
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+    original_fetch = LocalSyncRepository.fetch
+    saved: list[str] = []
+
+    def fetch_then_save(self: LocalSyncRepository) -> None:
+        original_fetch(self)
+        if not saved:
+            saved.append("done")
+            _write(joining, CONFIG, "name: saved while connecting\n")
+
+    monkeypatch.setattr(LocalSyncRepository, "fetch", fetch_then_save)
+
+    result = enrollment.enroll(str(hub), joining, record_rejection=recorder)
+
+    assert (joining / ".guildbotics" / CONFIG).read_text() == "name: hub\n"
+    assert result.rejection_id is not None
+    rejected = Repo(joining / ".guildbotics").git.show(
+        f"{REJECTED_REF_PREFIX}/{result.rejection_id}:{CONFIG}"
+    )
+    assert rejected == "name: saved while connecting"
+
+
 def test_a_failed_hub_change_keeps_the_hub_that_was_working(
     tmp_path: Path, hub: Path
 ) -> None:

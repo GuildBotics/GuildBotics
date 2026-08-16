@@ -319,7 +319,9 @@ def _prepare(workspace_root: Path | None) -> tuple[LocalSyncRepository, CommitOu
     The preview and the join share this so that a preview cannot describe a
     different starting point than the join it precedes. Committing here is what
     keeps a join from overwriting anything: the workspace's content exists as
-    history, on this device, before the hub's version is adopted over it.
+    history, on this device, before the hub's version is adopted over it. The
+    join commits once more inside its own lock, for whatever was saved while
+    the hub was being reached.
     """
     repository = LocalSyncRepository(workspace_root)
     repository.verify_boundary()
@@ -341,27 +343,40 @@ def _join(
     record_rejection: RejectionRecorder,
     unsendable: tuple[UnsendableChange, ...],
 ) -> EnrollmentResult:
-    """Adopt the hub's content, keeping what only this machine has."""
-    hub_only, _device_only, differing = _classify(repository, local, remote)
-    _validate_received(repository, remote, [*hub_only, *differing])
-    workspace_id = _hub_identity(repository, remote).workspace_id
-    rejection_id = repository.rejected_id_for(local)
-    if differing and rejection_id is None:
-        rejection_id = new_uuid7()
-        repository.save_rejected(rejection_id, local)
-        record_rejection(
-            rejection_id=rejection_id,
-            paths=list(differing),
-            device_id=device_id,
-            workspace_id=workspace_id,
-            workspace_root=repository.workspace_root,
-        )
-    held = {change.path for change in unsendable}
-    adopted = tuple(sorted((set(hub_only) | set(differing)) - held))
-    # Adopting and re-committing is one move for anything else writing these
-    # files: a config save landing between the two would be overwritten by
-    # content it never saw, and then committed as the user's own change.
+    """Adopt the hub's content, keeping what only this machine has.
+
+    Held under the shared-write lock from end to end. Reaching the hub had to
+    happen without it, and a save made in that interval holds the lock
+    correctly and is still only in the working tree, so the checkout below
+    would take it away -- and being uncommitted it would not be rejected on the
+    record either. Running the commit boundary again as the first thing inside
+    the lock turns it into a change with a name, which either survives the
+    adoption or is rejected; everything after is decided against the head that
+    produced rather than the one this was called with. Nothing in here waits on
+    the hub, so there is no reason to give the lock up part-way.
+    """
     with shared_write_lock(repository.workspace_root):
+        outcome = commit_shared_changes(repository, device_id=device_id)
+        # The boundary reports no head only for a repository with no commits,
+        # and this one has them -- ``local`` is the head _prepare committed.
+        local = outcome.head or local
+        unsendable = outcome.unsendable
+        hub_only, _device_only, differing = _classify(repository, local, remote)
+        _validate_received(repository, remote, [*hub_only, *differing])
+        workspace_id = _hub_identity(repository, remote).workspace_id
+        rejection_id = repository.rejected_id_for(local)
+        if differing and rejection_id is None:
+            rejection_id = new_uuid7()
+            repository.save_rejected(rejection_id, local)
+            record_rejection(
+                rejection_id=rejection_id,
+                paths=list(differing),
+                device_id=device_id,
+                workspace_id=workspace_id,
+                workspace_root=repository.workspace_root,
+            )
+        held = {change.path for change in unsendable}
+        adopted = tuple(sorted((set(hub_only) | set(differing)) - held))
         repository.move_to(remote)
         # A change held back by validation was never shareable, so the hub has
         # no version of it that supersedes anything -- and overwriting it would

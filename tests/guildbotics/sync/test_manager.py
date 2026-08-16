@@ -743,6 +743,28 @@ def test_adopting_the_hub_content_holds_the_shared_write_lock(
     assert held == [True]
 
 
+def test_converging_never_lets_go_between_the_commit_and_the_adoption(
+    first: Device, second: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole of it is one span, not two with a gap in the middle.
+
+    Nothing between the commit and the checkout waits on the hub -- the fetch
+    already happened -- so a writer let in there gains nothing and loses its
+    work: whatever it saved is still only in the working tree when the checkout
+    takes it away, and being uncommitted it is not rejected on the record
+    either. Deciding what to adopt is what runs in that gap, so the lock is
+    observed there.
+    """
+    first.write(CONFIG, "language: ja\n")
+    first.manager.synchronize()
+    second.write("state/events/2026/08/local.json", _activity_event("local", "s"))
+    held = _lock_state_during(monkeypatch, "changed_paths", second.root)
+
+    second.manager.synchronize()
+
+    assert held and all(held)
+
+
 def _lock_state_during(
     monkeypatch: pytest.MonkeyPatch, method: str, workspace_root: Path
 ) -> list[bool]:
