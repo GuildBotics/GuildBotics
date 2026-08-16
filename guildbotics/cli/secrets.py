@@ -19,7 +19,6 @@ from guildbotics.utils.workspace_state import (
     WorkspaceUnresolvedError,
     apply_workspace_for_cli,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 
 
 class _SecretsContext:
@@ -122,8 +121,7 @@ def secrets_set(
 @click.pass_obj
 def secrets_delete(env: _SecretsContext, key: str) -> None:
     """Delete a stored secret."""
-    with shared_write_lock():
-        env.store().delete(key)
+    env.store().delete(key)
     click.echo(f"Deleted {key}.")
 
 
@@ -164,8 +162,7 @@ def secrets_import(env: _SecretsContext, file: Path) -> None:
 def _set_values(store: KeyringSecretStore, values: dict[str, str]) -> None:
     """Store values with safe CLI errors that never include secret contents."""
     try:
-        with shared_write_lock():
-            store.set_many(values)
+        store.set_many(values)
     except SecretValueTooLargeError as exc:
         raise click.ClickException(
             t(

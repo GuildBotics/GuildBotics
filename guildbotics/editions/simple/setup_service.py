@@ -26,6 +26,7 @@ from guildbotics.utils.secret_store import (
     SecretStore,
     resolve_secret_store,
 )
+from guildbotics.utils.shared_write_lock import shared_write_operation
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -430,6 +431,22 @@ def _write_default_person_id(config_dir: Path, person_id: str) -> CreatedFile | 
 
 
 class SimpleProjectSetupService:
+    """Create and change a workspace's project-level config.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_project_config(self, *, config_dir: Path) -> ProjectConfigSnapshot:
         project_file = _project_config_file(config_dir)
         if not project_file.exists():
@@ -474,6 +491,7 @@ class SimpleProjectSetupService:
             provider_api_keys=provider_api_keys,
         )
 
+    @shared_write_operation
     def set_default_person(
         self, *, config_dir: Path, person_id: str
     ) -> ProjectSetupResult:
@@ -530,6 +548,7 @@ class SimpleProjectSetupService:
             url=f"{GITHUB_URL}{project_type}/{owner}/projects/{project_id}",
         )
 
+    @shared_write_operation
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
 
@@ -595,6 +614,7 @@ class SimpleProjectSetupService:
             if value and provider in env_keys:
                 store.set(env_keys[provider], value)
 
+    @shared_write_operation
     def ensure_sample_commands(
         self, config_dir: Path, language: str
     ) -> list[CreatedFile]:
@@ -622,6 +642,7 @@ class SimpleProjectSetupService:
             files.append(CreatedFile(path=dst_file, action="create"))
         return files
 
+    @shared_write_operation
     def update_project(self, config: ProjectUpdateInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
         project_config_file = _project_config_file(config.config_dir)
@@ -774,6 +795,22 @@ class SimpleProjectSetupService:
 
 
 class SimplePersonSetupService:
+    """Create, change, and remove a workspace's members.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_slack_tokens(self, *, config_dir: Path, person_id: str) -> tuple[str, str]:
         """Return the member's stored Slack bot and app tokens.
 
@@ -944,6 +981,7 @@ class SimplePersonSetupService:
             git_email=f"{github_user_id}+{github_username}@users.noreply.github.com",
         )
 
+    @shared_write_operation
     def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         person_config_file = _person_config_file(config.config_dir, config.person_id)
@@ -964,6 +1002,7 @@ class SimplePersonSetupService:
 
         return PersonSetupResult(files=files)
 
+    @shared_write_operation
     def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         original_person_file = _person_config_file(
@@ -1014,6 +1053,7 @@ class SimplePersonSetupService:
 
         return PersonSetupResult(files=files)
 
+    @shared_write_operation
     def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
         files: list[CreatedFile] = []
         person_dir = _person_config_dir(config_dir, person_id)

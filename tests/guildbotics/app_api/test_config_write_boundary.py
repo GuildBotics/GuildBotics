@@ -1,10 +1,12 @@
-"""Every route that changes config writes under the workspace's shared lock.
+"""Every route that changes config goes through the one comparing writer.
 
-The rule this file exists for is not "these particular routes take the lock"
-but "no route that writes config can be added without taking it". A writer
-outside the lock is invisible in review -- it looks like an ordinary save -- and
-what it costs shows up on another machine, as a change that vanished without
-being recorded as a conflict.
+Exclusion is no longer the question here: the sync port takes the workspace's
+shared-write lock for every shared write, so a route cannot land in the middle
+of a synchronization cycle whatever it does. What a route still has to do for
+itself is compare -- write through ``ConfigRepository.write``, so the revisions
+the screen composed against are checked before anything is written and the new
+ones come back in the answer. A route that skips that saves over another
+screen's change and reports success.
 
 So the population is every route that changes anything, taken from the
 application's own routing table, and each one is classified here. It is
@@ -19,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,7 +31,7 @@ import guildbotics.workspace.config_repository as config_repository_module
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
 
@@ -38,6 +40,8 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 #: Routes that change something other than the workspace's shared config, and
 #: what they change instead. Naming them is what lets the check below be
 #: exhaustive rather than a list of the routes someone happened to think of.
+#: Nothing here is unprotected: shared writes still go through the port, which
+#: serializes them. They simply have nobody to compare revisions with.
 ELSEWHERE = {
     ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
@@ -61,12 +65,12 @@ ELSEWHERE = {
     ("POST", "/system-alerts/dismiss"): "local/run state",
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",
-    ("POST", "/workspace/devices/self"): "state/, and it takes the lock in sync",
-    ("POST", "/workspace/sync/clone"): "sync takes the lock itself",
-    ("POST", "/workspace/sync/enable"): "sync takes the lock itself",
-    ("POST", "/workspace/sync/hub"): "sync takes the lock itself",
-    ("POST", "/workspace/sync/preview"): "sync takes the lock itself",
-    ("POST", "/workspace/sync/retry"): "sync takes the lock itself",
+    ("POST", "/workspace/devices/self"): "state/, settled by first-committer-wins",
+    ("POST", "/workspace/sync/clone"): "a whole workspace, not one config file",
+    ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
+    ("POST", "/workspace/sync/hub"): "a whole workspace, not one config file",
+    ("POST", "/workspace/sync/preview"): "compares two histories, writes no config",
+    ("POST", "/workspace/sync/retry"): "a whole workspace, not one config file",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
 }
@@ -90,17 +94,20 @@ def client(workspace: Path) -> TestClient:
 
 
 @pytest.fixture
-def locked(monkeypatch: pytest.MonkeyPatch) -> list[Path | None]:
-    """Record every acquisition of the shared-write lock, still taking it."""
+def compared(monkeypatch: pytest.MonkeyPatch) -> list[Path | None]:
+    """Record every pass through the comparing writer, still letting it run.
+
+    ``ConfigRepository.write`` is the only thing that takes the lock in that
+    module, so watching the lock is how a route is observed to have gone
+    through it rather than writing the file some other way.
+    """
     taken: list[Path | None] = []
 
     @contextmanager
-    def recording(
-        workspace_root: Path | None = None, **kwargs: Any
-    ) -> Iterator[IO[str]]:
+    def recording(workspace_root: Path | None = None, **kwargs: Any) -> Iterator[None]:
         taken.append(workspace_root)
-        with shared_write_lock(workspace_root, **kwargs) as handle:
-            yield handle
+        with shared_write_lock(workspace_root, **kwargs):
+            yield
 
     monkeypatch.setattr(config_repository_module, "shared_write_lock", recording)
     return taken
@@ -290,7 +297,7 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
 
     The population is every mutating route, not the ones under ``/config``:
     drawing it around the URL is what let the command files and the transcript
-    settings -- both config -- write outside the lock unnoticed.
+    settings -- both config -- be written without comparing anything.
     """
     declared = set(MUTATIONS) | set(ELSEWHERE)
     routing_table = {
@@ -306,17 +313,18 @@ def test_every_route_that_changes_anything_is_classified(client: TestClient) -> 
 @pytest.mark.parametrize(
     "route", sorted(MUTATIONS), ids=lambda route: f"{route[0]} {route[1]}"
 )
-def test_a_config_change_is_written_under_the_shared_write_lock(
+def test_a_config_change_goes_through_the_comparing_writer(
     client: TestClient,
     workspace: Path,
-    locked: list[Path | None],
+    compared: list[Path | None],
     monkeypatch: pytest.MonkeyPatch,
     route: tuple[str, str],
 ) -> None:
-    """Synchronization checks the hub's content out over these same files.
+    """Two screens can be open on the same config at once.
 
-    A writer that skips the lock can land in the middle of that, and the result
-    is committed and pushed as if the user had made it.
+    A route that writes the file directly saves over whatever the other one
+    wrote and answers as though nothing happened, because nothing compared the
+    revisions the screen was composed against.
     """
     monkeypatch.setattr(
         avatar_module, "get_github_avatar_url", _fake_url, raising=False
@@ -329,11 +337,13 @@ def test_a_config_change_is_written_under_the_shared_write_lock(
         _add_member(client, config_dir)
     if route[1].startswith("/commands/files/"):
         _add_command_file(client)
-    locked.clear()
+    compared.clear()
 
     MUTATIONS[route](client, workspace)
 
-    assert locked, f"{route[0]} {route[1]} wrote config without the lock"
+    assert compared, (
+        f"{route[0]} {route[1]} wrote config without comparing what it read"
+    )
 
 
 async def _fake_url(*_args: object, **_kwargs: object) -> str:
@@ -348,9 +358,9 @@ def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     """Make ``module``'s lock give up at once instead of after 30 seconds."""
 
     @contextmanager
-    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[IO[str]]:
-        with shared_write_lock(workspace_root, timeout=0.05) as handle:
-            yield handle
+    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[None]:
+        with shared_write_lock(workspace_root, timeout=0.05):
+            yield
 
     monkeypatch.setattr(module, "shared_write_lock", brief)
 
@@ -390,14 +400,3 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
     assert response is not None
     assert response.status_code == 503, response.text
     assert response.json()["code"] == "config_busy"
-
-
-def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
-    """Make ``module``'s lock give up at once instead of after 30 seconds."""
-
-    @contextmanager
-    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[IO[str]]:
-        with shared_write_lock(workspace_root, timeout=0.05) as handle:
-            yield handle
-
-    monkeypatch.setattr(module, "shared_write_lock", brief)

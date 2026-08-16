@@ -55,8 +55,13 @@ from guildbotics.commands.validation import (
     CommandValidationError,
     validate_generated_command_source,
 )
+from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
-MAX_COMMAND_FILE_BYTES = 1024 * 1024
+#: Commands are shared config, so what they may hold is what the commit
+#: boundary will carry. Derived rather than restated: a command saved above the
+#: boundary's limit succeeds here and is then held back on every cycle, with
+#: nothing the user can do about it from the screen that accepted it.
+MAX_COMMAND_FILE_BYTES = MAX_SHARED_FILE_BYTES
 
 _INITIAL_SOURCE: dict[CommandFileFormat, str] = {
     "markdown": "---\nname: New command\nbrain: none\ninputs:\n  message: hidden\n---\nTODO\n",

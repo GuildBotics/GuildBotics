@@ -53,6 +53,12 @@ def get_machine_state_path(*parts: str) -> Path:
     return get_machine_state_root().joinpath(*parts)
 
 
+#: What an in-progress atomic write is called while it exists. It is created
+#: beside its destination, which for a shared file means inside the tree the
+#: sync queue enumerates, so the queue has to be told to ignore it by name.
+ATOMIC_WRITE_SUFFIX = ".tmp"
+
+
 def atomic_write_bytes(path: Path, data: bytes) -> None:
     """Replace ``path`` with ``data`` so readers never observe a partial file.
 
@@ -67,7 +73,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             mode="wb",
             dir=path.parent,
             prefix=f"{path.name}.",
-            suffix=".tmp",
+            suffix=ATOMIC_WRITE_SUFFIX,
             delete=False,
         ) as handle:
             handle.write(data)

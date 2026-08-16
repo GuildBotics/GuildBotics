@@ -14,7 +14,10 @@ from guildbotics.workspace.config_repository import (
     StaleConfigWriteError,
     blob_id,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock_path
+from guildbotics.utils.shared_write_lock import (
+    shared_write_lock,
+    shared_write_lock_path,
+)
 from guildbotics.workspace.validation import SharedFileInvalidError
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
@@ -57,8 +60,15 @@ def project_yaml(name: str) -> str:
 
 
 def write(config_dir: Path, relative_path: str, content: str) -> None:
-    """Write a config file the way the config screens do."""
-    save_yaml_file(config_dir / relative_path, yaml.safe_load(content))
+    """Write a config file the way the config screens do.
+
+    Including the span: a screen's save reaches ``save_yaml_file`` from inside
+    :meth:`ConfigRepository.write`, which holds the workspace's shared-write
+    lock. Where this stands in for a save that already happened, the span is
+    simply the write itself.
+    """
+    with shared_write_lock():
+        save_yaml_file(config_dir / relative_path, yaml.safe_load(content))
 
 
 def test_blob_id_matches_git(tmp_path: Path) -> None:

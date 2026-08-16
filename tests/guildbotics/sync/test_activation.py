@@ -10,6 +10,7 @@ from git import Repo
 
 from guildbotics.sync import activation, enrollment
 from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
     NoOpWorkspaceSyncPort,
     get_workspace_sync_port,
@@ -108,11 +109,13 @@ def test_a_shared_write_reaches_the_running_queue(tmp_path: Path, hub: Path) -> 
     manager = activation.activate_workspace_sync(root)
     assert manager is not None
 
-    change = write_shared_text(
-        root / ".guildbotics" / "config" / "roles" / "reviewer.yml",
-        "a: b\n",
-        workspace_root=root,
-    )
+    # A storage layer declares its span around the write; that is all it knows.
+    with shared_write_lock(root):
+        change = write_shared_text(
+            root / ".guildbotics" / "config" / "roles" / "reviewer.yml",
+            "a: b\n",
+            workspace_root=root,
+        )
 
     assert change is not None
     assert manager.await_pushed(change.change_id) is True

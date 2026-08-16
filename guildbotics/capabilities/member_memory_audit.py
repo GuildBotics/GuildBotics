@@ -10,8 +10,13 @@ from typing import Any
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    append_shared_text,
+    write_shared_text,
+)
 from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
@@ -122,22 +127,30 @@ class MemoryAuditStore:
         return self._path or default_memory_audit_path()
 
     def record(self, item: dict[str, Any]) -> None:
+        """Append one event, trimming the journal once it reaches its bound.
+
+        Whether the journal has room decides whether this appends or rewrites
+        it from the end, so the answer has to come from the same span as the
+        write: read outside it, the size belongs to a file the queue replaces
+        a moment later with a hub's longer version, and the trim that was not
+        thought necessary never happens. The span is declared here rather than
+        expressed with ``update_shared_text`` because that would read and
+        rewrite the whole journal -- megabytes of it -- for every event, where
+        all but the trimming one need only the file's size and an append.
+        """
         path = self.path
         line = self._bounded_line(item)
         if not line:
             return
         try:
-            with _MEMORY_AUDIT_LOCK:
-                path.parent.mkdir(parents=True, exist_ok=True)
+            with shared_write_lock(), _MEMORY_AUDIT_LOCK:
                 current_size = path.stat().st_size if path.exists() else 0
                 if current_size + len(line.encode("utf-8")) + 1 > self._max_file_bytes:
                     self._rewrite_with_newest(path, line)
                 else:
-                    with path.open("a", encoding="utf-8") as handle:
-                        handle.write(line + "\n")
+                    append_shared_text(path, line + "\n")
         except OSError:
             return
-        notify_shared_state_changed("update", [path])
 
     def list_events(
         self,
@@ -198,12 +211,10 @@ class MemoryAuditStore:
                 break
             retained.append(line)
             size += line_size
-        try:
-            path.write_text("\n".join(reversed(retained)) + "\n", encoding="utf-8")
-        except OSError:
-            return
+        write_shared_text(path, "\n".join(reversed(retained)) + "\n")
 
     def _bounded_line(self, item: dict[str, Any]) -> str:
+        item = {**item, "schema_version": SHARED_RECORD_SCHEMA_VERSION}
         line = json.dumps(item, ensure_ascii=False, default=str)
         size = len(line.encode("utf-8")) + 1
         if size <= self._max_file_bytes:

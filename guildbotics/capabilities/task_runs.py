@@ -10,7 +10,11 @@ from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
+from guildbotics.utils.shared_write_lock import shared_write_lock
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    append_shared_text,
+)
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
@@ -93,19 +97,18 @@ class RunStore:
         self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
-        path = self._path(run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Add one line to a run's shared journal."""
         # Run journals are shared state, so one uniform pass masks secret
         # values and bounds every string, whatever shape the record has.
         payload = redact_for_sharing(
             {
                 "recorded_at": datetime.now(UTC).isoformat(),
                 **record,
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
             }
         )
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-        notify_shared_state_changed("update", [path])
+        line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+        append_shared_text(self._path(run_id), line)
 
     def append_evidence(
         self, run_id: str | None, evidence_type: str, payload: dict[str, Any]
@@ -141,28 +144,35 @@ class RunStore:
         subject_url: str = "",
         person_id: str,
     ) -> RunStatus:
-        records = self._read_records_if_exists(run_id)
-        evidence_types = _evidence_types(records)
-        if not self._has_required_evidence(
-            status, subject_type, summary, evidence_types, records
-        ):
-            raise TaskRunError(
-                f"Run '{run_id}' cannot be completed without required write evidence."
+        # The evidence check decides whether the completion may be written, so
+        # it is part of the write, and the span is declared here rather than
+        # left to the append below. Read outside it, the check can pass against
+        # a journal the queue replaces a moment later with a remote version
+        # that has no evidence in it -- and the completion is then appended
+        # anyway, leaving a run recorded as complete with nothing behind it.
+        with shared_write_lock():
+            records = self._read_records_if_exists(run_id)
+            evidence_types = _evidence_types(records)
+            if not self._has_required_evidence(
+                status, subject_type, summary, evidence_types, records
+            ):
+                raise TaskRunError(
+                    f"Run '{run_id}' cannot be completed without required write evidence."
+                )
+            completed_at = datetime.now(UTC).isoformat()
+            self.append(
+                run_id,
+                {
+                    "kind": "complete",
+                    "status": status,
+                    "summary": summary,
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "subject_url": subject_url,
+                    "person_id": person_id,
+                    "completed_at": completed_at,
+                },
             )
-        completed_at = datetime.now(UTC).isoformat()
-        self.append(
-            run_id,
-            {
-                "kind": "complete",
-                "status": status,
-                "summary": summary,
-                "subject_type": subject_type,
-                "subject_id": subject_id,
-                "subject_url": subject_url,
-                "person_id": person_id,
-                "completed_at": completed_at,
-            },
-        )
         return self.status(run_id)
 
     def evidence(self, run_id: str) -> list[dict[str, Any]]:

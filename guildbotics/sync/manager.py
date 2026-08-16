@@ -38,6 +38,10 @@ from guildbotics.sync.commits import (
 )
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
+from guildbotics.utils.shared_write_lock import (
+    SharedWriteBusyError,
+    shared_write_lock,
+)
 from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
@@ -45,10 +49,6 @@ from guildbotics.workspace.identity import (
     ensure_device_identity,
     ensure_workspace_identity,
     new_uuid7,
-)
-from guildbotics.workspace.shared_write_lock import (
-    SharedWriteBusyError,
-    shared_write_lock,
 )
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
@@ -366,35 +366,52 @@ class GitSyncManager:
         return self._push()
 
     def _converge(self, local: str | None, remote: str) -> str | None:
-        """Adopt the hub's content, reapplying what does not collide with it."""
-        if local is None:
-            base = None
-        else:
-            base = self._repository.merge_base(local, remote)
-            if base is None:
-                raise SharedDataAnomaly(
-                    "unrelated_histories",
-                    f"{remote} shares no history with this workspace",
-                )
-            if base == remote:
-                return local
-        self._state = "reconciling"
-        base_or_empty = base if base is not None else _EMPTY_TREE
-        local_changes = (
-            self._repository.changed_paths(base_or_empty, local)
-            if local is not None
-            else {}
-        )
-        remote_changes = self._repository.changed_paths(base_or_empty, remote)
-        self._validate_received(remote, remote_changes)
-        conflicts = set(local_changes) & set(remote_changes)
-        if conflicts and local is not None:
-            self._reject(local, sorted(conflicts), local_changes, remote_changes)
-        # Adopting the hub's content and committing what survives it is one
-        # move as far as the rest of the machine is concerned: a config save
-        # that slipped between the two would be written over content it never
-        # saw, and then committed as if the user had made that change.
+        """Adopt the hub's content, reapplying what does not collide with it.
+
+        Held under the shared-write lock from end to end. Nothing here waits on
+        the hub -- the fetch already happened -- so there is no reason to give
+        the lock up part-way, and every reason not to: a writer let in between
+        the commit and the checkout has its work taken away by the checkout
+        with nothing recording the loss, and one let in between the checkout
+        and the commit has its write committed as content it never saw.
+        """
         with shared_write_lock(self._repository.workspace_root):
+            # Everything since the last commit boundary ran without the lock,
+            # because that interval waits on the hub. A save made there holds
+            # the lock correctly and is still only in the working tree, so the
+            # checkout below would take it away -- the one case a writer
+            # holding the lock cannot protect itself from. Committing it first
+            # turns it into a change with a name: it either survives the
+            # adoption or collides and is rejected on the record. That also
+            # makes `local` stale, so the cycle is redone against the new head
+            # rather than reconciled from a state that no longer exists.
+            self._commit_held()
+            committed_in_the_interval = self._repository.head()
+            if committed_in_the_interval != local:
+                return committed_in_the_interval
+            if local is None:
+                base = None
+            else:
+                base = self._repository.merge_base(local, remote)
+                if base is None:
+                    raise SharedDataAnomaly(
+                        "unrelated_histories",
+                        f"{remote} shares no history with this workspace",
+                    )
+                if base == remote:
+                    return local
+            self._state = "reconciling"
+            base_or_empty = base if base is not None else _EMPTY_TREE
+            local_changes = (
+                self._repository.changed_paths(base_or_empty, local)
+                if local is not None
+                else {}
+            )
+            remote_changes = self._repository.changed_paths(base_or_empty, remote)
+            self._validate_received(remote, remote_changes)
+            conflicts = set(local_changes) & set(remote_changes)
+            if conflicts and local is not None:
+                self._reject(local, sorted(conflicts), local_changes, remote_changes)
             self._repository.move_to(remote)
             # A change held back by validation was never shareable, so it is
             # not a rejection -- but it is still the user's work, and adopting
@@ -403,7 +420,7 @@ class GitSyncManager:
             held = {item.path for item in self._invalid_paths}
             self._repository.restore_from_index(sorted(set(remote_changes) - held))
             self._commit_held()
-        return self._repository.head()
+            return self._repository.head()
 
     def _reject(
         self,

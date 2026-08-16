@@ -375,11 +375,14 @@ See `docs/custom_command_guide.en.md` / `.ja.md` for the user-facing guide.
 Members persist knowledge across runs as a document store (mechanism in
 `capabilities/member_memory.py`; audit in `capabilities/member_memory_audit.py`).
 
-- **Document**: 1 document = 1 directory (`meta.yml` + `body.md` + `assets/`) under
-  `<workspace-data-root>/documents/`. `meta.yml` holds title/summary/keywords, typed
-  `source` entries (ticket/PR/channel/thread URLs), creation/update timestamps and
-  member IDs (`created_at`/`created_by`, `updated_at`/`updated_by`), `pinned`, and
-  `kind`.
+- **Document**: 1 document = 1 directory (`meta.yml` + `body.md`) under
+  `<workspace-data-root>/documents/`. `meta.yml` holds `schema_version`,
+  title/summary/keywords, typed `source` entries (ticket/PR/channel/thread URLs),
+  creation/update timestamps and member IDs (`created_at`/`created_by`,
+  `updated_at`/`updated_by`), `pinned`, and `kind`. Both files stay under the shared
+  file size limit, checked together before either is written. A document is text
+  only: synchronization carries no binary but member avatars, so anything else put
+  beside these two would be held back on every cycle with no way to send it.
 - **Scopes**: `personal/<person_id>/` and `team/`. `memory promote` moves a document
   from personal to team.
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
@@ -475,6 +478,15 @@ the user hand-edits fails the same way on every device with or without synchroni
 Per-record semantic validators are deliberately absent; adding a shared record needs no
 change here.
 
+The generation check only reaches records that declare one, so every record written under
+`state/` stamps `SHARED_RECORD_SCHEMA_VERSION` at the point it is written — one constant, in
+`utils/workspace_sync_port.py` because the writers span layers that cannot import each other.
+A second literal would be a fault rather than a duplication: the boundary runs on the sending
+side too, so raising one kind's version alone makes the device that wrote it reject its own
+file and stop its own queue. `config/secrets.yml` is the one record that cannot carry a
+version, because the index admits nothing but `store_id` and `keys` — the same restriction
+that keeps secret values out of the history structurally.
+
 **Joining.** A device with existing content commits it first, then adopts the hub's version
 of any file both hold and sends what only it has. It is not an overwrite, and the commit
 pushed aside is kept. Joining is previewed; registering is not, because a hub with no copy
@@ -504,15 +516,57 @@ decided by the URL — commands (`config/commands`) and transcript settings
 (`config/transcripts.yml`) are config reached from elsewhere, and the `guildbotics
 secrets` CLI writes `config/secrets.yml` from another process entirely.
 
-**The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
-by both writers of its shared files: config writes, and the synchronization queue across
-checking the hub's content out and committing what survives. Without it the comparison
-decides nothing — a save can land on top of content adopted while it was running, and since
-that overwrite is an ordinary local write, the next cycle commits and pushes it with
-nothing recording the other device's change as lost. Nothing holds the lock across the
-network, so a save never waits on a hub. A wait that runs out raises `SharedWriteBusyError`,
-deliberately outside the `OSError` family: synchronization catches that family to mean the
-environment failed and would otherwise report the hub unreachable over a local save.
+**The shared-write lock** (`utils/shared_write_lock.py`). One lock per workspace, taken
+by every writer of its shared files and by the synchronization queue across checking the
+hub's content out and committing what survives. Without it the comparison decides nothing —
+a save can land on top of content adopted while it was running, and since that overwrite is
+an ordinary local write, the next cycle commits and pushes it with nothing recording the
+other device's change as lost. Nothing holds the lock across the network, so a save never
+waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
+`OSError` family: synchronization catches that family to mean the environment failed and
+would otherwise report the hub unreachable over a local save.
+
+Which writers must take it is not decided writer by writer. Every write to a shared path
+goes through the sync port, and the port takes the lock for it, so a writer that composes
+what it writes without reading anything has nothing to declare and no way to forget.
+Device-local paths and an unselected workspace are dropped by the same judgement that
+decides whether to announce a change, so neither waits on anything.
+
+What the port cannot infer is how far back a span reaches. Config is not the only side that
+loses this way: conversation control state (`state/chat_state`) and member memory
+(`state/documents`) read a shared file and write it back without knowing Git exists, so the
+same interleaving reinstates what the queue just adopted — costing a Slack answer, or a
+whole memory document. `update_shared_text(path, apply)` and its JSON form take the lock,
+read, hand the content to `apply`, and write what comes back, so the span starts at the read
+by construction rather than by each writer remembering to say so. It is the same shape as
+`ConfigRepository.write` for the same reason: passing the transformation in leaves no
+sequence for a caller to assemble wrongly.
+
+A few operations are wider than any single write — a journal that may be replaced rather
+than appended to, a document that is two files, a policy that is at most one per directory —
+and those take the lock themselves. Within one thread it re-enters, so such a writer declares
+its span without knowing whether a caller declared a wider one; that question is what was
+being answered per writer, and wrongly. Optimistic locking stays with config alone: the lock
+closes the silent loss, while a conflict the queue records as first-committer-wins is the
+design working.
+
+**What the boundary commits is what it validated.** Content is staged first and checked
+from the index. Reading a file to validate it and letting `git add` read it again are two
+reads of something a writer can change in between, and the second is what becomes history —
+one such file stops every receiving device's queue, while the sender stays green because its
+working tree matches the commit it made. Staging first also settles a deletion recreated
+before the commit: the recreated file is staged as content, so it is checked as content. A
+file that fails is unstaged and held back, left on disk for the user to fix.
+
+**The interval no writer can protect.** Fetching waits on the hub without the lock, and a
+save made in that interval holds the lock correctly and is still only in the working tree, so
+the checkout would take it with nothing recording the loss. The queue's convergence therefore
+holds the lock from end to end — nothing in it waits on the hub — and re-runs the commit
+boundary as its first act: the save becomes a change with a name, which either survives the
+adoption or is rejected on the record. A commit there means the convergence was computed from
+a head that no longer exists, so the cycle is redone. Joining a hub has the same interval,
+for the same reason, and closes it the same way — the join commits again inside its own lock
+and compares against the head that produced.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,

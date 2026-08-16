@@ -146,7 +146,7 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
 )
-from guildbotics.workspace.shared_write_lock import SharedWriteBusyError
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 # Origins the packaged desktop webview serves the app from. Windows uses the

@@ -17,9 +17,11 @@ from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
     redact_for_sharing,
 )
-from guildbotics.utils.workspace_sync_port import write_shared_json
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    write_shared_json,
+)
 
-ACTIVITY_EVENT_SCHEMA_VERSION = 1
 _MAX_SAFE_SUMMARY_CHARS = MAX_SHARED_TEXT_CHARS
 # Explicit allowlist of what shared activity history carries (workspace sync
 # plan §8.1): provider domain outcomes, workflow / command start, completion,
@@ -70,6 +72,12 @@ class ActivityEventStore:
         self.workspace_root = workspace_root
 
     def record(self, record: dict[str, Any]) -> Path:
+        """Write one event and announce it.
+
+        Every event gets its own file under a fresh identifier, so nothing
+        here is read before being written and the write helper's own span is
+        the whole of it.
+        """
         event = _to_activity_event(record)
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
@@ -130,7 +138,7 @@ def _to_activity_event(record: dict[str, Any]) -> dict[str, Any]:
     payload = record.get("payload")
     attributes = record.get("attributes")
     event = {
-        "schema_version": ACTIVITY_EVENT_SCHEMA_VERSION,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "event_id": event_id,
         "workspace_id": str(record.get("workspace_id") or ""),
         "occurred_at": occurred_at,
