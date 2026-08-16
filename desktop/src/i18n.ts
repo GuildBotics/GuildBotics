@@ -47,6 +47,165 @@ const resources = {
           logPath: "Bootstrap log",
         },
       },
+      sync: {
+        indicator: {
+          aria: "Synchronization: {{state}}",
+        },
+        settings: {
+          title: "Sync and devices",
+          subtitle: "Share this workspace with your other machines through a hub you run yourself.",
+        },
+        clone: {
+          action: "Take a copy from a hub",
+          title: "Take a copy from a hub",
+          body: "Create a workspace here from one the hub already holds. Use this on a machine that has no workspace yet; a machine that already has one connects it instead.",
+          destination: "Created in:",
+          chooseTitle: "Which workspace to take",
+          take: "Take",
+          empty: "This hub holds no workspace yet.",
+          failed: "Could not take a copy",
+        },
+        connect: {
+          title: "Connect to a hub",
+          changeTitle: "Connect to a different hub",
+          endpoint: "Hub address",
+          endpointHint:
+            "The machine hosting the hub, as user@host. GuildBotics decides where the repositories live on it.",
+          inspect: "Look up",
+          failed: "Could not connect",
+          chooseTitle: "What to do with this workspace",
+          register: "Register this workspace on the hub",
+          joinHint: "Or join a workspace the hub already holds:",
+          join: "Join…",
+        },
+        hostKey: {
+          title: "Confirm this machine's host key",
+          body: "Select the fingerprint that matches the one shown on the hub machine. Nothing is sent until it matches.",
+          changedTitle: "This machine is offering a different host key",
+          changedBody:
+            "A key was already stored for this address, and none of the keys being offered is it. Reinstalling the hub machine does that — so does something else answering in its place. Confirm the fingerprint on the hub machine itself before selecting it.",
+          confirm: "This is the one",
+          compareHint: "On the hub machine, run: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+        },
+        preview: {
+          title: "Before joining",
+          mode: {
+            join: "This machine's content is committed first, then the hub's version wins for any file both hold. What loses is kept locally and never discarded.",
+            reconnect:
+              "This machine and the hub share history, so the usual reconciliation applies rather than a replacement.",
+          },
+          differing_one: "1 file the hub's version will replace",
+          differing_other: "{{count}} files the hub's version will replace",
+          hubOnly_one: "1 file to take from the hub",
+          hubOnly_other: "{{count}} files to take from the hub",
+          deviceOnly_one: "1 file only this machine has, which will be sent",
+          deviceOnly_other: "{{count}} files only this machine has, which will be sent",
+          unsendableTitle: "Some changes stay on this machine",
+          unsendableBody_one: "1 change cannot be sent yet and is left untouched.",
+          unsendableBody_other: "{{count}} changes cannot be sent yet and are left untouched.",
+          cancel: "Cancel",
+          confirm: "Join",
+        },
+        connected: {
+          title: "Connected hub",
+          change: "Connect to a different hub",
+          cancelChange: "Cancel",
+          changeHint:
+            "Use this after rebuilding the hub on another machine. Content only this machine has is sent to the new hub rather than discarded.",
+        },
+        unsendable: {
+          title: "Changes that cannot be sent",
+          body: "These files stay on this machine until they are repaired here. Nothing is discarded.",
+          path: "File",
+          reason: "Reason",
+        },
+        devices: {
+          title: "Devices",
+          empty: "No device has joined this workspace yet.",
+          name: "Name",
+          os: "OS",
+          joinedAt: "Joined",
+          id: "Device ID",
+          self: "This machine",
+          copy: "Copy",
+          copied: "Copied",
+          rename: "Name of this machine",
+          renameHint: "Each machine is named on itself.",
+          renameAction: "Rename",
+        },
+        sshKey: {
+          title: "This device's SSH key",
+          body: "Add this public key to the hub machine's authorized_keys. GuildBotics cannot do it for you: that step is what proves you already have access to that machine.",
+          create: "Create a key",
+          copy: "Copy",
+          copied: "Copied",
+        },
+        host: {
+          title: "Host the hub on this machine",
+          body: "One machine holds the shared repositories the others connect to.",
+          create: "Host the hub here",
+          hosted_one: "Hosting the hub, with 1 workspace.",
+          hosted_other: "Hosting the hub, with {{count}} workspaces.",
+          sshdHint:
+            "The other machines reach it over SSH, so this machine needs an OpenSSH server running.",
+        },
+        state: {
+          synced: {
+            label: "In sync",
+            detail: "This machine and the hub hold the same content.",
+          },
+          sending: {
+            label: "Waiting to send",
+            detail: "Changes made here have not reached the hub yet. They are sent automatically.",
+          },
+          receiving: {
+            label: "Receiving",
+            detail: "Content from the hub is being taken in.",
+          },
+          unreachable: {
+            label: "Hub unreachable",
+            detail:
+              "This workspace still works, and changes are kept until the hub can be reached again.",
+          },
+          unsendable: {
+            label: "Changes that cannot be sent",
+            detail: "Some files cannot be shared until they are repaired on this machine.",
+          },
+          invalid_shared_state: {
+            label: "Shared data problem",
+            detail:
+              "Synchronization stopped because the shared content could not be reconciled automatically.",
+          },
+          update_required: {
+            label: "Update required",
+            detail:
+              "Another machine is running a newer version of GuildBotics, and this one cannot read what it wrote.",
+          },
+          disabled: { label: "Not synchronized", detail: "" },
+        },
+        alerts: {
+          unreachable:
+            "The hub cannot be reached. Local work continues; sharing resumes automatically.",
+          unsendable_one: "One change cannot be sent until the file is repaired.",
+          unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
+          invalid_shared_state:
+            "Synchronization stopped because the shared content could not be reconciled.",
+          update_required: "Update GuildBotics on this machine to keep sharing this workspace.",
+        },
+        counts: {
+          ahead_one: "1 change waiting to be sent",
+          ahead_other: "{{count}} changes waiting to be sent",
+          behind_one: "1 change to take in",
+          behind_other: "{{count}} changes to take in",
+          unsendable_one: "1 change cannot be sent",
+          unsendable_other: "{{count}} changes cannot be sent",
+          lastSuccess: "Last synchronized: {{time}}",
+        },
+        actions: {
+          retry: "Try again",
+          settings: "Sync and devices",
+        },
+      },
       systemAlerts: {
         region: "System health alerts",
         severity: {
@@ -104,6 +263,15 @@ const resources = {
           abandoned: "Abandoned",
           incomplete: "Incomplete",
         },
+        rejection: {
+          title: "This change was not applied",
+          body: "Another machine's change to the same file reached the hub first. Nothing here failed, and nothing was lost: the change is kept on the machine that made it.",
+          paths: "Files",
+          sourceDevice: "Made on device",
+          id: "Recovery ID",
+          recovery:
+            "To look at what was held back, use the recovery steps in the README on that machine. It cannot be reached from here, and GuildBotics never restores it automatically.",
+        },
         eventTypes: {
           pr_create: "PR created",
           pr_merge: "PR merged",
@@ -111,6 +279,7 @@ const resources = {
           push: "Push",
           issue_create: "Issue created",
           issue_resolve: "Issue resolved",
+          sync_rejected: "Update not applied",
           external: "Event",
         },
       },
@@ -455,6 +624,7 @@ const resources = {
           members: "Members",
           github: "GitHub",
           shortcuts: "Shortcuts",
+          sync: "Sync and devices",
           verification: "Verification",
         },
         verification: {
@@ -960,11 +1130,18 @@ const resources = {
           agentFieldError:
             "Could not update the Agent field. Check member credentials and the Project URL.",
         },
-        autosave: {
-          idle: "Autosave",
-          saving: "Saving",
+        save: {
+          action: "Save",
           saved: "Saved",
           error: "Save failed",
+        },
+        staleSave: {
+          title: "Nothing was saved",
+          body: "This screen was loaded before a more recent change, so it has been reloaded with the current settings. Make the change again.",
+        },
+        busySave: {
+          title: "Nothing was saved yet",
+          body: "Synchronization is writing to this workspace. Your entries are still here — save again in a moment.",
         },
         validation: {
           workspaceRequired: "Workspace is required.",
@@ -1486,6 +1663,8 @@ const resources = {
         clear: "Clear the hotkey",
         settingsTitle: "Quick run window",
         settingsDescription: "Copy the selected text, then press this key to open the run window.",
+        deviceLocal:
+          "Hotkeys belong to this machine and are not shared with your other machines: which combinations are free depends on the OS, the other applications installed, and the keyboard layout.",
         commandLabel: "Hotkey",
         commandDescription:
           "Runs this command directly. The run window opens instead when an input is missing.",
@@ -1568,6 +1747,164 @@ const resources = {
           logPath: "ブートログ",
         },
       },
+      sync: {
+        indicator: {
+          aria: "同期: {{state}}",
+        },
+        settings: {
+          title: "同期・device 設定",
+          subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
+        },
+        clone: {
+          action: "Hub から取得して作成",
+          title: "Hub から取得して作成",
+          body: "Hub にあるワークスペースから、このマシンにワークスペースを作ります。まだワークスペースが無いマシンで使う操作です。すでにある場合は、そのワークスペースを接続してください。",
+          destination: "作成先:",
+          chooseTitle: "取得するワークスペース",
+          take: "取得する",
+          empty: "この Hub にはまだワークスペースがありません。",
+          failed: "取得できませんでした",
+        },
+        connect: {
+          title: "Hub へ接続する",
+          changeTitle: "別の Hub へ接続する",
+          endpoint: "Hub のアドレス",
+          endpointHint:
+            "Hub を動かしているマシンを user@host の形で指定します。マシン内のどこに置くかは GuildBotics が決めます。",
+          inspect: "確認する",
+          failed: "接続できませんでした",
+          chooseTitle: "このワークスペースをどうするか",
+          register: "このワークスペースを Hub に登録する",
+          joinHint: "または、Hub にすでにあるワークスペースへ参加する:",
+          join: "参加する…",
+        },
+        hostKey: {
+          title: "このマシンのホスト鍵を確認してください",
+          body: "Hub マシン側に表示されている fingerprint と一致するものを選んでください。一致するまで何も送信しません。",
+          changedTitle: "このマシンは以前と違うホスト鍵を提示しています",
+          changedBody:
+            "このアドレスには保存済みの鍵がありますが、提示されている鍵はどれもそれと一致しません。Hub マシンを再インストールした場合にこうなりますが、別のものが代わりに応答している場合も同じに見えます。Hub マシン自身で fingerprint を確認してから選んでください。",
+          confirm: "これで合っています",
+          compareHint: "Hub マシンで実行: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+        },
+        preview: {
+          title: "参加する前に",
+          mode: {
+            join: "先にこのマシンの内容を commit してから、両方にあるファイルは Hub 側を採用します。押し出された内容はこのマシンに残り、破棄されません。",
+            reconnect:
+              "このマシンと Hub は履歴を共有しているため、置き換えではなく通常の収束処理になります。",
+          },
+          differing_one: "Hub 側の内容で置き換わるファイル 1 件",
+          differing_other: "Hub 側の内容で置き換わるファイル {{count}} 件",
+          hubOnly_one: "Hub から取り込むファイル 1 件",
+          hubOnly_other: "Hub から取り込むファイル {{count}} 件",
+          deviceOnly_one: "このマシンにだけあり、送信されるファイル 1 件",
+          deviceOnly_other: "このマシンにだけあり、送信されるファイル {{count}} 件",
+          unsendableTitle: "このマシンに残る変更があります",
+          unsendableBody_one: "1 件の変更はまだ送信できないため、そのまま残します。",
+          unsendableBody_other: "{{count}} 件の変更はまだ送信できないため、そのまま残します。",
+          cancel: "キャンセル",
+          confirm: "参加する",
+        },
+        connected: {
+          title: "接続中の Hub",
+          change: "別の Hub へ接続する",
+          cancelChange: "キャンセル",
+          changeHint:
+            "Hub を別マシンで作り直したときに使います。このマシンにだけある内容は破棄されず、新しい Hub へ送信されます。",
+        },
+        unsendable: {
+          title: "送信できない変更",
+          body: "これらのファイルは、このマシンで直すまで送信されずに残ります。破棄はされません。",
+          path: "ファイル",
+          reason: "理由",
+        },
+        devices: {
+          title: "device 一覧",
+          empty: "このワークスペースに参加した device はまだありません。",
+          name: "名前",
+          os: "OS",
+          joinedAt: "参加日時",
+          id: "device ID",
+          self: "このマシン",
+          copy: "コピー",
+          copied: "コピーしました",
+          rename: "このマシンの名前",
+          renameHint: "各マシンの名前は、そのマシン自身で変更します。",
+          renameAction: "変更する",
+        },
+        sshKey: {
+          title: "この device の SSH 鍵",
+          body: "この公開鍵を Hub マシンの authorized_keys へ追加してください。GuildBotics が代行はしません。その操作自体が、そのマシンへのアクセス権を持っていることの証明になるためです。",
+          create: "鍵を作成する",
+          copy: "コピー",
+          copied: "コピーしました",
+        },
+        host: {
+          title: "このマシンで Hub を動かす",
+          body: "1台のマシンが、他のマシンの接続先となる共有 repository を持ちます。",
+          create: "このマシンを Hub にする",
+          hosted_one: "Hub を動かしています（ワークスペース 1 件）。",
+          hosted_other: "Hub を動かしています（ワークスペース {{count}} 件）。",
+          sshdHint:
+            "他のマシンは SSH で接続するため、このマシンで OpenSSH サーバーを有効にしておく必要があります。",
+        },
+        state: {
+          synced: {
+            label: "同期済み",
+            detail: "このマシンと Hub の内容が一致しています。",
+          },
+          sending: {
+            label: "送信保留",
+            detail: "このマシンでの変更がまだ Hub に届いていません。自動で送信されます。",
+          },
+          receiving: {
+            label: "受信中",
+            detail: "Hub の更新を取り込んでいます。",
+          },
+          unreachable: {
+            label: "Hub 不達",
+            detail:
+              "このワークスペースはこのまま使えます。変更は Hub に接続できるまで保持されます。",
+          },
+          unsendable: {
+            label: "送信できない変更",
+            detail: "一部のファイルは、このマシンで直すまで共有できません。",
+          },
+          invalid_shared_state: {
+            label: "共有データ異常",
+            detail: "共有内容を自動で収束できなかったため、同期を停止しました。",
+          },
+          update_required: {
+            label: "更新が必要",
+            detail:
+              "別のマシンが新しいバージョンの GuildBotics を使っており、このマシンでは内容を読めません。",
+          },
+          disabled: { label: "同期していません", detail: "" },
+        },
+        alerts: {
+          unreachable:
+            "Hub に接続できません。このマシンでの作業は続けられ、共有は自動で再開します。",
+          unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
+          unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
+          invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
+          update_required:
+            "このワークスペースの共有を続けるには、このマシンの GuildBotics を更新してください。",
+        },
+        counts: {
+          ahead_one: "送信待ちの変更 1 件",
+          ahead_other: "送信待ちの変更 {{count}} 件",
+          behind_one: "取り込む変更 1 件",
+          behind_other: "取り込む変更 {{count}} 件",
+          unsendable_one: "送信できない変更 1 件",
+          unsendable_other: "送信できない変更 {{count}} 件",
+          lastSuccess: "最終同期: {{time}}",
+        },
+        actions: {
+          retry: "再試行",
+          settings: "同期・device 設定",
+        },
+      },
       systemAlerts: {
         region: "システム健全性アラート",
         severity: {
@@ -1625,6 +1962,15 @@ const resources = {
           abandoned: "打ち切り",
           incomplete: "未完了",
         },
+        rejection: {
+          title: "この変更は反映されませんでした",
+          body: "同じファイルへの別マシンの変更が先に Hub へ確定しました。失敗ではなく、内容も失われていません。変更したマシンに保持されています。",
+          paths: "対象ファイル",
+          sourceDevice: "変更元 device",
+          id: "回復用 ID",
+          recovery:
+            "保持された内容を確認するには、そのマシン上で README の回復手順を実行してください。ここからは参照できず、GuildBotics が自動で復元することもありません。",
+        },
         eventTypes: {
           pr_create: "PR 作成",
           pr_merge: "PR マージ",
@@ -1632,6 +1978,7 @@ const resources = {
           push: "Push",
           issue_create: "Issue 作成",
           issue_resolve: "Issue 解決",
+          sync_rejected: "更新が反映されませんでした",
           external: "イベント",
         },
       },
@@ -1672,6 +2019,7 @@ const resources = {
           members: "メンバー",
           github: "GitHub",
           shortcuts: "ショートカット",
+          sync: "同期・device",
           verification: "検証",
         },
         verification: {
@@ -2180,11 +2528,18 @@ const resources = {
           agentFieldError:
             "Agent フィールドを更新できませんでした。メンバーの認証情報と Project URL を確認してください。",
         },
-        autosave: {
-          idle: "自動保存",
-          saving: "保存中",
-          saved: "保存済み",
-          error: "保存失敗",
+        save: {
+          action: "保存",
+          saved: "保存しました",
+          error: "保存できませんでした",
+        },
+        staleSave: {
+          title: "保存しませんでした",
+          body: "この画面を開いた後に設定が変更されていたため、現在の内容を読み直しました。もう一度変更してください。",
+        },
+        busySave: {
+          title: "まだ保存していません",
+          body: "同期がこのワークスペースへ書き込み中です。入力はそのまま残っているので、少し待ってからもう一度保存してください。",
         },
         validation: {
           workspaceRequired: "ワークスペースは必須です。",
@@ -3021,6 +3376,8 @@ const resources = {
         settingsTitle: "コマンド実行ウィンドウ",
         settingsDescription:
           "選択中の文字列をコピーしてからこのキーを押すと、実行ウィンドウが開きます。",
+        deviceLocal:
+          "ホットキーはこのマシン固有の設定で、他のマシンとは共有されません。どの組み合わせが空いているかは、OS の標準ショートカット・入っている他のアプリ・キーボード配列で決まるためです。",
         commandLabel: "ホットキー",
         commandDescription:
           "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",

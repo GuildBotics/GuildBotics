@@ -43,6 +43,16 @@ CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
 MODEL_PATH_PROVIDER_INDEX = 1
 
 
+def intelligence_config_dir(person_id: str | None) -> str:
+    """Return the config-relative directory holding one scope's intelligence config.
+
+    The screen reconciles this directory as a whole -- writing some files and
+    pruning others -- so it is the directory, not a fixed file list, that a
+    stale-write check has to compare.
+    """
+    return f"team/members/{person_id}/intelligences" if person_id else "intelligences"
+
+
 class IntelligenceConfigResult:
     def __init__(self, files: list[CreatedFile]) -> None:
         self.files = files

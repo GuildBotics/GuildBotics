@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addMemberConfig,
   ApiRequestError,
+  cloneWorkspaceFromHub,
   deleteMemberConfig,
   getCliAgentDetections,
   ensureAgentField,
@@ -91,6 +92,15 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     addMemberConfig: vi.fn(async () => configWriteResponse()),
+    cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
+    inspectHub: vi.fn(async () => ({
+      endpoint: "user@hub.local",
+      is_local: false,
+      host_key_fingerprints: [],
+      host_key_trusted: true,
+      host_key_changed: false,
+      workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
+    })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
     getCliAgentDetections: vi.fn(async () => ({
       agents: [
@@ -156,6 +166,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getIntelligenceConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
+      revisions: {},
       person_id: null,
       inherited: false,
       model_mapping: { default: "models/openai.yml", openai: "models/openai.yml" },
@@ -212,6 +223,7 @@ vi.mock("../api/client", async (importOriginal) => {
     })),
     getProjectConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
+      revisions: {},
       language: "en",
       description: "Demo project",
       llm_api_type: "openai",
@@ -411,6 +423,37 @@ describe("SetupPage", () => {
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
     expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
     expect(screen.getByLabelText("Workspace")).toHaveValue("/empty-workspace");
+  });
+
+  it("takes up a copied workspace without switching to it a second time", async () => {
+    // `POST /workspace/sync/clone` already selected the copy and started its
+    // synchronization queue. Switching again would stop that queue, and a queue
+    // that does not stop in time reports the copy as blocked although it was
+    // taken.
+    const user = userEvent.setup();
+    const copied = configStatus({
+      cwd: "/copied-workspace",
+      workspace: "/copied-workspace",
+      config_dir: "/copied-workspace/.guildbotics/config",
+      project_file: "/copied-workspace/.guildbotics/config/team/project.yml",
+      project_file_exists: true,
+    });
+    vi.mocked(cloneWorkspaceFromHub).mockResolvedValue(copied);
+    vi.mocked(getConfigStatus).mockResolvedValue(copied);
+    renderSetupPage("/setup");
+    // The destination is whatever the workspace field already holds; typing a
+    // new one here would itself be an ordinary workspace switch.
+    await screen.findByLabelText("Workspace");
+
+    await user.click(screen.getByRole("button", { name: t("sync.clone.action") }));
+    await user.type(await screen.findByLabelText(t("sync.connect.endpoint")), "user@hub.local");
+    await user.click(screen.getByRole("button", { name: t("sync.connect.inspect") }));
+    await user.click(await screen.findByRole("button", { name: t("sync.clone.take") }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Workspace")).toHaveValue("/copied-workspace"),
+    );
+    expect(restartBackend).not.toHaveBeenCalled();
   });
 
   it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
@@ -926,7 +969,7 @@ describe("SetupPage", () => {
     expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
   });
 
-  it("autosaves an existing project through updateProjectConfig", async () => {
+  it("saves an existing project through updateProjectConfig when asked to", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
 
@@ -934,6 +977,7 @@ describe("SetupPage", () => {
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
     await user.type(description, "Updated description");
+    await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
@@ -942,16 +986,106 @@ describe("SetupPage", () => {
     expect(initConfig).not.toHaveBeenCalled();
   });
 
-  it("does not autosave when the form has a validation error", async () => {
+  it("does not write while the user is only typing", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
 
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
+    await user.type(description, "Half a thou");
 
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(updateProjectConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not save when the form has a validation error", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await saveSection(user);
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(updateProjectConfig).not.toHaveBeenCalled();
+  });
+
+  it("sends the revisions the form was composed against", async () => {
+    const user = userEvent.setup();
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "Updated description");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
+      expected_revisions: { "team/project.yml": "abc123" },
+    });
+  });
+
+  it("saves twice in a row without colliding with its own first save", async () => {
+    // The second save must not carry the revision the first one replaced: that
+    // would report a conflict with another machine where there is none, and
+    // throw the second edit away.
+    const user = userEvent.setup();
+    // Stand in for the file the save actually changes, so a later read of it
+    // reports what the save left rather than what it replaced.
+    vi.mocked(updateProjectConfig).mockImplementation(async () => {
+      vi.mocked(getProjectConfig).mockResolvedValue(
+        projectConfig({ revisions: { "team/project.yml": "after-first-save" } }),
+      );
+      return configWriteResponse({ "team/project.yml": "after-first-save" });
+    });
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "First");
+    await saveSection(user);
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+
+    await user.clear(description);
+    await user.type(description, "Second");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateProjectConfig).mock.calls[1][0]).toMatchObject({
+      expected_revisions: { "team/project.yml": "after-first-save" },
+    });
+  });
+
+  it("reloads instead of resending when the save is refused as stale", async () => {
+    // What synchronization makes ordinary: another machine's edit arrived while
+    // this screen was open. Re-sending the form is exactly the overwrite the
+    // backend refused, so the screen takes the current content instead.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockRejectedValueOnce(
+      new ApiRequestError({
+        code: "config_changed",
+        message: "changed since it was read",
+        context: { path: "config/team/project.yml", revisions: {} },
+      }),
+    );
+    renderSetupPage("/setup");
+
+    const description = await screen.findByLabelText("Project description");
+    await waitFor(() => expect(description).toHaveValue("Demo project"));
+    await user.clear(description);
+    await user.type(description, "From the stale screen");
+    vi.mocked(getProjectConfig).mockResolvedValue(
+      projectConfig({ description: "From the other machine" }),
+    );
+    await saveSection(user);
+
+    expect(await screen.findByText(t("setup.staleSave.title"))).toBeInTheDocument();
+    await waitFor(() => expect(description).toHaveValue("From the other machine"));
+    expect(updateProjectConfig).toHaveBeenCalledTimes(1);
   });
 
   it("renders the verification section and runs diagnostics", async () => {
@@ -1072,8 +1206,9 @@ function memberConfig() {
   };
 }
 
-function configWriteResponse() {
+function configWriteResponse(revisions: Record<string, string> = {}) {
   return {
+    revisions,
     project: null,
     member: null,
     intelligence: null,
@@ -1157,6 +1292,7 @@ type ProjectConfigValue = Parameters<typeof toProjectUpdateRequest>[2];
 function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigValue {
   return {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: { "team/project.yml": "abc123" },
     language: "en",
     description: "Existing project",
     llm_api_type: "openai",
@@ -1787,6 +1923,7 @@ describe("character payload round trip", () => {
 describe("toIntelligenceUpdatePayload", () => {
   const team = {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: {},
     person_id: null,
     inherited: false,
     model_mapping: { default: "models/openai.yml" },
@@ -2004,6 +2141,7 @@ describe("patrol / schedule helpers", () => {
 
 function memberConfigDetail(overrides: Partial<MemberConfig> = {}): MemberConfig {
   return {
+    revisions: {},
     person_id: "alice",
     person_name: "Alice",
     // No GitHub linking keeps the loaded member valid for save without extra
@@ -3209,6 +3347,7 @@ describe("PatrolSettingsEditor", () => {
 function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): IntelligenceConfig {
   return {
     config_dir: "/workspace/.guildbotics/config",
+    revisions: {},
     person_id: null,
     inherited: false,
     model_mapping: { default: "models/openai/default.yml" },
@@ -3308,6 +3447,11 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
   });
 }
 
+/** Saving is deliberate now, so every settings test has to press the button. */
+async function saveSection(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: t("setup.save.action") }));
+}
+
 async function openTeamIntelligenceAdvanced(user: ReturnType<typeof userEvent.setup>) {
   renderSetupPage("/setup");
   // The intelligence section is reached through the sidebar nav (only the
@@ -3350,7 +3494,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("autosaves an LLM slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+  it("renames an LLM slot on blur and sends it on save, without losing focus while typing", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       teamIntelligenceConfig({
         model_mapping: {
@@ -3412,12 +3556,10 @@ describe("IntelligenceEditor (team default)", () => {
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
-    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
-
-    // Trigger blur manually to commit rename
+    // The rename commits on blur; the save button is what sends it.
     fireEvent.blur(slotInput!);
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3437,6 +3579,8 @@ describe("IntelligenceEditor (team default)", () => {
       await screen.findByRole("button", { name: t("setup.intelligence.addCliSlot") }),
     );
 
+    await saveSection(user);
+
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
     });
@@ -3450,7 +3594,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(new Set(paths).size).toBe(paths.length);
   });
 
-  it("autosaves a CLI slot rename after focus blur, without losing focus during typing, and holds autosave while focused", async () => {
+  it("renames a CLI slot on blur and sends it on save, without losing focus while typing", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(
       teamIntelligenceConfig({
         cli_agent_mapping: {
@@ -3496,12 +3640,10 @@ describe("IntelligenceEditor (team default)", () => {
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
-    // Wait 1000ms (>800ms debounce) while focused and verify no save occurred
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
-
-    // Trigger blur manually to commit rename
+    // The rename commits on blur; the save button is what sends it.
     fireEvent.blur(slotInput!);
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3511,13 +3653,107 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
   });
 
-  it("autosaves a model definition edit through updateIntelligenceConfig after debounce", async () => {
+  it.each([
+    ["refused as stale", "config_changed"],
+    ["refused because synchronization holds the files", "config_busy"],
+  ])("does not save the advanced half when the basic half is %s", async (_name, code) => {
+    // One button, two writes. Applying only the second is worse than applying
+    // neither, and it contradicts the message the user was just shown.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockRejectedValue(
+      new ApiRequestError({ code, message: "refused", context: { revisions: {} } }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
+  it("composes the advanced save against what the basic save just wrote", async () => {
+    // One button saves both halves, and the basic half rewrites two of the
+    // files the advanced half guards. Sending the revisions read before that
+    // write would make the screen collide with itself on every provider
+    // change, and report it as a conflict with another machine.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockResolvedValue(
+      configWriteResponse({
+        "team/project.yml": "p2",
+        "intelligences/model_mapping.yml": "m2",
+        "intelligences/cli_agent_mapping.yml": "c2",
+      }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].expected_revisions).toMatchObject({
+      "intelligences/model_mapping.yml": "m2",
+      "intelligences/cli_agent_mapping.yml": "c2",
+    });
+  });
+
+  it("carries the revisions its own save reported into the next one", async () => {
+    // The editor stays open after a save, so a second one composed against what
+    // it was loaded with would collide with the first and be reported as a
+    // conflict with another machine -- discarding the second edit.
+    const user = userEvent.setup();
+    // The refetch a save starts is held open, because that is the case the
+    // reply has to cover: a save that overtakes it would otherwise send the
+    // revision it has already replaced.
+    let releaseRefetch = () => {};
+    const refetched = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    let loaded = false;
+    vi.mocked(getIntelligenceConfig).mockImplementation(async () => {
+      if (loaded) {
+        await refetched;
+      }
+      loaded = true;
+      return teamIntelligenceConfig({ revisions: { "intelligences/": "tree-1" } });
+    });
+    vi.mocked(updateIntelligenceConfig).mockResolvedValue(
+      configWriteResponse({ "intelligences/": "tree-2" }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+    await saveSection(user);
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-7");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].expected_revisions).toMatchObject({
+      "intelligences/": "tree-1",
+    });
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[1][0].expected_revisions).toMatchObject({
+      "intelligences/": "tree-2",
+    });
+    releaseRefetch();
+  });
+
+  it("sends a model definition edit through updateIntelligenceConfig on save", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "gpt-6");
+
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3530,14 +3766,17 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("does not autosave repeatedly before the debounce elapses", async () => {
+  it("writes nothing until the save button is pressed", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.type(modelId, "X");
-    // The debounce is 800ms; right after typing nothing has been persisted yet.
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3554,6 +3793,8 @@ describe("IntelligenceEditor (team default)", () => {
     await user.click(engineSelect);
     await user.click(await screen.findByRole("option", { name: "CLI" }));
 
+    await saveSection(user);
+
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
     });
@@ -3565,7 +3806,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("shows a JSON validation error and blocks autosave for a malformed effort", async () => {
+  it("shows a JSON validation error and blocks the save for a malformed effort", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3584,7 +3825,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
-  it("autosaves a typed effort edit through the API", async () => {
+  it("sends a typed effort edit through the API on save", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3593,6 +3834,7 @@ describe("IntelligenceEditor (team default)", () => {
     );
     await user.click(screen.getByLabelText("low reasoning_effort"));
     await user.click(await screen.findByRole("option", { name: "low" }));
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3606,7 +3848,7 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
-  it("blocks autosave while the JSON escape hatch holds malformed text", async () => {
+  it("blocks the save while the JSON escape hatch holds malformed text", async () => {
     // The field withholds onChange while the text is malformed, so without the
     // validity wiring the pending autosave would still fire and silently
     // persist the last value that parsed -- not what is on screen.
@@ -3654,7 +3896,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
-  it("autosaves one native adapter policy without changing the others", async () => {
+  it("saves one native adapter policy without changing the others", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
@@ -3670,6 +3912,7 @@ describe("IntelligenceEditor (team default)", () => {
         name: t("setup.intelligence.filesystemOptions.host"),
       }),
     );
+    await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
       timeout: 3000,
@@ -3730,9 +3973,9 @@ describe("IntelligenceEditor (team default)", () => {
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
     await user.type(modelId, "broken-model");
+    await saveSection(user);
 
-    expect(await screen.findByText(t("setup.intelligence.saveAdvancedError"))).toBeInTheDocument();
-    expect(screen.getByText("write blew up")).toBeInTheDocument();
+    expect(await screen.findByText("write blew up")).toBeInTheDocument();
   });
 });
 
@@ -3768,6 +4011,33 @@ describe("IntelligenceEditor (member override)", () => {
     });
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
+  });
+
+  it("carries the revisions its own save reported into the next one", async () => {
+    // The editor stays open on the member it just saved. Sending the revision
+    // that save replaced would report a conflict with another machine where
+    // there is none, and discard the second round of edits.
+    const user = userEvent.setup();
+    vi.mocked(updateMemberConfig).mockResolvedValue(
+      configWriteResponse({ "team/members/alice/person.yml": "after-first-save" }),
+    );
+    renderSetupPage("/setup?section=members");
+    await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
+
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await user.clear(name);
+    await user.type(name, "First");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+
+    await user.clear(name);
+    await user.type(name, "Second");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateMemberConfig).mock.calls[1][1]).toMatchObject({
+      expected_revisions: { "team/members/alice/person.yml": "after-first-save" },
+    });
   });
 
   it("registers an external save callback and persists a member override on save", async () => {
@@ -3917,6 +4187,7 @@ describe("IntelligenceEditor (member override)", () => {
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0]).toEqual({
       config_dir: "/workspace/.guildbotics/config",
+      expected_revisions: {},
       person_id: "alice",
       inherit_team_defaults: true,
     });

@@ -29,12 +29,13 @@ __all__ = [
     "MAX_AVATAR_BYTES",
     "SUPPORTED_EXTENSIONS",
     "clean_existing_avatars",
+    "download_avatar",
     "find_avatar_file",
     "get_github_avatar_url",
     "get_slack_avatar_url",
-    "import_avatar_from_url",
+    "read_upload",
     "require_shareable_avatar",
-    "save_avatar_file",
+    "store_avatar",
 ]
 
 
@@ -70,28 +71,35 @@ def require_shareable_avatar(content: bytes) -> bytes:
     return content
 
 
-def save_avatar_file(config_dir: Path, person_id: str, upload_file: UploadFile) -> Path:
-    content = require_shareable_avatar(upload_file.file.read())
+def store_avatar(config_dir: Path, person_id: str, content: bytes, suffix: str) -> Path:
+    """Replace the member's avatar with ``content``.
 
+    Deleting the old file and writing the new one is one change to the shared
+    state: a synchronization cycle that ran between the two would commit the
+    member as having no avatar. Callers hold the workspace's shared-write lock
+    around this, and do their downloading outside it.
+    """
     member_dir = get_member_avatar_dir(config_dir, person_id)
     member_dir.mkdir(parents=True, exist_ok=True)
-
-    orig_suffix = Path(upload_file.filename or "").suffix.lower()
-    suffix = orig_suffix if orig_suffix in SUPPORTED_EXTENSIONS else ".png"
-
     clean_existing_avatars(member_dir)
-
     dest_path = member_dir / f"avatar{suffix}"
-    with open(dest_path, "wb") as f:
-        f.write(content)
-
+    dest_path.write_bytes(content)
     return dest_path
 
 
-async def import_avatar_from_url(config_dir: Path, person_id: str, url: str) -> Path:
-    member_dir = get_member_avatar_dir(config_dir, person_id)
-    member_dir.mkdir(parents=True, exist_ok=True)
+def read_upload(upload_file: UploadFile) -> tuple[bytes, str]:
+    """Return an uploaded avatar's content and the suffix to store it under."""
+    content = require_shareable_avatar(upload_file.file.read())
+    orig_suffix = Path(upload_file.filename or "").suffix.lower()
+    return content, orig_suffix if orig_suffix in SUPPORTED_EXTENSIONS else ".png"
 
+
+async def download_avatar(url: str) -> tuple[bytes, str]:
+    """Fetch an avatar and return its content and the suffix to store it under.
+
+    Downloading is kept apart from storing so the wait on a remote server
+    happens outside the workspace's shared-write lock.
+    """
     async with httpx.AsyncClient() as client:
         response = await client.get(
             url, follow_redirects=True, timeout=AVATAR_DOWNLOAD_TIMEOUT
@@ -113,12 +121,7 @@ async def import_avatar_from_url(config_dir: Path, person_id: str, url: str) -> 
         url_suffix = Path(url.split("?", maxsplit=1)[0]).suffix.lower()
         suffix = url_suffix if url_suffix in SUPPORTED_EXTENSIONS else ".png"
 
-    clean_existing_avatars(member_dir)
-
-    dest_path = member_dir / f"avatar{suffix}"
-    dest_path.write_bytes(content)
-
-    return dest_path
+    return content, suffix
 
 
 async def get_github_avatar_url(github_username: str) -> str:

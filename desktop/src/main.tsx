@@ -5,6 +5,7 @@ import { Notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Bootstrap } from "./Bootstrap";
+import { comboboxThemeComponents } from "./comboboxTheme";
 import { stopBackend } from "./api/backend";
 import "./i18n";
 import "@mantine/core/styles.css";
@@ -78,6 +79,7 @@ const theme = createTheme({
     ],
   },
   components: {
+    ...comboboxThemeComponents,
     Card: {
       styles: {
         root: {

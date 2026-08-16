@@ -37,6 +37,8 @@ PROBE_TIMEOUT_SECONDS = 10.0
 COMMAND_TIMEOUT_SECONDS = 30.0
 #: The key type generated for a device that has none.
 SSH_KEY_TYPE = "ed25519"
+#: ``host keytype key`` is the shortest line either OpenSSH tool prints.
+_HOST_KEY_FIELDS = 3
 
 #: A leading ``-`` would reach ``ssh`` and ``ssh-keyscan`` as an option rather
 #: than as the machine to contact, so neither part may start with one.
@@ -110,11 +112,17 @@ class HubHostKey:
 
     Attributes:
         fingerprints (tuple[str, ...]): The ``SHA256:`` fingerprints offered.
-        trusted (bool): Whether this machine already knows the host.
+        trusted (bool): Whether one of the keys offered is already stored for
+            this host. Knowing the host by name is not enough: the stored key
+            is what every later connection is checked against.
+        changed (bool): Whether keys are stored for this host but none of them
+            is being offered. Either the machine was rebuilt or something else
+            is answering for it, and only the user can tell which.
     """
 
     fingerprints: tuple[str, ...]
     trusted: bool
+    changed: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,10 +208,29 @@ def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
 
     The user confirms the fingerprint before anything is stored, which is the
     one moment where a machine-in-the-middle can be caught.
+
+    What is stored decides, not whether the host is named in ``known_hosts`` at
+    all. A machine whose key was replaced is known by name and still cannot be
+    connected to, so reporting it as trusted would send the caller on to an SSH
+    call that fails on the host key -- and the fingerprints the user has to
+    look at would never be shown.
+
+    Trust here only ever means "a plain entry for this host holds one of the
+    keys being offered". It is the weaker of the two claims on purpose: the
+    connection itself is where OpenSSH decides, and this side is worth having
+    only while it errs towards asking the user.
     """
+    offered = _scan_host_keys(endpoint)
+    stored = _known_host_keys(endpoint)
+    recognized = {
+        key
+        for line in offered
+        if (key := _key_material(line)) is not None and key in stored
+    }
     return HubHostKey(
-        fingerprints=tuple(_fingerprint_of(line) for line in _scan_host_keys(endpoint)),
-        trusted=_is_known_host(endpoint),
+        fingerprints=tuple(_fingerprint_of(line) for line in offered),
+        trusted=bool(recognized),
+        changed=bool(stored) and not recognized,
     )
 
 
@@ -338,10 +365,11 @@ def _fingerprint_of(line: str) -> str:
     return next((field for field in output.split() if field.startswith("SHA256:")), "")
 
 
-def _is_known_host(endpoint: HubEndpoint) -> bool:
+def _known_host_keys(endpoint: HubEndpoint) -> set[tuple[str, str]]:
+    """The keys already stored for this host, as ``(type, key)`` pairs."""
     keygen = keygen_executable()
     if keygen is None or not _known_hosts_path().is_file():
-        return False
+        return set()
     result = subprocess.run(
         [keygen, "-F", endpoint.host],
         capture_output=True,
@@ -349,7 +377,32 @@ def _is_known_host(endpoint: HubEndpoint) -> bool:
         check=False,
         timeout=COMMAND_TIMEOUT_SECONDS,
     )
-    return result.returncode == 0 and bool(result.stdout.strip())
+    if result.returncode != 0:
+        return set()
+    return {
+        key
+        for line in result.stdout.splitlines()
+        if (key := _key_material(line)) is not None
+    }
+
+
+def _key_material(line: str) -> tuple[str, str] | None:
+    """The ``(type, key)`` of one plain host key line, if it is one.
+
+    A stored line names the host by hash and a scanned one names it plainly, so
+    only the two fields after the name are comparable between them.
+
+    A line carrying a marker -- ``@revoked``, ``@cert-authority`` -- is not one
+    of these, and is dropped rather than read as though the marker were absent.
+    What each marker means to OpenSSH is OpenSSH's to decide, and it decides it
+    on the connection itself; reproducing that here would be claiming more than
+    this comparison can know. Dropping them only ever costs a fingerprint the
+    user is asked to look at again.
+    """
+    fields = line.split()
+    if len(fields) < _HOST_KEY_FIELDS or fields[0].startswith(("#", "@")):
+        return None
+    return fields[1], fields[2]
 
 
 def _ssh_key(public_path: Path) -> HubSshKey:

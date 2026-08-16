@@ -97,6 +97,8 @@ import {
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
 import { openExternal } from "./openExternal";
 import { SetupPage } from "./setup/SetupPage";
+import { SyncAlerts } from "./sync/SyncAlerts";
+import { SyncIndicator } from "./sync/SyncIndicator";
 import {
   tracePresentationLabel,
   tracePresentationMessage,
@@ -163,6 +165,7 @@ export function App() {
           }}
         />
 
+        {configured ? <SyncIndicator /> : null}
         <nav className="nav">
           {configured ? (
             <GuardedNavLink className="nav-item" to="/activity">
@@ -225,7 +228,12 @@ export function App() {
             cursor: "default",
           }}
         />
-        {configured ? <SystemAlertBand /> : null}
+        {configured ? (
+          <Stack className="system-alert-band" gap="xs">
+            <SyncAlerts />
+            <SystemAlertBand />
+          </Stack>
+        ) : null}
         <Routes>
           <Route
             element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}

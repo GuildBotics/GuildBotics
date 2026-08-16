@@ -374,16 +374,35 @@ export type ActivityHistorySession = {
   } | null;
 };
 
+/**
+ * Enough to find a rejected change's stashed commit again. The stashed content
+ * is deliberately absent: recovery is a manual procedure on the source device.
+ */
+export type ActivityHistoryRejection = {
+  rejection_id: string;
+  paths: string[];
+  source_device_id: string;
+};
+
 export type ActivityHistoryEvent = {
   id: string;
   timestamp: string;
   person_id: string;
   type:
-    "pr_create" | "pr_merge" | "pr_closed" | "push" | "issue_create" | "issue_resolve" | "external";
+    | "pr_create"
+    | "pr_merge"
+    | "pr_closed"
+    | "push"
+    | "issue_create"
+    | "issue_resolve"
+    | "sync_rejected"
+    | "external";
   title: string;
   detail: string;
   url: string;
   links: ActivityHistoryLink[];
+  /** Present only on `sync_rejected`. */
+  rejection?: ActivityHistoryRejection | null;
 };
 
 export type ActivityHistoryResponse = {
@@ -600,6 +619,8 @@ export type ProjectSetupRequest = {
 
 export type ProjectConfig = {
   config_dir: string;
+  /** Config-relative path -> revision, sent back with the save. */
+  revisions: ConfigRevisions;
   language: "en" | "ja";
   description: string;
   llm_api_type: string;
@@ -612,6 +633,7 @@ export type ProjectConfig = {
 
 export type ProjectConfigUpdateRequest = {
   config_dir: string;
+  expected_revisions?: ConfigRevisions;
   language: "en" | "ja";
   description?: string;
   llm_api_type: string;
@@ -733,6 +755,7 @@ export type SlackTokenVerifyResponse = {
 };
 
 export type MemberConfig = {
+  revisions: ConfigRevisions;
   person_id: string;
   person_name: string;
   person_type: MemberPersonType | "";
@@ -767,6 +790,7 @@ export type MemberTaskSchedule = {
 
 export type MemberConfigUpdateRequest = MemberWriteRequestBase & {
   original_person_id: string;
+  expected_revisions?: ConfigRevisions;
 };
 
 export type MemberDeleteRequest = {
@@ -880,6 +904,7 @@ export type LlmProviderInfo = {
 
 export type IntelligenceConfig = {
   config_dir: string;
+  revisions: ConfigRevisions;
   person_id: string | null;
   inherited: boolean;
   model_mapping: Record<string, string>;
@@ -897,6 +922,7 @@ export type IntelligenceConfig = {
 
 export type IntelligenceConfigUpdateRequest = {
   config_dir: string;
+  expected_revisions?: ConfigRevisions;
   person_id?: string | null;
   inherit_team_defaults?: boolean;
   model_mapping?: Record<string, string>;
@@ -908,6 +934,8 @@ export type IntelligenceConfigUpdateRequest = {
 };
 
 export type ConfigWriteResponse = {
+  /** Where the written files now stand, for the next save from this screen. */
+  revisions: ConfigRevisions;
   project: { files: Array<{ path: string; action: string }> } | null;
   member: { files: Array<{ path: string; action: string }> } | null;
   intelligence?: { files: Array<{ path: string; action: string }> } | null;
@@ -917,6 +945,117 @@ export type ApiErrorPayload = {
   code: string;
   message: string;
   context: Record<string, unknown>;
+};
+
+/** Config-relative path -> the revision the screen was composed against. */
+export type ConfigRevisions = Record<string, string>;
+
+/**
+ * The seven states the sidebar shows, ordered so that the one needing the user
+ * comes first when several are true at once.
+ */
+export type SyncState =
+  | "disabled"
+  | "idle"
+  | "fetching"
+  | "reconciling"
+  | "pushing"
+  | "unreachable"
+  | "invalid_shared_state"
+  | "update_required";
+
+export type UnsendableChange = {
+  path: string;
+  reason: string;
+};
+
+export type WorkspaceSyncStatus = {
+  enabled: boolean;
+  workspace_id: string | null;
+  device_id: string | null;
+  hub_url: string | null;
+  state: SyncState;
+  local_head: string | null;
+  remote_head: string | null;
+  ahead_count: number;
+  behind_count: number;
+  unsendable_changes: UnsendableChange[];
+  last_success_at: string | null;
+  last_error_code: string | null;
+};
+
+/** Empty `endpoint` means this machine, which needs no network and no host key. */
+export type HubTarget = {
+  endpoint: string;
+};
+
+export type HubStatus = {
+  hosted: boolean;
+  hub_root: string;
+  hub_id: string | null;
+  created_at: string | null;
+  ssh_endpoint: string | null;
+  workspace_ids: string[];
+};
+
+export type HubConnection = {
+  endpoint: string;
+  is_local: boolean;
+  host_key_fingerprints: string[];
+  host_key_trusted: boolean;
+  /** A key is stored for this host, and the host is offering a different one. */
+  host_key_changed: boolean;
+  workspace_ids: string[];
+};
+
+export type HubTrustRequest = {
+  endpoint: string;
+  /** The fingerprint the user actually looked at. Trusting without one is refused. */
+  fingerprint: string;
+};
+
+export type DeviceSshKey = {
+  exists: boolean;
+  path: string | null;
+  public_key: string;
+  fingerprint: string;
+};
+
+export type WorkspaceSyncEnableRequest = {
+  hub: HubTarget;
+  /** Names the hub workspace to join; empty registers this one on the hub. */
+  workspace_id?: string;
+};
+
+export type WorkspaceSyncPreview = {
+  hub_workspace_id: string | null;
+  workspace_id: string;
+  mode: "join" | "reconnect";
+  hub_only: string[];
+  device_only: string[];
+  differing: string[];
+  unsendable_changes: UnsendableChange[];
+};
+
+export type WorkspaceSyncCloneRequest = {
+  hub: HubTarget;
+  workspace_id: string;
+  workspace_dir: string;
+};
+
+export type WorkspaceDevice = {
+  device_id: string;
+  display_name: string;
+  os: string;
+  joined_at: string;
+  status: string;
+  ssh_public_key_fingerprint: string;
+  is_self: boolean;
+};
+
+export type WorkspaceDevices = {
+  devices: WorkspaceDevice[];
+  device_id: string;
 };
 
 export class ApiRequestError extends Error {
@@ -929,6 +1068,73 @@ export class ApiRequestError extends Error {
     this.code = payload.code;
     this.context = payload.context;
   }
+}
+
+export async function getWorkspaceSyncStatus(): Promise<WorkspaceSyncStatus> {
+  return request("/workspace/sync");
+}
+
+export async function previewWorkspaceSync(
+  body: WorkspaceSyncEnableRequest,
+): Promise<WorkspaceSyncPreview> {
+  return request("/workspace/sync/preview", { method: "POST", body });
+}
+
+export async function enableWorkspaceSync(
+  body: WorkspaceSyncEnableRequest,
+): Promise<WorkspaceSyncStatus> {
+  return request("/workspace/sync/enable", { method: "POST", body });
+}
+
+export async function changeWorkspaceSyncHub(
+  body: WorkspaceSyncEnableRequest,
+): Promise<WorkspaceSyncStatus> {
+  return request("/workspace/sync/hub", { method: "POST", body });
+}
+
+export async function retryWorkspaceSync(): Promise<WorkspaceSyncStatus> {
+  return request("/workspace/sync/retry", { method: "POST" });
+}
+
+export async function cloneWorkspaceFromHub(
+  body: WorkspaceSyncCloneRequest,
+): Promise<ConfigStatus> {
+  return request("/workspace/sync/clone", { method: "POST", body });
+}
+
+export async function getHubStatus(): Promise<HubStatus> {
+  return request("/hub");
+}
+
+export async function createHub(): Promise<HubStatus> {
+  return request("/hub", { method: "POST" });
+}
+
+export async function inspectHub(body: HubTarget): Promise<HubConnection> {
+  return request("/hub/inspect", { method: "POST", body });
+}
+
+export async function trustHub(body: HubTrustRequest): Promise<HubConnection> {
+  return request("/hub/trust", { method: "POST", body });
+}
+
+export async function getDeviceSshKey(): Promise<DeviceSshKey> {
+  return request("/hub/ssh-key");
+}
+
+export async function createDeviceSshKey(): Promise<DeviceSshKey> {
+  return request("/hub/ssh-key", { method: "POST" });
+}
+
+export async function getWorkspaceDevices(): Promise<WorkspaceDevices> {
+  return request("/workspace/devices");
+}
+
+export async function renameThisDevice(displayName: string): Promise<WorkspaceDevices> {
+  return request("/workspace/devices/self", {
+    method: "POST",
+    body: { display_name: displayName },
+  });
 }
 
 export async function getConfigStatus(): Promise<ConfigStatus> {

@@ -18,12 +18,15 @@ from pathlib import Path
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import (
+    DeviceRenameRequest,
     DeviceSshKey,
     HubConnection,
     HubStatus,
     HubTarget,
     HubTrustRequest,
     UnsendableChangeModel,
+    WorkspaceDevice,
+    WorkspaceDevices,
     WorkspaceSyncCloneRequest,
     WorkspaceSyncEnableRequest,
     WorkspaceSyncPreview,
@@ -55,9 +58,13 @@ from guildbotics.sync import (
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
 from guildbotics.utils.openssh import OpenSshNotFoundError
 from guildbotics.workspace.identity import (
+    DeviceRecord,
     ensure_device_identity,
     ensure_workspace_identity,
+    list_device_records,
+    publish_device_record,
     read_workspace_identity,
+    set_device_display_name,
 )
 
 #: The failures a hub operation reports back to the user rather than crashing
@@ -120,6 +127,7 @@ class WorkspaceSyncService:
             is_local=False,
             host_key_fingerprints=list(host_key.fingerprints),
             host_key_trusted=host_key.trusted,
+            host_key_changed=host_key.changed,
             workspace_ids=(self._workspace_ids(location) if host_key.trusted else []),
         )
 
@@ -160,6 +168,44 @@ class WorkspaceSyncService:
             "ssh_key_failed", "An SSH key could not be created on this device."
         ):
             return _ssh_key_model(connection.ensure_ssh_key())
+
+    # -- Devices sharing the workspace --------------------------------------
+
+    def get_devices(self) -> WorkspaceDevices:
+        """List the machines this workspace has been shared with."""
+        device_id = ensure_device_identity().device_id
+        return WorkspaceDevices(
+            device_id=device_id,
+            devices=[
+                WorkspaceDevice(
+                    device_id=record.device_id,
+                    display_name=record.display_name,
+                    os=record.os,
+                    joined_at=record.joined_at,
+                    status=record.status,
+                    ssh_public_key_fingerprint=(
+                        record.ssh_public_key_fingerprint or ""
+                    ),
+                    is_self=record.device_id == device_id,
+                )
+                for record in _device_records()
+            ],
+        )
+
+    def rename_device(self, request: DeviceRenameRequest) -> WorkspaceDevices:
+        """Rename this machine and publish the new name to the other devices.
+
+        Only this machine can be renamed: the name belongs to the device, so
+        every other entry is edited on the machine it describes.
+        """
+        try:
+            set_device_display_name(request.display_name)
+        except ValueError as exc:
+            raise AppApiError("device_name_invalid", str(exc), status_code=400) from exc
+        root = _workspace_root()
+        if root is not None:
+            publish_device_record(root)
+        return self.get_devices()
 
     # -- Enrolling a workspace ----------------------------------------------
 
@@ -398,6 +444,12 @@ def _own_workspace_id() -> str:
         "sync_enable_failed", "This workspace could not be given an identifier."
     ):
         return ensure_workspace_identity(root).workspace_id
+
+
+def _device_records() -> list[DeviceRecord]:
+    """Return the shared device records, or none when no workspace is selected."""
+    root = _workspace_root()
+    return list_device_records(root) if root is not None else []
 
 
 def _unsendable(changes: Sequence[UnsendableChange]) -> list[UnsendableChangeModel]:

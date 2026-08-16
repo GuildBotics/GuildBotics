@@ -3,7 +3,7 @@
 Config files are the shared state a person edits by hand, so two machines --
 or one machine with a stale editor open -- can plausibly submit conflicting
 edits. Every read therefore returns the content together with its Git blob ID,
-and every write states the blob ID it expects to replace. A write whose
+and every save states the blob IDs it expects to replace. A save whose
 expectation no longer holds is refused rather than merged, and the caller
 redisplays the current content.
 
@@ -14,6 +14,15 @@ and replace, not a lock held for the length of an edit: a distributed lock
 would block local editing whenever the hub is unreachable, which the design
 refuses to trade away.
 
+One screen's save writes several config files, so comparing, writing, and
+reporting where the write left them are one indivisible step:
+:meth:`ConfigRepository.write` is the whole write API. A caller hands over what
+it was going to write and gets back a receipt; it never assembles the steps
+itself. That matters more than it sounds -- when the lock, the comparison, the
+write, and the observation are separate parts, every writer is a place to put
+them in the wrong order or leave one out, and there are as many such places as
+there are writers.
+
 This optimistic lock applies to config alone. Memory documents, conversation
 state, and task runs keep their existing save APIs; when two devices really do
 change the same file, the sync manager's first-committer-wins rule settles it.
@@ -22,16 +31,18 @@ change the same file, the sync manager's first-committer-wins rule settles it.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from guildbotics.utils.advisory_lock import held_lock
-from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
-from guildbotics.utils.workspace_sync_port import write_shared_text
-from guildbotics.workspace.validation import (
-    SharedFileInvalidError,
-    validate_shared_file,
-)
+from guildbotics.utils.fileio import get_workspace_config_dir
+from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.workspace.validation import SharedFileInvalidError
+
+#: Ends a revision key that stands for a directory's set of files rather than
+#: for one file's content. A config file's path never ends in a separator, so
+#: the two forms cannot be confused for one another.
+DIRECTORY_MARK = "/"
 
 
 def blob_id(data: bytes) -> str:
@@ -63,20 +74,38 @@ class ConfigSnapshot:
     content: str
 
 
+@dataclass(frozen=True)
+class ConfigWriteReceipt[T]:
+    """What one write produced, and where it left the files it touched.
+
+    Attributes:
+        result (T): Whatever the caller's own write returned.
+        revisions (dict[str, str]): Read before the lock was released, so it
+            describes the state this write created rather than what the next
+            writer made of it. A screen saving again sends these back.
+    """
+
+    result: T
+    revisions: dict[str, str]
+
+
 class StaleConfigWriteError(RuntimeError):
     """Raised when a config write expected a revision that is no longer current.
 
     Attributes:
-        snapshot (ConfigSnapshot | None): The content now stored, or None when
-            the file has since been deleted.
+        relative_path (str): The first path whose revision no longer holds.
+        revisions (dict[str, str]): What the expected paths stand at now, read
+            under the same lock as the comparison. The screen reloads with
+            these rather than reading them again afterwards, which would
+            describe yet another moment.
     """
 
-    def __init__(self, relative_path: str, snapshot: ConfigSnapshot | None) -> None:
+    def __init__(self, relative_path: str, revisions: dict[str, str]) -> None:
         super().__init__(
             f"{relative_path} changed since it was read; the write was not applied."
         )
         self.relative_path = relative_path
-        self.snapshot = snapshot
+        self.revisions = revisions
 
 
 class ConfigRepository:
@@ -89,9 +118,6 @@ class ConfigRepository:
     def __init__(self, workspace_root: Path | None = None) -> None:
         self.workspace_root = workspace_root
         self._config_dir = get_workspace_config_dir(workspace_root)
-        self._lock_path = get_workspace_local_path(
-            "run", "config-write.lock", workspace_root=workspace_root
-        )
 
     def read_config(self, relative_path: str) -> ConfigSnapshot | None:
         """Return the config file's content and revision, or None when absent.
@@ -102,45 +128,115 @@ class ConfigRepository:
         """
         return self._snapshot(relative_path)
 
-    def write_config(
-        self, relative_path: str, expected_blob_id: str | None, content: str
-    ) -> ConfigSnapshot:
-        """Replace a config file when it still holds ``expected_blob_id``.
+    def revisions(self, relative_paths: Iterable[str]) -> dict[str, str]:
+        """Return the current revision of each named config file or directory.
+
+        A file that does not exist is reported as an empty revision rather than
+        left out, so its absence is itself what a later :meth:`write` compares
+        against: a file created meanwhile is a change like any other, and
+        omitting it would let the save replace it unseen.
 
         Args:
-            relative_path (str): The path relative to the config directory.
-            expected_blob_id (str | None): The revision the caller read, or
-                None to require that the file does not exist yet.
-            content (str): The complete new content.
+            relative_paths (Iterable[str]): Paths relative to the config
+                directory, for example ``team/project.yml``. A path ending in
+                ``/`` names a directory and reads as its set of files.
+        """
+        return {path: self._revision(path) for path in relative_paths}
 
-        Returns:
-            ConfigSnapshot: The newly written content and its revision.
+    def tree_revisions(self, relative_dir: str) -> dict[str, str]:
+        """Return revisions describing a whole config directory.
+
+        Screens that reconcile a directory -- writing some files, pruning
+        others -- are stale if any file they read has changed since, and just
+        as stale if the directory now holds a file they never saw: saving would
+        prune it. One entry therefore stands for the set of paths itself, so a
+        file another device added, and a directory that did not exist at all
+        when the screen was read, are both changes there is something to
+        compare against.
+
+        Args:
+            relative_dir (str): A directory relative to the config directory,
+                for example ``intelligences``.
+        """
+        paths = self._tree_paths(relative_dir)
+        return self.revisions([f"{relative_dir}{DIRECTORY_MARK}", *paths])
+
+    def write[T](
+        self,
+        apply: Callable[[], T],
+        *,
+        expected: Mapping[str, str] | None = None,
+        report: Callable[[], dict[str, str]] | None = None,
+    ) -> ConfigWriteReceipt[T]:
+        """Apply one config write as a unit: compare, write, and report.
+
+        All three happen under the workspace's shared-write lock, which
+        synchronization holds too. Comparing without it would let the hub's
+        content arrive between the comparison and the write; reporting without
+        it would answer with a revision belonging to content the caller never
+        wrote, and the screen would then save against it unchallenged.
+
+        Args:
+            apply (Callable[[], T]): The caller's own write, run once the
+                comparison holds.
+            expected (Mapping[str, str] | None): Config-relative path to the
+                revision the caller read. A path left out is unconstrained; a
+                path mapped to an empty string must still not exist; a path
+                ending in ``/`` constrains that directory's set of files. None
+                compares nothing -- which is not the same as needing no lock,
+                because the write still must not interleave with the hub's.
+            report (Callable[[], dict[str, str]] | None): Reads the revisions
+                to answer with, called while the lock is still held.
 
         Raises:
-            StaleConfigWriteError: When the stored revision differs, leaving
-                the file untouched and announcing nothing.
-            SharedFileInvalidError: When ``content`` is not valid for this
-                file's kind, leaving the file untouched.
+            StaleConfigWriteError: When one of the files changed since it was
+                read. Nothing has been written when this is raised.
+            SharedWriteBusyError: When synchronization held the workspace's
+                shared files for longer than this waited.
         """
-        path = self._absolute_path(relative_path)
-        shared_path = self._shared_path(relative_path)
-        data = content.encode("utf-8")
-        validate_shared_file(shared_path, data)
-        with held_lock(self._lock_path):
-            current = self._snapshot(relative_path)
-            current_blob_id = current.blob_id if current is not None else None
-            if current_blob_id != expected_blob_id:
-                raise StaleConfigWriteError(shared_path, current)
-            write_shared_text(path, content, workspace_root=self.workspace_root)
-            # Describe the bytes this call committed rather than re-reading the
-            # file. Reading after the lock would report the content of whoever
-            # wrote next, which is not what this write applied.
-            return ConfigSnapshot(
-                relative_path=shared_path,
-                path=path,
-                blob_id=blob_id(data),
-                content=content,
+        with shared_write_lock(self.workspace_root):
+            self._refuse_if_stale(expected or {})
+            result = apply()
+            return ConfigWriteReceipt(result, report() if report is not None else {})
+
+    def _refuse_if_stale(self, expected: Mapping[str, str]) -> None:
+        for relative_path, expected_blob_id in expected.items():
+            if self._revision(relative_path) != expected_blob_id:
+                raise StaleConfigWriteError(
+                    self._shared_path(relative_path), self.revisions(expected)
+                )
+
+    def _revision(self, relative_path: str) -> str:
+        """The revision of one config file, or of a directory's set of files."""
+        if relative_path.endswith(DIRECTORY_MARK):
+            return self._path_set_revision(
+                self._tree_paths(relative_path[: -len(DIRECTORY_MARK)])
             )
+        snapshot = self._snapshot(relative_path)
+        return snapshot.blob_id if snapshot is not None else ""
+
+    def _tree_paths(self, relative_dir: str) -> list[str]:
+        """Config-relative paths of every file under ``relative_dir``, sorted."""
+        root = self._absolute_path(relative_dir)
+        if not root.is_dir():
+            return []
+        return [
+            PurePosixPath(relative_dir)
+            .joinpath(path.relative_to(root).as_posix())
+            .as_posix()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        ]
+
+    @staticmethod
+    def _path_set_revision(paths: Sequence[str]) -> str:
+        """A revision of which files exist, deliberately not of their content.
+
+        Content is already covered file by file. A directory revision that
+        moved with it as well would refuse a save whose own earlier step wrote
+        one of those files -- a conflict with nobody.
+        """
+        return blob_id("".join(f"{path}\n" for path in paths).encode())
 
     def _absolute_path(self, relative_path: str) -> Path:
         """Resolve a config-relative path, refusing anything outside config/.

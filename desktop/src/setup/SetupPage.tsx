@@ -68,6 +68,7 @@ import {
   type CliAgentDefinition,
   type EffortFieldSpec,
   type EffortOverlay,
+  type ConfigRevisions,
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
@@ -131,6 +132,9 @@ import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { CloneFromHubButton } from "../sync/CloneFromHub";
+import { SyncSettings } from "../sync/SyncSettings";
+import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { normalizeLanguage } from "../i18n";
 
@@ -210,6 +214,8 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   // Hotkeys are an everyday convenience rather than part of getting running,
   // so they are offered only once the workspace is configured.
   "shortcuts",
+  // Sharing a workspace presupposes there is one to share.
+  "sync",
   "verification",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
@@ -345,7 +351,15 @@ export function SetupPage() {
       }
       return initConfig(toInitialProjectSetupRequest(values));
     },
-    onSuccess: () => {
+    onSuccess: (written) => {
+      // Take the revisions from the reply rather than waiting for the refetch
+      // below: the screen stays open and can be saved again immediately, and a
+      // save that overtakes the refetch would carry the revision it replaced.
+      if ("revisions" in written) {
+        queryClient.setQueryData<ProjectConfig>(["project-config"], (current) =>
+          current ? { ...current, revisions: written.revisions } : current,
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ["config"] });
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
@@ -406,7 +420,9 @@ export function SetupPage() {
   const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState("");
   const [forceWorkspaceSwitching, setForceWorkspaceSwitching] = useState(false);
   const workspaceSwitchId = useRef(0);
-  const canAutosave = hasExistingProject && projectConfig.isSuccess;
+  // A saved project whose content is loaded: only then is there something
+  // to compare a save against, and something to save into.
+  const canSaveProject = hasExistingProject && projectConfig.isSuccess;
   // Keys already stored in the workspace secret store. Only a saved project has
   // them; during first setup the snapshot belongs to no workspace yet (and may
   // still be cached from a previously opened one), so it must not be consulted.
@@ -470,32 +486,34 @@ export function SetupPage() {
     form.resetDirty(initialValues);
   }, [form, initialValues, serializedInitialValues]);
 
-  useAutosave(
-    form,
-    config.data,
-    validationSchema,
-    saveMutation.mutateAsync,
-    setSaveState,
-    canAutosave && !workspaceSwitching,
-  );
-
   const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
   const visibleStatus = hasExistingProject ? setupStatus : initialProgress;
   const currentSectionReady = currentCoreSection
     ? isCoreSectionReady(currentCoreSection, visibleStatus)
     : true;
-  const saveNow = async () => {
+  /**
+   * Save the basic settings.
+   *
+   * Returns where the files it wrote now stand, so a save that continues into
+   * the advanced editor is composed against this result rather than against
+   * what was on screen before it ran — or null when nothing was written, so
+   * that the second half does not run on its own. One button applying half of
+   * itself is worse than applying neither half, and it contradicts what the
+   * refusal just told the user.
+   */
+  const saveNow = async (): Promise<ConfigRevisions | null> => {
     if (form.validate().hasErrors) {
       setSaveState("error");
-      return;
+      return null;
     }
     const creatingInitialSetup = !hasExistingProject;
     const initialSetupRequest = creatingInitialSetup
       ? toInitialProjectSetupRequest(form.values)
       : null;
+    let revisionsWritten: ConfigRevisions | null = null;
     setSaveState("saving");
     try {
-      await saveMutation.mutateAsync(form.values);
+      const written = await saveMutation.mutateAsync(form.values);
       if (creatingInitialSetup) {
         await restartBackend(form.values.workspaceDir);
         await Promise.all([
@@ -505,6 +523,7 @@ export function SetupPage() {
       }
       form.resetDirty(form.values);
       setSaveState("saved");
+      revisionsWritten = "revisions" in written ? written.revisions : {};
       if (initialSetupRequest) {
         notifications.show({
           autoClose: false,
@@ -520,12 +539,37 @@ export function SetupPage() {
           ),
         });
       }
-    } catch {
+    } catch (error) {
       setSaveState("error");
+      if (isStaleConfigSave(error)) {
+        // Reload rather than retry: the reply carries the current revisions,
+        // and re-sending this form would be the overwrite that was refused.
+        await queryClient.refetchQueries({ queryKey: ["project-config"] });
+        notifications.show({
+          color: "warning",
+          title: t("setup.staleSave.title"),
+          message: t("setup.staleSave.body"),
+        });
+      } else if (isBusyConfigSave(error)) {
+        // The form is still good; it was simply never compared. Keep it as it
+        // is so the same click can be repeated.
+        notifications.show({
+          color: "warning",
+          title: t("setup.busySave.title"),
+          message: t("setup.busySave.body"),
+        });
+      }
     }
+    return revisionsWritten;
   };
-  const applyWorkspaceSwitch = async (workspace: string, switchId: number) => {
-    await restartBackend(workspace);
+  const applyWorkspaceSwitch = async (
+    workspace: string,
+    switchId: number,
+    alreadySwitched = false,
+  ) => {
+    if (!alreadySwitched) {
+      await restartBackend(workspace);
+    }
     if (workspaceSwitchId.current !== switchId) {
       return;
     }
@@ -551,12 +595,12 @@ export function SetupPage() {
     await announceWorkspaceChange();
     setSaveState("saved");
   };
-  const startWorkspaceSwitch = (workspace: string) => {
+  const startWorkspaceSwitch = (workspace: string, alreadySwitched = false) => {
     const switchId = workspaceSwitchId.current + 1;
     workspaceSwitchId.current = switchId;
     setWorkspaceSwitching(true);
     setSaveState("saving");
-    void applyWorkspaceSwitch(workspace, switchId)
+    void applyWorkspaceSwitch(workspace, switchId, alreadySwitched)
       .catch((error: unknown) => {
         if (workspaceSwitchId.current === switchId) {
           if (isWorkspaceSwitchBlocked(error)) {
@@ -578,6 +622,20 @@ export function SetupPage() {
     const workspace = value.trim();
     if (workspace) {
       startWorkspaceSwitch(workspace);
+    }
+  };
+  /**
+   * Take up a workspace the backend has already switched to.
+   *
+   * Taking a copy from a hub selects it on the server and answers with the new
+   * configuration, so switching again here would stop the synchronization queue
+   * that had just been started — and a queue that does not stop within the
+   * timeout reports the copy as blocked although it was taken.
+   */
+  const adoptWorkspace = (workspace: string) => {
+    form.setFieldValue("workspaceDir", workspace);
+    if (workspace) {
+      startWorkspaceSwitch(workspace, true);
     }
   };
   const dismissPendingWorkspaceSwitch = () => {
@@ -632,7 +690,9 @@ export function SetupPage() {
         status={visibleStatus}
         hasExistingProject={hasExistingProject}
         initialProgress={initialProgress}
-        onCreateInitial={saveNow}
+        onCreateInitial={async () => {
+          await saveNow();
+        }}
         creating={saveMutation.isPending}
         canGoBack={canGoBack}
         canGoNext={canGoNext}
@@ -648,15 +708,20 @@ export function SetupPage() {
             <ProjectSection
               form={form}
               saveState={saveState}
-              autosaveEnabled={canAutosave}
+              persisted={canSaveProject && !workspaceSwitching}
+              saving={saveMutation.isPending}
+              onSave={saveNow}
               onWorkspaceChange={changeWorkspace}
+              onWorkspaceCloned={adoptWorkspace}
             />
           ) : null}
           {activeSection === "intelligence" ? (
             <IntelligenceSection
               form={form}
               saveState={saveState}
-              autosaveEnabled={canAutosave}
+              persisted={canSaveProject && !workspaceSwitching}
+              saving={saveMutation.isPending}
+              onSave={saveNow}
               detections={cliDetections.data?.agents ?? []}
               detectionLoading={cliDetections.isLoading}
               storedProviderKeys={storedProviderKeys}
@@ -665,6 +730,7 @@ export function SetupPage() {
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
           {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
+          {activeSection === "sync" ? <SyncSettings /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
               config={config.data}
@@ -839,6 +905,7 @@ function SetupSectionNav({
     ["members", t("setup.nav.members"), status.membersReady],
     ["github", t("setup.nav.github"), status.githubReady],
     ["shortcuts", t("setup.nav.shortcuts"), true],
+    ["sync", t("setup.nav.sync"), true],
     ["verification", t("setup.nav.verification"), status.verificationReady],
   ];
   return (
@@ -873,13 +940,19 @@ function StatusIcon({ ok }: { ok: boolean }) {
 function ProjectSection({
   form,
   saveState,
-  autosaveEnabled,
+  persisted,
+  saving,
+  onSave,
   onWorkspaceChange,
+  onWorkspaceCloned,
 }: {
   form: ProjectForm;
   saveState: "idle" | "saving" | "saved" | "error";
-  autosaveEnabled: boolean;
+  persisted: boolean;
+  saving: boolean;
+  onSave: () => Promise<ConfigRevisions | null>;
   onWorkspaceChange: (value: string) => void;
+  onWorkspaceCloned: (workspace: string) => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -887,7 +960,7 @@ function ProjectSection({
       <PanelHeader
         title={t("setup.project.title")}
         subtitle={t("setup.project.subtitle")}
-        saveState={autosaveEnabled ? saveState : undefined}
+        save={persisted ? { state: saveState, saving, onSave: () => void onSave() } : undefined}
       />
       <Stack mt="md">
         <LabeledSegmentedControl
@@ -902,7 +975,15 @@ function ProjectSection({
             form.setFieldValue("language", value as ProjectFormValues["language"])
           }
         />
-        <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+        <Stack gap="xs">
+          <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
+          <Group>
+            <CloneFromHubButton
+              destination={form.values.workspaceDir}
+              onCloned={(status) => onWorkspaceCloned(status.workspace ?? "")}
+            />
+          </Group>
+        </Stack>
         <Textarea
           label={<RequiredLabel text={t("setup.project.description")} />}
           aria-label={t("setup.project.description")}
@@ -950,7 +1031,9 @@ function ProjectSection({
 function IntelligenceSection({
   form,
   saveState,
-  autosaveEnabled,
+  persisted,
+  saving,
+  onSave,
   detections,
   detectionLoading,
   storedProviderKeys,
@@ -958,7 +1041,9 @@ function IntelligenceSection({
 }: {
   form: ProjectForm;
   saveState: "idle" | "saving" | "saved" | "error";
-  autosaveEnabled: boolean;
+  persisted: boolean;
+  saving: boolean;
+  onSave: () => Promise<ConfigRevisions | null>;
   detections: CliAgentDetection[];
   detectionLoading: boolean;
   storedProviderKeys: Record<string, boolean> | undefined;
@@ -966,6 +1051,31 @@ function IntelligenceSection({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  // The advanced editor writes different files from the basic settings above
+  // it, but they are one screen to the user, so one button saves both.
+  const saveAdvanced = useRef<((written: ConfigRevisions) => Promise<void>) | null>(null);
+  const [savingSection, setSavingSection] = useState(false);
+  const saveSection = async () => {
+    setSavingSection(true);
+    try {
+      // The basic settings write two of the files the advanced editor guards,
+      // so the advanced save is composed against what this one just left --
+      // otherwise one button would reliably collide with itself.
+      const written = await onSave();
+      if (written === null) {
+        // The basic half wrote nothing. Going on would apply the advanced half
+        // alone, which is not what one button means, and not what the message
+        // the user just saw says happened.
+        return;
+      }
+      await saveAdvanced.current?.(written);
+    } catch {
+      // Both halves report their own failure: the basic settings through the
+      // section's save state, the advanced editor through its own alert.
+    } finally {
+      setSavingSection(false);
+    }
+  };
 
   const detectedCliAgents = useMemo(
     () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
@@ -1020,7 +1130,15 @@ function IntelligenceSection({
       <PanelHeader
         title={t("setup.intelligence.title")}
         subtitle={t("setup.intelligence.subtitle")}
-        saveState={autosaveEnabled ? saveState : undefined}
+        save={
+          persisted
+            ? {
+                state: saveState,
+                saving: saving || savingSection,
+                onSave: () => void saveSection(),
+              }
+            : undefined
+        }
         badge={t("setup.intelligence.teamDefault")}
       />
       <Stack mt="md" gap="md">
@@ -1196,13 +1314,16 @@ function IntelligenceSection({
           </Stack>
         </Card>
 
-        {autosaveEnabled ? (
+        {persisted ? (
           <Accordion variant="contained">
             <Accordion.Item value="advanced-intelligence">
               <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
               <Accordion.Panel>
                 <IntelligenceEditor
-                  enabled={autosaveEnabled}
+                  enabled={persisted}
+                  onRegisterSave={(save) => {
+                    saveAdvanced.current = save;
+                  }}
                   detections={detections}
                   providers={providers}
                   teamLlmApiType={form.values.llmApiType}
@@ -1570,7 +1691,6 @@ function IntelligenceEditor({
   detections,
   llmProviderAvailability,
   providers,
-  saveMode = "auto",
   onRegisterSave,
   teamLlmApiType,
   teamCliAgent,
@@ -1583,8 +1703,8 @@ function IntelligenceEditor({
   detections: CliAgentDetection[];
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
-  saveMode?: "auto" | "external";
-  onRegisterSave?: (save: (() => Promise<void>) | null) => void;
+  /** The enclosing section's save button drives this editor too. */
+  onRegisterSave?: (save: ((written?: ConfigRevisions) => Promise<void>) | null) => void;
   teamLlmApiType?: string;
   teamCliAgent?: string;
   onTeamLlmApiTypeChange?: (val: string) => void;
@@ -1601,7 +1721,6 @@ function IntelligenceEditor({
     enabled,
   });
   const [draftState, setDraftState] = useState<IntelligenceDraftState | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   // Field id -> the JSON in that editor does not parse. A malformed object must
   // block saving, not be silently dropped on the way to the backend.
   const [jsonErrors, setJsonErrors] = useState<Record<string, boolean>>({});
@@ -1617,7 +1736,14 @@ function IntelligenceEditor({
   const hasJsonError = Object.keys(jsonErrors).length > 0;
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
-    onSuccess: () => {
+    onSuccess: (written) => {
+      // Take the revisions from the reply rather than waiting for the refetch
+      // below: this editor stays open and can be saved again immediately, and a
+      // save that overtakes the refetch would carry the revision it replaced.
+      queryClient.setQueryData<IntelligenceConfig>(
+        ["intelligence-config", personId ?? "team"],
+        (current) => (current ? { ...current, revisions: written.revisions } : current),
+      );
       queryClient.invalidateQueries({ queryKey: ["intelligence-config", personId ?? "team"] });
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
     },
@@ -1635,22 +1761,23 @@ function IntelligenceEditor({
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
   const canSave = Boolean(payload && dirty && !hasJsonError);
 
-  const saveDraft = useCallback(async () => {
-    if (!payload || !serializedPayload || hasJsonError) {
-      return;
-    }
-    setSaveState("saving");
-    try {
-      await mutation.mutateAsync(payload);
+  const saveDraft = useCallback(
+    async (written?: ConfigRevisions) => {
+      if (!payload || !serializedPayload || hasJsonError) {
+        return;
+      }
+      await mutation.mutateAsync({
+        ...payload,
+        // `written` describes files a save that just ran left behind, and takes
+        // precedence over what this editor read before that save.
+        expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
+      });
       setDraftState((current) =>
         current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
       );
-      setSaveState("saved");
-    } catch (error) {
-      setSaveState("error");
-      throw error;
-    }
-  }, [draftKey, hasJsonError, mutation, payload, serializedPayload]);
+    },
+    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
+  );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
     setDraftState((current) => {
@@ -1665,26 +1792,15 @@ function IntelligenceEditor({
           current?.key === draftKey ? current.savedSerialized : querySerializedPayload,
       };
     });
-    setSaveState("idle");
   };
 
   useEffect(() => {
-    if (!enabled || saveMode !== "auto" || !canSave) {
+    if (!enabled || !onRegisterSave) {
       return;
     }
-    const timer = window.setTimeout(() => {
-      void saveDraft().catch(() => undefined);
-    }, 800);
-    return () => window.clearTimeout(timer);
-  }, [canSave, enabled, saveDraft, saveMode]);
-
-  useEffect(() => {
-    if (saveMode !== "external" || !enabled || !onRegisterSave) {
-      return;
-    }
-    onRegisterSave(saveDraft);
+    onRegisterSave(canSave ? saveDraft : null);
     return () => onRegisterSave(null);
-  }, [enabled, onRegisterSave, saveDraft, saveMode]);
+  }, [canSave, enabled, onRegisterSave, saveDraft]);
 
   // Sync basic settings (props) -> advanced settings (draftState)
   useEffect(() => {
@@ -2110,7 +2226,6 @@ function IntelligenceEditor({
             ? t("setup.intelligence.memberOverrideDescription")
             : t("setup.intelligence.teamAdvancedDescription")}
         </Text>
-        {saveMode === "auto" ? <AutosaveIndicator state={saveState} /> : null}
       </Group>
       {personId ? (
         <Switch
@@ -2965,9 +3080,13 @@ function MembersSection({
     setIsActive(nextPersonType === "human" ? false : member.is_active);
   };
 
+  // What the member form was composed against, sent back with the save so an
+  // edit that arrived from another machine meanwhile is not replaced unseen.
+  const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions>({});
   const memberConfigMutation = useMutation({
     mutationFn: getMemberConfig,
     onSuccess: (snapshot) => {
+      setMemberRevisions(snapshot.revisions);
       fillFormFromMember(snapshot);
       setMode("edit");
     },
@@ -2995,11 +3114,11 @@ function MembersSection({
   });
   const addMemberMutation = useMutation({
     mutationFn: addMemberConfig,
-    onSuccess: (_, request) => {
+    onSuccess: (written, request) => {
       if (!hasPersistedProject) {
         setDraftMembers((current) => [
           ...current.filter((member) => member.person_id !== request.person_id),
-          memberRequestToConfig(request),
+          memberRequestToConfig(request, written.revisions),
         ]);
       }
       onMemberActiveDelta(effectiveIsActive ? 1 : 0);
@@ -3020,7 +3139,10 @@ function MembersSection({
       originalPersonId: string;
       body: MemberConfigUpdateRequest;
     }) => updateMemberConfig(originalPersonId, body),
-    onSuccess: (_, variables) => {
+    onSuccess: (written, variables) => {
+      // The screen stays open on the member that was just saved, so without
+      // this its next save would be composed against the revision it replaced.
+      setMemberRevisions(written.revisions);
       const previous =
         members.find((member) => member.person_id === variables.originalPersonId) ??
         draftMembers.find((member) => member.person_id === variables.originalPersonId);
@@ -3029,7 +3151,7 @@ function MembersSection({
       if (!hasPersistedProject) {
         setDraftMembers((current) => [
           ...current.filter((member) => member.person_id !== variables.originalPersonId),
-          memberRequestToConfig(variables.body),
+          memberRequestToConfig(variables.body, written.revisions),
         ]);
       }
       onMemberActiveDelta(delta);
@@ -3395,7 +3517,10 @@ function MembersSection({
           const delta = Number(effectiveIsActive) - Number(previous?.is_active ?? false);
           setDraftMembers((current) => [
             ...current.filter((member) => member.person_id !== editingPersonId),
-            memberRequestToConfig({ ...request, original_person_id: editingPersonId }),
+            memberRequestToConfig(
+              { ...request, original_person_id: editingPersonId },
+              memberRevisions,
+            ),
           ]);
           onMemberActiveDelta(delta);
           setEditingPersonId(personId.trim());
@@ -3406,6 +3531,7 @@ function MembersSection({
           body: {
             ...request,
             original_person_id: editingPersonId,
+            expected_revisions: memberRevisions,
           },
         });
         syncAgentFieldAfterSave(request);
@@ -3416,6 +3542,27 @@ function MembersSection({
       }
       await addMemberMutation.mutateAsync(request);
       syncAgentFieldAfterSave(request);
+    } catch (error) {
+      if (isStaleConfigSave(error) && editingPersonId) {
+        // Reload the member rather than resend this form: the input it holds
+        // is what would have overwritten the change that arrived.
+        memberConfigMutation.mutate(editingPersonId);
+        notifications.show({
+          color: "warning",
+          title: t("setup.staleSave.title"),
+          message: t("setup.staleSave.body"),
+        });
+        return;
+      }
+      if (isBusyConfigSave(error)) {
+        notifications.show({
+          color: "warning",
+          title: t("setup.busySave.title"),
+          message: t("setup.busySave.body"),
+        });
+        return;
+      }
+      throw error;
     } finally {
       setSavingMember(false);
     }
@@ -3430,6 +3577,7 @@ function MembersSection({
 
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
+    setMemberRevisions({});
     setEditingPersonId(memberId);
     setActiveTab(initialTab ?? "basic");
     const draft = draftMembers.find((member) => member.person_id === memberId);
@@ -3989,7 +4137,6 @@ function MembersSection({
                       detections={cliDetections}
                       llmProviderAvailability={llmProviderAvailability}
                       providers={providers}
-                      saveMode="external"
                       onRegisterSave={(save) => {
                         memberIntelligenceSaveRef.current = save;
                       }}
@@ -5345,12 +5492,12 @@ function PanelHeader({
   title,
   subtitle,
   badge,
-  saveState,
+  save,
 }: {
   title: string;
   subtitle: string;
   badge?: string;
-  saveState?: "idle" | "saving" | "saved" | "error";
+  save?: SectionSave;
 }) {
   return (
     <Group justify="space-between" align="flex-start">
@@ -5363,24 +5510,40 @@ function PanelHeader({
           {subtitle}
         </Text>
       </Box>
-      {saveState ? <AutosaveIndicator state={saveState} /> : null}
+      {save ? <SectionSaveControl {...save} /> : null}
     </Group>
   );
 }
 
-function AutosaveIndicator({ state }: { state: "idle" | "saving" | "saved" | "error" }) {
+type SectionSave = {
+  state: "idle" | "saving" | "saved" | "error";
+  saving: boolean;
+  onSave: () => void;
+};
+
+/**
+ * Saving is deliberate here, matching the member editor. Writing on every
+ * keystroke gave the user no way to hold a change back, and with another
+ * machine editing the same files it also decided, without being asked, that
+ * a half-typed value should win over what just arrived.
+ */
+function SectionSaveControl({ state, saving, onSave }: SectionSave) {
   const { t } = useTranslation();
-  const label = {
-    idle: t("setup.autosave.idle"),
-    saving: t("setup.autosave.saving"),
-    saved: t("setup.autosave.saved"),
-    error: t("setup.autosave.error"),
-  }[state];
-  const color = state === "error" ? "danger" : state === "saved" ? "success" : "neutral";
   return (
-    <Badge color={color} variant="light" leftSection={<Save size={12} />}>
-      {label}
-    </Badge>
+    <Group gap="xs" align="center">
+      {state === "saved" || state === "error" ? (
+        <Badge
+          color={state === "error" ? "danger" : "success"}
+          variant="light"
+          leftSection={<Save size={12} />}
+        >
+          {t(`setup.save.${state}`)}
+        </Badge>
+      ) : null}
+      <Button loading={saving} onClick={onSave} size="xs">
+        {t("setup.save.action")}
+      </Button>
+    </Group>
   );
 }
 
@@ -5570,100 +5733,6 @@ function InfoCallout({ title, children }: { title: string; children: ReactNode }
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function sameFormErrors(current: ProjectForm["errors"], next: Record<string, string>): boolean {
-  const currentKeys = Object.keys(current);
-  const nextKeys = Object.keys(next);
-  return (
-    currentKeys.length === nextKeys.length && nextKeys.every((key) => current[key] === next[key])
-  );
-}
-
-function useAutosave(
-  form: ProjectForm,
-  config: ConfigStatus | undefined,
-  schema: ReturnType<typeof createProjectSchema>,
-  save: (values: ProjectFormValues) => Promise<unknown>,
-  setSaveState: (state: "idle" | "saving" | "saved" | "error") => void,
-  enabled: boolean,
-) {
-  const previous = useRef("");
-  const timerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const serialized = JSON.stringify(form.values);
-    if (!previous.current) {
-      previous.current = serialized;
-      return;
-    }
-
-    const isValueChanged = previous.current !== serialized;
-
-    if (isValueChanged) {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      previous.current = serialized;
-    }
-
-    if (!form.isDirty()) {
-      setSaveState("idle");
-      return;
-    }
-    if (!config?.project_file_exists) {
-      setSaveState("idle");
-      return;
-    }
-
-    const validation = schema.safeParse(form.values);
-    if (!validation.success) {
-      const errors: Record<string, string> = {};
-      for (const [key, messages] of Object.entries(validation.error.flatten().fieldErrors)) {
-        if (messages && messages.length > 0) {
-          errors[key] = messages[0];
-        }
-      }
-      // Only write when the errors actually change. `form` is a fresh object on
-      // every render, so this effect re-runs each render; setting a new errors
-      // object unconditionally would re-render → re-run → loop indefinitely.
-      if (!sameFormErrors(form.errors, errors)) {
-        form.setErrors(errors);
-      }
-      setSaveState("idle");
-      return;
-    }
-
-    if (Object.keys(form.errors).length > 0) {
-      form.clearErrors();
-    }
-
-    if (isValueChanged && timerRef.current === null) {
-      timerRef.current = window.setTimeout(async () => {
-        setSaveState("saving");
-        try {
-          await save(validation.data);
-          setSaveState("saved");
-        } catch {
-          setSaveState("error");
-        } finally {
-          timerRef.current = null;
-        }
-      }, 700);
-    }
-  }, [enabled, form, form.values, config, save, schema, setSaveState]);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-      }
-    };
-  }, []);
 }
 
 function useSetupStatus(
@@ -6172,6 +6241,10 @@ export function toProjectUpdateRequest(
   const github = values.githubDecision === "enabled" ? parseGitHub(values.githubProjectUrl) : null;
   return {
     config_dir: snapshot.config_dir || config?.config_dir || resolveConfigDir(values.workspaceDir),
+    // What this form was composed against. Another machine's edit can arrive
+    // while the screen sits open, and saving would otherwise replace it with
+    // values read before it landed.
+    expected_revisions: snapshot.revisions,
     language: values.language,
     description: values.description,
     llm_api_type: values.llmApiType,
@@ -6515,8 +6588,12 @@ function joinPath(base: string, suffix: string) {
 
 function memberRequestToConfig(
   request: MemberSetupRequest | MemberConfigUpdateRequest,
+  revisions: ConfigRevisions,
 ): MemberConfig {
   return {
+    // Where the write left this member's files, read before the backend
+    // released the lock. The screen stays open, so its next save stands here.
+    revisions,
     person_id: request.person_id,
     person_name: request.person_name,
     person_type: request.person_type,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -371,6 +372,32 @@ def test_a_device_reconnects_to_a_rebuilt_hub_without_losing_its_own_work(
 
     assert _hub_file(new_hub, CONFIG) == "name: shared\n"
     assert _hub_file(new_hub, ROLES) == "a: b\n"
+
+
+def test_a_hub_rebuilt_at_the_same_address_receives_the_content_again(
+    tmp_path: Path, hub: Path
+) -> None:
+    """The realistic rebuild: the replacement hub lives where the old one did.
+
+    Nothing about the remote changes, so the only thing that can tell this
+    device the hub is empty is the fetch itself. Left unpruned, the
+    remote-tracking ref from the hub that is gone keeps describing content the
+    replacement has never seen, and this device sends it nothing while
+    reporting itself in sync.
+    """
+    root = _workspace(tmp_path / "mac", **{CONFIG: "name: shared\n"})
+    registered = enrollment.enroll(str(hub), root)
+    device: Device = make_device(
+        root, hub, device_id="device-mac", workspace_id=registered.workspace_id
+    )
+    # Fetching at least once is what leaves a remote-tracking ref behind.
+    device.manager.synchronize()
+
+    shutil.rmtree(hub)
+    Repo.init(hub, bare=True, initial_branch="main")
+    enrollment.enroll(str(hub), root)
+
+    assert _hub_file(hub, CONFIG) == "name: shared\n"
 
 
 def test_the_device_that_reconnects_keeps_synchronizing_afterwards(

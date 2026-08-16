@@ -337,10 +337,30 @@ class PersonConfigSnapshot(BaseModel):
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
     avatar_timestamp: int = 0
+    # Config-relative path -> revision, to be sent back with the save so an
+    # edit made elsewhere since this read is refused instead of overwritten.
+    revisions: dict[str, str] = Field(default_factory=dict)
 
 
 class PersonUpdateInput(PersonSetupInput):
     original_person_id: str
+    # Revisions this form was composed against; empty for a member being added.
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
+
+
+#: Config files the project screen reads and writes, relative to the config
+#: directory. The screen saves all of them together, so a stale-write check has
+#: to cover the set rather than the one file the user visibly edited.
+PROJECT_CONFIG_PATHS = (
+    "team/project.yml",
+    "intelligences/model_mapping.yml",
+    "intelligences/cli_agent_mapping.yml",
+)
+
+
+def person_config_paths(person_id: str) -> tuple[str, ...]:
+    """Return the config files the member screen reads and writes."""
+    return (f"team/members/{person_id}/person.yml",)
 
 
 def _project_config_file(config_dir: Path) -> Path:

@@ -287,8 +287,14 @@ class LocalSyncRepository:
 
         The remote's own refspec is used rather than naming the branch, so a
         hub that has no commits yet is an empty answer rather than an error.
+
+        Pruning is what makes "the hub has nothing" reachable at all. A hub
+        rebuilt at the address the old one used answers an unpruned fetch with
+        silence, and the remote-tracking ref left over from the hub that is gone
+        keeps describing content the new one has never seen -- so this device
+        concludes it is in sync and sends the rebuilt hub nothing.
         """
-        self._repo().git.fetch(SYNC_REMOTE)
+        self._repo().git.fetch(SYNC_REMOTE, "--prune")
 
     def fetch_preview(self, url: str) -> str | None:
         """Read a hub's content without connecting this workspace to it.

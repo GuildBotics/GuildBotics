@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,98 @@ def _offering(monkeypatch: pytest.MonkeyPatch, keys: dict[str, str]) -> None:
     """Make the hub offer these ``line -> fingerprint`` pairs."""
     monkeypatch.setattr(connection, "_scan_host_keys", lambda endpoint: list(keys))
     monkeypatch.setattr(connection, "_fingerprint_of", lambda line: keys[line])
+
+
+def _stored(monkeypatch: pytest.MonkeyPatch, keys: set[tuple[str, str]]) -> None:
+    """Make ``known_hosts`` already hold these ``(type, key)`` pairs."""
+    monkeypatch.setattr(connection, "_known_host_keys", lambda endpoint: keys)
+
+
+def test_a_host_offering_a_key_this_device_stored_is_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _offering(monkeypatch, {ED25519: "SHA256:stored"})
+    _stored(monkeypatch, {("ssh-ed25519", "AAAAC3Nz")})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (True, False)
+
+
+def test_a_host_offering_a_key_other_than_the_stored_one_is_not_trusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Knowing the host by name is not enough. Every later connection is checked
+    against the stored key, so calling this trusted sends the caller straight
+    into an SSH call that fails on the host key -- and the fingerprints the user
+    has to compare would never be shown."""
+    _offering(monkeypatch, {ED25519: "SHA256:rotated"})
+    _stored(monkeypatch, {("ssh-ed25519", "AAAAreplaced")})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (False, True)
+    assert result.fingerprints == ("SHA256:rotated",)
+
+
+def test_a_host_no_key_is_stored_for_is_a_first_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _offering(monkeypatch, {ED25519: "SHA256:new"})
+    _stored(monkeypatch, set())
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert (result.trusted, result.changed) == (False, False)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("hub.local ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("|1|aGFzaA==|aGFzaA== ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("@cert-authority hub.local ssh-ed25519 AAAAC3Nz", None),
+        ("@revoked hub.local ssh-ed25519 AAAAC3Nz", None),
+        ("# Host hub.local found: line 3", None),
+        ("", None),
+    ],
+)
+def test_the_comparable_part_of_a_host_key_line(
+    line: str, expected: tuple[str, str] | None
+) -> None:
+    """``ssh-keygen -F`` names the host by hash and ``ssh-keyscan`` names it
+    plainly, so only the type and the key itself compare between them. A marked
+    line is not a plain host key at all, and reading one as though the marker
+    were absent would claim a trust OpenSSH does not grant."""
+    assert connection._key_material(line) == expected
+
+
+def test_a_revoked_key_the_hub_offers_is_never_trusted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`@revoked` records a key the user must not connect with.
+
+    Counting it as a stored key would skip the confirmation this probe exists
+    for, and the connection would then be refused on that very key -- the same
+    dead end as an unrecognized rotation.
+    """
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(f"@revoked {ED25519}\n", encoding="utf-8")
+    monkeypatch.setattr(connection, "_known_hosts_path", lambda: known_hosts)
+    monkeypatch.setattr(connection, "keygen_executable", lambda: "ssh-keygen")
+    monkeypatch.setattr(
+        connection.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 0, known_hosts.read_text(encoding="utf-8"), ""
+        ),
+    )
+    _offering(monkeypatch, {ED25519: "SHA256:revoked"})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert result.trusted is False
+    assert result.fingerprints == ("SHA256:revoked",)
 
 
 def test_trusting_stores_the_key_the_user_confirmed(
