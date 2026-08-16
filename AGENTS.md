@@ -300,7 +300,9 @@ help / docstring が正であり、member コマンドの一行説明は
 - **`config/secrets.yml` だけは例外で `schema_version` を持てない。** 境界の `_validate_secret_index` が top-level を `{store_id, keys}` に限定するため、付けると境界が拒否する。Secret 値の入る余地を構造的に無くすための制約なので正しい取引だが、このファイルだけ世代検知が効かない（`validation.py` の docstring に明記）
 - 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
 - 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
-- **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける
+- **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`、`MAX_COMMAND_FILE_BYTES = MAX_SHARED_FILE_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける
+- 母集団は `tests/guildbotics/workspace/test_shared_size_limits.py` が package 内の `*_BYTES` / `*_CHARS` 定数を全列挙し、「共有ファイルを縛る（境界定数から導出する）」「共有されないものを縛る（何を）」へ分類させる。数値を書き直した定数はそれだけで落ちる。**上限を書き直すのは読みにくい重複ではなく欠陥で、2つの差分がそのまま「保存は成功するが永久に送信できない」範囲になる**
+- 1つの文書が複数ファイルに分かれる場合（memory の `meta.yml` と `body.md`）は、**どちらも書く前に両方を測る**。片方が着地して片方が拒否された文書は、古い文書でも新しい文書でもない
 
 ### 5. スケジューラ
 

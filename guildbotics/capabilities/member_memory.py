@@ -18,9 +18,9 @@ from guildbotics.capabilities.member_memory_audit import append_memory_event
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
+    dump_yaml,
     get_workspace_state_path,
     load_yaml_file,
-    save_yaml_file,
 )
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
@@ -28,6 +28,7 @@ from guildbotics.utils.workspace_sync_port import (
     write_shared_text,
 )
 from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
 DEFAULT_DIGEST_N = 20
@@ -573,7 +574,6 @@ class MemberMemoryService:
         raise MemberMemoryError(f"Memory document not found: {doc_id}")
 
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
-        doc_dir.mkdir(parents=True, exist_ok=True)
         # Stamped at the write rather than by the caller, so the generation
         # never reaches ``_changed_fields`` and is never reported as an edit
         # the member made.
@@ -581,8 +581,17 @@ class MemberMemoryService:
             "schema_version": SHARED_RECORD_SCHEMA_VERSION,
             **_redact_meta(meta),
         }
-        save_yaml_file(doc_dir / META_FILE, stamped)
-        write_shared_text(doc_dir / BODY_FILE, _redact_secrets(body))
+        meta_text = dump_yaml(stamped)
+        body_text = _redact_secrets(body)
+        # Both are measured before either is written: a document whose metadata
+        # landed and whose body was refused is neither the old document nor the
+        # new one.
+        _require_shareable_size(META_FILE, meta_text)
+        _require_shareable_size(BODY_FILE, body_text)
+
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        write_shared_text(doc_dir / META_FILE, meta_text)
+        write_shared_text(doc_dir / BODY_FILE, body_text)
         (doc_dir / "assets").mkdir(exist_ok=True)
         notify_shared_state_changed("update", [doc_dir / META_FILE])
 
@@ -716,6 +725,27 @@ def _source_entries_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _require_shareable_size(filename: str, text: str) -> None:
+    """Refuse content the commit boundary would then hold back forever.
+
+    A size limit is the one thing the boundary rejects that the product's own
+    paths accept: an agent can pour a long answer into a memory document, the
+    save succeeds, the agent reports success, and only the synchronization
+    queue -- on every cycle from then on -- says the change cannot be sent. So
+    the limit is answered here, where the writer can still say no, and it is
+    the boundary's own limit rather than a second opinion about it.
+
+    Raises:
+        MemberMemoryError: When the content is above the shared size limit.
+    """
+    size = len(text.encode("utf-8"))
+    if size > MAX_SHARED_FILE_BYTES:
+        raise MemberMemoryError(
+            f"Memory {filename} is {size} bytes, above the "
+            f"{MAX_SHARED_FILE_BYTES} byte limit for a shared file."
+        )
 
 
 def _validate_doc_id(doc_id: str) -> str:
