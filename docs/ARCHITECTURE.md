@@ -527,25 +527,28 @@ waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately
 would otherwise report the hub unreachable over a local save.
 
 Which writers must take it is not decided writer by writer. Every write to a shared path
-goes through the sync port, and the port's helpers refuse one made outside the lock, so a
-writer that has not declared its span fails immediately and by name. The helpers do not
-take the lock themselves: acquired per write, it would leave the read a read-modify-write
-derives from outside the span — protected-looking and not protected. Within one thread the
-lock re-enters, so a writer declares its own span without knowing whether a caller declared
-a wider one; that question is what was being answered per writer, and wrongly.
+goes through the sync port, and the port takes the lock for it, so a writer that composes
+what it writes without reading anything has nothing to declare and no way to forget.
+Device-local paths and an unselected workspace are dropped by the same judgement that
+decides whether to announce a change, so neither waits on anything.
 
-Config is not the only side that loses this way. Conversation control state
-(`state/chat_state`) and member memory (`state/documents`) read a shared file and write it
-back without knowing Git exists, so the same interleaving reinstates what the queue just
-adopted — costing a Slack answer, or a whole memory document. They hold the same lock across
-their read and their write. Optimistic locking stays with config alone: the lock closes the
-silent loss, while a conflict the queue records as first-committer-wins is the design
-working. The lock is not re-entrant, so an operation takes it once and never around a call
-into another writer — memory releases it before the audit journal, which takes its own. With
-no workspace selected it stands down and yields nothing, matching the sync port, which drops
-changes it cannot place in a workspace. Who has to take it is settled by reading the code:
-`tests/guildbotics/workspace/test_shared_write_lock_boundary.py` finds every function that
-reaches a shared-write helper and requires each one to be classified.
+What the port cannot infer is how far back a span reaches. Config is not the only side that
+loses this way: conversation control state (`state/chat_state`) and member memory
+(`state/documents`) read a shared file and write it back without knowing Git exists, so the
+same interleaving reinstates what the queue just adopted — costing a Slack answer, or a
+whole memory document. `update_shared_text(path, apply)` and its JSON form take the lock,
+read, hand the content to `apply`, and write what comes back, so the span starts at the read
+by construction rather than by each writer remembering to say so. It is the same shape as
+`ConfigRepository.write` for the same reason: passing the transformation in leaves no
+sequence for a caller to assemble wrongly.
+
+A few operations are wider than any single write — a journal that may be replaced rather
+than appended to, a document that is two files, a policy that is at most one per directory —
+and those take the lock themselves. Within one thread it re-enters, so such a writer declares
+its span without knowing whether a caller declared a wider one; that question is what was
+being answered per writer, and wrongly. Optimistic locking stays with config alone: the lock
+closes the silent loss, while a conflict the queue records as first-committer-wins is the
+design working.
 
 **What the boundary commits is what it validated.** Content is staged first and checked
 from the index. Reading a file to validate it and letting `git add` read it again are two
@@ -555,12 +558,15 @@ working tree matches the commit it made. Staging first also settles a deletion r
 before the commit: the recreated file is staged as content, so it is checked as content. A
 file that fails is unstaged and held back, left on disk for the user to fix.
 
-**The interval no writer can protect.** Convergence waits on the hub without the lock, and a
+**The interval no writer can protect.** Fetching waits on the hub without the lock, and a
 save made in that interval holds the lock correctly and is still only in the working tree, so
-the checkout would take it with nothing recording the loss. The queue therefore re-runs the
-commit boundary as the first thing inside the convergence lock: the save becomes a change with
-a name, which either survives the adoption or is rejected on the record. A commit there means
-the convergence was computed from a head that no longer exists, so the cycle is redone.
+the checkout would take it with nothing recording the loss. The queue's convergence therefore
+holds the lock from end to end — nothing in it waits on the hub — and re-runs the commit
+boundary as its first act: the save becomes a change with a name, which either survives the
+adoption or is rejected on the record. A commit there means the convergence was computed from
+a head that no longer exists, so the cycle is redone. Joining a hub has the same interval,
+for the same reason, and closes it the same way — the join commits again inside its own lock
+and compares against the head that produced.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,
