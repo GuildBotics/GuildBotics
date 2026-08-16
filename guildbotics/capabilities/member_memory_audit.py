@@ -10,12 +10,13 @@ from typing import Any
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
-    notify_shared_state_changed,
+    append_shared_text,
+    write_shared_text,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
@@ -133,7 +134,8 @@ class MemoryAuditStore:
         another member's CLI process, or the synchronization queue checking a
         hub's content out over it -- has to be excluded for the span of both,
         which the in-process lock cannot do. So the shared-write lock is held
-        here, at the one place events enter the journal.
+        here, at the one place events enter the journal, and the write itself
+        goes through the port so the announcement is inside the span too.
         """
         path = self.path
         line = self._bounded_line(item)
@@ -141,16 +143,13 @@ class MemoryAuditStore:
             return
         try:
             with shared_write_lock(), _MEMORY_AUDIT_LOCK:
-                path.parent.mkdir(parents=True, exist_ok=True)
                 current_size = path.stat().st_size if path.exists() else 0
                 if current_size + len(line.encode("utf-8")) + 1 > self._max_file_bytes:
                     self._rewrite_with_newest(path, line)
                 else:
-                    with path.open("a", encoding="utf-8") as handle:
-                        handle.write(line + "\n")
+                    append_shared_text(path, line + "\n")
         except OSError:
             return
-        notify_shared_state_changed("update", [path])
 
     def list_events(
         self,
@@ -211,13 +210,10 @@ class MemoryAuditStore:
                 break
             retained.append(line)
             size += line_size
-        try:
-            path.write_text("\n".join(reversed(retained)) + "\n", encoding="utf-8")
-        except OSError:
-            return
+        write_shared_text(path, "\n".join(reversed(retained)) + "\n")
 
     def _bounded_line(self, item: dict[str, Any]) -> str:
-        item = {"schema_version": SHARED_RECORD_SCHEMA_VERSION, **item}
+        item = {**item, "schema_version": SHARED_RECORD_SCHEMA_VERSION}
         line = json.dumps(item, ensure_ascii=False, default=str)
         size = len(line.encode("utf-8")) + 1
         if size <= self._max_file_bytes:

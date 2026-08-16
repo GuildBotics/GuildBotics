@@ -73,7 +73,7 @@ def apply_config_write[T](
 
     Note:
         A lock this could not take raises
-        :class:`~guildbotics.workspace.shared_write_lock.SharedWriteBusyError`,
+        :class:`~guildbotics.utils.shared_write_lock.SharedWriteBusyError`,
         which the application turns into one 503 for every route rather than
         each route naming it.
     """

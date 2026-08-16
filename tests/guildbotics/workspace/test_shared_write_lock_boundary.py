@@ -1,39 +1,32 @@
-"""Everything that changes a shared file changes it under the shared lock.
+"""A shared file cannot be changed without declaring the span it changes in.
 
-The rule is not "these particular stores take the lock" but "no writer of a
-shared file can be added without deciding whether it needs one". A writer that
-reads a file and writes it back outside the lock looks like an ordinary save in
-review; what it costs appears on another machine, as a change that vanished
-without being recorded as a conflict. Chat state loses an answer to a message,
-or answers it twice; memory loses a whole document.
+This used to be a list. Every function that wrote a shared file was classified
+here as taking the lock or not needing it, and the classification was the thing
+that kept being wrong -- once because "does it read before writing?" is not the
+question. The question is whether the change can land inside a window the
+synchronization queue is working in, and the queue's windows cover the whole
+shared tree, so for a writer of a shared path the answer is always yes.
 
-So the population is taken from the code rather than from a list someone
-remembered to keep: every function in the package that calls one of the
-shared-write helpers, found by reading the source. Each one is classified
-below, and a new writer fails this file until it is. Reaching the helpers is
-what makes the enumeration reliable -- a writer that opens the file itself
-still has to announce the change to the sync port, so it is caught too.
-
-Being classified as "the lock is taken at X" is a claim about X, so the second
-half of this file makes every X prove it: with the lock already held, the
-operation must give up rather than write.
+So there is no list any more. Every write to a shared path goes through the
+workspace sync port, and the port refuses one made outside the lock. What is
+checked here is that refusal, and the two things a writer still has to get
+right on its own: that its span covers the read its write is derived from, and
+that a wider span from a caller subsumes a narrower one rather than deadlocking
+against it.
 """
 
 from __future__ import annotations
 
-import ast
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO, Any
 
 import pytest
 
-import guildbotics.capabilities.member_memory as member_memory_module
-import guildbotics.capabilities.member_memory_audit as memory_audit_module
-import guildbotics.integrations.file_chat_state_store as chat_state_module
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
@@ -44,171 +37,22 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.workspace.shared_write_lock import (
+from guildbotics.observability.activity_event_store import ActivityEventStore
+import guildbotics.utils.shared_write_lock as shared_write_lock_module
+from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
+    SharedWriteLockRequiredError,
     shared_write_lock,
 )
-
-PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "guildbotics"
-
-#: Calling one of these means the caller is changing a shared file, or telling
-#: the sync queue that it just did. ``save_yaml_file`` is included because it
-#: is how config is written, and ``notify_shared_state_changed`` because it is
-#: how a writer that opens the file itself still reaches the queue.
-SHARED_WRITE_HELPERS = {
-    "delete_shared_path",
-    "notify_shared_state_changed",
-    "save_yaml_file",
-    "write_shared_bytes",
-    "write_shared_json",
-    "write_shared_text",
-}
-
-#: The helpers' own definitions and the one function that forwards to them.
-#: Nothing here writes on its own behalf.
-PLUMBING = {
-    "guildbotics.utils.fileio:save_yaml_file",
-    "guildbotics.utils.workspace_sync_port:delete_shared_path",
-    "guildbotics.utils.workspace_sync_port:write_shared_bytes",
-    "guildbotics.utils.workspace_sync_port:write_shared_json",
-    "guildbotics.utils.workspace_sync_port:write_shared_text",
-}
-
-#: Writers that run inside a block holding the lock, and where that block is.
-#: The operation named here is the one the second half of this file checks.
-UNDER_THE_LOCK = {
-    "guildbotics.app_api.intelligences:IntelligenceConfigService._reconcile_mapping_file": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.app_api.intelligences:IntelligenceConfigService._reconcile_member_defs": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.app_api.intelligences:IntelligenceConfigService._write_cli_agent_def": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.app_api.intelligences:IntelligenceConfigService._write_model_def": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.app_api.intelligences:IntelligenceConfigService._write_native_agent_policy": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.app_api.intelligences:IntelligenceConfigService.update_config": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.capabilities.member_memory:MemberMemoryService._write_doc": (
-        "MemberMemoryService.record / update"
-    ),
-    "guildbotics.capabilities.member_memory:MemberMemoryService._write_recent": (
-        "MemberMemoryService.record / update / touch / archive / promote"
-    ),
-    "guildbotics.capabilities.member_memory:_notify_document_moved": (
-        "MemberMemoryService.archive / promote"
-    ),
-    "guildbotics.capabilities.member_memory_audit:MemoryAuditStore.record": (
-        "MemoryAuditStore.record itself"
-    ),
-    "guildbotics.editions.simple.setup_service:SimplePersonSetupService.update_person": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.editions.simple.setup_service:SimplePersonSetupService.write_person": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.editions.simple.setup_service:SimpleProjectSetupService.update_project": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.editions.simple.setup_service:SimpleProjectSetupService.write_project": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.editions.simple.setup_service:_write_default_person_id": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.integrations.file_chat_state_store:FileConversationStateStore._remove": (
-        "every mutating method of FileConversationStateStore"
-    ),
-    "guildbotics.integrations.file_chat_state_store:FileConversationStateStore._write_json": (
-        "every mutating method of FileConversationStateStore"
-    ),
-    "guildbotics.observability.session_transcripts:write_transcript_settings": (
-        "app_api.config_revisions.apply_config_write"
-    ),
-    "guildbotics.utils.secret_store:KeyringSecretStore._write_index": (
-        "cli.secrets, the only caller that changes the index"
-    ),
-}
-
-#: Writers that do not need the lock, and why. A reason is required because the
-#: next person to add a writer has to answer the same question, and "it looked
-#: fine" is not an answer anyone can check.
-WITHOUT_THE_LOCK = {
-    "guildbotics.app_api.hotkeys:save_hotkeys": (
-        "local/hotkeys.yml is device-specific and never shared"
-    ),
-    "guildbotics.capabilities.task_runs:RunStore.append": (
-        "appends a line without reading the journal back, so nothing it wrote "
-        "is derived from content the queue could have replaced"
-    ),
-    "guildbotics.observability.activity_event_store:ActivityEventStore.record": (
-        "writes one new file per event and reads none of them"
-    ),
-    "guildbotics.utils.workspace_migrate:_convert_secrets_index": (
-        "builds a workspace that is not selected yet, so it has no queue"
-    ),
-    "guildbotics.workspace.identity:ensure_workspace_identity": (
-        "numbers the workspace once, under its own identity lock"
-    ),
-    "guildbotics.workspace.identity:publish_device_record": (
-        "only this device writes its own record, from its local identity"
-    ),
-}
-
-
-def _shared_write_sites() -> dict[str, list[int]]:
-    """Return every function in the package that reaches a shared-write helper."""
-    found: dict[str, list[int]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
-        module = ".".join(path.relative_to(PACKAGE_ROOT.parent).with_suffix("").parts)
-        enclosing: list[str] = []
-
-        def visit(node: ast.AST) -> None:
-            named = isinstance(
-                node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-            )
-            if named:
-                enclosing.append(node.name)  # type: ignore[attr-defined]
-            if isinstance(node, ast.Call):
-                func = node.func
-                name = getattr(func, "attr", None) or getattr(func, "id", None)
-                if name in SHARED_WRITE_HELPERS and enclosing:
-                    key = f"{module}:{'.'.join(enclosing)}"
-                    found.setdefault(key, []).append(node.lineno)
-            for child in ast.iter_child_nodes(node):
-                visit(child)
-            if named:
-                enclosing.pop()
-
-        visit(ast.parse(path.read_text(encoding="utf-8")))
-    return found
-
-
-def test_every_writer_of_a_shared_file_is_classified() -> None:
-    """A new shared writer fails here until someone decides about its lock."""
-    writers = set(_shared_write_sites()) - PLUMBING
-    classified = set(UNDER_THE_LOCK) | set(WITHOUT_THE_LOCK)
-
-    unclassified = sorted(writers - classified)
-    assert not unclassified, (
-        "These write a shared file without saying whether they hold the "
-        f"shared-write lock: {unclassified}"
-    )
-
-    stale = sorted(classified - writers)
-    assert not stale, f"These are classified but no longer write anything: {stale}"
-
-
-def test_no_writer_is_classified_both_ways() -> None:
-    """The two tables answer the same question, so an entry belongs to one."""
-    both = sorted(set(UNDER_THE_LOCK) & set(WITHOUT_THE_LOCK))
-    assert not both, f"Classified as taking the lock and as not needing it: {both}"
+from guildbotics.utils.workspace_sync_port import (
+    append_shared_text,
+    delete_shared_path,
+    notify_shared_state_changed,
+    write_shared_bytes,
+    write_shared_json,
+    write_shared_text,
+)
+from guildbotics.workspace.identity import publish_device_record
 
 
 @pytest.fixture
@@ -221,50 +65,174 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
-    """Make ``module``'s lock give up at once instead of after 30 seconds."""
+@pytest.fixture(autouse=True)
+def brief_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shorten the wait so a refusal is immediate rather than half a minute.
 
-    @contextmanager
-    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[IO[str] | None]:
-        with shared_write_lock(workspace_root, timeout=0.05) as handle:
-            yield handle
+    The production wait is generous because a first copy from a hub restores
+    thousands of files inside the lock. Nothing here is testing how long a
+    writer waits, only that it does.
+    """
+    monkeypatch.setattr(shared_write_lock_module, "LOCK_TIMEOUT_SECONDS", 0.05)
 
-    monkeypatch.setattr(module, "shared_write_lock", brief)
+
+@contextmanager
+def held_elsewhere(workspace: Path) -> Iterator[None]:
+    """Hold the workspace's lock on another thread for the duration.
+
+    Another thread rather than this one, because the lock re-enters within a
+    thread: a writer called from here would join the test's own span and prove
+    nothing. Another thread is also what the real other writer is -- a
+    synchronization worker, or a second process.
+    """
+    taken = threading.Event()
+    release = threading.Event()
+    failure: list[BaseException] = []
+
+    def hold() -> None:
+        try:
+            with shared_write_lock(workspace):
+                taken.set()
+                release.wait(30)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failure.append(exc)
+            taken.set()
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    try:
+        assert taken.wait(30), "the holder thread never took the lock"
+        assert not failure, failure
+        yield
+    finally:
+        release.set()
+        holder.join(30)
+        assert not holder.is_alive()
 
 
-def _event(event_id: str = "e1") -> ChatEvent:
+#: Every way the port lets a caller change a shared path. Each one refuses a
+#: change made without a span; that refusal is what replaced the list of
+#: writers this file used to keep.
+PORT_WRITES: dict[str, Callable[[Path], object]] = {
+    "append_shared_text": lambda shared: append_shared_text(
+        shared / "state/journal.jsonl", "{}\n"
+    ),
+    "delete_shared_path": lambda shared: delete_shared_path(shared / "state/gone.json"),
+    "notify_shared_state_changed": lambda shared: notify_shared_state_changed(
+        "update", [shared / "state/other.json"]
+    ),
+    "write_shared_bytes": lambda shared: write_shared_bytes(
+        shared / "state/bytes.json", b"{}\n"
+    ),
+    "write_shared_json": lambda shared: write_shared_json(
+        shared / "state/payload.json", {}
+    ),
+    "write_shared_text": lambda shared: write_shared_text(
+        shared / "state/text.json", "{}\n"
+    ),
+}
+
+
+def _existing_shared_files(workspace: Path) -> Path:
+    shared = workspace / ".guildbotics"
+    (shared / "state").mkdir(parents=True, exist_ok=True)
+    (shared / "state/gone.json").write_text("{}\n", encoding="utf-8")
+    (shared / "state/other.json").write_text("{}\n", encoding="utf-8")
+    return shared
+
+
+@pytest.mark.parametrize("helper", sorted(PORT_WRITES))
+def test_the_port_refuses_a_shared_change_made_without_a_span(
+    workspace: Path, helper: str
+) -> None:
+    """Checked on every entry, because one unguarded entry is the whole hole."""
+    shared = _existing_shared_files(workspace)
+
+    with pytest.raises(SharedWriteLockRequiredError):
+        PORT_WRITES[helper](shared)
+
+
+@pytest.mark.parametrize("helper", sorted(PORT_WRITES))
+def test_the_same_change_inside_a_span_is_allowed(workspace: Path, helper: str) -> None:
+    """The refusal is about the span, not about the path or the payload."""
+    shared = _existing_shared_files(workspace)
+
+    with shared_write_lock(workspace):
+        PORT_WRITES[helper](shared)
+
+
+def test_a_device_local_change_needs_no_span(workspace: Path) -> None:
+    """``local/`` is this machine's, so no queue ever touches it.
+
+    The port drops those paths rather than announcing them, and the lock has to
+    agree: requiring a span for them would make every device-local writer take
+    a lock that orders it against nothing.
+    """
+    local = workspace / ".guildbotics/local/hotkeys.yml"
+    local.parent.mkdir(parents=True)
+
+    assert write_shared_text(local, "a: b\n") is None
+    assert local.read_text(encoding="utf-8") == "a: b\n"
+
+
+def test_a_change_with_no_workspace_selected_needs_no_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is shared until a workspace is, so nothing is refused."""
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+    path = tmp_path / ".guildbotics/state/thing.json"
+    path.parent.mkdir(parents=True)
+
+    assert write_shared_text(path, "{}\n") is None
+    with shared_write_lock() as handle:
+        assert handle is None
+
+
+def test_a_wider_span_subsumes_a_narrower_one(workspace: Path) -> None:
+    """A writer declares its own span without asking who called it.
+
+    Answering "does my caller already hold it?" per writer is what produced a
+    writer left outside the lock and, on the other side, writers that could
+    only ever be called from one place. Re-entering removes the question.
+    """
+    service = MemberMemoryService(Person(person_id="p1", name="P"))
+
+    with shared_write_lock(workspace):
+        recorded = service.record(scope="personal", title="t", body="b")
+
+    assert service.get(doc_id=recorded["doc_id"])["body"] == "b"
+
+
+def test_a_span_still_excludes_another_thread(workspace: Path) -> None:
+    """Re-entering is for this thread only; everyone else still waits."""
+    with held_elsewhere(workspace):
+        with pytest.raises(SharedWriteBusyError):
+            with shared_write_lock(workspace):
+                pytest.fail("the lock was taken while another thread held it")
+
+
+def _chat_state() -> FileConversationStateStore:
+    return FileConversationStateStore()
+
+
+def _event() -> ChatEvent:
     return ChatEvent(
-        event_id=event_id,
+        event_id="e1",
         channel_id="C1",
         message_ts="1.0",
         thread_ts="1.0",
         author_id="U1",
-        text="hello",
+        text="hi",
     )
 
 
-def _pending(event_id: str = "e1") -> PendingChatEvent:
-    return PendingChatEvent(event=_event(event_id), chat_participation="strict")
-
-
-#: Every method of the chat state store that changes a shared file. The store
-#: reads the file it is about to write in most of them, so the lock has to span
-#: both; here each one only has to prove it asks for the lock at all.
-CHAT_STATE_MUTATIONS: dict[str, Callable[[FileConversationStateStore], None]] = {
-    "save_channel_cursor": lambda store: store.save_channel_cursor(
-        "slack", "p1", "C1", ChannelCursorState(cursor="c")
-    ),
-    "mark_processed_event": lambda store: store.mark_processed_event(
-        "slack", "p1", "C1", "e1"
-    ),
-    "save_thread_state": lambda store: store.save_thread_state(
-        "slack",
-        "p1",
-        "C1",
-        "1.0",
-        ThreadConversationState(channel_id="C1", thread_ts="1.0"),
-    ),
-    "append_thread_message": lambda store: store.append_thread_message(
+#: Operations whose span has to cover a read as well as a write. A span that
+#: covers only the write leaves the read outside, which looks protected and is
+#: not: the value written was decided from content the queue may have replaced
+#: in between.
+READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
+    "chat_state.append_thread_message": lambda _: _chat_state().append_thread_message(
         "slack",
         "p1",
         "C1",
@@ -273,101 +241,83 @@ CHAT_STATE_MUTATIONS: dict[str, Callable[[FileConversationStateStore], None]] = 
             channel_id="C1", thread_ts="1.0", message_ts="1.0", author_id="U1", text="x"
         ),
     ),
-    "save_scheduled_post_state": lambda store: store.save_scheduled_post_state(
-        "slack", "p1", "daily", ScheduledPostState(last_run_slot="s")
-    ),
-    "upsert_pending_event": lambda store: store.upsert_pending_event(
-        "slack", "p1", "C1", _event()
-    ),
-    "save_pending_event": lambda store: store.save_pending_event(
-        "slack", "p1", "C1", _pending()
-    ),
-    "remove_pending_event": lambda store: store.remove_pending_event(
+    "chat_state.mark_processed_event": lambda _: _chat_state().mark_processed_event(
         "slack", "p1", "C1", "e1"
     ),
-    "save_receive_cutoff": lambda store: store.save_receive_cutoff(
+    "chat_state.remove_pending_event": lambda _: _chat_state().remove_pending_event(
+        "slack", "p1", "C1", "e1"
+    ),
+    "chat_state.upsert_pending_event": lambda _: _chat_state().upsert_pending_event(
+        "slack", "p1", "C1", _event()
+    ),
+    "identity.publish_device_record": publish_device_record,
+    "memory_audit.record": lambda _: MemoryAuditStore().record(
+        {"kind": "memory", "type": "memory.get", "message": "m"}
+    ),
+}
+
+
+@pytest.mark.parametrize("operation", sorted(READ_MODIFY_WRITE))
+def test_an_operation_that_reads_first_holds_the_lock_for_the_read(
+    workspace: Path, operation: str
+) -> None:
+    """With the lock held elsewhere, the operation must not reach its read.
+
+    Checked by refusal rather than by inspection: an operation that waits for
+    the lock before reading cannot have derived its write from content that
+    changed underneath it.
+    """
+    with held_elsewhere(workspace):
+        with pytest.raises(SharedWriteBusyError):
+            READ_MODIFY_WRITE[operation](workspace)
+
+
+#: Operations that read nothing and still hold the lock, because what makes the
+#: lock necessary is changing a path the queue is working in -- not reading one.
+BLIND_WRITES: dict[str, Callable[[Path], object]] = {
+    "activity.record": lambda _: ActivityEventStore().record(
+        {"type": "github.pull_request.opened", "person_id": "p1"}
+    ),
+    "chat_state.save_channel_cursor": lambda _: _chat_state().save_channel_cursor(
+        "slack", "p1", "C1", ChannelCursorState(cursor="c")
+    ),
+    "chat_state.save_pending_event": lambda _: _chat_state().save_pending_event(
+        "slack",
+        "p1",
+        "C1",
+        PendingChatEvent(event=_event(), chat_participation="strict"),
+    ),
+    "chat_state.save_receive_cutoff": lambda _: _chat_state().save_receive_cutoff(
         "slack", "p1", "1.0"
     ),
-    "clear_channel_receive_backlog": lambda store: store.clear_channel_receive_backlog(
-        "slack", "p1", "C1"
+    "chat_state.save_scheduled_post_state": lambda _: (
+        _chat_state().save_scheduled_post_state(
+            "slack", "p1", "daily", ScheduledPostState(last_run_slot="s")
+        )
     ),
+    "chat_state.save_thread_state": lambda _: _chat_state().save_thread_state(
+        "slack",
+        "p1",
+        "C1",
+        "1.0",
+        ThreadConversationState(channel_id="C1", thread_ts="1.0"),
+    ),
+    "task_runs.append": lambda _: RunStore().append("run-1", {"kind": "evidence"}),
 }
 
 
-@pytest.mark.parametrize("operation", sorted(CHAT_STATE_MUTATIONS))
-def test_a_chat_state_change_waits_for_the_other_writer(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+@pytest.mark.parametrize("operation", sorted(BLIND_WRITES))
+def test_a_writer_that_reads_nothing_still_holds_the_lock(
+    workspace: Path, operation: str
 ) -> None:
-    """Checked on every mutating method, not one of them.
+    """The criterion is what the queue is doing, not what the writer read.
 
-    The methods were written one at a time and only some of them read before
-    writing, which is exactly how a writer comes to be left outside: whoever
-    adds the next one copies the shape of a neighbour that happened not to
-    need the lock.
+    A journal append reads nothing and is still committed by whatever the queue
+    stages a moment later. Landing between the validation and the staging makes
+    unchecked content into shared history, and the devices that receive it stop
+    their queues on it. "It only appends" was the reasoning that left one of
+    these outside the lock.
     """
-    store = FileConversationStateStore(
-        base_dir=workspace / ".guildbotics/state/chat_state",
-        cache_dir=workspace / ".guildbotics/local/chat-cache",
-    )
-    _impatient(monkeypatch, chat_state_module)
-
-    with shared_write_lock(workspace):
+    with held_elsewhere(workspace):
         with pytest.raises(SharedWriteBusyError):
-            CHAT_STATE_MUTATIONS[operation](store)
-
-
-#: Every memory operation that changes a document. ``get`` and ``recall`` are
-#: absent on purpose: they change only the audit journal, which takes the lock
-#: on its own behalf below.
-MEMORY_MUTATIONS: dict[str, Callable[[MemberMemoryService, str], None]] = {
-    "record": lambda service, doc_id: service.record(
-        scope="personal", title="t", body="b"
-    ),
-    "update": lambda service, doc_id: service.update(doc_id=doc_id, title="t2"),
-    "touch": lambda service, doc_id: service.touch(doc_id=doc_id),
-    "archive": lambda service, doc_id: service.archive(doc_id=doc_id),
-    "promote": lambda service, doc_id: service.promote(doc_id=doc_id),
-}
-
-
-@pytest.mark.parametrize("operation", sorted(MEMORY_MUTATIONS))
-def test_a_memory_change_waits_for_the_other_writer(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, operation: str
-) -> None:
-    """What a memory change risks losing is a whole document, so all of them."""
-    service = MemberMemoryService(Person(person_id="p1", name="P"))
-    existing = service.record(scope="personal", title="seed", body="body")
-    _impatient(monkeypatch, member_memory_module)
-
-    with shared_write_lock(workspace):
-        with pytest.raises(SharedWriteBusyError):
-            MEMORY_MUTATIONS[operation](service, existing["doc_id"])
-
-
-def test_an_audit_event_waits_for_the_other_writer(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The journal is rewritten whole once it is full, and read to do it."""
-    store = MemoryAuditStore()
-    _impatient(monkeypatch, memory_audit_module)
-
-    with shared_write_lock(workspace):
-        with pytest.raises(SharedWriteBusyError):
-            store.record({"kind": "memory", "type": "memory.get", "message": "m"})
-
-
-def test_a_workspace_that_is_not_selected_has_nothing_to_serialize(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No workspace means no shared file and no queue, so the lock stands down.
-
-    Writers here resolve the workspace the way the sync port does, and the port
-    answers this state by dropping the change rather than raising. The lock has
-    to answer it the same way, or every one of those writers grows its own copy
-    of the exception.
-    """
-    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
-
-    with shared_write_lock() as handle:
-        assert handle is None
+            BLIND_WRITES[operation](workspace)

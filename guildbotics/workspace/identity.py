@@ -27,6 +27,7 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
     get_workspace_state_path,
 )
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
@@ -169,7 +170,9 @@ def ensure_workspace_identity(
     lock_path = get_workspace_local_path(
         "run", "workspace-identity.lock", workspace_root=workspace_root
     )
-    with held_lock(lock_path):
+    # Two locks with two jobs: this one keeps the number from being drawn
+    # twice, the shared one keeps the write out of the queue's way.
+    with held_lock(lock_path), shared_write_lock(workspace_root):
         existing = read_workspace_identity(workspace_root)
         if existing is not None:
             return existing
@@ -257,6 +260,14 @@ def publish_device_record(
     Rewriting an unchanged record would create pointless synchronization work,
     so an identical record is left alone.
 
+    The fields not being set here are carried over from what is on disk, and
+    that is not only this machine's own writing: another device retires this
+    one by setting ``status`` in the same record. Renaming a device happens
+    while the queue is running, so the read and the write are held together --
+    otherwise a rename that read the record before a retirement was adopted
+    writes ``active`` back over it, and pushes the reversal as this device's
+    own change.
+
     Args:
         workspace_root (Path | None): The workspace, or None to use the selected one.
         ssh_public_key_fingerprint (str | None): The key registered with the hub,
@@ -264,21 +275,22 @@ def publish_device_record(
     """
     identity = ensure_device_identity()
     path = device_record_path(identity.device_id, workspace_root)
-    existing = read_device_record(identity.device_id, workspace_root)
-    record = DeviceRecord(
-        device_id=identity.device_id,
-        display_name=identity.display_name,
-        os=identity.os,
-        joined_at=existing.joined_at if existing is not None else utc_now_iso(),
-        status=existing.status if existing is not None else "active",
-        ssh_public_key_fingerprint=(
-            ssh_public_key_fingerprint
-            if ssh_public_key_fingerprint is not None
-            else (existing.ssh_public_key_fingerprint if existing else None)
-        ),
-    )
-    if record != existing:
-        write_shared_json(path, record.model_dump(), workspace_root=workspace_root)
+    with shared_write_lock(workspace_root):
+        existing = read_device_record(identity.device_id, workspace_root)
+        record = DeviceRecord(
+            device_id=identity.device_id,
+            display_name=identity.display_name,
+            os=identity.os,
+            joined_at=existing.joined_at if existing is not None else utc_now_iso(),
+            status=existing.status if existing is not None else "active",
+            ssh_public_key_fingerprint=(
+                ssh_public_key_fingerprint
+                if ssh_public_key_fingerprint is not None
+                else (existing.ssh_public_key_fingerprint if existing else None)
+            ),
+        )
+        if record != existing:
+            write_shared_json(path, record.model_dump(), workspace_root=workspace_root)
     return record
 
 

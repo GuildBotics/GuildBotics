@@ -164,9 +164,12 @@ def test_listing_device_records_is_ordered_by_identifier(
         os="linux",
         joined_at="2026-08-15T00:00:00Z",
     )
-    workspace_sync_port.write_shared_json(
-        tmp_path / f".guildbotics/state/devices/{other.device_id}.json",
-        other.model_dump(),
+    # Another device's record arrives as a synchronization checkout, not
+    # through a writer on this device, so plant the file directly.
+    other_path = tmp_path / f".guildbotics/state/devices/{other.device_id}.json"
+    other_path.parent.mkdir(parents=True, exist_ok=True)
+    other_path.write_text(
+        workspace_sync_port.dump_shared_json(other.model_dump()), encoding="utf-8"
     )
 
     records = list_device_records()

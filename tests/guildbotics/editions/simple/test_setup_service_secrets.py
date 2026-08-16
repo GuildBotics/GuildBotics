@@ -17,7 +17,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
 )
-from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
+from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.utils.secret_store import (
     SECRETS_INDEX_FILENAME,
     KeyringSecretStore,
@@ -309,7 +309,9 @@ class TestStaleKeyMetadata:
         store = KeyringSecretStore(config_dir)
         index = load_yaml_file(store.location)
         index["keys"][key]["generation"] = index["keys"][key]["generation"] + 1
-        save_yaml_file(store.location, index)
+        # Synchronization delivers the bumped index as a checkout, not through
+        # a writer, so write it directly.
+        store.location.write_text(dump_yaml(index), encoding="utf-8")
         assert store.get(key) is None
 
     def test_update_person_rename_moves_stale_key_metadata(

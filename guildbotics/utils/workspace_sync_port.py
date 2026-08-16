@@ -25,6 +25,7 @@ from guildbotics.utils.fileio import (
     atomic_write_bytes,
     get_workspace_root,
 )
+from guildbotics.utils.shared_write_lock import require_shared_write_lock
 
 #: Directories under ``.guildbotics/`` whose contents are shared between devices.
 SHARED_ROOTS = ("config", "state")
@@ -123,6 +124,30 @@ def shared_relative_path(path: Path, workspace_root: Path | None = None) -> str 
     return relative.as_posix()
 
 
+def _shared_subset(paths: list[Path], workspace_root: Path | None) -> tuple[str, ...]:
+    return tuple(
+        relative
+        for relative in (
+            shared_relative_path(path, workspace_root=workspace_root) for path in paths
+        )
+        if relative is not None
+    )
+
+
+def _require_lock(paths: list[Path], workspace_root: Path | None) -> tuple[str, ...]:
+    """Refuse a shared write made outside the workspace's shared-write lock.
+
+    Called before touching the file rather than after, so a caller that has
+    not declared its span is stopped instead of leaving the change half made.
+
+    Raises:
+        SharedWriteLockRequiredError: When the caller does not hold the lock.
+    """
+    shared = _shared_subset(paths, workspace_root)
+    require_shared_write_lock(shared, workspace_root=workspace_root)
+    return shared
+
+
 def notify_shared_state_changed(
     operation: ChangeOperation,
     paths: list[Path],
@@ -133,16 +158,18 @@ def notify_shared_state_changed(
     Paths outside the shared roots are dropped, so callers may pass a mixed
     list without classifying it themselves.
 
+    The lock is required here as well as in the write helpers, because this is
+    what a caller that changed the file some other way -- a rename, an append,
+    an unlink of its own -- still has to call. It is the one point every change
+    to a shared path passes through.
+
     Returns:
         ChangeSet | None: The announced change, or None when nothing shared changed.
+
+    Raises:
+        SharedWriteLockRequiredError: When the caller does not hold the lock.
     """
-    shared = tuple(
-        relative
-        for relative in (
-            shared_relative_path(path, workspace_root=workspace_root) for path in paths
-        )
-        if relative is not None
-    )
+    shared = _require_lock(paths, workspace_root)
     if not shared:
         return None
     change = ChangeSet(change_id=uuid4().hex, operation=operation, paths=shared)
@@ -163,6 +190,7 @@ def write_shared_bytes(
     path: Path, data: bytes, workspace_root: Path | None = None
 ) -> ChangeSet | None:
     """Atomically write ``data`` to ``path`` and announce the change."""
+    _require_lock([path], workspace_root)
     operation: ChangeOperation = "update" if path.exists() else "create"
     atomic_write_bytes(path, data)
     return notify_shared_state_changed(operation, [path], workspace_root=workspace_root)
@@ -184,10 +212,30 @@ def write_shared_json(
     )
 
 
+def append_shared_text(
+    path: Path, text: str, workspace_root: Path | None = None
+) -> ChangeSet | None:
+    """Append UTF-8 ``text`` to ``path`` and announce the change.
+
+    Journals grow by appending, and opening the file for that is still a change
+    to a shared path -- one the queue can be part-way through validating and
+    staging. Appending through the port is what puts it under the same
+    requirement as every other write, instead of leaving one writer holding an
+    open file the rule never reached.
+    """
+    _require_lock([path], workspace_root)
+    operation: ChangeOperation = "update" if path.exists() else "create"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(text)
+    return notify_shared_state_changed(operation, [path], workspace_root=workspace_root)
+
+
 def delete_shared_path(
     path: Path, workspace_root: Path | None = None
 ) -> ChangeSet | None:
     """Delete ``path`` when it exists and announce the change."""
+    _require_lock([path], workspace_root)
     if not path.exists():
         return None
     path.unlink()

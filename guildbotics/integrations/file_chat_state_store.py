@@ -23,12 +23,12 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
     delete_shared_path,
     write_shared_json,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 
 
 class FileConversationStateStore(ConversationStateStore):
@@ -661,9 +661,16 @@ class FileConversationStateStore(ConversationStateStore):
         # kind carries it without anyone remembering to add it -- and a kind
         # that did not carry it would leave a build too old to read it no way
         # to tell, since the reader of every field here defaults quietly.
+        #
+        # Stamped last so this build's generation wins. The pending-event
+        # methods read the file and hand the same mapping straight back, so
+        # stamping first would write out whatever was already on disk: after a
+        # move to 2, a record this build had just rewritten would still claim
+        # 1, and an older build would read it as one it understands. That is
+        # the exact failure the field exists to prevent.
         with self._lock:
             write_shared_json(
-                path, {"schema_version": SHARED_RECORD_SCHEMA_VERSION, **payload}
+                path, {**payload, "schema_version": SHARED_RECORD_SCHEMA_VERSION}
             )
 
     def _remove(self, path: Path) -> None:

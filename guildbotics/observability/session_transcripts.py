@@ -118,19 +118,27 @@ def read_transcript_settings() -> dict[str, Any]:
 
 
 def write_transcript_settings(*, detail: str, retention_days: int) -> None:
+    """Save the shared transcript settings.
+
+    ``config/transcripts.yml`` is shared like the rest of config, so this
+    declares its own span. A caller that already holds a wider one -- a config
+    save comparing several files -- simply subsumes it.
+    """
     from guildbotics.utils.fileio import save_yaml_file
+    from guildbotics.utils.shared_write_lock import shared_write_lock
 
     path = transcript_settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    save_yaml_file(
-        path,
-        {
-            "detail": "full"
-            if detail.strip().lower() == "full"
-            else DEFAULT_TRANSCRIPT_DETAIL,
-            "retention_days": max(1, int(retention_days)),
-        },
-    )
+    with shared_write_lock():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        save_yaml_file(
+            path,
+            {
+                "detail": "full"
+                if detail.strip().lower() == "full"
+                else DEFAULT_TRANSCRIPT_DETAIL,
+                "retention_days": max(1, int(retention_days)),
+            },
+        )
 
 
 def transcript_detail() -> str:

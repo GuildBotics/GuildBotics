@@ -45,6 +45,7 @@ from guildbotics.sync.commits import (
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.workspace.identity import (
     WorkspaceIdentity,
     ensure_device_identity,
@@ -52,7 +53,6 @@ from guildbotics.workspace.identity import (
     new_uuid7,
     publish_device_record,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import SharedFileInvalidError
 
 _WORKSPACE_IDENTITY_PATH = "state/workspace.json"

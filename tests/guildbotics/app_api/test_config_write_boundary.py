@@ -29,7 +29,7 @@ import guildbotics.workspace.config_repository as config_repository_module
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
 

@@ -7,6 +7,7 @@ import pytest
 
 from guildbotics.utils import workspace_sync_port
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
     NoOpWorkspaceSyncPort,
@@ -77,7 +78,8 @@ def test_write_shared_json_uses_stable_serialization(
     tmp_path: Path, port: RecordingPort
 ) -> None:
     path = tmp_path / ".guildbotics/state/devices/one.json"
-    write_shared_json(path, {"b": 2, "a": 1})
+    with shared_write_lock():
+        write_shared_json(path, {"b": 2, "a": 1})
 
     text = path.read_text(encoding="utf-8")
     assert text == '{\n  "a": 1,\n  "b": 2\n}\n'
@@ -90,8 +92,11 @@ def test_write_announces_create_then_update(
 ) -> None:
     path = tmp_path / ".guildbotics/state/devices/one.json"
 
-    write_shared_json(path, {"a": 1})
-    write_shared_json(path, {"a": 2})
+    # Each save is its own writer, so each declares its own span.
+    with shared_write_lock():
+        write_shared_json(path, {"a": 1})
+    with shared_write_lock():
+        write_shared_json(path, {"a": 2})
 
     assert [change.operation for change in port.changes] == ["create", "update"]
     assert [change.paths for change in port.changes] == [
@@ -105,14 +110,17 @@ def test_delete_announces_only_for_an_existing_file(
     tmp_path: Path, port: RecordingPort
 ) -> None:
     path = tmp_path / ".guildbotics/state/chat_state/pending/e1.json"
-    write_shared_text(path, "{}")
+    with shared_write_lock():
+        write_shared_text(path, "{}")
     port.changes.clear()
 
-    assert delete_shared_path(path) is not None
+    with shared_write_lock():
+        assert delete_shared_path(path) is not None
     assert not path.exists()
     assert [change.operation for change in port.changes] == ["delete"]
 
-    assert delete_shared_path(path) is None
+    with shared_write_lock():
+        assert delete_shared_path(path) is None
     assert len(port.changes) == 1
 
 
@@ -127,13 +135,14 @@ def test_device_local_writes_are_not_announced(
 def test_notify_drops_local_paths_and_keeps_shared_ones(
     tmp_path: Path, port: RecordingPort
 ) -> None:
-    change = notify_shared_state_changed(
-        "update",
-        [
-            tmp_path / ".guildbotics/local/chat-cache/thread.json",
-            tmp_path / ".guildbotics/state/documents/team/abc/meta.yml",
-        ],
-    )
+    with shared_write_lock():
+        change = notify_shared_state_changed(
+            "update",
+            [
+                tmp_path / ".guildbotics/local/chat-cache/thread.json",
+                tmp_path / ".guildbotics/state/documents/team/abc/meta.yml",
+            ],
+        )
 
     assert change is not None
     assert change.paths == ("state/documents/team/abc/meta.yml",)

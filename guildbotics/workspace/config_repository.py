@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from guildbotics.utils.fileio import get_workspace_config_dir
-from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import SharedFileInvalidError
 
 #: Ends a revision key that stands for a directory's set of files rather than

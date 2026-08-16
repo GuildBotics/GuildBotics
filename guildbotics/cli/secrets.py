@@ -15,11 +15,11 @@ from guildbotics.utils.secret_store import (
     resolve_secret_store,
     write_env_text,
 )
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_state import (
     WorkspaceUnresolvedError,
     apply_workspace_for_cli,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 
 
 class _SecretsContext:

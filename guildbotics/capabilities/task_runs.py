@@ -10,9 +10,10 @@ from typing import Any, ClassVar
 
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
-    notify_shared_state_changed,
+    append_shared_text,
 )
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
@@ -96,20 +97,27 @@ class RunStore:
         self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
-        path = self._path(run_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Add one line to a run's shared journal.
+
+        Appending reads nothing, which is not the same as being safe to do
+        unsynchronized. The queue validates this journal and then stages it
+        from disk a moment later; a line added in between is committed and
+        pushed without ever being checked, and the devices that receive it
+        stop their queues on it. The lock is held for the append for that
+        reason, not because anything is read.
+        """
         # Run journals are shared state, so one uniform pass masks secret
         # values and bounds every string, whatever shape the record has.
         payload = redact_for_sharing(
             {
-                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
                 "recorded_at": datetime.now(UTC).isoformat(),
                 **record,
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
             }
         )
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
-        notify_shared_state_changed("update", [path])
+        line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+        with shared_write_lock():
+            append_shared_text(self._path(run_id), line)
 
     def append_evidence(
         self, run_id: str | None, evidence_type: str, payload: dict[str, Any]

@@ -34,6 +34,7 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
+from guildbotics.utils.shared_write_lock import shared_write_operation
 from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
@@ -301,6 +302,7 @@ class KeyringSecretStore(SecretStore):
             "keys": _parse_key_index(data.get("keys")),
         }
 
+    @shared_write_operation
     def _write_index(self, index: dict[str, Any]) -> None:
         payload = {
             "store_id": index["store_id"],

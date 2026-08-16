@@ -25,6 +25,7 @@ import pytest
 import yaml  # type: ignore
 
 from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
@@ -116,6 +117,111 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
     )
 
     RunStore().append("run-1", {"kind": "evidence", "evidence_type": "commit"})
+
+
+#: One writer per record kind, handed a generation that is not this build's.
+#: Every one of them takes a mapping from somewhere it does not control -- a
+#: caller's record, or the file it just read -- so the stamp has to win over
+#: what arrives, not the other way round.
+AHEAD = SHARED_RECORD_SCHEMA_VERSION + 1
+
+
+def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
+    """Run each writer with a foreign generation in what it is handed."""
+    store = FileConversationStateStore()
+    # The pending-event writers read the file and hand the same mapping back,
+    # so planting the generation on disk is how a caller-supplied one would
+    # actually reach them on a later save.
+    pending = (
+        workspace / ".guildbotics/state/chat_state/slack/p1/pending_events/C1.json"
+    )
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(
+        json.dumps({"schema_version": AHEAD, "events": []}), encoding="utf-8"
+    )
+    store.upsert_pending_event(
+        "slack",
+        "p1",
+        "C1",
+        ChatEvent(
+            event_id="e1",
+            channel_id="C1",
+            message_ts="1.0",
+            thread_ts="1.0",
+            author_id="U1",
+            text="hi",
+        ),
+    )
+
+    service = MemberMemoryService(Person(person_id="p1", name="P"))
+    # ``--set`` reaches the metadata for policy memory, so a member can hand a
+    # generation straight in.
+    policy = service.record(
+        scope="team",
+        title="Policy",
+        body="rules",
+        kind="policy",
+        policy_approved=True,
+        params={"schema_version": AHEAD},
+    )
+
+    RunStore().append("run-1", {"kind": "evidence", "schema_version": AHEAD})
+    MemoryAuditStore().record(
+        {"kind": "memory", "type": "memory.get", "schema_version": AHEAD}
+    )
+    ActivityEventStore().record(
+        {
+            "type": "github.pull_request.opened",
+            "person_id": "p1",
+            "schema_version": AHEAD,
+        }
+    )
+    return {
+        "pending events": pending,
+        "memory metadata": (
+            workspace / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
+        ),
+    }
+
+
+def test_a_generation_the_caller_supplies_never_survives(workspace: Path) -> None:
+    """The stamp is this build's, whatever the payload said.
+
+    Stamped first instead of last, the value already in the mapping wins --
+    and the mapping is often the one just read off disk. After a move to a new
+    generation, a record this build had rewritten would still claim the old
+    one, and an older build would read it as something it understands. That is
+    the precise failure the field exists to prevent, reintroduced by the order
+    of two lines.
+    """
+    _write_with_a_foreign_generation(workspace)
+
+    for relative, path in _shared_files(workspace).items():
+        if path.suffix not in RECORD_SUFFIXES:
+            continue
+        for payload in _records_in(path):
+            assert payload.get("schema_version") == SHARED_RECORD_SCHEMA_VERSION, (
+                f"{relative} kept a generation it was handed"
+            )
+
+
+def test_the_boundary_would_have_refused_the_supplied_generation(
+    workspace: Path,
+) -> None:
+    """The stamp matters because the boundary acts on what it finds.
+
+    A record that kept the foreign generation would be refused on the way out
+    -- by this device, about its own file -- and its queue would stop.
+    """
+    planted = _write_with_a_foreign_generation(workspace)
+    root = workspace / ".guildbotics"
+
+    for name, path in planted.items():
+        relative = path.relative_to(root).as_posix()
+        validate_shared_file(relative, path.read_bytes())
+        with pytest.raises(SharedSchemaAheadError):
+            validate_shared_file(relative, _with_generation(path, AHEAD))
+        assert name
 
 
 def _shared_files(workspace: Path) -> dict[str, Path]:

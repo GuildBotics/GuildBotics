@@ -11,7 +11,7 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
-from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
+from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
@@ -555,7 +555,9 @@ def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None
         {"command": "bad", "schedules": ["invalid cron"]},
         "not a schedule",
     ]
-    save_yaml_file(person_file, person_data)
+    # Hand-written fixture content simulating a user's manual edit; no product
+    # writer produces it, so it is written directly rather than through one.
+    person_file.write_text(dump_yaml(person_data), encoding="utf-8")
 
     snapshot = service.read_person_config(
         config_dir=config_dir,

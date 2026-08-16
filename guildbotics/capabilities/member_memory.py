@@ -22,12 +22,15 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
     load_yaml_file,
 )
+from guildbotics.utils.shared_write_lock import (
+    SharedWriteBusyError,
+    shared_write_lock,
+)
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
     notify_shared_state_changed,
     write_shared_text,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
@@ -54,6 +57,15 @@ class MemberMemoryError(RuntimeError):
     pass
 
 
+#: What the audit journal is allowed to fail with without failing the operation
+#: it is recording. The document has already been written by the time the entry
+#: is made, so reporting the operation as failed would be untrue -- and an
+#: agent that retries a `record` on that report creates a second document.
+#: ``SharedWriteBusyError`` is here because it is deliberately outside the
+#: ``OSError`` family, which is exactly why it would otherwise slip past.
+_AUDIT_IS_BEST_EFFORT = (OSError, SharedWriteBusyError)
+
+
 @dataclass(frozen=True)
 class PolicyParams:
     digest_n: int = DEFAULT_DIGEST_N
@@ -72,9 +84,9 @@ class MemberMemoryService:
     for memory the unit lost is a whole document.
 
     Each operation therefore holds the workspace's shared-write lock from the
-    read it derives from to the last file it writes. The lock is not re-entrant,
-    so it is taken once per operation and never around a call to another writer:
-    the audit journal is written after the block, and takes its own.
+    read it derives from to the last file it writes. The audit journal is
+    written after that span and takes its own, so a journal that cannot be
+    written does not undo a document that already was.
     """
 
     def __init__(self, person: Person) -> None:
@@ -98,28 +110,34 @@ class MemberMemoryService:
         kind = _normalize_kind(kind)
         if params and kind != "policy":
             raise MemberMemoryError("--set is only available for policy memory.")
-        if kind == "policy":
-            self._ensure_policy_write_allowed(policy_approved)
-            existing = self._team_policy_doc()
-            if existing is not None:
-                return self.update(
-                    doc_id=existing.name,
-                    scope="team",
-                    title=title,
-                    body=body,
-                    summary=summary,
-                    keywords=keywords,
-                    source=source,
-                    pinned=True,
-                    kind="policy",
-                    policy_approved=True,
-                    params=params,
-                )
-            scope = "team"
-            pinned = True
-
-        scope_dir = self._scope_dir(scope)
+        # There is at most one team policy, so "is there one already?" decides
+        # whether this call creates or replaces -- which makes the lookup part
+        # of the write, not something to do beforehand. Asked outside the span,
+        # it can be answered "no" a moment before the queue adopts another
+        # device's policy, and then a second one is created beside it. The
+        # delegation below re-enters this same span.
         with shared_write_lock():
+            if kind == "policy":
+                self._ensure_policy_write_allowed(policy_approved)
+                existing = self._team_policy_doc()
+                if existing is not None:
+                    return self.update(
+                        doc_id=existing.name,
+                        scope="team",
+                        title=title,
+                        body=body,
+                        summary=summary,
+                        keywords=keywords,
+                        source=source,
+                        pinned=True,
+                        kind="policy",
+                        policy_approved=True,
+                        params=params,
+                    )
+                scope = "team"
+                pinned = True
+
+            scope_dir = self._scope_dir(scope)
             scope_dir.mkdir(parents=True, exist_ok=True)
             doc_id = self._new_doc_id(scope_dir)
             now = _now()
@@ -464,7 +482,7 @@ class MemberMemoryService:
                 source_entries=_source_entries_from_meta(doc.meta),
                 changed_fields=changed_fields,
             )
-        except OSError:
+        except _AUDIT_IS_BEST_EFFORT:
             return
 
     def _record_recall_audit(
@@ -489,7 +507,7 @@ class MemberMemoryService:
                 result_count=result_count,
                 duration_ms=(perf_counter() - started_at) * 1000,
             )
-        except OSError:
+        except _AUDIT_IS_BEST_EFFORT:
             return
 
     def _iter_active_docs(self) -> list[tuple[Scope, Path]]:
@@ -568,8 +586,8 @@ class MemberMemoryService:
         # never reaches ``_changed_fields`` and is never reported as an edit
         # the member made.
         stamped = {
-            "schema_version": SHARED_RECORD_SCHEMA_VERSION,
             **_redact_meta(meta),
+            "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         }
         meta_text = dump_yaml(stamped)
         body_text = _redact_secrets(body)

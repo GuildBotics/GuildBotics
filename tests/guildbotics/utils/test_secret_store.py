@@ -4,8 +4,8 @@ import json
 
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
+    dump_yaml,
     load_yaml_dict,
-    save_yaml_file,
 )
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
@@ -122,11 +122,12 @@ def test_get_refuses_stale_generation(fake_keyring, tmp_path, monkeypatch):
     store.set("OPENAI_API_KEY", "old-value")
     assert store.get("OPENAI_API_KEY") == "old-value"
 
-    # Simulate a sync that raised the shared generation to 2.
+    # Simulate a sync that raised the shared generation to 2. Synchronization
+    # delivers the file as a checkout, not through a writer, so write directly.
     index_file = tmp_path / ".guildbotics" / "config" / "secrets.yml"
     data = load_yaml_dict(index_file)
     data["keys"]["OPENAI_API_KEY"]["generation"] = 2
-    save_yaml_file(index_file, data)
+    index_file.write_text(dump_yaml(data), encoding="utf-8")
 
     assert store.get("OPENAI_API_KEY") is None
     assert store.stale_keys() == ["OPENAI_API_KEY"]
@@ -184,9 +185,10 @@ def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
     # Another device bumped the shared generation; this device is stale now.
+    # Synchronization delivers the file as a checkout, so write it directly.
     index = load_yaml_dict(store.location)
     index["keys"]["ALICE_GITHUB_ACCESS_TOKEN"]["generation"] = 2
-    save_yaml_file(store.location, index)
+    store.location.write_text(dump_yaml(index), encoding="utf-8")
     assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
 
     store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")

@@ -24,7 +24,7 @@ from guildbotics.utils.workspace_sync_port import (
 )
 from guildbotics.workspace.identity import WorkspaceIdentity
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device, make_device
-from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.utils.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 CONFIG = "config/team/project.yml"
@@ -775,10 +775,26 @@ def test_a_busy_workspace_is_not_reported_as_an_unreachable_hub(
 
     monkeypatch.setattr(manager_module, "shared_write_lock", brief)
     first.write(CONFIG, "language: ja\n")
+    # The lock re-enters within one thread, so the save in the way has to be a
+    # genuinely different thread holding it while the queue runs.
+    locked = threading.Event()
+    release = threading.Event()
 
-    with shared_write_lock(first.root):
+    def hold() -> None:
+        with shared_write_lock(first.root):
+            locked.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert locked.wait(5)
         status = first.manager.synchronize()
+    finally:
+        release.set()
+        holder.join(10)
 
+    assert not holder.is_alive()
     assert status.last_error_code == "local_write_busy"
     assert status.state != "unreachable"
 
@@ -822,9 +838,11 @@ def test_installing_the_manager_makes_a_plain_save_reach_the_hub(
     nothing about Git, and the change ends up on the hub."""
     set_workspace_sync_port(first.manager)
     try:
-        change = write_shared_text(
-            first.shared / CONFIG, "language: ja\n", workspace_root=first.root
-        )
+        # The one thing the storage layer declares is its own write span.
+        with shared_write_lock(first.root):
+            change = write_shared_text(
+                first.shared / CONFIG, "language: ja\n", workspace_root=first.root
+            )
         assert change is not None
         first.manager.synchronize()
 
