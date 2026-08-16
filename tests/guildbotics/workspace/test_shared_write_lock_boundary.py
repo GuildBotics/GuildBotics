@@ -39,6 +39,7 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability.activity_event_store import ActivityEventStore
 import guildbotics.utils.shared_write_lock as shared_write_lock_module
+from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
     SharedWriteLockRequiredError,
@@ -251,6 +252,17 @@ READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
         "slack", "p1", "C1", _event()
     ),
     "identity.publish_device_record": publish_device_record,
+    "secret_store.ensure_initialized": lambda root: KeyringSecretStore(
+        root / ".guildbotics/config"
+    ).ensure_initialized(),
+    "task_runs.complete_run": lambda _: RunStore().complete_run(
+        "run-1",
+        "done",
+        "summary",
+        subject_type="chat",
+        subject_id="C1:1.0",
+        person_id="p1",
+    ),
     "memory_audit.record": lambda _: MemoryAuditStore().record(
         {"kind": "memory", "type": "memory.get", "message": "m"}
     ),

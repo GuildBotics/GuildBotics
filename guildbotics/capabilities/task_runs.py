@@ -153,28 +153,35 @@ class RunStore:
         subject_url: str = "",
         person_id: str,
     ) -> RunStatus:
-        records = self._read_records_if_exists(run_id)
-        evidence_types = _evidence_types(records)
-        if not self._has_required_evidence(
-            status, subject_type, summary, evidence_types, records
-        ):
-            raise TaskRunError(
-                f"Run '{run_id}' cannot be completed without required write evidence."
+        # The evidence check decides whether the completion may be written, so
+        # it is part of the write. Read outside the span, it can pass against a
+        # journal the queue replaces a moment later with a remote version that
+        # has no evidence in it -- and the completion is then appended anyway,
+        # leaving a run recorded as complete with nothing behind it. The span
+        # starts at the read for that reason; `append` re-enters it.
+        with shared_write_lock():
+            records = self._read_records_if_exists(run_id)
+            evidence_types = _evidence_types(records)
+            if not self._has_required_evidence(
+                status, subject_type, summary, evidence_types, records
+            ):
+                raise TaskRunError(
+                    f"Run '{run_id}' cannot be completed without required write evidence."
+                )
+            completed_at = datetime.now(UTC).isoformat()
+            self.append(
+                run_id,
+                {
+                    "kind": "complete",
+                    "status": status,
+                    "summary": summary,
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "subject_url": subject_url,
+                    "person_id": person_id,
+                    "completed_at": completed_at,
+                },
             )
-        completed_at = datetime.now(UTC).isoformat()
-        self.append(
-            run_id,
-            {
-                "kind": "complete",
-                "status": status,
-                "summary": summary,
-                "subject_type": subject_type,
-                "subject_id": subject_id,
-                "subject_url": subject_url,
-                "person_id": person_id,
-                "completed_at": completed_at,
-            },
-        )
         return self.status(run_id)
 
     def evidence(self, run_id: str) -> list[dict[str, Any]]:

@@ -1,9 +1,11 @@
-"""What memory has to get right when another writer is working at the same time.
+"""Decisions taken from disk, which are part of the write that follows them.
 
-Two things that are not about the write itself. One is a decision taken from
-what is on disk -- "is there already a team policy?" -- which is part of the
-write whether or not it looks like one. The other is the audit journal, which
-records what already happened and so must never be able to undo it.
+Three of them. "Is there already a team policy?" decides create or replace.
+"Does this run have the evidence its completion requires?" decides whether the
+completion may be written at all. Both are read from a file another device can
+be replacing, so both belong inside the span rather than in front of it. The
+third is the opposite case: the audit journal records what already happened, so
+it must never be able to undo it.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import pytest
 import guildbotics.utils.shared_write_lock as shared_write_lock_module
 from guildbotics.capabilities import member_memory_audit
 from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.capabilities.task_runs import RunStore, TaskRunError
 from guildbotics.entities.team import Person
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
@@ -144,3 +147,74 @@ def test_a_busy_audit_journal_does_not_undo_an_update(
     service.update(doc_id=recorded["doc_id"], body="edited")
 
     assert service.get(doc_id=recorded["doc_id"])["body"] == "edited"
+
+
+def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The evidence check and the completion are one decision, so one span.
+
+    Proven by what another thread can do while the check is running: nothing.
+    A queue checkout of a remote version with no evidence in it would otherwise
+    land between the two, and the completion would be appended anyway -- a run
+    recorded as complete with nothing behind it.
+    """
+    store = RunStore()
+    store.append("run-1", {"kind": "evidence", "evidence_type": "chat_reply"})
+    got_in: list[bool] = []
+    original = RunStore._read_records_if_exists
+
+    def note_whether_anyone_else_can_write(
+        self: RunStore, run_id: str
+    ) -> list[dict[str, object]]:
+        got_in.append(_another_thread_can_take_the_lock(workspace))
+        return original(self, run_id)
+
+    monkeypatch.setattr(
+        RunStore, "_read_records_if_exists", note_whether_anyone_else_can_write
+    )
+
+    store.complete_run(
+        "run-1",
+        "done",
+        "replied",
+        subject_type="chat",
+        subject_id="C1:1.0",
+        person_id="p1",
+    )
+
+    assert got_in == [False], "the evidence check ran outside the span"
+    assert store.status("run-1").status == "done"
+
+
+def _another_thread_can_take_the_lock(workspace: Path) -> bool:
+    """Whether a second thread could write shared files right now."""
+    taken: list[bool] = []
+
+    def attempt() -> None:
+        try:
+            with shared_write_lock(workspace):
+                taken.append(True)
+        except SharedWriteBusyError:
+            taken.append(False)
+
+    other = threading.Thread(target=attempt)
+    other.start()
+    other.join(30)
+    assert not other.is_alive()
+    return taken == [True]
+
+
+def test_a_completion_without_evidence_is_still_refused(workspace: Path) -> None:
+    """Widening the span must not have widened what counts as evidence."""
+    store = RunStore()
+
+    with pytest.raises(TaskRunError):
+        store.complete_run(
+            "run-2",
+            "done",
+            "replied",
+            subject_type="chat",
+            subject_id="C1:1.0",
+            person_id="p1",
+        )
