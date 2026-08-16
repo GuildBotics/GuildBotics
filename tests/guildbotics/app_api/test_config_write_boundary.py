@@ -390,14 +390,3 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
     assert response is not None
     assert response.status_code == 503, response.text
     assert response.json()["code"] == "config_busy"
-
-
-def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
-    """Make ``module``'s lock give up at once instead of after 30 seconds."""
-
-    @contextmanager
-    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[IO[str]]:
-        with shared_write_lock(workspace_root, timeout=0.05) as handle:
-            yield handle
-
-    monkeypatch.setattr(module, "shared_write_lock", brief)
