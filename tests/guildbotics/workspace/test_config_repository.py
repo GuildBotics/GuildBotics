@@ -22,6 +22,11 @@ PROJECT = "team/project.yml"
 MODEL_MAPPING = "intelligences/model_mapping.yml"
 
 
+def refuse_to_run() -> None:
+    """A write body that must never be reached."""
+    pytest.fail("the write must not run against superseded content")
+
+
 def shared_write_lock_is_held(workspace_root: Path | None = None) -> bool:
     """Whether something else already holds a workspace's shared-write lock.
 
@@ -112,8 +117,7 @@ def test_a_file_created_since_the_read_refuses_the_save(
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError):
-        with repository.guard(expected):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected=expected)
 
     assert port.changes == []
 
@@ -125,12 +129,17 @@ def test_a_guarded_write_at_the_current_revisions_applies(
     expected = repository.revisions([PROJECT])
     port.changes.clear()
 
-    with repository.guard(expected):
-        write(config_dir, PROJECT, project_yaml("Renamed"))
+    receipt = repository.write(
+        lambda: write(config_dir, PROJECT, project_yaml("Renamed")),
+        expected=expected,
+        report=lambda: repository.revisions([PROJECT]),
+    )
 
     snapshot = repository.read_config(PROJECT)
     assert snapshot is not None
     assert snapshot.content == project_yaml("Renamed")
+    # The receipt describes what this write left, not what it replaced.
+    assert receipt.revisions == {PROJECT: blob_id(project_yaml("Renamed").encode())}
     assert [change.operation for change in port.changes] == ["update"]
 
 
@@ -143,14 +152,15 @@ def test_a_guarded_write_at_a_stale_revision_changes_nothing(
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
-        with repository.guard(stale):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected=stale)
 
     current = repository.read_config(PROJECT)
     assert current is not None
     assert current.content == project_yaml("Newer")
-    assert error.value.snapshot == current
     assert error.value.relative_path == "config/team/project.yml"
+    # Read under the same lock as the comparison, so the screen reloads with
+    # what the comparison actually saw.
+    assert error.value.revisions == {PROJECT: current.blob_id}
     assert port.changes == []
 
 
@@ -161,11 +171,9 @@ def test_a_guarded_write_expecting_absence_is_refused_once_the_file_exists(
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
-        with repository.guard({PROJECT: ""}):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected={PROJECT: ""})
 
-    assert error.value.snapshot is not None
-    assert error.value.snapshot.content == project_yaml("GuildBotics")
+    assert error.value.revisions[PROJECT] != ""
     assert port.changes == []
 
 
@@ -181,8 +189,7 @@ def test_one_stale_file_refuses_the_whole_save(
     port.changes.clear()
 
     with pytest.raises(StaleConfigWriteError) as error:
-        with repository.guard(expected):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected=expected)
 
     assert error.value.relative_path == "config/intelligences/model_mapping.yml"
     untouched = repository.read_config(PROJECT)
@@ -226,8 +233,7 @@ def test_a_file_another_device_added_refuses_a_directory_save(
     write(config_dir, "intelligences/native_agent_policy.yml", project_yaml("codex"))
 
     with pytest.raises(StaleConfigWriteError) as error:
-        with repository.guard(expected):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected=expected)
 
     assert error.value.relative_path == "config/intelligences"
 
@@ -241,8 +247,7 @@ def test_a_directory_another_device_created_refuses_a_save(
     write(config_dir, f"{scope}/native_agent_policy.yml", project_yaml("codex"))
 
     with pytest.raises(StaleConfigWriteError):
-        with repository.guard(expected):
-            pytest.fail("the body must not run against superseded content")
+        repository.write(refuse_to_run, expected=expected)
 
 
 def test_a_guarded_save_holds_the_workspace_shared_write_lock(
@@ -252,9 +257,17 @@ def test_a_guarded_save_holds_the_workspace_shared_write_lock(
     write(config_dir, PROJECT, project_yaml("GuildBotics"))
     expected = repository.revisions([PROJECT])
 
-    with repository.guard(expected):
-        assert shared_write_lock_is_held()
+    held: list[bool] = []
+    receipt = repository.write(
+        lambda: held.append(shared_write_lock_is_held()),
+        expected=expected,
+        # The report runs inside the lock too: a revision read after it was
+        # released could describe content this write never made.
+        report=lambda: {"held-while-reporting": str(shared_write_lock_is_held())},
+    )
 
+    assert held == [True]
+    assert receipt.revisions == {"held-while-reporting": "True"}
     assert not shared_write_lock_is_held()
 
 
@@ -283,8 +296,10 @@ def test_only_one_of_two_concurrent_savers_wins(
         saver = ConfigRepository()
         start.wait()
         try:
-            with saver.guard(expected):
-                write(config_dir, PROJECT, project_yaml(name))
+            saver.write(
+                lambda: write(config_dir, PROJECT, project_yaml(name)),
+                expected=expected,
+            )
         except StaleConfigWriteError:
             outcomes.append(f"stale:{name}")
         else:
@@ -320,8 +335,7 @@ def test_a_path_outside_the_config_directory_is_refused(
     relative_path: str,
 ) -> None:
     with pytest.raises(SharedFileInvalidError):
-        with repository.guard({relative_path: ""}):
-            pytest.fail("an unusable path must be refused before the body runs")
+        repository.write(refuse_to_run, expected={relative_path: ""})
     with pytest.raises(SharedFileInvalidError):
         repository.read_config(relative_path)
 
@@ -337,8 +351,7 @@ def test_a_symlink_out_of_the_config_directory_is_refused(
     (config_dir / "escape").symlink_to(tmp_path / ".guildbotics/state")
 
     with pytest.raises(SharedFileInvalidError):
-        with repository.guard({"escape/workspace.json": ""}):
-            pytest.fail("an unusable path must be refused before the body runs")
+        repository.write(refuse_to_run, expected={"escape/workspace.json": ""})
 
     assert port.changes == []
 
@@ -346,13 +359,14 @@ def test_a_symlink_out_of_the_config_directory_is_refused(
 def test_the_write_lock_is_released_after_each_save(
     repository: ConfigRepository, config_dir: Path, port: RecordingPort
 ) -> None:
-    with repository.guard({}):
-        write(config_dir, PROJECT, project_yaml("GuildBotics"))
+    repository.write(lambda: write(config_dir, PROJECT, project_yaml("GuildBotics")))
 
     # A second repository instance in the same process must not deadlock on the
     # lock the first one already released.
-    with ConfigRepository().guard(repository.revisions([PROJECT])):
-        write(config_dir, PROJECT, project_yaml("Renamed"))
+    ConfigRepository().write(
+        lambda: write(config_dir, PROJECT, project_yaml("Renamed")),
+        expected=repository.revisions([PROJECT]),
+    )
 
     snapshot = repository.read_config(PROJECT)
     assert snapshot is not None

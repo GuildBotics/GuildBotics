@@ -483,22 +483,33 @@ of the workspace has nothing to compare against.
 **Optimistic locking** (`workspace/config_repository.py`). Config is the shared state a
 person edits by hand, so a screen can be composed against content another machine has since
 replaced. Reads report each file's Git blob ID; saves state the IDs they expect, and a save
-whose expectation no longer holds is refused rather than merged. Comparison and writing
-happen inside one lock covering every file the screen saves — a refusal that had already
-applied half of itself is the outcome the check exists to prevent. A screen that reconciles
-a whole directory also states the set of paths it read, so a file another device added
-under it is a change like any other rather than something the save may prune unseen. Write
-endpoints answer with the revisions their own write left behind, because the screen stays
-open and its next save must stand where that one finished. This applies to config alone;
-for every other shared file the first-committer-wins rule settles it.
+whose expectation no longer holds is refused rather than merged. A screen that reconciles a
+whole directory also states the set of paths it read, so a file another device added under
+it is a change like any other rather than something the save may prune unseen. This applies
+to config alone; for every other shared file the first-committer-wins rule settles it.
+
+**One write API, not a sequence to assemble.** `ConfigRepository.write(apply, expected,
+report)` takes the lock, compares, runs the caller's write, and reads the revisions to
+answer with — all before releasing. The caller supplies what to write and gets back a
+receipt. This is a shape, not a convenience: when the lock, the comparison, the write, and
+the observation are separate parts, every writer is a place to order them wrongly or leave
+one out, and there are as many such places as there are writers. Each half of it earns its
+place. Writing inside the comparison's lock stops a refusal that has already applied half
+of itself. Reading the revisions there too stops an answer that pairs content the caller
+wrote with a revision the hub's arrival produced — the screen would save against it and
+overwrite content it never saw. Every route that changes config goes through
+`app_api/config_revisions.py`, including those with nothing to compare: comparing is
+optional, being the only writer while writing is not.
 
 **The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
-by both writers of its shared files: the config save, across its comparison and its write,
-and the synchronization queue, across checking the hub's content out and committing what
-survives. Without it the comparison decides nothing — a save can land on top of content
-adopted while it was running, and since that overwrite is an ordinary local write, the next
-cycle commits and pushes it with nothing recording the other device's change as lost.
-Nothing holds the lock across the network, so a save never waits on a hub.
+by both writers of its shared files: config writes, and the synchronization queue across
+checking the hub's content out and committing what survives. Without it the comparison
+decides nothing — a save can land on top of content adopted while it was running, and since
+that overwrite is an ordinary local write, the next cycle commits and pushes it with
+nothing recording the other device's change as lost. Nothing holds the lock across the
+network, so a save never waits on a hub. A wait that runs out raises `SharedWriteBusyError`,
+deliberately outside the `OSError` family: synchronization catches that family to mean the
+environment failed and would otherwise report the hub unreachable over a local save.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,

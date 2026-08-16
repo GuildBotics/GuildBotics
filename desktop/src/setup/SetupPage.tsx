@@ -134,7 +134,7 @@ import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { CloneFromHubButton } from "../sync/CloneFromHub";
 import { SyncSettings } from "../sync/SyncSettings";
-import { isStaleConfigSave } from "./configRevisions";
+import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { normalizeLanguage } from "../i18n";
 
@@ -546,6 +546,14 @@ export function SetupPage() {
           color: "warning",
           title: t("setup.staleSave.title"),
           message: t("setup.staleSave.body"),
+        });
+      } else if (isBusyConfigSave(error)) {
+        // The form is still good; it was simply never compared. Keep it as it
+        // is so the same click can be repeated.
+        notifications.show({
+          color: "warning",
+          title: t("setup.busySave.title"),
+          message: t("setup.busySave.body"),
         });
       }
     }
@@ -3097,11 +3105,11 @@ function MembersSection({
   });
   const addMemberMutation = useMutation({
     mutationFn: addMemberConfig,
-    onSuccess: (_, request) => {
+    onSuccess: (written, request) => {
       if (!hasPersistedProject) {
         setDraftMembers((current) => [
           ...current.filter((member) => member.person_id !== request.person_id),
-          memberRequestToConfig(request),
+          memberRequestToConfig(request, written.revisions),
         ]);
       }
       onMemberActiveDelta(effectiveIsActive ? 1 : 0);
@@ -3134,7 +3142,7 @@ function MembersSection({
       if (!hasPersistedProject) {
         setDraftMembers((current) => [
           ...current.filter((member) => member.person_id !== variables.originalPersonId),
-          memberRequestToConfig(variables.body),
+          memberRequestToConfig(variables.body, written.revisions),
         ]);
       }
       onMemberActiveDelta(delta);
@@ -3500,7 +3508,10 @@ function MembersSection({
           const delta = Number(effectiveIsActive) - Number(previous?.is_active ?? false);
           setDraftMembers((current) => [
             ...current.filter((member) => member.person_id !== editingPersonId),
-            memberRequestToConfig({ ...request, original_person_id: editingPersonId }),
+            memberRequestToConfig(
+              { ...request, original_person_id: editingPersonId },
+              memberRevisions,
+            ),
           ]);
           onMemberActiveDelta(delta);
           setEditingPersonId(personId.trim());
@@ -3531,6 +3542,14 @@ function MembersSection({
           color: "warning",
           title: t("setup.staleSave.title"),
           message: t("setup.staleSave.body"),
+        });
+        return;
+      }
+      if (isBusyConfigSave(error)) {
+        notifications.show({
+          color: "warning",
+          title: t("setup.busySave.title"),
+          message: t("setup.busySave.body"),
         });
         return;
       }
@@ -6560,11 +6579,12 @@ function joinPath(base: string, suffix: string) {
 
 function memberRequestToConfig(
   request: MemberSetupRequest | MemberConfigUpdateRequest,
+  revisions: ConfigRevisions,
 ): MemberConfig {
   return {
-    // A member built from a request the screen just sent has no revisions of
-    // its own: the reply carries no file content, so the next save reloads.
-    revisions: {},
+    // Where the write left this member's files, read before the backend
+    // released the lock. The screen stays open, so its next save stands here.
+    revisions,
     person_id: request.person_id,
     person_name: request.person_name,
     person_type: request.person_type,

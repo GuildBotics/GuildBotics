@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -206,7 +207,8 @@ def test_a_host_no_key_is_stored_for_is_a_first_contact(
     [
         ("hub.local ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
         ("|1|aGFzaA==|aGFzaA== ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
-        ("@cert-authority hub.local ssh-ed25519 AAAAC3Nz", ("ssh-ed25519", "AAAAC3Nz")),
+        ("@cert-authority hub.local ssh-ed25519 AAAAC3Nz", None),
+        ("@revoked hub.local ssh-ed25519 AAAAC3Nz", None),
         ("# Host hub.local found: line 3", None),
         ("", None),
     ],
@@ -215,8 +217,38 @@ def test_the_comparable_part_of_a_host_key_line(
     line: str, expected: tuple[str, str] | None
 ) -> None:
     """``ssh-keygen -F`` names the host by hash and ``ssh-keyscan`` names it
-    plainly, so only the type and the key itself compare between them."""
+    plainly, so only the type and the key itself compare between them. A marked
+    line is not a plain host key at all, and reading one as though the marker
+    were absent would claim a trust OpenSSH does not grant."""
     assert connection._key_material(line) == expected
+
+
+def test_a_revoked_key_the_hub_offers_is_never_trusted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`@revoked` records a key the user must not connect with.
+
+    Counting it as a stored key would skip the confirmation this probe exists
+    for, and the connection would then be refused on that very key -- the same
+    dead end as an unrecognized rotation.
+    """
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(f"@revoked {ED25519}\n", encoding="utf-8")
+    monkeypatch.setattr(connection, "_known_hosts_path", lambda: known_hosts)
+    monkeypatch.setattr(connection, "keygen_executable", lambda: "ssh-keygen")
+    monkeypatch.setattr(
+        connection.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 0, known_hosts.read_text(encoding="utf-8"), ""
+        ),
+    )
+    _offering(monkeypatch, {ED25519: "SHA256:revoked"})
+
+    result = connection.probe_host_key(HubEndpoint(host="hub.local"))
+
+    assert result.trusted is False
+    assert result.fingerprints == ("SHA256:revoked",)
 
 
 def test_trusting_stores_the_key_the_user_confirmed(

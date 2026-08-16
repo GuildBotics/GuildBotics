@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import threading
 import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ import pytest
 from git import GitCommandError, Repo
 
 from guildbotics.sync.local_repository import REJECTED_REF_PREFIX, LocalSyncRepository
+import guildbotics.sync.manager as manager_module
 from guildbotics.sync.manager import SharedDataAnomaly
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
@@ -21,6 +24,7 @@ from guildbotics.utils.workspace_sync_port import (
 )
 from guildbotics.workspace.identity import WorkspaceIdentity
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device, make_device
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 CONFIG = "config/team/project.yml"
@@ -752,6 +756,31 @@ def _lock_state_during(
 
     monkeypatch.setattr(LocalSyncRepository, method, spy)
     return observed
+
+
+def test_a_busy_workspace_is_not_reported_as_an_unreachable_hub(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A save holding the workspace's files says nothing about the hub.
+
+    A lock timeout belongs to the ``OSError`` family that this queue catches to
+    mean the environment failed, so without naming it the sidebar would tell
+    the user their hub is unreachable while a local save was simply in the way.
+    """
+
+    @contextmanager
+    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[Any]:
+        with shared_write_lock(workspace_root, timeout=0.05) as handle:
+            yield handle
+
+    monkeypatch.setattr(manager_module, "shared_write_lock", brief)
+    first.write(CONFIG, "language: ja\n")
+
+    with shared_write_lock(first.root):
+        status = first.manager.synchronize()
+
+    assert status.last_error_code == "local_write_busy"
+    assert status.state != "unreachable"
 
 
 def test_synchronize_is_serialized_between_threads(first: Device) -> None:

@@ -46,7 +46,10 @@ from guildbotics.workspace.identity import (
     ensure_workspace_identity,
     new_uuid7,
 )
-from guildbotics.workspace.shared_write_lock import shared_write_lock
+from guildbotics.workspace.shared_write_lock import (
+    SharedWriteBusyError,
+    shared_write_lock,
+)
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
     SharedSchemaAheadError,
@@ -286,6 +289,11 @@ class GitSyncManager:
                 self._synchronize()
             except SharedDataAnomaly as anomaly:
                 self._halt(anomaly)
+            except SharedWriteBusyError:
+                # A save is holding the workspace's files. Nothing is wrong
+                # with the hub, and the next cycle picks the work up, so the
+                # state stays as it was rather than claiming unreachable.
+                self._last_error_code = "local_write_busy"
             except (GitCommandError, SyncRepositoryError, OSError) as exc:
                 self._state = "unreachable"
                 self._last_error_code = type(exc).__name__

@@ -160,6 +160,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - Workspace root の path を保存すること（Hub は Workspace ID だけで対応づける）
 - 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
 - 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
+- **OpenSSH の判定を自前で再現すること。** `probe_host_key` の `trusted` は「無印の `known_hosts` entry が、提示された鍵のどれかを持っている」だけを主張する。`@revoked` / `@cert-authority` などの marker 付き行は一律で候補から外す（fail-closed）。marker の意味を parser で解こうとすると、OpenSSH が拒否する鍵を trusted と言ってしまう。**権威は接続そのもの**であり、この probe は「trusted と言うなら ssh も通る」側へだけ保守的であればよい
 - 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
 
 #### App API (`guildbotics/app_api/*`)
@@ -278,7 +279,9 @@ help / docstring が正であり、member コマンドの一行説明は
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
 - **directory 全体を reconcile する画面（intelligences）は、読んだファイルの revision だけでなく path 集合そのものも申告する**（`tree_revisions()` が返す `<dir>/` の entry）。読んだ時点で存在しなかったファイルには名前が無く、file 単位の比較では表せないため、他 device が足したファイルを黙って prune できてしまう。空 mapping を返すと `guarded_config_write()` が検査自体を省略する点にも注意する（team defaults を継承中の member がこれに当たる）
 - **書き込み API は「書き込み後の revision」を応答に載せる**（`ConfigWriteResponse.revisions`）。画面は保存後も開いたままで次の保存をしうるので、refetch を待たせず応答で cache を更新する。refetch 頼みだと保存が refetch を追い越したときに偽 409 になる
-- **共有ファイルへ書く側は `guildbotics/workspace/shared_write_lock.py` の `shared_write_lock()` を取る。** Config 保存は「比較〜書き込み」の全体を、同期は「Hub の内容の checkout〜commit」の全体を保持する。片方だけが慎重でも意味が無く、比較を通った保存が、その最中に採用された他 device の内容の上に着地しうる。これは Git から見れば普通のローカル書き込みなので、次の cycle で commit / push され、失われたことがどこにも残らない。network 区間では保持しない（保存が Hub を待つことになる）
+- **共有ファイルへ書く側は `guildbotics/workspace/shared_write_lock.py` の `shared_write_lock()` を取る。** 同期は「Hub の内容の checkout〜commit」の全体を保持する。片方だけが慎重でも意味が無く、比較を通った保存が、その最中に採用された他 device の内容の上に着地しうる。これは Git から見れば普通のローカル書き込みなので、次の cycle で commit / push され、失われたことがどこにも残らない。network 区間では保持しない（保存が Hub を待つことになる）
+- **Config の書き込みは `ConfigRepository.write(apply, expected, report)` 1本に通す。** lock の取得・比較・書き込み・応答用 revision の観測を、呼び出し側が組み立てない。**部品にすると、並べ損ねる場所が writer の数だけできる**（実際に、比較を省略した writer・lock の外で revision を読む writer・応答が実在しない状態を述べる writer が同時に生まれた）。app_api 側は `config_revisions.py` の `apply_config_write()` だけを使い、**config を書く endpoint は1つ残らずそこを通す**。比較する対象が無い（`expected=None`）ことは、mutex が要らないことを意味しない。新しい endpoint を足したら `tests/guildbotics/app_api/test_config_write_boundary.py` の分類へ追加する（routing table と突き合わせているので、足さないと落ちる）
+- **lock 競合は `SharedWriteBusyError`（`OSError` 系譜の外）**。`LockTimeoutError` は `TimeoutError` → `OSError` なので、そのままだと同期の「環境障害」を捕まえる網に吸われて Hub 不達と表示される。呼び出し側ごとに変換して回らず、型で網から外し、API 側は exception handler 1個で 503 にする
 - **同期境界の検証（`guildbotics/workspace/validation.py`）に、種別ごとの意味検証を足さない。** 共有 record はすべて GuildBotics 自身がコードで形を決めて書くため、境界で field を再確認しても writer が既に保証していることの繰り返しにしかならない（それは writer の test の仕事）。利用者が書くファイル（commands、手で編集する設定）は壊れていても製品の通常経路でどの device でも同じように失敗するので、書きかけを「送信できない変更」にすると同期を下手にするだけ
 - 境界が見るのは3つだけ。**(1) 共有 root 内・サイズ上限・decode・構文**（サイズは同期が負う2つの保証の一方＝履歴を肥大させない）、**(2) `schema_version` が現在値より新しい record**（新しい build が書いたものは古い build には読めない。writer もローカルの test も捕まえられず、受け取った device にしか分からない）、**(3) `config/secrets.yml` の構造**（もう一方の保証＝Secret 値を共有履歴へ入れない）
 - 新しい共有 record を追加しても、原則として validation.py に手を入れる必要はない。`schema_version` を現在値で持たせれば世代差は自動的に検知される

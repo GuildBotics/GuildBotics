@@ -18,17 +18,28 @@ other. Nothing holds it across the network, so a save never waits on a hub.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import IO
 
-from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import get_workspace_local_path
 
 #: How long each side waits for the other. Generous on purpose: a first copy
 #: from a hub restores thousands of files inside this lock, and a save refused
 #: there would be reported as an error the user can do nothing about.
 LOCK_TIMEOUT_SECONDS = 30.0
+
+
+class SharedWriteBusyError(RuntimeError):
+    """Raised when the other writer held the lock for the whole wait.
+
+    Deliberately outside the ``OSError`` family that :class:`TimeoutError`
+    belongs to. Synchronization catches that family to mean "the environment
+    failed" and reports the hub unreachable; the hub has nothing to do with
+    this, and a caller that has to tell the two apart should not have to name
+    a lock timeout to do it.
+    """
 
 
 def shared_write_lock_path(workspace_root: Path | None = None) -> Path:
@@ -53,7 +64,17 @@ def shared_write_lock(
         IO[str]: The open lock file handle.
 
     Raises:
-        LockTimeoutError: When the other side holds it past ``timeout``.
+        SharedWriteBusyError: When the other side holds it past ``timeout``.
     """
-    with held_lock(shared_write_lock_path(workspace_root), timeout=timeout) as handle:
+    path = shared_write_lock_path(workspace_root)
+    stack = ExitStack()
+    # Only the acquisition is translated. A timeout raised by the body belongs
+    # to whatever the body was doing, not to waiting for this lock.
+    try:
+        handle = stack.enter_context(held_lock(path, timeout=timeout))
+    except LockTimeoutError as exc:
+        raise SharedWriteBusyError(
+            f"Another writer held {path} for longer than {timeout:g}s."
+        ) from exc
+    with stack:
         yield handle

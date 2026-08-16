@@ -214,6 +214,11 @@ def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
     connected to, so reporting it as trusted would send the caller on to an SSH
     call that fails on the host key -- and the fingerprints the user has to
     look at would never be shown.
+
+    Trust here only ever means "a plain entry for this host holds one of the
+    keys being offered". It is the weaker of the two claims on purpose: the
+    connection itself is where OpenSSH decides, and this side is worth having
+    only while it errs towards asking the user.
     """
     offered = _scan_host_keys(endpoint)
     stored = _known_host_keys(endpoint)
@@ -382,16 +387,20 @@ def _known_host_keys(endpoint: HubEndpoint) -> set[tuple[str, str]]:
 
 
 def _key_material(line: str) -> tuple[str, str] | None:
-    """The ``(type, key)`` of one scanned or stored host key line, if it has one.
+    """The ``(type, key)`` of one plain host key line, if it is one.
 
     A stored line names the host by hash and a scanned one names it plainly, so
     only the two fields after the name are comparable between them.
+
+    A line carrying a marker -- ``@revoked``, ``@cert-authority`` -- is not one
+    of these, and is dropped rather than read as though the marker were absent.
+    What each marker means to OpenSSH is OpenSSH's to decide, and it decides it
+    on the connection itself; reproducing that here would be claiming more than
+    this comparison can know. Dropping them only ever costs a fingerprint the
+    user is asked to look at again.
     """
     fields = line.split()
-    # A marker (``@cert-authority``, ``@revoked``) shifts every field right.
-    if fields and fields[0].startswith("@"):
-        fields = fields[1:]
-    if len(fields) < _HOST_KEY_FIELDS or fields[0].startswith("#"):
+    if len(fields) < _HOST_KEY_FIELDS or fields[0].startswith(("#", "@")):
         return None
     return fields[1], fields[2]
 

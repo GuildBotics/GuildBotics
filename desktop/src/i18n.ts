@@ -1139,6 +1139,10 @@ const resources = {
           title: "Nothing was saved",
           body: "This screen was loaded before a more recent change, so it has been reloaded with the current settings. Make the change again.",
         },
+        busySave: {
+          title: "Nothing was saved yet",
+          body: "Synchronization is writing to this workspace. Your entries are still here — save again in a moment.",
+        },
         validation: {
           workspaceRequired: "Workspace is required.",
           descriptionRequired: "Project description is required.",
@@ -2532,6 +2536,10 @@ const resources = {
         staleSave: {
           title: "保存しませんでした",
           body: "この画面を開いた後に設定が変更されていたため、現在の内容を読み直しました。もう一度変更してください。",
+        },
+        busySave: {
+          title: "まだ保存していません",
+          body: "同期がこのワークスペースへ書き込み中です。入力はそのまま残っているので、少し待ってからもう一度保存してください。",
         },
         validation: {
           workspaceRequired: "ワークスペースは必須です。",

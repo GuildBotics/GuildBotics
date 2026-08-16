@@ -14,3 +14,14 @@ import { ApiRequestError } from "../api/client";
 export function isStaleConfigSave(error: unknown): boolean {
   return error instanceof ApiRequestError && error.code === "config_changed";
 }
+
+/**
+ * Whether a save was refused because synchronization held the same files.
+ *
+ * Nothing is wrong with what the screen holds -- it never got as far as being
+ * compared. Saying so matters because the alternative reading, "Save failed",
+ * invites the user to change something before trying again.
+ */
+export function isBusyConfigSave(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.code === "config_busy";
+}
