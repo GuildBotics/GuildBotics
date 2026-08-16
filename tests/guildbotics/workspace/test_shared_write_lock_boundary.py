@@ -42,6 +42,7 @@ import guildbotics.utils.shared_write_lock as shared_write_lock_module
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
+    shared_write_lock_held,
     SharedWriteLockRequiredError,
     shared_write_lock,
 )
@@ -213,6 +214,47 @@ def test_a_span_still_excludes_another_thread(workspace: Path) -> None:
                 pytest.fail("the lock was taken while another thread held it")
 
 
+def _trim_the_audit_journal() -> None:
+    """Fill the journal past its bound, so the entry after it rewrites the file.
+
+    Below the bound an entry is appended without the file being read, and it is
+    the rewrite that reads: the whole journal is loaded to decide what still
+    fits. A small bound is what makes that the path under test.
+    """
+    store = MemoryAuditStore(max_file_bytes=400)
+    for index in range(4):
+        store.record({"kind": "memory", "type": "memory.get", "message": str(index)})
+
+
+def _remove_a_pending_event() -> None:
+    """Put a pending event there and take it away again.
+
+    Removal reads the file to find out what is left, and reads nothing when
+    there is nothing there, so the pair is what has to be exercised.
+    """
+    store = _chat_state()
+    store.upsert_pending_event("slack", "p1", "C1", _event())
+    store.remove_pending_event("slack", "p1", "C1", "e1")
+
+
+def _complete_a_run_with_evidence() -> object:
+    """Complete a run that has what a completion requires.
+
+    The evidence has to be there for the check to get past, because the check
+    is the read this operation's span exists for.
+    """
+    store = RunStore()
+    store.append("run-1", {"kind": "evidence", "evidence_type": "chat_reply"})
+    return store.complete_run(
+        "run-1",
+        "done",
+        "summary",
+        subject_type="chat",
+        subject_id="C1:1.0",
+        person_id="p1",
+    )
+
+
 def _chat_state() -> FileConversationStateStore:
     return FileConversationStateStore()
 
@@ -233,6 +275,111 @@ def _event() -> ChatEvent:
 #: not: the value written was decided from content the queue may have replaced
 #: in between.
 READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
+    "chat_state.mark_processed_event": lambda _: _chat_state().mark_processed_event(
+        "slack", "p1", "C1", "e1"
+    ),
+    "chat_state.remove_pending_event": lambda _: _remove_a_pending_event(),
+    "chat_state.upsert_pending_event": lambda _: _chat_state().upsert_pending_event(
+        "slack", "p1", "C1", _event()
+    ),
+    "identity.publish_device_record": publish_device_record,
+    "secret_store.ensure_initialized": lambda root: KeyringSecretStore(
+        root / ".guildbotics/config"
+    ).ensure_initialized(),
+    "task_runs.complete_run": lambda _: _complete_a_run_with_evidence(),
+    "memory_audit.record": lambda _: _trim_the_audit_journal(),
+}
+
+
+@contextmanager
+def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
+    """Note every read of a shared file, and whether the lock was held for it.
+
+    The port sees writes, so it can insist the lock is held for one. It never
+    sees a read -- ``read_text`` on a memory document is an ordinary file read
+    -- so it cannot tell where a span began. Watching the reads from the test
+    is what makes "the span starts at the read" checkable at all.
+    """
+    seen: list[tuple[str, bool]] = []
+    shared = workspace / ".guildbotics"
+    originals = {
+        name: getattr(Path, name) for name in ("read_text", "read_bytes", "open")
+    }
+
+    def note(path: Path) -> None:
+        try:
+            relative = path.resolve().relative_to(shared.resolve())
+        except (OSError, ValueError):
+            return
+        if relative.parts and relative.parts[0] in {"config", "state"}:
+            seen.append((relative.as_posix(), shared_write_lock_held(workspace)))
+
+    def wrap(name: str) -> Callable[..., object]:
+        original = originals[name]
+
+        def wrapper(self: Path, *args: object, **kwargs: object) -> object:
+            # ``open`` is how a journal is appended to as well as read, and a
+            # write counted as a read would report the writer's own lock as
+            # proof that its read was covered.
+            mode = str(kwargs.get("mode", args[0] if args else "r"))
+            if name != "open" or not set(mode) & set("wax+"):
+                note(self)
+            return original(self, *args, **kwargs)
+
+        return wrapper
+
+    patcher = pytest.MonkeyPatch()
+    for name in originals:
+        patcher.setattr(Path, name, wrap(name))
+    try:
+        yield seen
+    finally:
+        patcher.undo()
+
+
+@pytest.mark.parametrize("operation", sorted(READ_MODIFY_WRITE))
+def test_the_span_starts_at_the_read_not_at_the_write(
+    workspace: Path, operation: str
+) -> None:
+    """A read the write is derived from is inside the span, not in front of it.
+
+    The port can only insist the lock is held at the moment of the write, and
+    that is not the same claim: a check that passed against content the queue
+    replaced a moment later is a check of nothing. Only reads before the first
+    write are looked at -- what an operation reads afterwards, to report what
+    it did, is not what it decided from.
+
+    Asserting a refusal instead does not work here, and used to be what this
+    file did: with the read outside the span the read simply succeeds and the
+    write raises, so the same exception comes out either way and the two shapes
+    are indistinguishable.
+
+    It is the first read that is checked. An operation reads again afterwards
+    to report what it did, and that read decided nothing.
+    """
+    # Run it once first: these operations read a file they also create, and on
+    # a workspace where it does not exist yet there is no read to observe.
+    READ_MODIFY_WRITE[operation](workspace)
+
+    with recording_shared_reads(workspace) as reads:
+        READ_MODIFY_WRITE[operation](workspace)
+
+    assert reads, f"{operation} read no shared file, so it does not belong here"
+    path, held = reads[0]
+    assert held, (
+        f"{operation} read {path} before taking the lock, so what it wrote was "
+        "decided from content the queue may have replaced in between"
+    )
+
+
+#: Operations that read nothing and still hold the lock, because what makes the
+#: lock necessary is changing a path the queue is working in -- not reading one.
+BLIND_WRITES: dict[str, Callable[[Path], object]] = {
+    "activity.record": lambda _: ActivityEventStore().record(
+        {"type": "github.pull_request.opened", "person_id": "p1"}
+    ),
+    # Reads the thread message cache, which is device-local, and creates the
+    # shared thread state beside it without reading that.
     "chat_state.append_thread_message": lambda _: _chat_state().append_thread_message(
         "slack",
         "p1",
@@ -241,54 +388,6 @@ READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
         ThreadMessageState(
             channel_id="C1", thread_ts="1.0", message_ts="1.0", author_id="U1", text="x"
         ),
-    ),
-    "chat_state.mark_processed_event": lambda _: _chat_state().mark_processed_event(
-        "slack", "p1", "C1", "e1"
-    ),
-    "chat_state.remove_pending_event": lambda _: _chat_state().remove_pending_event(
-        "slack", "p1", "C1", "e1"
-    ),
-    "chat_state.upsert_pending_event": lambda _: _chat_state().upsert_pending_event(
-        "slack", "p1", "C1", _event()
-    ),
-    "identity.publish_device_record": publish_device_record,
-    "secret_store.ensure_initialized": lambda root: KeyringSecretStore(
-        root / ".guildbotics/config"
-    ).ensure_initialized(),
-    "task_runs.complete_run": lambda _: RunStore().complete_run(
-        "run-1",
-        "done",
-        "summary",
-        subject_type="chat",
-        subject_id="C1:1.0",
-        person_id="p1",
-    ),
-    "memory_audit.record": lambda _: MemoryAuditStore().record(
-        {"kind": "memory", "type": "memory.get", "message": "m"}
-    ),
-}
-
-
-@pytest.mark.parametrize("operation", sorted(READ_MODIFY_WRITE))
-def test_an_operation_that_reads_first_holds_the_lock_for_the_read(
-    workspace: Path, operation: str
-) -> None:
-    """With the lock held elsewhere, the operation must not reach its read.
-
-    Checked by refusal rather than by inspection: an operation that waits for
-    the lock before reading cannot have derived its write from content that
-    changed underneath it.
-    """
-    with held_elsewhere(workspace):
-        with pytest.raises(SharedWriteBusyError):
-            READ_MODIFY_WRITE[operation](workspace)
-
-
-#: Operations that read nothing and still hold the lock, because what makes the
-#: lock necessary is changing a path the queue is working in -- not reading one.
-BLIND_WRITES: dict[str, Callable[[Path], object]] = {
-    "activity.record": lambda _: ActivityEventStore().record(
-        {"type": "github.pull_request.opened", "person_id": "p1"}
     ),
     "chat_state.save_channel_cursor": lambda _: _chat_state().save_channel_cursor(
         "slack", "p1", "C1", ChannelCursorState(cursor="c")
