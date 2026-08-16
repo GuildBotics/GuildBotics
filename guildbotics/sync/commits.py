@@ -55,21 +55,42 @@ class CommitOutcome:
 def commit_shared_changes(
     repository: LocalSyncRepository, *, device_id: str
 ) -> CommitOutcome:
-    """Commit every shared change that validates, holding back the rest."""
-    sendable: list[WorkingTreeChange] = []
+    """Commit every shared change that validates, holding back the rest.
+
+    The content is staged first and checked from the index, not from disk.
+    Reading the file to validate it and then letting ``git add`` read it again
+    are two reads of something a writer can change in between, and what would
+    then be committed is whatever the second read saw. It only takes one such
+    file for every other device to stop its queue on content nothing checked --
+    and the device that sent it stays green, because its own working tree
+    matches the commit it made. Staging first makes "what was validated" and
+    "what is committed" the same bytes by construction. It also settles a
+    deletion that is recreated before the commit: the recreated file is staged
+    as content, so it is checked as content.
+    """
+    changes = repository.working_tree_changes()
+    if not changes:
+        return CommitOutcome(head=repository.head(), unsendable=())
+    repository.stage([change.path for change in changes])
+
     held: list[UnsendableChange] = []
-    for change in repository.working_tree_changes():
-        if change.deleted:
+    sendable: list[WorkingTreeChange] = []
+    for change in changes:
+        staged = repository.read_staged(change.path)
+        if staged is None:
+            # Staged as a deletion. There is no content to check, and removing
+            # a file cannot make the shared set unreadable.
             sendable.append(change)
             continue
         try:
-            validate_shared_file(change.path, repository.read_working_tree(change.path))
+            validate_shared_file(change.path, staged)
         except SharedFileInvalidError as exc:
             held.append(UnsendableChange(path=change.path, reason=exc.reason))
         else:
             sendable.append(change)
+    if held:
+        repository.unstage([item.path for item in held])
     if sendable:
-        repository.stage([change.path for change in sendable])
         repository.commit(_commit_message(sendable, device_id))
     return CommitOutcome(head=repository.head(), unsendable=tuple(held))
 

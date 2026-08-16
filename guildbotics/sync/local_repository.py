@@ -25,7 +25,7 @@ from pathlib import Path
 from git import GitCommandError, Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
-from guildbotics.utils.fileio import get_workspace_root
+from guildbotics.utils.fileio import ATOMIC_WRITE_SUFFIX, get_workspace_root
 from guildbotics.utils.openssh import OpenSshNotFoundError, git_ssh_command
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
 
@@ -38,8 +38,13 @@ REJECTED_REF_PREFIX = "refs/guildbotics/rejected"
 #: Where a hub's content is read before the workspace is connected to it.
 PREVIEW_REF = "refs/guildbotics/hub-preview"
 #: ``local/`` is device-only; ``.env`` is refused a second time here because a
-#: file of secrets must not reach the hub even if one is written by hand.
-GITIGNORE_CONTENT = "local/\n.env\n"
+#: file of secrets must not reach the hub even if one is written by hand. The
+#: third entry is an atomic write in progress: it is created beside its
+#: destination, so for a shared file it lands inside this tree, and a cycle
+#: that enumerates it either commits a half-written name or fails its own
+#: ``git add`` when the rename beats it -- reported as a hub it could not
+#: reach. It is never a file the user meant to share.
+GITIGNORE_CONTENT = f"local/\n.env\n*{ATOMIC_WRITE_SUFFIX}\n"
 #: Command lines stay bounded when a rescan finds thousands of changed files.
 _PATH_BATCH = 200
 #: ``git status --porcelain`` prefixes every entry with ``XY `` before the path.
@@ -199,6 +204,33 @@ class LocalSyncRepository:
         """Stage the given paths, recording deletions as deletions."""
         for batch in _batched(paths):
             self._repo().git.add("--", *batch)
+
+    def unstage(self, paths: Sequence[str]) -> None:
+        """Take ``paths`` back out of the index, leaving the working tree alone.
+
+        Used for a staged file that turned out not to be shareable: the index
+        goes back to what the last commit holds, and the content the user has
+        to fix stays on disk exactly as they left it.
+        """
+        head = self.head()
+        for batch in _batched(paths):
+            if head is None:
+                self._repo().git.rm("--cached", "--force", "--", *batch)
+            else:
+                self._repo().git.reset("--quiet", head, "--", *batch)
+
+    def read_staged(self, path: str) -> bytes | None:
+        """Return the bytes staged for ``path``, or None when it is staged as gone."""
+        try:
+            content = self._repo().git.cat_file(
+                "blob",
+                f":0:{path}",
+                stdout_as_string=False,
+                strip_newline_in_stdout=False,
+            )
+        except GitCommandError:
+            return None
+        return bytes(content)
 
     def commit(self, message: str) -> str | None:
         """Commit whatever is staged, returning the new commit, or None if empty."""

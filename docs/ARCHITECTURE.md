@@ -516,7 +516,7 @@ decided by the URL — commands (`config/commands`) and transcript settings
 (`config/transcripts.yml`) are config reached from elsewhere, and the `guildbotics
 secrets` CLI writes `config/secrets.yml` from another process entirely.
 
-**The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
+**The shared-write lock** (`utils/shared_write_lock.py`). One lock per workspace, taken
 by every writer of its shared files and by the synchronization queue across checking the
 hub's content out and committing what survives. Without it the comparison decides nothing —
 a save can land on top of content adopted while it was running, and since that overwrite is
@@ -525,6 +525,14 @@ other device's change as lost. Nothing holds the lock across the network, so a s
 waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
 `OSError` family: synchronization catches that family to mean the environment failed and
 would otherwise report the hub unreachable over a local save.
+
+Which writers must take it is not decided writer by writer. Every write to a shared path
+goes through the sync port, and the port's helpers refuse one made outside the lock, so a
+writer that has not declared its span fails immediately and by name. The helpers do not
+take the lock themselves: acquired per write, it would leave the read a read-modify-write
+derives from outside the span — protected-looking and not protected. Within one thread the
+lock re-enters, so a writer declares its own span without knowing whether a caller declared
+a wider one; that question is what was being answered per writer, and wrongly.
 
 Config is not the only side that loses this way. Conversation control state
 (`state/chat_state`) and member memory (`state/documents`) read a shared file and write it
@@ -538,6 +546,21 @@ no workspace selected it stands down and yields nothing, matching the sync port,
 changes it cannot place in a workspace. Who has to take it is settled by reading the code:
 `tests/guildbotics/workspace/test_shared_write_lock_boundary.py` finds every function that
 reaches a shared-write helper and requires each one to be classified.
+
+**What the boundary commits is what it validated.** Content is staged first and checked
+from the index. Reading a file to validate it and letting `git add` read it again are two
+reads of something a writer can change in between, and the second is what becomes history —
+one such file stops every receiving device's queue, while the sender stays green because its
+working tree matches the commit it made. Staging first also settles a deletion recreated
+before the commit: the recreated file is staged as content, so it is checked as content. A
+file that fails is unstaged and held back, left on disk for the user to fix.
+
+**The interval no writer can protect.** Convergence waits on the hub without the lock, and a
+save made in that interval holds the lock correctly and is still only in the working tree, so
+the checkout would take it with nothing recording the loss. The queue therefore re-runs the
+commit boundary as the first thing inside the convergence lock: the save becomes a change with
+a name, which either survives the adoption or is rejected on the record. A commit there means
+the convergence was computed from a head that no longer exists, so the cycle is redone.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,

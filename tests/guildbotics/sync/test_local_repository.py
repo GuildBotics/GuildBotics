@@ -31,7 +31,9 @@ def test_initialize_ignores_device_local_data_and_env_files(tmp_path: Path) -> N
     assert [change.path for change in repository.working_tree_changes()] == [
         "state/kept.json"
     ]
-    assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == "local/\n.env\n"
+    assert (
+        tmp_path / ".guildbotics" / ".gitignore"
+    ).read_text() == "local/\n.env\n*.tmp\n"
 
 
 def test_initialize_is_repeatable(tmp_path: Path) -> None:

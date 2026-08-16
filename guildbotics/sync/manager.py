@@ -38,6 +38,10 @@ from guildbotics.sync.commits import (
 )
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
+from guildbotics.utils.shared_write_lock import (
+    SharedWriteBusyError,
+    shared_write_lock,
+)
 from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
@@ -45,10 +49,6 @@ from guildbotics.workspace.identity import (
     ensure_device_identity,
     ensure_workspace_identity,
     new_uuid7,
-)
-from guildbotics.workspace.shared_write_lock import (
-    SharedWriteBusyError,
-    shared_write_lock,
 )
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
@@ -367,6 +367,20 @@ class GitSyncManager:
 
     def _converge(self, local: str | None, remote: str) -> str | None:
         """Adopt the hub's content, reapplying what does not collide with it."""
+        # Everything since the last commit boundary ran without the lock,
+        # because it waits on the hub. A save made in that interval holds the
+        # lock correctly and is still only in the working tree, so the checkout
+        # below would take it away with nothing recording the loss -- the one
+        # case a writer holding the lock cannot protect itself from. Committing
+        # it first turns it into a change with a name: it either survives the
+        # adoption or collides and is rejected on the record. That also makes
+        # `local` stale, so the cycle is redone against the new head rather
+        # than reconciled from a state that no longer exists.
+        with shared_write_lock(self._repository.workspace_root):
+            self._commit_held()
+        committed_in_the_interval = self._repository.head()
+        if committed_in_the_interval != local:
+            return committed_in_the_interval
         if local is None:
             base = None
         else:
