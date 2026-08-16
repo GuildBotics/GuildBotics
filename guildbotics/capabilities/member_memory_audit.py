@@ -12,6 +12,7 @@ from guildbotics.observability import correlation_fields
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.timestamps import parse_iso_datetime
 from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
 MEMORY_AUDIT_FILE = "memory_events.jsonl"
@@ -122,12 +123,21 @@ class MemoryAuditStore:
         return self._path or default_memory_audit_path()
 
     def record(self, item: dict[str, Any]) -> None:
+        """Append one event, trimming the journal once it reaches its bound.
+
+        The size check and the trim are a read-modify-write of a shared file,
+        and the trim rewrites the whole journal. Whoever else is writing it --
+        another member's CLI process, or the synchronization queue checking a
+        hub's content out over it -- has to be excluded for the span of both,
+        which the in-process lock cannot do. So the shared-write lock is held
+        here, at the one place events enter the journal.
+        """
         path = self.path
         line = self._bounded_line(item)
         if not line:
             return
         try:
-            with _MEMORY_AUDIT_LOCK:
+            with shared_write_lock(), _MEMORY_AUDIT_LOCK:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 current_size = path.stat().st_size if path.exists() else 0
                 if current_size + len(line.encode("utf-8")) + 1 > self._max_file_bytes:

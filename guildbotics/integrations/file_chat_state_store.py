@@ -24,10 +24,26 @@ from guildbotics.integrations.chat_workflow_status import (
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.workspace_sync_port import delete_shared_path, write_shared_json
+from guildbotics.workspace.shared_write_lock import shared_write_lock
 
 
 class FileConversationStateStore(ConversationStateStore):
-    """JSON file-backed state store for chat workflows."""
+    """JSON file-backed state store for chat workflows.
+
+    ``state/chat_state`` is shared, so every change here is a change another
+    device can be making at the same instant, and most of them read the file
+    they are about to write. The in-process lock below orders the threads of
+    one runtime; it says nothing to the synchronization queue, which checks a
+    hub's content out over these same files. A read taken before that checkout
+    and written back after it reinstates what the queue just adopted, as an
+    ordinary local edit that the next cycle commits and pushes -- so the other
+    device's change disappears without being recorded as a conflict. For chat
+    state that means answering a message twice, or not at all.
+
+    Every method that changes a shared file therefore holds the workspace's
+    shared-write lock across its read and its write, which is the same lock
+    the queue holds across its checkout and commit.
+    """
 
     def __init__(
         self,
@@ -72,18 +88,26 @@ class FileConversationStateStore(ConversationStateStore):
         channel_id: str,
         state: ChannelCursorState,
     ) -> None:
-        with self._lock:
-            processed = _dedupe_keep_order(state.processed_event_ids)[
-                -self._max_processed_events :
-            ]
-            payload = {
-                "cursor": state.cursor,
-                "oldest_ts": state.oldest_ts,
-                "processed_event_ids": processed,
-            }
-            self._write_json(
-                self._channel_file(service, person_id, channel_id), payload
-            )
+        with shared_write_lock(), self._lock:
+            self._write_channel_cursor(service, person_id, channel_id, state)
+
+    def _write_channel_cursor(
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        state: ChannelCursorState,
+    ) -> None:
+        """Write a cursor for a caller that already holds the shared lock."""
+        processed = _dedupe_keep_order(state.processed_event_ids)[
+            -self._max_processed_events :
+        ]
+        payload = {
+            "cursor": state.cursor,
+            "oldest_ts": state.oldest_ts,
+            "processed_event_ids": processed,
+        }
+        self._write_json(self._channel_file(service, person_id, channel_id), payload)
 
     def is_processed_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
@@ -95,10 +119,10 @@ class FileConversationStateStore(ConversationStateStore):
     def mark_processed_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             state = self.load_channel_cursor(service, person_id, channel_id)
             state.processed_event_ids.append(event_id)
-            self.save_channel_cursor(service, person_id, channel_id, state)
+            self._write_channel_cursor(service, person_id, channel_id, state)
 
     def load_thread_state(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
@@ -170,9 +194,10 @@ class FileConversationStateStore(ConversationStateStore):
     ) -> None:
         payload = asdict(state)
         payload["participants"] = sorted(state.participants)
-        self._write_json(
-            self._thread_file(service, person_id, channel_id, thread_ts), payload
-        )
+        with shared_write_lock():
+            self._write_json(
+                self._thread_file(service, person_id, channel_id, thread_ts), payload
+            )
 
     def load_thread_messages(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
@@ -227,6 +252,20 @@ class FileConversationStateStore(ConversationStateStore):
         thread_ts: str,
         message: ThreadMessageState,
     ) -> None:
+        with shared_write_lock():
+            self._append_thread_message(
+                service, person_id, channel_id, thread_ts, message
+            )
+
+    def _append_thread_message(
+        self,
+        service: str,
+        person_id: str,
+        channel_id: str,
+        thread_ts: str,
+        message: ThreadMessageState,
+    ) -> None:
+        """Merge one message for a caller that already holds the shared lock."""
         path = self._thread_cache_file(service, person_id, channel_id, thread_ts)
         payload = self._read_json(path)
         raw_items = payload.get("messages") or []
@@ -291,7 +330,7 @@ class FileConversationStateStore(ConversationStateStore):
         schedule_name: str,
         state: ScheduledPostState,
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             self._write_json(
                 self._scheduled_post_file(service, person_id, schedule_name),
                 {"last_run_slot": state.last_run_slot},
@@ -361,7 +400,7 @@ class FileConversationStateStore(ConversationStateStore):
         event: ChatEvent,
         chat_participation: str = "strict",
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             path = self._pending_events_file(service, person_id, channel_id)
             data = self._read_json(path)
             raw_items = data.get("events") or []
@@ -412,7 +451,7 @@ class FileConversationStateStore(ConversationStateStore):
         channel_id: str,
         pending: PendingChatEvent,
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             path = self._pending_events_file(service, person_id, channel_id)
             data = self._read_json(path)
             raw_items = data.get("events") or []
@@ -438,7 +477,7 @@ class FileConversationStateStore(ConversationStateStore):
     def remove_pending_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             path = self._pending_events_file(service, person_id, channel_id)
             data = self._read_json(path)
             raw_items = data.get("events") or []
@@ -498,7 +537,7 @@ class FileConversationStateStore(ConversationStateStore):
             return _to_str_or_none(data.get("cutoff_ts"))
 
     def save_receive_cutoff(self, service: str, person_id: str, cutoff_ts: str) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             self._write_json(
                 self._receive_cutoff_file(service, person_id),
                 {"cutoff_ts": cutoff_ts},
@@ -507,7 +546,7 @@ class FileConversationStateStore(ConversationStateStore):
     def clear_channel_receive_backlog(
         self, service: str, person_id: str, channel_id: str
     ) -> None:
-        with self._lock:
+        with shared_write_lock(), self._lock:
             # Drop received-but-unprocessed events for this channel. The pending
             # queue is drained without a cutoff check, so a stale file here would
             # be reprocessed. If unlink fails, overwrite with an empty backlog so

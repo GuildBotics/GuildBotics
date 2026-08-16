@@ -505,14 +505,27 @@ decided by the URL — commands (`config/commands`) and transcript settings
 secrets` CLI writes `config/secrets.yml` from another process entirely.
 
 **The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
-by both writers of its shared files: config writes, and the synchronization queue across
-checking the hub's content out and committing what survives. Without it the comparison
-decides nothing — a save can land on top of content adopted while it was running, and since
-that overwrite is an ordinary local write, the next cycle commits and pushes it with
-nothing recording the other device's change as lost. Nothing holds the lock across the
-network, so a save never waits on a hub. A wait that runs out raises `SharedWriteBusyError`,
-deliberately outside the `OSError` family: synchronization catches that family to mean the
-environment failed and would otherwise report the hub unreachable over a local save.
+by every writer of its shared files and by the synchronization queue across checking the
+hub's content out and committing what survives. Without it the comparison decides nothing —
+a save can land on top of content adopted while it was running, and since that overwrite is
+an ordinary local write, the next cycle commits and pushes it with nothing recording the
+other device's change as lost. Nothing holds the lock across the network, so a save never
+waits on a hub. A wait that runs out raises `SharedWriteBusyError`, deliberately outside the
+`OSError` family: synchronization catches that family to mean the environment failed and
+would otherwise report the hub unreachable over a local save.
+
+Config is not the only side that loses this way. Conversation control state
+(`state/chat_state`) and member memory (`state/documents`) read a shared file and write it
+back without knowing Git exists, so the same interleaving reinstates what the queue just
+adopted — costing a Slack answer, or a whole memory document. They hold the same lock across
+their read and their write. Optimistic locking stays with config alone: the lock closes the
+silent loss, while a conflict the queue records as first-committer-wins is the design
+working. The lock is not re-entrant, so an operation takes it once and never around a call
+into another writer — memory releases it before the audit journal, which takes its own. With
+no workspace selected it stands down and yields nothing, matching the sync port, which drops
+changes it cannot place in a workspace. Who has to take it is settled by reading the code:
+`tests/guildbotics/workspace/test_shared_write_lock_boundary.py` finds every function that
+reaches a shared-write helper and requires each one to be classified.
 
 **Queue ownership.** Only the Desktop backend activates the queue
 (`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,

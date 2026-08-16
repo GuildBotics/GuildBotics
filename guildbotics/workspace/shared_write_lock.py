@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import IO
 
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
-from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_workspace_local_path,
+)
 
 #: How long each side waits for the other. Generous on purpose: a first copy
 #: from a hub restores thousands of files inside this lock, and a save refused
@@ -52,8 +55,13 @@ def shared_write_lock_path(workspace_root: Path | None = None) -> Path:
 @contextmanager
 def shared_write_lock(
     workspace_root: Path | None = None, timeout: float = LOCK_TIMEOUT_SECONDS
-) -> Iterator[IO[str]]:
+) -> Iterator[IO[str] | None]:
     """Hold a workspace's shared-write lock for the duration of the block.
+
+    With no workspace selected there is nothing to serialize: no file is
+    shared, and no queue exists to adopt a hub's content over one. Writers
+    that resolve the workspace the way the sync port does reach this state
+    normally, so the exception is answered here rather than by each of them.
 
     Args:
         workspace_root (Path | None): The workspace, or None to use the
@@ -61,12 +69,17 @@ def shared_write_lock(
         timeout (float): Seconds to wait for the other side before giving up.
 
     Yields:
-        IO[str]: The open lock file handle.
+        IO[str] | None: The open lock file handle, or None when no workspace
+            is selected.
 
     Raises:
         SharedWriteBusyError: When the other side holds it past ``timeout``.
     """
-    path = shared_write_lock_path(workspace_root)
+    try:
+        path = shared_write_lock_path(workspace_root)
+    except WorkspaceNotConfiguredError:
+        yield None
+        return
     stack = ExitStack()
     # Only the acquisition is translated. A timeout raised by the body belongs
     # to whatever the body was doing, not to waiting for this lock.
