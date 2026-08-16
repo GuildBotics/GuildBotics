@@ -1400,6 +1400,10 @@ def create_app(
         except ValueError as exc:
             # Validation failures (e.g. too large) carry a safe, stable message.
             raise AppApiError("avatar_invalid", str(exc), status_code=400) from exc
+        except (AppApiError, SharedWriteBusyError):
+            # Both already say what happened, and the catch-all below would
+            # bury them under a generic 500.
+            raise
         except Exception as exc:
             logger.exception("Failed to save avatar for %s", person_id)
             raise AppApiError(
@@ -1449,7 +1453,7 @@ def create_app(
             dest_path = await _store_downloaded_avatar(
                 config_dir, person_id, avatar_url
             )
-        except AppApiError:
+        except (AppApiError, SharedWriteBusyError):
             raise
         except Exception as exc:
             logger.exception("Failed to import avatar from GitHub for %s", person_id)
@@ -1526,7 +1530,7 @@ def create_app(
             dest_path = await _store_downloaded_avatar(
                 config_dir, person_id, avatar_url
             )
-        except AppApiError:
+        except (AppApiError, SharedWriteBusyError):
             raise
         except Exception as exc:
             if "missing_scope" in str(exc):

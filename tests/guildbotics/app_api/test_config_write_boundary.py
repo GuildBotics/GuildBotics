@@ -4,9 +4,14 @@ The rule this file exists for is not "these particular routes take the lock"
 but "no route that writes config can be added without taking it". A writer
 outside the lock is invisible in review -- it looks like an ordinary save -- and
 what it costs shows up on another machine, as a change that vanished without
-being recorded as a conflict. So the routes are enumerated here against the
-application's own routing table: a new one has to be classified before this
-passes.
+being recorded as a conflict.
+
+So the population is every route that changes anything, taken from the
+application's own routing table, and each one is classified here. It is
+deliberately not "the routes under ``/config``": config lives under that prefix
+but is not only written from it -- commands and transcript settings are config
+files reached from elsewhere, and drawing the boundary around the URL is how
+they came to be missed.
 """
 
 from __future__ import annotations
@@ -30,16 +35,40 @@ HTTP_OK = 200
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
-#: Routes under ``/config`` that change nothing on disk, and why. Listing them
-#: is what lets the coverage check below be exhaustive.
-READ_ONLY_ROUTES = {
-    ("POST", "/config/project/status-options"): "reads a GitHub project's lanes",
-    ("POST", "/config/project/agent-field"): "reads a GitHub project's field",
-    ("POST", "/config/project/agent-field/ensure"): "creates a field on GitHub",
+#: Routes that change something other than the workspace's shared config, and
+#: what they change instead. Naming them is what lets the check below be
+#: exhaustive rather than a list of the routes someone happened to think of.
+ELSEWHERE = {
+    ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
+    ("POST", "/commands/author"): "proposes a change set, writes nothing",
+    ("POST", "/commands/input-files"): "a temporary file outside the workspace",
+    ("POST", "/commands/run"): "starts a run; its own writes go through the port",
     ("POST", "/config/members/resolve"): "resolves an identity, writes nothing",
     ("POST", "/config/members/github-app/registrations"): "starts an OAuth flow",
     ("POST", "/config/members/slack-app/registrations"): "starts an OAuth flow",
     ("POST", "/config/members/slack-app/verify"): "calls Slack",
+    ("POST", "/config/project/agent-field"): "reads a GitHub project's field",
+    ("POST", "/config/project/agent-field/ensure"): "creates a field on GitHub",
+    ("POST", "/config/project/status-options"): "reads a GitHub project's lanes",
+    ("POST", "/diagnostics/scenario"): "local/run diagnostics",
+    ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
+    ("POST", "/hub"): "~/.guildbotics/hub, outside any workspace",
+    ("POST", "/hub/inspect"): "reads a hub",
+    ("POST", "/hub/ssh-key"): "~/.ssh",
+    ("POST", "/hub/trust"): "~/.ssh/known_hosts",
+    ("POST", "/scheduler/start"): "runtime lifecycle",
+    ("POST", "/scheduler/stop"): "runtime lifecycle",
+    ("POST", "/system-alerts/dismiss"): "local/run state",
+    ("POST", "/verify"): "runs checks",
+    ("POST", "/workspace"): "selects a workspace",
+    ("POST", "/workspace/devices/self"): "state/, and it takes the lock in sync",
+    ("POST", "/workspace/sync/clone"): "sync takes the lock itself",
+    ("POST", "/workspace/sync/enable"): "sync takes the lock itself",
+    ("POST", "/workspace/sync/hub"): "sync takes the lock itself",
+    ("POST", "/workspace/sync/preview"): "sync takes the lock itself",
+    ("POST", "/workspace/sync/retry"): "sync takes the lock itself",
+    ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
+    ("PUT", "/runtime/debug"): "a runtime flag",
 }
 
 
@@ -81,13 +110,13 @@ def _config_dir(workspace: Path) -> Path:
     return workspace / ".guildbotics/config"
 
 
-def _init(client: TestClient, workspace: Path) -> Path:
-    config_dir = _config_dir(workspace)
-    response = client.post(
+def _post_init(client: TestClient, workspace: Path) -> Any:
+    """Send the first-setup write without judging the answer."""
+    return client.post(
         "/config/init",
         headers=AUTH_HEADERS,
         json={
-            "config_dir": str(config_dir),
+            "config_dir": str(_config_dir(workspace)),
             "language": "en",
             "description": "Temp automation workspace",
             "llm_api_type": "openai",
@@ -95,12 +124,22 @@ def _init(client: TestClient, workspace: Path) -> Path:
             "provider_api_keys": {"openai": "test-openai-key"},
         },
     )
+
+
+def _init(client: TestClient, workspace: Path) -> Path:
+    response = _post_init(client, workspace)
     assert response.status_code == HTTP_OK
-    return config_dir
+    return _config_dir(workspace)
 
 
-def _add_member(client: TestClient, config_dir: Path) -> None:
-    response = client.post(
+def _add_member(client: TestClient, config_dir: Path) -> Any:
+    response = _post_member(client, config_dir)
+    assert response.status_code == HTTP_OK
+    return response
+
+
+def _post_member(client: TestClient, config_dir: Path) -> Any:
+    return client.post(
         "/config/members",
         headers=AUTH_HEADERS,
         json={
@@ -116,12 +155,29 @@ def _add_member(client: TestClient, config_dir: Path) -> None:
             "speaking_style": "concise",
         },
     )
+
+
+def _add_command_file(client: TestClient) -> str:
+    response = client.post(
+        "/commands/files",
+        headers=AUTH_HEADERS,
+        json={"command": "demo", "format": "markdown", "content": "# demo\n"},
+    )
     assert response.status_code == HTTP_OK
+    return response.json()["id"]
+
+
+def _command_file(client: TestClient) -> dict[str, str]:
+    """The command file the update / delete mutations act on."""
+    listing = client.get("/commands/files", headers=AUTH_HEADERS).json()["files"]
+    entry = next(item for item in listing if item["command"].endswith("demo"))
+    detail = client.get(f"/commands/files/{entry['id']}", headers=AUTH_HEADERS).json()
+    return {"id": detail["id"], "revision": detail["revision"]}
 
 
 #: How to exercise each config-writing route, keyed the way FastAPI names it.
 MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
-    ("POST", "/config/init"): lambda client, workspace: _init(client, workspace),
+    ("POST", "/config/init"): lambda client, workspace: _post_init(client, workspace),
     ("PUT", "/config/project"): lambda client, workspace: client.put(
         "/config/project",
         headers=AUTH_HEADERS,
@@ -139,7 +195,7 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
         headers=AUTH_HEADERS,
         json={"person_id": "alice"},
     ),
-    ("POST", "/config/members"): lambda client, workspace: _add_member(
+    ("POST", "/config/members"): lambda client, workspace: _post_member(
         client, _config_dir(workspace)
     ),
     ("PUT", "/config/members/{person_id}"): lambda client, workspace: client.put(
@@ -186,22 +242,62 @@ MUTATIONS: dict[tuple[str, str], Callable[[TestClient, Path], Any]] = {
             "/config/members/alice/avatar/slack", headers=AUTH_HEADERS
         )
     ),
+    # Commands are config files too; the prefix they are served under is not
+    # what decides.
+    ("POST", "/commands/files"): lambda client, workspace: client.post(
+        "/commands/files",
+        headers=AUTH_HEADERS,
+        json={"command": "another", "format": "markdown", "content": "# x\n"},
+    ),
+    ("PUT", "/commands/files/{file_id}"): lambda client, workspace: client.put(
+        f"/commands/files/{_command_file(client)['id']}",
+        headers=AUTH_HEADERS,
+        json={
+            "content": "# edited\n",
+            "expected_revision": _command_file(client)["revision"],
+        },
+    ),
+    ("DELETE", "/commands/files/{file_id}"): lambda client, workspace: client.delete(
+        f"/commands/files/{_command_file(client)['id']}"
+        f"?expected_revision={_command_file(client)['revision']}",
+        headers=AUTH_HEADERS,
+    ),
+    ("POST", "/commands/author/apply"): lambda client, workspace: client.post(
+        "/commands/author/apply",
+        headers=AUTH_HEADERS,
+        json={
+            "changes": [
+                {
+                    "operation": "create",
+                    "command": "authored",
+                    "format": "markdown",
+                    "relative_path": "authored.md",
+                    "content": "# authored\n",
+                }
+            ]
+        },
+    ),
+    ("PUT", "/transcripts/settings"): lambda client, workspace: client.put(
+        "/transcripts/settings",
+        headers=AUTH_HEADERS,
+        json={"detail": "full", "retention_days": 7},
+    ),
 }
 
 
-def test_the_routes_that_change_config_are_all_classified(client: TestClient) -> None:
-    """A new config route has to be sorted into one list or the other.
+def test_every_route_that_changes_anything_is_classified(client: TestClient) -> None:
+    """A new route has to be sorted into one list or the other.
 
-    Without this, the next writer added is simply not covered, and the omission
-    reads as an ordinary endpoint.
+    The population is every mutating route, not the ones under ``/config``:
+    drawing it around the URL is what let the command files and the transcript
+    settings -- both config -- write outside the lock unnoticed.
     """
-    declared = set(MUTATIONS) | set(READ_ONLY_ROUTES)
+    declared = set(MUTATIONS) | set(ELSEWHERE)
     routing_table = {
         (method, route.path)
         for route in client.app.routes  # type: ignore[attr-defined]
         for method in getattr(route, "methods", set())
-        if str(getattr(route, "path", "")).startswith("/config")
-        and method in {"POST", "PUT", "DELETE"}
+        if method in {"POST", "PUT", "DELETE"}
     }
 
     assert routing_table == declared
@@ -231,6 +327,8 @@ def test_a_config_change_is_written_under_the_shared_write_lock(
     config_dir = _init(client, workspace)
     if route != ("POST", "/config/members"):
         _add_member(client, config_dir)
+    if route[1].startswith("/commands/files/"):
+        _add_command_file(client)
     locked.clear()
 
     MUTATIONS[route](client, workspace)
@@ -257,26 +355,49 @@ def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     monkeypatch.setattr(module, "shared_write_lock", brief)
 
 
-def test_a_save_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
-    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "route", sorted(MUTATIONS), ids=lambda route: f"{route[0]} {route[1]}"
+)
+def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
+    client: TestClient,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route: tuple[str, str],
 ) -> None:
     """Waiting on the other writer is not a failure of the request.
 
     A lock timeout is a ``TimeoutError``, so the family it belongs to would
-    otherwise be read as the environment breaking -- a 500 here, and the hub
-    reported unreachable on the synchronization side.
+    otherwise be read as the environment breaking. This is checked on every
+    writer rather than one of them: a route that wraps its own body in a broad
+    ``except`` turns the wait into its own 500, and only that route shows it.
     """
+    monkeypatch.setattr(
+        avatar_module, "get_github_avatar_url", _fake_url, raising=False
+    )
+    monkeypatch.setattr(avatar_module, "get_slack_avatar_url", _fake_url, raising=False)
+    monkeypatch.setattr(avatar_module, "download_avatar", _fake_download, raising=False)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     config_dir = _init(client, workspace)
+    if route != ("POST", "/config/members"):
+        _add_member(client, config_dir)
+    if route[1].startswith("/commands/files/"):
+        _add_command_file(client)
     _impatient(monkeypatch, config_repository_module)
 
     with shared_write_lock(workspace):
-        response = client.put(
-            "/config/project/default-person",
-            headers=AUTH_HEADERS,
-            json={"person_id": ""},
-        )
+        response = MUTATIONS[route](client, workspace)
 
-    assert response.status_code == 503
+    assert response is not None
+    assert response.status_code == 503, response.text
     assert response.json()["code"] == "config_busy"
-    # Nothing was written, so the screen may simply try again.
-    assert (config_dir / "team/project.yml").exists()
+
+
+def _impatient(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
+    """Make ``module``'s lock give up at once instead of after 30 seconds."""
+
+    @contextmanager
+    def brief(workspace_root: Path | None = None, **_: Any) -> Iterator[IO[str]]:
+        with shared_write_lock(workspace_root, timeout=0.05) as handle:
+            yield handle
+
+    monkeypatch.setattr(module, "shared_write_lock", brief)

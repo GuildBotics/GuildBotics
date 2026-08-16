@@ -496,18 +496,21 @@ export function SetupPage() {
    *
    * Returns where the files it wrote now stand, so a save that continues into
    * the advanced editor is composed against this result rather than against
-   * what was on screen before it ran.
+   * what was on screen before it ran — or null when nothing was written, so
+   * that the second half does not run on its own. One button applying half of
+   * itself is worse than applying neither half, and it contradicts what the
+   * refusal just told the user.
    */
-  const saveNow = async (): Promise<ConfigRevisions> => {
+  const saveNow = async (): Promise<ConfigRevisions | null> => {
     if (form.validate().hasErrors) {
       setSaveState("error");
-      return {};
+      return null;
     }
     const creatingInitialSetup = !hasExistingProject;
     const initialSetupRequest = creatingInitialSetup
       ? toInitialProjectSetupRequest(form.values)
       : null;
-    let revisionsWritten: ConfigRevisions = {};
+    let revisionsWritten: ConfigRevisions | null = null;
     setSaveState("saving");
     try {
       const written = await saveMutation.mutateAsync(form.values);
@@ -947,7 +950,7 @@ function ProjectSection({
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
-  onSave: () => Promise<ConfigRevisions>;
+  onSave: () => Promise<ConfigRevisions | null>;
   onWorkspaceChange: (value: string) => void;
   onWorkspaceCloned: (workspace: string) => void;
 }) {
@@ -1040,7 +1043,7 @@ function IntelligenceSection({
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
-  onSave: () => Promise<ConfigRevisions>;
+  onSave: () => Promise<ConfigRevisions | null>;
   detections: CliAgentDetection[];
   detectionLoading: boolean;
   storedProviderKeys: Record<string, boolean> | undefined;
@@ -1059,6 +1062,12 @@ function IntelligenceSection({
       // so the advanced save is composed against what this one just left --
       // otherwise one button would reliably collide with itself.
       const written = await onSave();
+      if (written === null) {
+        // The basic half wrote nothing. Going on would apply the advanced half
+        // alone, which is not what one button means, and not what the message
+        // the user just saw says happened.
+        return;
+      }
       await saveAdvanced.current?.(written);
     } catch {
       // Both halves report their own failure: the basic settings through the

@@ -3653,6 +3653,27 @@ describe("IntelligenceEditor (team default)", () => {
     expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
   });
 
+  it.each([
+    ["refused as stale", "config_changed"],
+    ["refused because synchronization holds the files", "config_busy"],
+  ])("does not save the advanced half when the basic half is %s", async (_name, code) => {
+    // One button, two writes. Applying only the second is worse than applying
+    // neither, and it contradicts the message the user was just shown.
+    const user = userEvent.setup();
+    vi.mocked(updateProjectConfig).mockRejectedValue(
+      new ApiRequestError({ code, message: "refused", context: { revisions: {} } }),
+    );
+    await openTeamIntelligenceAdvanced(user);
+    const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
+    await user.clear(modelId);
+    await user.type(modelId, "gpt-6");
+
+    await saveSection(user);
+
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
   it("composes the advanced save against what the basic save just wrote", async () => {
     // One button saves both halves, and the basic half rewrites two of the
     // files the advanced half guards. Sending the revisions read before that

@@ -499,7 +499,10 @@ of itself. Reading the revisions there too stops an answer that pairs content th
 wrote with a revision the hub's arrival produced — the screen would save against it and
 overwrite content it never saw. Every route that changes config goes through
 `app_api/config_revisions.py`, including those with nothing to compare: comparing is
-optional, being the only writer while writing is not.
+optional, being the only writer while writing is not. Which routes those are is not
+decided by the URL — commands (`config/commands`) and transcript settings
+(`config/transcripts.yml`) are config reached from elsewhere, and the `guildbotics
+secrets` CLI writes `config/secrets.yml` from another process entirely.
 
 **The shared-write lock** (`workspace/shared_write_lock.py`). One lock per workspace, taken
 by both writers of its shared files: config writes, and the synchronization queue across
