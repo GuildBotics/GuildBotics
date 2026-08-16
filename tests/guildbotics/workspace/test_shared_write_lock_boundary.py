@@ -1,22 +1,28 @@
-"""A shared file cannot be changed without declaring the span it changes in.
+"""A shared file is never written outside the workspace's shared-write lock.
 
-This used to be a list. Every function that wrote a shared file was classified
-here as taking the lock or not needing it, and the classification was the thing
-that kept being wrong -- once because "does it read before writing?" is not the
-question. The question is whether the change can land inside a window the
-synchronization queue is working in, and the queue's windows cover the whole
-shared tree, so for a writer of a shared path the answer is always yes.
+This used to be a list of writers, each classified as taking the lock or not
+needing it, and the classification was the thing that kept being wrong. Then it
+was a refusal: the port raised at anyone who wrote without declaring a span,
+and every writer of a shared path had to declare one -- which is the same list
+again, spelled as a ``with`` in front of thirty functions and an entry here for
+each.
 
-So there is no list any more. Every write to a shared path goes through the
-workspace sync port, and the port refuses one made outside the lock. What is
-checked here is that refusal, and the two things a writer still has to get
-right on its own: that its span covers the read its write is derived from, and
-that a wider span from a caller subsumes a narrower one rather than deadlocking
-against it.
+Now the port takes the lock itself, so a writer that reads nothing has nothing
+to declare and nothing to be listed as. What is left to check is what the port
+cannot infer: that a value derived from a file's current contents was decided
+inside the same span that wrote it. ``update_shared_text`` makes that structural
+and is checked as such; the few operations whose span is wider than any single
+write still say so by hand, and those are named below.
+
+For those, waiting is not the property. The port takes the lock for the write
+whichever way the caller declared its span, so an operation that read before
+taking one reads happily and then raises at the write -- the same exception a
+correct one would raise. The reads themselves are watched instead.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -24,37 +30,30 @@ from pathlib import Path
 
 import pytest
 
+import guildbotics.utils.shared_write_lock as shared_write_lock_module
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.editions.simple.setup_service import SimpleProjectSetupService
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatEvent
-from guildbotics.integrations.chat_state_store import (
-    ChannelCursorState,
-    PendingChatEvent,
-    ScheduledPostState,
-    ThreadConversationState,
-    ThreadMessageState,
-)
-from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.observability.activity_event_store import ActivityEventStore
-import guildbotics.utils.shared_write_lock as shared_write_lock_module
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
-    shared_write_lock_held,
-    SharedWriteLockRequiredError,
     shared_write_lock,
 )
 from guildbotics.utils.workspace_sync_port import (
+    ChangeSet,
     append_shared_text,
     delete_shared_path,
     notify_shared_state_changed,
+    set_workspace_sync_port,
+    update_shared_json,
+    update_shared_text,
     write_shared_bytes,
     write_shared_json,
     write_shared_text,
 )
-from guildbotics.workspace.identity import publish_device_record
+from tests.guildbotics.workspace.test_config_repository import shared_write_lock_is_held
 
 
 @pytest.fixture
@@ -112,16 +111,18 @@ def held_elsewhere(workspace: Path) -> Iterator[None]:
         assert not holder.is_alive()
 
 
-#: Every way the port lets a caller change a shared path. Each one refuses a
-#: change made without a span; that refusal is what replaced the list of
-#: writers this file used to keep.
+#: Every way the port lets a caller change a shared path. Each one takes the
+#: lock, which is what replaced the list of writers this file used to keep.
 PORT_WRITES: dict[str, Callable[[Path], object]] = {
     "append_shared_text": lambda shared: append_shared_text(
         shared / "state/journal.jsonl", "{}\n"
     ),
     "delete_shared_path": lambda shared: delete_shared_path(shared / "state/gone.json"),
-    "notify_shared_state_changed": lambda shared: notify_shared_state_changed(
-        "update", [shared / "state/other.json"]
+    "update_shared_json": lambda shared: update_shared_json(
+        shared / "state/other.json", lambda current: current
+    ),
+    "update_shared_text": lambda shared: update_shared_text(
+        shared / "state/other.json", lambda current: current
     ),
     "write_shared_bytes": lambda shared: write_shared_bytes(
         shared / "state/bytes.json", b"{}\n"
@@ -135,6 +136,20 @@ PORT_WRITES: dict[str, Callable[[Path], object]] = {
 }
 
 
+class _RecordingPort:
+    """A sync port that keeps what it was told, so announcements can be counted."""
+
+    def __init__(self, announced: list[ChangeSet]) -> None:
+        self._announced = announced
+
+    def shared_state_changed(self, change: ChangeSet) -> bool:
+        self._announced.append(change)
+        return True
+
+    def await_pushed(self, change_id: str) -> bool:
+        return False
+
+
 def _existing_shared_files(workspace: Path) -> Path:
     shared = workspace / ".guildbotics"
     (shared / "state").mkdir(parents=True, exist_ok=True)
@@ -144,51 +159,71 @@ def _existing_shared_files(workspace: Path) -> Path:
 
 
 @pytest.mark.parametrize("helper", sorted(PORT_WRITES))
-def test_the_port_refuses_a_shared_change_made_without_a_span(
+def test_every_port_write_waits_for_the_other_writer(
     workspace: Path, helper: str
 ) -> None:
     """Checked on every entry, because one unguarded entry is the whole hole."""
     shared = _existing_shared_files(workspace)
 
-    with pytest.raises(SharedWriteLockRequiredError):
-        PORT_WRITES[helper](shared)
+    with held_elsewhere(workspace):
+        with pytest.raises(SharedWriteBusyError):
+            PORT_WRITES[helper](shared)
 
 
 @pytest.mark.parametrize("helper", sorted(PORT_WRITES))
-def test_the_same_change_inside_a_span_is_allowed(workspace: Path, helper: str) -> None:
-    """The refusal is about the span, not about the path or the payload."""
+def test_the_same_change_succeeds_when_nobody_else_is_writing(
+    workspace: Path, helper: str
+) -> None:
+    """The wait is about the other writer, not about the path or the payload."""
     shared = _existing_shared_files(workspace)
 
-    with shared_write_lock(workspace):
-        PORT_WRITES[helper](shared)
+    PORT_WRITES[helper](shared)
 
 
-def test_a_device_local_change_needs_no_span(workspace: Path) -> None:
+def test_announcing_a_change_already_made_takes_no_lock(workspace: Path) -> None:
+    """Excluding the queue after the file changed protects nothing.
+
+    A writer that renames or unlinks a shared file itself holds the lock across
+    the change and this announcement together. Taking it here as well would
+    only make an announcement look like the protection it is not, and would
+    stall a writer already inside a wider span of its own.
+    """
+    shared = _existing_shared_files(workspace)
+
+    with held_elsewhere(workspace):
+        change = notify_shared_state_changed("update", [shared / "state/other.json"])
+
+    assert change is not None and change.paths == ("state/other.json",)
+
+
+def test_a_device_local_change_never_waits(workspace: Path) -> None:
     """``local/`` is this machine's, so no queue ever touches it.
 
     The port drops those paths rather than announcing them, and the lock has to
-    agree: requiring a span for them would make every device-local writer take
-    a lock that orders it against nothing.
+    agree: waiting on them would make every device-local writer queue behind a
+    synchronization cycle it is not racing.
     """
     local = workspace / ".guildbotics/local/hotkeys.yml"
     local.parent.mkdir(parents=True)
 
-    assert write_shared_text(local, "a: b\n") is None
+    with held_elsewhere(workspace):
+        assert write_shared_text(local, "a: b\n") is None
+
     assert local.read_text(encoding="utf-8") == "a: b\n"
 
 
-def test_a_change_with_no_workspace_selected_needs_no_span(
+def test_a_change_with_no_workspace_selected_never_waits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Nothing is shared until a workspace is, so nothing is refused."""
+    """Nothing is shared until a workspace is, so there is nothing to serialize."""
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     path = tmp_path / ".guildbotics/state/thing.json"
     path.parent.mkdir(parents=True)
 
     assert write_shared_text(path, "{}\n") is None
-    with shared_write_lock() as handle:
-        assert handle is None
+    with shared_write_lock():
+        pass
 
 
 def test_a_wider_span_subsumes_a_narrower_one(workspace: Path) -> None:
@@ -214,6 +249,78 @@ def test_a_span_still_excludes_another_thread(workspace: Path) -> None:
                 pytest.fail("the lock was taken while another thread held it")
 
 
+def test_a_rewrite_reads_the_file_inside_the_span(workspace: Path) -> None:
+    """The transformation is not even reached while another writer holds it.
+
+    This is the whole reason the closure is passed in rather than the finished
+    text. Given the text, a caller has already read the file by the time it
+    calls, and whether that read was covered is a matter of where the caller
+    happened to put its ``with``. Given the transformation, the read is the
+    helper's, and it happens after the wait.
+    """
+    shared = _existing_shared_files(workspace)
+    reads: list[str | None] = []
+
+    with held_elsewhere(workspace):
+        with pytest.raises(SharedWriteBusyError):
+            update_shared_text(
+                shared / "state/other.json", lambda current: reads.append(current) or ""
+            )
+
+    assert not reads, "the file was read before the other writer was waited for"
+
+
+def test_a_rewrite_sees_what_the_other_writer_left(workspace: Path) -> None:
+    """Waiting is not enough on its own: the read has to come after it."""
+    shared = _existing_shared_files(workspace)
+    target = shared / "state/other.json"
+
+    def hold_then_change() -> None:
+        with shared_write_lock(workspace):
+            started.set()
+            proceed.wait(30)
+            target.write_text(json.dumps({"n": 1}), encoding="utf-8")
+
+    started = threading.Event()
+    proceed = threading.Event()
+    holder = threading.Thread(target=hold_then_change, daemon=True)
+    holder.start()
+    assert started.wait(30)
+    proceed.set()
+    holder.join(30)
+
+    payload = update_shared_json(target, lambda current: {"n": current["n"] + 1})
+
+    assert payload == {"n": 2}
+
+
+def test_unchanged_content_is_not_rewritten(workspace: Path) -> None:
+    """A file rewritten with what it already held is synchronization work with
+    nothing behind it, so no change is announced for one."""
+    shared = _existing_shared_files(workspace)
+    target = shared / "state/other.json"
+    announced: list[ChangeSet] = []
+    set_workspace_sync_port(_RecordingPort(announced))
+    try:
+        assert update_shared_text(target, lambda current: current) == "{}\n"
+        assert not announced
+
+        update_shared_text(target, lambda _current: "{ }\n")
+    finally:
+        set_workspace_sync_port(None)
+
+    assert [change.paths for change in announced] == [("state/other.json",)]
+
+
+def test_a_rewrite_that_returns_nothing_removes_the_file(workspace: Path) -> None:
+    """An emptied record is stored as no file, not as an empty one."""
+    shared = _existing_shared_files(workspace)
+    target = shared / "state/other.json"
+
+    assert update_shared_text(target, lambda _current: None) is None
+    assert not target.exists()
+
+
 def _trim_the_audit_journal() -> None:
     """Fill the journal past its bound, so the entry after it rewrites the file.
 
@@ -224,17 +331,6 @@ def _trim_the_audit_journal() -> None:
     store = MemoryAuditStore(max_file_bytes=400)
     for index in range(4):
         store.record({"kind": "memory", "type": "memory.get", "message": str(index)})
-
-
-def _remove_a_pending_event() -> None:
-    """Put a pending event there and take it away again.
-
-    Removal reads the file to find out what is left, and reads nothing when
-    there is nothing there, so the pair is what has to be exercised.
-    """
-    store = _chat_state()
-    store.upsert_pending_event("slack", "p1", "C1", _event())
-    store.remove_pending_event("slack", "p1", "C1", "e1")
 
 
 def _complete_a_run_with_evidence() -> object:
@@ -255,39 +351,47 @@ def _complete_a_run_with_evidence() -> object:
     )
 
 
-def _chat_state() -> FileConversationStateStore:
-    return FileConversationStateStore()
+def _record_a_policy() -> object:
+    """Record team policy, which is at most one document in the whole scope.
 
-
-def _event() -> ChatEvent:
-    return ChatEvent(
-        event_id="e1",
-        channel_id="C1",
-        message_ts="1.0",
-        thread_ts="1.0",
-        author_id="U1",
-        text="hi",
+    Whether this creates or replaces comes from scanning the team directory,
+    not from reading the file being written, so no write helper can put that
+    read inside the span.
+    """
+    service = MemberMemoryService(Person(person_id="p1", name="P"))
+    return service.record(
+        scope="team", title="t", body="b", kind="policy", policy_approved=True
     )
 
 
-#: Operations whose span has to cover a read as well as a write. A span that
-#: covers only the write leaves the read outside, which looks protected and is
-#: not: the value written was decided from content the queue may have replaced
-#: in between.
-READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
-    "chat_state.mark_processed_event": lambda _: _chat_state().mark_processed_event(
-        "slack", "p1", "C1", "e1"
-    ),
-    "chat_state.remove_pending_event": lambda _: _remove_a_pending_event(),
-    "chat_state.upsert_pending_event": lambda _: _chat_state().upsert_pending_event(
-        "slack", "p1", "C1", _event()
-    ),
-    "identity.publish_device_record": publish_device_record,
+def _set_the_default_member(root: Path) -> object:
+    """Write the project's default member into the config it has to read first.
+
+    Cleared rather than set, because the member being named is looked up in its
+    own file and this is about the project config the value lands in.
+    """
+    config_dir = root / ".guildbotics/config"
+    (config_dir / "team").mkdir(parents=True, exist_ok=True)
+    project = config_dir / "team/project.yml"
+    if not project.exists():
+        project.write_text("language: en\n", encoding="utf-8")
+    return SimpleProjectSetupService().set_default_person(
+        config_dir=config_dir, person_id=""
+    )
+
+
+#: The operations whose span is wider than any one write, and which therefore
+#: still declare it by hand. Each reads something the write helpers cannot see
+#: it reading: a journal it may replace instead of appending to, another file
+#: entirely, a directory.
+HAND_DECLARED_SPANS: dict[str, Callable[[Path], object]] = {
+    "memory.record_policy": lambda _: _record_a_policy(),
+    "memory_audit.record": lambda _: _trim_the_audit_journal(),
     "secret_store.ensure_initialized": lambda root: KeyringSecretStore(
         root / ".guildbotics/config"
     ).ensure_initialized(),
+    "setup_service.set_default_person": _set_the_default_member,
     "task_runs.complete_run": lambda _: _complete_a_run_with_evidence(),
-    "memory_audit.record": lambda _: _trim_the_audit_journal(),
 }
 
 
@@ -295,10 +399,10 @@ READ_MODIFY_WRITE: dict[str, Callable[[Path], object]] = {
 def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
     """Note every read of a shared file, and whether the lock was held for it.
 
-    The port sees writes, so it can insist the lock is held for one. It never
-    sees a read -- ``read_text`` on a memory document is an ordinary file read
-    -- so it cannot tell where a span began. Watching the reads from the test
-    is what makes "the span starts at the read" checkable at all.
+    The port sees writes, so it takes the lock for one. It never sees a read --
+    ``read_text`` on a memory document is an ordinary file read -- so nothing
+    in the code can tell where a hand-declared span began. Watching the reads
+    from the test is what makes "the span starts at the read" checkable at all.
     """
     seen: list[tuple[str, bool]] = []
     shared = workspace / ".guildbotics"
@@ -312,7 +416,7 @@ def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
         except (OSError, ValueError):
             return
         if relative.parts and relative.parts[0] in {"config", "state"}:
-            seen.append((relative.as_posix(), shared_write_lock_held(workspace)))
+            seen.append((relative.as_posix(), shared_write_lock_is_held(workspace)))
 
     def wrap(name: str) -> Callable[..., object]:
         original = originals[name]
@@ -337,32 +441,28 @@ def recording_shared_reads(workspace: Path) -> Iterator[list[tuple[str, bool]]]:
         patcher.undo()
 
 
-@pytest.mark.parametrize("operation", sorted(READ_MODIFY_WRITE))
-def test_the_span_starts_at_the_read_not_at_the_write(
+@pytest.mark.parametrize("operation", sorted(HAND_DECLARED_SPANS))
+def test_a_hand_declared_span_starts_at_the_read(
     workspace: Path, operation: str
 ) -> None:
     """A read the write is derived from is inside the span, not in front of it.
 
-    The port can only insist the lock is held at the moment of the write, and
-    that is not the same claim: a check that passed against content the queue
-    replaced a moment later is a check of nothing. Only reads before the first
-    write are looked at -- what an operation reads afterwards, to report what
-    it did, is not what it decided from.
-
-    Asserting a refusal instead does not work here, and used to be what this
-    file did: with the read outside the span the read simply succeeds and the
-    write raises, so the same exception comes out either way and the two shapes
-    are indistinguishable.
+    Asserting that the operation waits for another writer does not show this,
+    and is the trap: the port takes the lock for the write whatever the caller
+    did, so an operation whose read sits outside its span reads happily, then
+    blocks at the write and raises the same exception as one that got it right.
+    The two shapes are indistinguishable from the outside, which is why the
+    reads are observed instead.
 
     It is the first read that is checked. An operation reads again afterwards
     to report what it did, and that read decided nothing.
     """
-    # Run it once first: these operations read a file they also create, and on
+    # Run it once first: these operations read files they also create, and on
     # a workspace where it does not exist yet there is no read to observe.
-    READ_MODIFY_WRITE[operation](workspace)
+    HAND_DECLARED_SPANS[operation](workspace)
 
     with recording_shared_reads(workspace) as reads:
-        READ_MODIFY_WRITE[operation](workspace)
+        HAND_DECLARED_SPANS[operation](workspace)
 
     assert reads, f"{operation} read no shared file, so it does not belong here"
     path, held = reads[0]
@@ -370,65 +470,3 @@ def test_the_span_starts_at_the_read_not_at_the_write(
         f"{operation} read {path} before taking the lock, so what it wrote was "
         "decided from content the queue may have replaced in between"
     )
-
-
-#: Operations that read nothing and still hold the lock, because what makes the
-#: lock necessary is changing a path the queue is working in -- not reading one.
-BLIND_WRITES: dict[str, Callable[[Path], object]] = {
-    "activity.record": lambda _: ActivityEventStore().record(
-        {"type": "github.pull_request.opened", "person_id": "p1"}
-    ),
-    # Reads the thread message cache, which is device-local, and creates the
-    # shared thread state beside it without reading that.
-    "chat_state.append_thread_message": lambda _: _chat_state().append_thread_message(
-        "slack",
-        "p1",
-        "C1",
-        "1.0",
-        ThreadMessageState(
-            channel_id="C1", thread_ts="1.0", message_ts="1.0", author_id="U1", text="x"
-        ),
-    ),
-    "chat_state.save_channel_cursor": lambda _: _chat_state().save_channel_cursor(
-        "slack", "p1", "C1", ChannelCursorState(cursor="c")
-    ),
-    "chat_state.save_pending_event": lambda _: _chat_state().save_pending_event(
-        "slack",
-        "p1",
-        "C1",
-        PendingChatEvent(event=_event(), chat_participation="strict"),
-    ),
-    "chat_state.save_receive_cutoff": lambda _: _chat_state().save_receive_cutoff(
-        "slack", "p1", "1.0"
-    ),
-    "chat_state.save_scheduled_post_state": lambda _: (
-        _chat_state().save_scheduled_post_state(
-            "slack", "p1", "daily", ScheduledPostState(last_run_slot="s")
-        )
-    ),
-    "chat_state.save_thread_state": lambda _: _chat_state().save_thread_state(
-        "slack",
-        "p1",
-        "C1",
-        "1.0",
-        ThreadConversationState(channel_id="C1", thread_ts="1.0"),
-    ),
-    "task_runs.append": lambda _: RunStore().append("run-1", {"kind": "evidence"}),
-}
-
-
-@pytest.mark.parametrize("operation", sorted(BLIND_WRITES))
-def test_a_writer_that_reads_nothing_still_holds_the_lock(
-    workspace: Path, operation: str
-) -> None:
-    """The criterion is what the queue is doing, not what the writer read.
-
-    A journal append reads nothing and is still committed by whatever the queue
-    stages a moment later. Landing between the validation and the staging makes
-    unchecked content into shared history, and the devices that receive it stop
-    their queues on it. "It only appends" was the reasoning that left one of
-    these outside the lock.
-    """
-    with held_elsewhere(workspace):
-        with pytest.raises(SharedWriteBusyError):
-            BLIND_WRITES[operation](workspace)

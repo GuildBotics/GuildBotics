@@ -35,7 +35,6 @@ from guildbotics.utils.keychain import (
     system_keychain,
 )
 from guildbotics.utils.shared_write_lock import shared_write_operation
-from guildbotics.utils.workspace_sync_port import notify_shared_state_changed
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
@@ -139,7 +138,17 @@ class SecretStore(ABC):
 
 
 class KeyringSecretStore(SecretStore):
-    """OS keychain storage with a non-secret key index in the workspace."""
+    """OS keychain storage with a non-secret key index in the workspace.
+
+    Every change here reads the shared index, moves values in the keychain, and
+    writes the index back, so the whole operation is one span rather than the
+    write at the end of it: read outside one, the index that gets written back
+    is the one from before a hub's version was adopted, and the generations
+    another device published are silently reverted. The operations declare that
+    span with :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`
+    because it is simply the method -- there is nothing in them that waits on
+    anything remote.
+    """
 
     def __init__(
         self,
@@ -317,7 +326,6 @@ class KeyringSecretStore(SecretStore):
         }
         self.location.parent.mkdir(parents=True, exist_ok=True)
         save_yaml_file(self.location, payload)
-        notify_shared_state_changed("update", [self.location])
 
     def _read_local(self) -> dict[str, Any]:
         if not self._local_index.exists():

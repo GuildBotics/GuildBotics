@@ -97,15 +97,7 @@ class RunStore:
         self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
-        """Add one line to a run's shared journal.
-
-        Appending reads nothing, which is not the same as being safe to do
-        unsynchronized. The queue validates this journal and then stages it
-        from disk a moment later; a line added in between is committed and
-        pushed without ever being checked, and the devices that receive it
-        stop their queues on it. The lock is held for the append for that
-        reason, not because anything is read.
-        """
+        """Add one line to a run's shared journal."""
         # Run journals are shared state, so one uniform pass masks secret
         # values and bounds every string, whatever shape the record has.
         payload = redact_for_sharing(
@@ -116,8 +108,7 @@ class RunStore:
             }
         )
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
-        with shared_write_lock():
-            append_shared_text(self._path(run_id), line)
+        append_shared_text(self._path(run_id), line)
 
     def append_evidence(
         self, run_id: str | None, evidence_type: str, payload: dict[str, Any]
@@ -154,11 +145,11 @@ class RunStore:
         person_id: str,
     ) -> RunStatus:
         # The evidence check decides whether the completion may be written, so
-        # it is part of the write. Read outside the span, it can pass against a
-        # journal the queue replaces a moment later with a remote version that
-        # has no evidence in it -- and the completion is then appended anyway,
-        # leaving a run recorded as complete with nothing behind it. The span
-        # starts at the read for that reason; `append` re-enters it.
+        # it is part of the write, and the span is declared here rather than
+        # left to the append below. Read outside it, the check can pass against
+        # a journal the queue replaces a moment later with a remote version
+        # that has no evidence in it -- and the completion is then appended
+        # anyway, leaving a run recorded as complete with nothing behind it.
         with shared_write_lock():
             records = self._read_records_if_exists(run_id)
             evidence_types = _evidence_types(records)

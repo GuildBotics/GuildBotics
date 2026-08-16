@@ -17,7 +17,6 @@ from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
     redact_for_sharing,
 )
-from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
     write_shared_json,
@@ -76,18 +75,14 @@ class ActivityEventStore:
         """Write one event and announce it.
 
         Every event gets its own file under a fresh identifier, so nothing
-        here is read before being written. The lock is still held: the file
-        appears in a working tree the queue may be part-way through staging,
-        and the temporary file an atomic write leaves beside it is in the
-        shared tree too. Being the writer of a shared path is what decides
-        this, not whether the writer read anything.
+        here is read before being written and the write helper's own span is
+        the whole of it.
         """
         event = _to_activity_event(record)
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
         path = self.root / year / month / f"{event['event_id']}.json"
-        with shared_write_lock(self.workspace_root):
-            write_shared_json(path, event, workspace_root=self.workspace_root)
+        write_shared_json(path, event, workspace_root=self.workspace_root)
         return path
 
     def list_between(

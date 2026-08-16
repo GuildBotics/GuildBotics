@@ -9,40 +9,38 @@ that is not enough: a save whose comparison has just passed can land on top of
 content the queue adopted while the save was running, and because that
 overwrite is an ordinary local write, the next cycle commits and pushes it.
 Nothing in the sync history records the other device's change as lost -- which
-is exactly the outcome the comparison exists to prevent. A write that lands
-between the queue's validation and its ``git add`` is worse still: content
-nothing checked becomes shared history, and the devices that receive it stop
-their queues.
+is exactly the outcome the comparison exists to prevent.
 
-So every writer holds this lock, and holds it across the whole of what it does
-to the files -- from the read a write is derived from to the last file written.
+Writers do not take this lock one by one. Every write to a shared path goes
+through :mod:`guildbotics.utils.workspace_sync_port`, and those helpers take
+it, so a write that reads nothing is already serialized against the queue with
+nothing to declare. What the helpers cannot infer is how far back a write's
+span reaches: a value derived from a file's current contents has to exclude the
+queue from the read as well, or the read is of content the checkout is about to
+replace and the write puts it back. That is what
+:func:`~guildbotics.utils.workspace_sync_port.update_shared_text` and its JSON
+form are for -- they take the lock, read, and write inside it, so the span
+starts at the read by construction. An operation whose span is wider still --
+several files that have to land together, a decision made by scanning a
+directory -- takes this lock itself, which is the one case left where a writer
+has to know it is doing something the helpers cannot see.
+
 Nothing holds it across the network, so a save never waits on a hub.
 
-Which writers those are is not a judgement anyone makes per writer. Every write
-to a shared path goes through :mod:`guildbotics.utils.workspace_sync_port`, and
-those helpers call :func:`require_shared_write_lock`, so a writer that has not
-declared its span fails immediately and by name. The lock is deliberately not
-taken by the helpers themselves: a lock acquired per write would leave the read
-a read-modify-write derives from outside the span, which looks protected and is
-not. Declaring the span is the writer's job precisely because only the writer
-knows where its read began.
-
 Within one thread the lock re-enters, so a writer declares its own span without
-having to know whether a caller already declared a wider one. That question --
-"does my caller hold it?" -- is what was being answered per writer, wrongly and
-repeatedly: a config save holds the lock across the several files it compares
-and writes, and the writers it calls are the same ones a test, a CLI, or a
-future caller reaches directly. An outer span simply subsumes the inner ones.
+having to know whether a caller already declared a wider one. A config save
+holds the lock across the several files it compares and writes, and the writers
+it calls are the same ones a test, a CLI, or a future caller reaches directly.
+An outer span simply subsumes the inner ones.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import IO
 
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 from guildbotics.utils.fileio import (
@@ -73,30 +71,12 @@ class SharedWriteBusyError(RuntimeError):
     """
 
 
-class SharedWriteLockRequiredError(RuntimeError):
-    """Raised when a shared file is written outside the lock.
-
-    A programming error rather than a condition to handle: the caller has to
-    decide what its span is -- where its read begins and its last write ends --
-    and no default the write helper could pick would be right for it.
-    """
-
-    def __init__(self, paths: Sequence[str]) -> None:
-        listed = ", ".join(paths)
-        super().__init__(
-            f"{listed} is shared, so the change must be made inside "
-            "shared_write_lock(). Hold it from the read the write derives "
-            "from to the last file written."
-        )
-        self.paths = tuple(paths)
-
-
-def _held_roots() -> dict[Path, tuple[int, IO[str] | None]]:
-    roots: dict[Path, tuple[int, IO[str] | None]] | None = getattr(_held, "roots", None)
-    if roots is None:
-        roots = {}
-        _held.roots = roots
-    return roots
+def _held_depths() -> dict[Path, int]:
+    depths: dict[Path, int] | None = getattr(_held, "depths", None)
+    if depths is None:
+        depths = {}
+        _held.depths = depths
+    return depths
 
 
 def shared_write_lock_path(workspace_root: Path | None = None) -> Path:
@@ -106,37 +86,10 @@ def shared_write_lock_path(workspace_root: Path | None = None) -> Path:
     )
 
 
-def shared_write_lock_held(workspace_root: Path | None = None) -> bool:
-    """Return whether this thread holds ``workspace_root``'s shared-write lock."""
-    try:
-        root = get_workspace_root(workspace_root)
-    except WorkspaceNotConfiguredError:
-        return False
-    return root in _held_roots()
-
-
-def require_shared_write_lock(
-    paths: Sequence[str], workspace_root: Path | None = None
-) -> None:
-    """Refuse a change to shared ``paths`` made outside the lock.
-
-    Args:
-        paths (Sequence[str]): The ``.guildbotics``-relative paths being
-            changed, for the message.
-        workspace_root (Path | None): The workspace, or None for the selected one.
-
-    Raises:
-        SharedWriteLockRequiredError: When this thread does not hold the lock.
-    """
-    if not paths or shared_write_lock_held(workspace_root):
-        return
-    raise SharedWriteLockRequiredError(paths)
-
-
 @contextmanager
 def shared_write_lock(
     workspace_root: Path | None = None, timeout: float | None = None
-) -> Iterator[IO[str] | None]:
+) -> Iterator[None]:
     """Hold a workspace's shared-write lock for the duration of the block.
 
     With no workspace selected there is nothing to serialize: no file is
@@ -152,10 +105,6 @@ def shared_write_lock(
             the call rather than bound as a default, so the wait every writer
             inherits stays one value that can be answered in one place.
 
-    Yields:
-        IO[str] | None: The open lock file handle, or None when no workspace
-            is selected.
-
     Raises:
         SharedWriteBusyError: When the other side holds it past ``timeout``.
     """
@@ -164,46 +113,44 @@ def shared_write_lock(
         path = shared_write_lock_path(workspace_root)
         root = get_workspace_root(workspace_root)
     except WorkspaceNotConfiguredError:
-        yield None
+        yield
         return
-    held = _held_roots()
-    entered = held.get(root)
-    if entered is not None:
+    depths = _held_depths()
+    if root in depths:
         # Already this thread's: a wider span is in progress and subsumes this
         # one. Taking the file lock again would block on this thread's own
         # handle until the timeout and then blame a writer that is not there.
-        depth, handle = entered
-        held[root] = (depth + 1, handle)
+        depths[root] += 1
         try:
-            yield handle
+            yield
         finally:
-            depth, handle = held[root]
-            held[root] = (depth - 1, handle)
+            depths[root] -= 1
         return
     stack = ExitStack()
     # Only the acquisition is translated. A timeout raised by the body belongs
     # to whatever the body was doing, not to waiting for this lock.
     try:
-        handle = stack.enter_context(held_lock(path, timeout=wait))
+        stack.enter_context(held_lock(path, timeout=wait))
     except LockTimeoutError as exc:
         raise SharedWriteBusyError(
             f"Another writer held {path} for longer than {wait:g}s."
         ) from exc
-    held[root] = (1, handle)
+    depths[root] = 1
     try:
         with stack:
-            yield handle
+            yield
     finally:
-        del held[root]
+        del depths[root]
 
 
 def shared_write_operation[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     """Declare that the whole of ``func`` is one change to shared files.
 
-    For an operation whose span is simply itself -- it reads what it needs and
-    writes what it decided, and nothing in between waits on anything remote.
-    Where the span is narrower than the function, or the workspace is not the
-    selected one, take :func:`shared_write_lock` directly instead.
+    For an operation whose span is the function itself: it decides what to
+    write by reading shared files, or writes several that have to land
+    together, and nothing in between waits on anything remote. Where the span
+    is narrower than the function, or the workspace is not the selected one,
+    take :func:`shared_write_lock` directly instead.
     """
 
     @wraps(func)

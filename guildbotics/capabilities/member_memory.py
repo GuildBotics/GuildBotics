@@ -84,9 +84,12 @@ class MemberMemoryService:
     for memory the unit lost is a whole document.
 
     Each operation therefore holds the workspace's shared-write lock from the
-    read it derives from to the last file it writes. The audit journal is
-    written after that span and takes its own, so a journal that cannot be
-    written does not undo a document that already was.
+    read it derives from to the last file it writes. Declaring it here rather
+    than leaving it to the write helpers is what the shape of these operations
+    forces: a document is two files, the recency list is a third, and archiving
+    and promoting rename a directory -- none of which any single write can
+    infer. The audit journal is written after that span and takes its own, so
+    a journal that cannot be written does not undo a document that already was.
     """
 
     def __init__(self, person: Person) -> None:
@@ -112,10 +115,11 @@ class MemberMemoryService:
             raise MemberMemoryError("--set is only available for policy memory.")
         # There is at most one team policy, so "is there one already?" decides
         # whether this call creates or replaces -- which makes the lookup part
-        # of the write, not something to do beforehand. Asked outside the span,
-        # it can be answered "no" a moment before the queue adopts another
-        # device's policy, and then a second one is created beside it. The
-        # delegation below re-enters this same span.
+        # of the write, and it is a scan of the whole team directory rather
+        # than a read of the file being written, so no write helper can put it
+        # inside the span. Asked outside one, it can be answered "no" a moment
+        # before the queue adopts another device's policy, and then a second
+        # one is created beside it. The delegation below re-enters this span.
         with shared_write_lock():
             if kind == "policy":
                 self._ensure_policy_write_allowed(policy_approved)
@@ -582,6 +586,12 @@ class MemberMemoryService:
         raise MemberMemoryError(f"Memory document not found: {doc_id}")
 
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
+        """Write both halves of one document, under the caller's span.
+
+        A document is two files, and either alone is neither the old document
+        nor the new one, so the span that covers them is the operation's --
+        every caller here is already inside one.
+        """
         # Stamped at the write rather than by the caller, so the generation
         # never reaches ``_changed_fields`` and is never reported as an edit
         # the member made.
@@ -600,7 +610,6 @@ class MemberMemoryService:
         doc_dir.mkdir(parents=True, exist_ok=True)
         write_shared_text(doc_dir / META_FILE, meta_text)
         write_shared_text(doc_dir / BODY_FILE, body_text)
-        notify_shared_state_changed("update", [doc_dir / META_FILE])
 
     def _scope_dir(self, scope: Scope) -> Path:
         if scope == "team":

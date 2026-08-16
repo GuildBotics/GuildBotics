@@ -16,7 +16,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
@@ -24,15 +24,13 @@ from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import (
     atomic_write_text,
     get_machine_state_path,
-    get_workspace_local_path,
     get_workspace_state_path,
 )
-from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
     dump_shared_json,
-    write_shared_json,
+    update_shared_json,
 )
 
 DeviceOs = Literal["macos", "windows", "linux"]
@@ -160,29 +158,30 @@ def ensure_workspace_identity(
     The identity is generated exactly once per workspace, so first use is
     serialized: two processes starting together would otherwise each return a
     different identifier while only one survived on disk, and a caller holding
-    the discarded one would register the wrong workspace with a hub. Every
-    later copy adopts the value it received, so joining a hub never renumbers
-    a workspace.
+    the discarded one would register the wrong workspace with a hub. Deciding
+    inside the same span that writes is what makes that true -- the identifier
+    already on disk always wins, whether it was drawn by another process or
+    adopted from a hub a moment ago. Every later copy adopts the value it
+    received, so joining a hub never renumbers a workspace.
     """
     existing = read_workspace_identity(workspace_root)
     if existing is not None:
         return existing
-    lock_path = get_workspace_local_path(
-        "run", "workspace-identity.lock", workspace_root=workspace_root
-    )
-    # Two locks with two jobs: this one keeps the number from being drawn
-    # twice, the shared one keeps the write out of the queue's way.
-    with held_lock(lock_path), shared_write_lock(workspace_root):
-        existing = read_workspace_identity(workspace_root)
-        if existing is not None:
-            return existing
-        identity = WorkspaceIdentity(workspace_id=new_uuid7(), created_at=utc_now_iso())
-        write_shared_json(
+
+    def _created(current: Any | None) -> dict[str, Any]:
+        if current is not None:
+            return current
+        return WorkspaceIdentity(
+            workspace_id=new_uuid7(), created_at=utc_now_iso()
+        ).model_dump()
+
+    return WorkspaceIdentity.model_validate(
+        update_shared_json(
             workspace_identity_path(workspace_root),
-            identity.model_dump(),
+            _created,
             workspace_root=workspace_root,
         )
-        return identity
+    )
 
 
 def device_identity_path() -> Path:
@@ -257,9 +256,6 @@ def publish_device_record(
 ) -> DeviceRecord:
     """Publish this machine into the workspace's shared device list.
 
-    Rewriting an unchanged record would create pointless synchronization work,
-    so an identical record is left alone.
-
     The fields not being set here are carried over from what is on disk, and
     that is not only this machine's own writing: another device retires this
     one by setting ``status`` in the same record. Renaming a device happens
@@ -274,10 +270,10 @@ def publish_device_record(
             or None to keep the fingerprint already published.
     """
     identity = ensure_device_identity()
-    path = device_record_path(identity.device_id, workspace_root)
-    with shared_write_lock(workspace_root):
-        existing = read_device_record(identity.device_id, workspace_root)
-        record = DeviceRecord(
+
+    def _published(current: Any | None) -> dict[str, Any]:
+        existing = DeviceRecord.model_validate(current) if current is not None else None
+        return DeviceRecord(
             device_id=identity.device_id,
             display_name=identity.display_name,
             os=identity.os,
@@ -288,10 +284,15 @@ def publish_device_record(
                 if ssh_public_key_fingerprint is not None
                 else (existing.ssh_public_key_fingerprint if existing else None)
             ),
+        ).model_dump()
+
+    return DeviceRecord.model_validate(
+        update_shared_json(
+            device_record_path(identity.device_id, workspace_root),
+            _published,
+            workspace_root=workspace_root,
         )
-        if record != existing:
-            write_shared_json(path, record.model_dump(), workspace_root=workspace_root)
-    return record
+    )
 
 
 def read_device_record(

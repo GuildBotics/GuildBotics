@@ -431,6 +431,22 @@ def _write_default_person_id(config_dir: Path, person_id: str) -> CreatedFile | 
 
 
 class SimpleProjectSetupService:
+    """Create and change a workspace's project-level config.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_project_config(self, *, config_dir: Path) -> ProjectConfigSnapshot:
         project_file = _project_config_file(config_dir)
         if not project_file.exists():
@@ -779,6 +795,22 @@ class SimpleProjectSetupService:
 
 
 class SimplePersonSetupService:
+    """Create, change, and remove a workspace's members.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_slack_tokens(self, *, config_dir: Path, person_id: str) -> tuple[str, str]:
         """Return the member's stored Slack bot and app tokens.
 

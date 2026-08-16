@@ -129,13 +129,14 @@ class MemoryAuditStore:
     def record(self, item: dict[str, Any]) -> None:
         """Append one event, trimming the journal once it reaches its bound.
 
-        The size check and the trim are a read-modify-write of a shared file,
-        and the trim rewrites the whole journal. Whoever else is writing it --
-        another member's CLI process, or the synchronization queue checking a
-        hub's content out over it -- has to be excluded for the span of both,
-        which the in-process lock cannot do. So the shared-write lock is held
-        here, at the one place events enter the journal, and the write itself
-        goes through the port so the announcement is inside the span too.
+        Whether the journal has room decides whether this appends or rewrites
+        it from the end, so the answer has to come from the same span as the
+        write: read outside it, the size belongs to a file the queue replaces
+        a moment later with a hub's longer version, and the trim that was not
+        thought necessary never happens. The span is declared here rather than
+        expressed with ``update_shared_text`` because that would read and
+        rewrite the whole journal -- megabytes of it -- for every event, where
+        all but the trimming one need only the file's size and an append.
         """
         path = self.path
         line = self._bounded_line(item)

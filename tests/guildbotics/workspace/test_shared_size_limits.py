@@ -12,8 +12,19 @@ opinion about it. Restating the number is not a duplication that reads badly:
 the two drift, and the gap between them is exactly the range where a save
 succeeds and can never be shared.
 
-The population is every size limit in the package, read out of the source, and
-each one says whether it bounds a shared file or something else.
+Two things are checked. Each writer limit is compared against the boundary
+limit it claims to be, so a derivation quietly turned back into a number fails.
+And the population is every size limit in the package, read out of the source,
+each saying whether it bounds a shared file or something else -- because the
+case worth catching is the *next* writer, the one that has not been written
+yet and bounds a shared file with a figure of its own. Nothing else in the
+codebase would notice that, and what it costs is invisible until a queue says,
+on every cycle forever, that the change cannot be sent.
+
+The tax is one line for a limit that has nothing to do with sharing. That is
+worth paying: the entry states in five words what the limit bounds, and the
+alternative is losing the only check that stands at the edge where the defect
+enters.
 """
 
 from __future__ import annotations
@@ -23,17 +34,37 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.app_api.avatar import MAX_AVATAR_BYTES
+from guildbotics.app_api.command_files import MAX_COMMAND_FILE_BYTES
 from guildbotics.capabilities.member_memory import (
     MemberMemoryError,
     MemberMemoryService,
 )
+from guildbotics.capabilities.member_memory_audit import (
+    DEFAULT_MEMORY_AUDIT_MAX_BYTES,
+)
 from guildbotics.entities.team import Person
+from guildbotics.observability.activity_event_store import _MAX_SAFE_SUMMARY_CHARS
+from guildbotics.utils.shared_redaction import MAX_SHARED_TEXT_CHARS
 from guildbotics.workspace.validation import (
+    MAX_SHARED_AVATAR_BYTES,
     MAX_SHARED_FILE_BYTES,
+    MAX_SHARED_JOURNAL_BYTES,
     validate_shared_file,
 )
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "guildbotics"
+
+#: Each limit a writer applies, beside the boundary limit it has to equal.
+DERIVED_LIMITS = {
+    "avatar upload": (MAX_AVATAR_BYTES, MAX_SHARED_AVATAR_BYTES),
+    "command file save": (MAX_COMMAND_FILE_BYTES, MAX_SHARED_FILE_BYTES),
+    "memory audit journal": (
+        DEFAULT_MEMORY_AUDIT_MAX_BYTES,
+        MAX_SHARED_JOURNAL_BYTES,
+    ),
+    "activity event summary": (_MAX_SAFE_SUMMARY_CHARS, MAX_SHARED_TEXT_CHARS),
+}
 
 #: The boundary's own limits. A writer's limit has to be one of these.
 BOUNDARY_LIMITS = {
@@ -78,6 +109,14 @@ NOT_SHARED = {
 }
 
 _LIMIT_SUFFIXES = ("_BYTES", "_CHARS")
+
+
+@pytest.mark.parametrize("writer", sorted(DERIVED_LIMITS))
+def test_a_writer_limit_equals_the_boundary_limit(writer: str) -> None:
+    """The pair is checked, so a number written out by hand fails here."""
+    applied, boundary = DERIVED_LIMITS[writer]
+
+    assert applied == boundary
 
 
 def _declared_limits() -> dict[str, ast.expr]:
