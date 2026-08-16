@@ -273,17 +273,7 @@ class MemberMemoryService:
     def get(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
         doc = self._resolve_doc(doc_id, scope)
         payload = _summary_payload(doc)
-        payload.update(
-            {
-                "meta": doc.meta,
-                "body": doc.body,
-                "assets": [
-                    f"documents/{path.relative_to(self.root)}"
-                    for path in sorted((doc.path / "assets").glob("**/*"))
-                    if path.is_file()
-                ],
-            }
-        )
+        payload.update({"meta": doc.meta, "body": doc.body})
         self._record_audit("get", doc)
         return payload
 
@@ -592,7 +582,6 @@ class MemberMemoryService:
         doc_dir.mkdir(parents=True, exist_ok=True)
         write_shared_text(doc_dir / META_FILE, meta_text)
         write_shared_text(doc_dir / BODY_FILE, body_text)
-        (doc_dir / "assets").mkdir(exist_ok=True)
         notify_shared_state_changed("update", [doc_dir / META_FILE])
 
     def _scope_dir(self, scope: Scope) -> Path:

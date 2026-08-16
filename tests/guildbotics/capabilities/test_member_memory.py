@@ -77,7 +77,6 @@ def test_record_recall_get_and_digest_redact_secret(
 
     full = service.get(doc_id=doc_id)
     assert full["body"] == "Do not store ***. Retry after refresh."
-    assert full["assets"] == []
     assert service.load_digest(limit=1)[0]["doc_id"] == doc_id
 
 

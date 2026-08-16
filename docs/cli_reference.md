@@ -68,7 +68,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
-| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata, body, and asset paths without changing recency. |
+| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata and body without changing recency. |
 | [`guildbotics member memory promote`](#guildbotics-member-memory-promote) | Move a personal memory into team memory without changing the document id. |
 | [`guildbotics member memory recall`](#guildbotics-member-memory-recall) | Search personal and team memory by literal OR queries and return compact hits. |
 | [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
@@ -1000,7 +1000,7 @@ guildbotics member memory [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
-| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata, body, and asset paths without changing recency. |
+| [`guildbotics member memory get`](#guildbotics-member-memory-get) | Read one memory document's metadata and body without changing recency. |
 | [`guildbotics member memory promote`](#guildbotics-member-memory-promote) | Move a personal memory into team memory without changing the document id. |
 | [`guildbotics member memory recall`](#guildbotics-member-memory-recall) | Search personal and team memory by literal OR queries and return compact hits. |
 | [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
@@ -1026,7 +1026,7 @@ guildbotics member memory archive [OPTIONS]
 
 ## `guildbotics member memory get`
 
-Read one memory document's metadata, body, and asset paths without changing recency.
+Read one memory document's metadata and body without changing recency.
 
 ```text
 guildbotics member memory get [OPTIONS]

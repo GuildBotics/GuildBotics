@@ -375,11 +375,14 @@ See `docs/custom_command_guide.en.md` / `.ja.md` for the user-facing guide.
 Members persist knowledge across runs as a document store (mechanism in
 `capabilities/member_memory.py`; audit in `capabilities/member_memory_audit.py`).
 
-- **Document**: 1 document = 1 directory (`meta.yml` + `body.md` + `assets/`) under
-  `<workspace-data-root>/documents/`. `meta.yml` holds title/summary/keywords, typed
-  `source` entries (ticket/PR/channel/thread URLs), creation/update timestamps and
-  member IDs (`created_at`/`created_by`, `updated_at`/`updated_by`), `pinned`, and
-  `kind`.
+- **Document**: 1 document = 1 directory (`meta.yml` + `body.md`) under
+  `<workspace-data-root>/documents/`. `meta.yml` holds `schema_version`,
+  title/summary/keywords, typed `source` entries (ticket/PR/channel/thread URLs),
+  creation/update timestamps and member IDs (`created_at`/`created_by`,
+  `updated_at`/`updated_by`), `pinned`, and `kind`. Both files stay under the shared
+  file size limit, checked together before either is written. A document is text
+  only: synchronization carries no binary but member avatars, so anything else put
+  beside these two would be held back on every cycle with no way to send it.
 - **Scopes**: `personal/<person_id>/` and `team/`. `memory promote` moves a document
   from personal to team.
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
