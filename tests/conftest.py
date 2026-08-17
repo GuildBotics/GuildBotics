@@ -60,6 +60,20 @@ def _ignore_ambient_slack_tokens(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_secret_key_registry():
+    """Keep the process-lifetime secret-key provenance registry test-local.
+
+    The registry is deliberately monotonic in production, so without this
+    reset a key registered by one test would stay secret for the whole suite.
+    """
+    from guildbotics.utils import secret_store
+
+    secret_store._KNOWN_SECRET_ENV_KEYS.clear()
+    yield
+    secret_store._KNOWN_SECRET_ENV_KEYS.clear()
+
+
+@pytest.fixture(autouse=True)
 def fake_keyring():
     """Keep tests off the developer's real OS keychain."""
     import keyring

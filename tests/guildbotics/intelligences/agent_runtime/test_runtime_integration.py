@@ -742,6 +742,8 @@ def test_native_environment_removes_direct_write_credentials(
         LEASE_PERSON_ENV,
         LEASE_RUN_ENV,
     )
+    # Set rather than cleared: an assertion over variables that were never
+    # there passes just as happily with the isolation removed.
     for key in stripped:
         monkeypatch.setenv(key, "secret")
 
@@ -752,6 +754,67 @@ def test_native_environment_removes_direct_write_credentials(
         assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert "IdentityFile=/dev/null" in env["GIT_SSH_COMMAND"]
         assert env["GH_CONFIG_DIR"] == gh_config_dir
+    finally:
+        remove_isolated_config(gh_config_dir)
+
+
+def test_native_environment_removes_member_tokens_and_provider_api_keys(
+    monkeypatch,
+) -> None:
+    # The member's own credentials are published to `os.environ` by
+    # `load_guildbotics_env()`, and the provider API keys are consumed inside
+    # the GuildBotics process. None of them belong to an AI CLI subprocess.
+    stripped = (
+        "AIKO_GITHUB_ACCESS_TOKEN",
+        "AIKO_SLACK_BOT_TOKEN",
+        "AIKO_SLACK_APP_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "XAI_API_KEY",
+        # A credential this repository has never heard of is removed too: the
+        # point of the name pattern is that it does not need a list entry.
+        "SOME_VENDOR_CLIENT_SECRET",
+        "PGPASSWORD",
+    )
+    for key in stripped:
+        monkeypatch.setenv(key, "secret-value")
+    monkeypatch.setenv("GUILDBOTICS_EDITION", "simple")
+
+    env, gh_config_dir = isolated_agent_environment()
+    try:
+        assert all(key not in env for key in stripped)
+        assert "secret-value" not in env.values()
+        # Non-credential ambient settings still reach the AI CLI tool.
+        assert env["GUILDBOTICS_EDITION"] == "simple"
+    finally:
+        remove_isolated_config(gh_config_dir)
+
+
+def test_native_environment_removes_secret_store_keys_without_marker_names(
+    tmp_path, monkeypatch
+) -> None:
+    # `secrets set` accepts any key name and `load_guildbotics_env()` publishes
+    # every stored key, so a value can be a credential while its name matches
+    # no pattern. Provenance -- the key was stored -- must strip it too, even
+    # when the value arrives via a real environment variable (skip path).
+    from guildbotics.utils.env_loader import load_guildbotics_env
+    from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("DATABASE_URL", "postgres://user:hunter2@db/example")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:hunter2@db/example")
+    monkeypatch.setenv("GUILDBOTICS_EDITION", "simple")
+
+    load_guildbotics_env(override=False)
+
+    env, gh_config_dir = isolated_agent_environment()
+    try:
+        assert "DATABASE_URL" not in env
+        # Ordinary variables are still inherited.
+        assert env["GUILDBOTICS_EDITION"] == "simple"
     finally:
         remove_isolated_config(gh_config_dir)
 

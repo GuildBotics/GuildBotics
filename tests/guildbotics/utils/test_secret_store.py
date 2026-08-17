@@ -10,12 +10,29 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
     format_env_line,
+    is_secret_env_key,
     keyring_available,
     keyring_status,
+    known_secret_env_keys,
     read_env_values,
+    register_secret_env_keys,
     resolve_secret_store,
     write_env_values,
 )
+
+
+def test_is_secret_env_key_matches_by_name_or_provenance():
+    assert is_secret_env_key("AIKO_GITHUB_ACCESS_TOKEN")
+    assert is_secret_env_key("PGPASSWORD")
+    assert not is_secret_env_key("DATABASE_URL")
+
+    register_secret_env_keys(["DATABASE_URL"])
+
+    assert is_secret_env_key("DATABASE_URL")
+    assert "DATABASE_URL" in known_secret_env_keys()
+    # The registry only grows within a process; repeated loads union.
+    register_secret_env_keys(["DOCKER_AUTH_CONFIG"])
+    assert known_secret_env_keys() >= {"DATABASE_URL", "DOCKER_AUTH_CONFIG"}
 
 
 def test_keyring_store_writes_generation_index(fake_keyring, tmp_path, monkeypatch):

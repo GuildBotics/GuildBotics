@@ -369,7 +369,7 @@ class AcpAdapterBase:
         # session the conversation still names is reloaded on the way in.
         self._open_sessions = set()
         try:
-            await self._initialize(env)
+            await self._initialize()
         except AgentRuntimeError:
             await self.close()
             raise
@@ -394,7 +394,7 @@ class AcpAdapterBase:
             ),
         )
 
-    async def _initialize(self, env: dict[str, str]) -> None:
+    async def _initialize(self) -> None:
         result = as_dict(
             await self._transport.request(
                 "initialize",
@@ -430,7 +430,7 @@ class AcpAdapterBase:
                 f"The installed {self.product_label} cannot resume an exact session.",
                 details={"agent_version": self._agent_version},
             )
-        await self._authenticate(result, env)
+        await self._authenticate(result)
 
     @property
     def _supports_resume(self) -> bool:
@@ -933,7 +933,7 @@ class AcpAdapterBase:
         """The boundary this turn runs under, as reported on the policy event."""
         raise NotImplementedError
 
-    async def _authenticate(self, result: dict[str, Any], env: dict[str, str]) -> None:
+    async def _authenticate(self, result: dict[str, Any]) -> None:
         """Establish that the installed CLI has a usable non-interactive login."""
         raise NotImplementedError
 

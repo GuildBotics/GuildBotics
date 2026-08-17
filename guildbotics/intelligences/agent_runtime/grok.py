@@ -35,7 +35,6 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
 _CACHED_TOKEN_METHOD = "cached_token"
-_API_KEY_METHOD = "xai.api_key"
 #: Interactive sign-in must never be started from a headless run.
 _INTERACTIVE_AUTH_METHODS = frozenset({"grok.com"})
 
@@ -181,17 +180,16 @@ class GrokAcpAdapter(AcpAdapterBase):
         # Grok Build reports its version privately rather than in `agentInfo`.
         return str(as_dict(result.get("_meta")).get("agentVersion", ""))
 
-    async def _authenticate(self, result: dict[str, Any], env: dict[str, str]) -> None:
+    async def _authenticate(self, result: dict[str, Any]) -> None:
+        # Only the saved login is usable. An API key would have to reach this
+        # process through the environment, and credential-named variables are
+        # stripped from the AI CLI environment on purpose.
         methods = [
             str(as_dict(method).get("id", ""))
             for method in result.get("authMethods", [])
             if isinstance(method, dict)
         ]
-        chosen = ""
-        if _CACHED_TOKEN_METHOD in methods:
-            chosen = _CACHED_TOKEN_METHOD
-        elif _API_KEY_METHOD in methods and env.get("XAI_API_KEY", "").strip():
-            chosen = _API_KEY_METHOD
+        chosen = _CACHED_TOKEN_METHOD if _CACHED_TOKEN_METHOD in methods else ""
         if not chosen:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.AUTHENTICATION,

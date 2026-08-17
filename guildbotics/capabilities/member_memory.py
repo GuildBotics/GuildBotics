@@ -22,6 +22,7 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
     load_yaml_file,
 )
+from guildbotics.utils.secret_store import is_secret_env_key
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
     shared_write_lock,
@@ -835,10 +836,7 @@ def _is_autonomous_run() -> bool:
 def _redact_secrets(text: str) -> str:
     redacted = text
     for key, value in os.environ.items():
-        upper = key.upper()
-        if not any(
-            part in upper for part in ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY")
-        ):
+        if not is_secret_env_key(key):
             continue
         if len(value) >= MIN_SECRET_VALUE_LENGTH:
             redacted = redacted.replace(value, "***")

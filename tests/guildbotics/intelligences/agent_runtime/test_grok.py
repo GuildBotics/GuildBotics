@@ -1014,18 +1014,26 @@ async def test_interactive_only_auth_is_refused_with_login_guidance(
 
 
 @pytest.mark.asyncio
-async def test_api_key_is_used_only_when_advertised(monkeypatch, tmp_path) -> None:
+async def test_api_key_auth_is_refused_with_login_guidance(
+    monkeypatch, tmp_path
+) -> None:
+    # `XAI_API_KEY` never reaches the Grok process (the isolated environment
+    # strips credential-named variables), so an API-key-only install has no
+    # usable non-interactive login regardless of what the parent shell exports.
     monkeypatch.setenv("XAI_API_KEY", "secret-value")
     initialize = _initialize()
     initialize["authMethods"] = [{"id": "xai.api_key", "name": "API key"}]
     peer = _Peer(initialize=initialize)
     install(monkeypatch, peer)
 
-    _result, events = await _run(GrokAcpAdapter(), tmp_path)
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await _run(GrokAcpAdapter(), tmp_path)
 
-    assert peer.sent("authenticate")["params"] == {"methodId": "xai.api_key"}
-    # Only the method identifier is recorded, never the key itself.
-    assert "secret-value" not in json.dumps([event.details for event in events])
+    assert excinfo.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
+    assert "grok login" in str(excinfo.value)
+    assert "authenticate" not in peer.methods()
+    assert excinfo.value.details["advertised_methods"] == ["xai.api_key"]
+    assert "secret-value" not in json.dumps(excinfo.value.details)
 
 
 @pytest.mark.asyncio

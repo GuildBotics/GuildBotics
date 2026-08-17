@@ -262,10 +262,11 @@ help / docstring が正であり、member コマンドの一行説明は
 
 - 優先順は「一次設定 (`GUILDBOTICS_CONFIG_DIR` or cwd の `.guildbotics/config`) → パッケージテンプレート (`guildbotics/templates`)」の2段（`fileio._get_config_path`）。`~/.guildbotics/config` のような home 設定階層は無い（`fileio.py` の `Path.home()` 参照は `~/.guildbotics/data` のデータ用のみ）
 - `guildbotics member ...` は `guildbotics/utils/workspace_state.py` も使う。`--workspace` があればその workspace を最優先し、明示的な `GUILDBOTICS_CONFIG_DIR` または cwd の `.guildbotics/config` が無い場合だけ active workspace を適用する
-- desktop runtime は workspace 選択時に active workspace を保存し、workspace の `.guildbotics/config` と `.env` から `GUILDBOTICS_CONFIG_DIR` / `GUILDBOTICS_ENV_FILE` を設定する
+- desktop runtime は workspace 選択時に active workspace を保存し、workspace の `.guildbotics/config` から `GUILDBOTICS_CONFIG_DIR` を設定する
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
-- シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。新規ワークスペースの既定は OS キーチェーン（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）、キーチェーンが使えない環境で作成したワークスペースは `.env`。解決優先順位は実環境変数 > キーチェーン > `.env`（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは autouse fixture が `GUILDBOTICS_SECRETS_BACKEND=env-file` を強制するため、keyring 経路の検証には `fake_keyring` fixture を使う
+- シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。バックエンドは OS キーチェーンだけで、平文への fallback は無い（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）。キーチェーンが使えなければ `SecretStoreError`。解決優先順位は実環境変数 > キーチェーンの 2 段で、ワークスペースの `.env` は読まない（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは `tests/conftest.py` の autouse fixture `fake_keyring` が in-memory キーチェーンを入れるため、実 OS キーチェーンには触れない
+- 環境変数が認証情報を運ぶかの判定は `secret_store.is_secret_env_key()` が正本。名前パターン（`TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含むか）と、SecretStore に保存されたキー名の provenance レジストリ（`register_secret_env_keys()`。`env_loader.read_workspace_secrets()` が skip 判定・値取得より前に登録し、プロセス生存中は単調増加）の和集合で判定する。AI CLI 子プロセスの環境からの除去（`intelligences/agent_runtime/environment.py`）と member memory の redaction（`capabilities/member_memory.py`）は両方ここから導出する。除去対象を名前の列挙で持たない（列挙は「追加を忘れた秘密」だけを残す）し、非規約名の secret（例: `DATABASE_URL`）を断片リストへの追加で塞がない（provenance が塞ぐ）
 
 ### 4.1 共有 state の書き込み（Workspace Sync Port）
 
