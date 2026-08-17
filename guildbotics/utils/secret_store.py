@@ -46,10 +46,28 @@ _PLAIN_ENV_VALUE = re.compile(r"[^\s#'\"\\]*")
 # agent subprocess. Consumers read these from the store at the point of use.
 ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES = ("_GITHUB_PRIVATE_KEY",)
 
+# Name fragments that mark an environment variable as carrying a credential
+# value. The set of credentials a process environment holds is open-ended --
+# GuildBotics publishes person-prefixed tokens, the operator's shell exports
+# whatever else the machine needs -- so membership is decided by the name
+# rather than by an enumeration that has to be extended for every new secret.
+_SECRET_ENV_NAME_PARTS = ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "API_KEY")
+
 
 def is_environment_secret(key: str) -> bool:
     """True when the secret may be published to ``os.environ``."""
     return not key.endswith(ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES)
+
+
+def is_secret_env_key(key: str) -> bool:
+    """True when an environment variable's name marks it as a credential.
+
+    Used both to keep such values out of AI CLI subprocess environments and to
+    redact them from anything a member writes down, so the two answers cannot
+    drift apart.
+    """
+    upper = key.upper()
+    return any(part in upper for part in _SECRET_ENV_NAME_PARTS)
 
 
 def utc_now_iso() -> str:

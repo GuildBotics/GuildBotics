@@ -153,8 +153,9 @@ GuildBoticsのサービスを実行するOSユーザーと同じユーザーで�
 認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
-`cached_token`だけを選択します。`XAI_API_KEY`が設定されていて、かつCLIが`xai.api_key`を
-提示した場合に限りAPIキー方式を使用します。ブラウザを開く`grok.com`の対話認証は、headless実行
+`cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか
+プロセスへ届かず、後述のとおりAI CLIツールの環境からは認証情報名の変数を取り除くためです。
+ブラウザを開く`grok.com`の対話認証は、headless実行
 中に自動で開始しません。保存済みの認証がない場合は認証エラーとして停止し、`grok login`
 （または`grok login --device-auth`）の実行を案内します。診断記録に残すのは選択した認証方式の
 識別子だけで、`~/.grok/auth.json`の内容は読み取りません。
@@ -168,6 +169,14 @@ GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、�
 残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
+親プロセスの環境変数のうち、名前に`TOKEN`、`SECRET`、`PASSWORD`、`PRIVATE_KEY`、`API_KEY`を
+含むものはすべて取り除きます。除外する名前を列挙するのではなくパターンで判定するのは、列挙は
+「追加を忘れた秘密」だけを残す形になるためです。これにより、メンバー自身の
+`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN`と、
+LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）も渡りません。いずれもGuildBoticsのプロセス内で
+消費するものであり、member CLIは自分でOSキーチェーンから読み込むため、この除去の影響を
+受けません。認証情報を渡す代わりに呼び出させる`git`/`ssh`のhelperとsocket
+（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）も取り除きます。
 親プロセスのrun識別子とexecution delegationも同様に取り除きます。有効なdelegationは単なる
 識別ラベルではなくそのまま使えるgrantであるため、継承させると、providerのプロセスがmember CLIを
 直接呼び出し、自身のtransportが敷いている境界を迂回できてしまいます。この情報を正当に運ぶ

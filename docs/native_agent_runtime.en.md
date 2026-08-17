@@ -169,12 +169,13 @@ or `copilot login`) as the same OS user that runs the GuildBotics service. Provi
 credentials stay in the provider's own credential store. GuildBotics does not copy them
 into its conversation store or diagnostics.
 
-For Grok Build, GuildBotics selects only an advertised authentication method: the saved
-login `cached_token`, or `xai.api_key` when `XAI_API_KEY` is set and that method is
-advertised. The browser-based `grok.com` flow is never started during a headless run;
-without a saved login the turn fails as an authentication error that points at
-`grok login` (or `grok login --device-auth`). Only the chosen method id is recorded;
-the contents of `~/.grok/auth.json` are never read.
+For Grok Build, GuildBotics selects only one advertised authentication method: the saved
+login `cached_token`. The API key method is never used -- a key could only reach the
+process through the environment, and credential-named variables are stripped from the AI
+CLI environment as described below. The browser-based `grok.com` flow is never started
+during a headless run; without a saved login the turn fails as an authentication error
+that points at `grok login` (or `grok login --device-auth`). Only the chosen method id
+is recorded; the contents of `~/.grok/auth.json` are never read.
 
 GitHub Copilot advertises one method, `copilot-login`, whose metadata tells the client
 to run `copilot login` in a terminal. GuildBotics verifies the saved login by calling
@@ -185,8 +186,17 @@ that does not answer promptly -- the terminal login waiting for a user who is no
 method id is recorded; the contents of the Copilot credential store are never read.
 
 GitHub, Git, and SSH write credentials are deliberately removed from native
-agent process environments, together with the parent process's run identity and
-execution delegation. A live delegation is a usable grant rather than a label, so
+agent process environments. Every inherited variable whose name contains `TOKEN`,
+`SECRET`, `PASSWORD`, `PRIVATE_KEY`, or `API_KEY` is dropped; the rule is a name
+pattern rather than a list because a list only ever keeps the secrets nobody
+remembered to add to it. That covers the member's own
+`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN` and the LLM
+provider API keys (`OPENAI_API_KEY` and friends): all of them are consumed inside the
+GuildBotics process, and the member CLI loads its own from the OS keychain, so removing
+them changes nothing a member can legitimately do. The helpers and sockets that hand out
+a credential on demand (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`) are removed too,
+together with the parent process's run identity and execution delegation.
+A live delegation is a usable grant rather than a label, so
 inheriting one would let a provider process call the member CLI directly and bypass
 the boundary its own transport enforces. The adapters and the broker that legitimately
 carry that metadata re-inject it from the execution context and the held lease, so each

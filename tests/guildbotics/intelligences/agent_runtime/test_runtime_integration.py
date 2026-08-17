@@ -742,6 +742,8 @@ def test_native_environment_removes_direct_write_credentials(
         LEASE_PERSON_ENV,
         LEASE_RUN_ENV,
     )
+    # Set rather than cleared: an assertion over variables that were never
+    # there passes just as happily with the isolation removed.
     for key in stripped:
         monkeypatch.setenv(key, "secret")
 
@@ -752,6 +754,39 @@ def test_native_environment_removes_direct_write_credentials(
         assert env["GIT_CONFIG_GLOBAL"] == os.devnull
         assert "IdentityFile=/dev/null" in env["GIT_SSH_COMMAND"]
         assert env["GH_CONFIG_DIR"] == gh_config_dir
+    finally:
+        remove_isolated_config(gh_config_dir)
+
+
+def test_native_environment_removes_member_tokens_and_provider_api_keys(
+    monkeypatch,
+) -> None:
+    # The member's own credentials are published to `os.environ` by
+    # `load_guildbotics_env()`, and the provider API keys are consumed inside
+    # the GuildBotics process. None of them belong to an AI CLI subprocess.
+    stripped = (
+        "AIKO_GITHUB_ACCESS_TOKEN",
+        "AIKO_SLACK_BOT_TOKEN",
+        "AIKO_SLACK_APP_TOKEN",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "XAI_API_KEY",
+        # A credential this repository has never heard of is removed too: the
+        # point of the name pattern is that it does not need a list entry.
+        "SOME_VENDOR_CLIENT_SECRET",
+        "PGPASSWORD",
+    )
+    for key in stripped:
+        monkeypatch.setenv(key, "secret-value")
+    monkeypatch.setenv("GUILDBOTICS_EDITION", "simple")
+
+    env, gh_config_dir = isolated_agent_environment()
+    try:
+        assert all(key not in env for key in stripped)
+        assert "secret-value" not in env.values()
+        # Non-credential ambient settings still reach the AI CLI tool.
+        assert env["GUILDBOTICS_EDITION"] == "simple"
     finally:
         remove_isolated_config(gh_config_dir)
 
