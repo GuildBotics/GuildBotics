@@ -25,6 +25,7 @@ import {
   createDeviceSshKey,
   createHub,
   enableWorkspaceSync,
+  getConfigStatus,
   getDeviceSshKey,
   getHubStatus,
   getWorkspaceDevices,
@@ -48,17 +49,39 @@ import { HubConnector } from "./HubConnector";
  */
 export function SyncSettings() {
   const { t } = useTranslation();
-  const status = useQuery({
-    queryKey: ["workspace-sync"],
-    queryFn: getWorkspaceSyncStatus,
-    refetchInterval: 5000,
-  });
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  // Hosting a hub and this device's key are properties of the machine, not of
+  // a workspace, and the machine that hosts the hub is often the one that has
+  // no workspace at all. Only the sharing itself waits for one.
+  const hasWorkspace = Boolean(config.data?.workspace);
   return (
     <Stack gap="md">
       <Title order={3}>{t("sync.settings.title")}</Title>
       <Text c="dimmed" size="sm">
         {t("sync.settings.subtitle")}
       </Text>
+      {hasWorkspace ? (
+        <WorkspaceSharing />
+      ) : (
+        <Alert color="neutral" title={t("sync.settings.noWorkspaceTitle")}>
+          {t("sync.settings.noWorkspaceBody")}
+        </Alert>
+      )}
+      <SshKeyCard />
+      <HostThisMachineCard />
+    </Stack>
+  );
+}
+
+/** The hub this workspace uses, what it cannot send, and who else holds it. */
+function WorkspaceSharing() {
+  const status = useQuery({
+    queryKey: ["workspace-sync"],
+    queryFn: getWorkspaceSyncStatus,
+    refetchInterval: 5000,
+  });
+  return (
+    <>
       {status.data?.enabled ? (
         <ConnectedHubCard hubUrl={status.data.hub_url ?? ""} />
       ) : (
@@ -66,9 +89,7 @@ export function SyncSettings() {
       )}
       <UnsendableChangesCard />
       <DevicesCard />
-      <SshKeyCard />
-      <HostThisMachineCard />
-    </Stack>
+    </>
   );
 }
 
@@ -124,10 +145,12 @@ function ConnectCard({ change = false }: { change?: boolean }) {
       <Stack gap="sm">
         <Title order={4}>{t(change ? "sync.connect.changeTitle" : "sync.connect.title")}</Title>
         <HubConnector onEndpointChange={() => setError("")}>
-          {(connection, endpoint) => (
+          {(connection) => (
             <WorkspaceChoice
               connection={connection}
-              onChoose={(workspaceId) => startConnect.mutate({ endpoint, workspaceId })}
+              onChoose={(workspaceId) =>
+                startConnect.mutate({ endpoint: connection.endpoint, workspaceId })
+              }
               pending={startConnect.isPending || connect.isPending}
             />
           )}

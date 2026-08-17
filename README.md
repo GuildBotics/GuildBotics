@@ -508,9 +508,35 @@ Everything below is done in **Settings → Sync and devices** in the desktop app
 #### Set up the first machine
 
 1. On the machine that will be the hub, select **Host the hub on this machine**. Make sure
-   its OpenSSH server is running (see [What You Need](#what-you-need)).
-2. On the machine holding the workspace, enter the hub as `user@host` and select **Look up**.
-3. Compare the fingerprint shown against the hub machine's own, then confirm it. On the hub
+   its OpenSSH server is running (see [What You Need](#what-you-need)). This creates
+   `~/.guildbotics/hub/` and its `hub.json`; the repository for a workspace is created later,
+   when the first machine registers one.
+2. On the machine holding the workspace, select **Create a key** under **This device's SSH
+   key**, then copy the key it shows. It is `~/.ssh/id_ed25519`, and an existing key of that
+   name is used as it is rather than replaced.
+3. Add that public key to the hub machine's `~/.ssh/authorized_keys`. On the hub machine:
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... guildbotics alice@mac-studio' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+   ```
+
+   GuildBotics cannot do this for you: that step is what proves you already have access to
+   the machine. It is a prerequisite rather than a fallback — the next step asks the hub for
+   its workspace list over SSH, and synchronization runs SSH non-interactively, so an
+   unregistered key fails there instead of prompting for a password.
+4. Check that the hub machine answers its own command over SSH, from the machine holding the
+   workspace:
+
+   ```bash
+   ssh user@hub-host guildbotics hub status
+   ```
+
+   GuildBotics reaches the hub by running `guildbotics hub …` there, so the command has to be
+   on the PATH that non-interactive SSH sessions get — which is not always the one an
+   interactive login has. If it is not found, see
+   [`guildbotics` is not found over SSH](#guildbotics-is-not-found-over-ssh).
+5. Back in the desktop app, enter the hub as `user@host` and select **Look up**.
+6. Compare the fingerprint shown against the hub machine's own, then confirm it. On the hub
    machine, print it with:
 
    ```bash
@@ -519,14 +545,26 @@ Everything below is done in **Settings → Sync and devices** in the desktop app
 
    This is the only point at which the key is checked: synchronization runs SSH
    non-interactively afterwards, so its usual first-contact prompt never appears.
-4. Select **Register this workspace on the hub**.
+7. Select **Register this workspace on the hub**. The hub's repository for this workspace,
+   `~/.guildbotics/hub/workspaces/<workspace id>/repository.git`, is created now.
 
-If the connection is refused, copy the key shown under **This device's SSH key** into the
-hub machine's `~/.ssh/authorized_keys` and try again.
+##### `guildbotics` is not found over SSH
+
+A non-interactive SSH session does not read the shell startup files an interactive login
+does, so a `guildbotics` installed under `~/.local/bin` is often invisible to it. The
+shortest fix is a link from a directory that is always on the PATH, made on the hub machine:
+
+```bash
+sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
+```
+
+`~/.guildbotics/bin/guildbotics` is the managed shim, so it keeps working across
+reinstalls of the CLI itself. On Windows the installer puts the managed bin on the user
+PATH, which SSH sessions also get.
 
 #### Add another machine
 
-On the new machine, register its SSH key with the hub as above, then either:
+On the new machine, create its SSH key and register it with the hub as above, then either:
 
 - **Take a copy**: choose the workspace from the hub's list to create a new workspace
   directory from it, or
@@ -543,7 +581,11 @@ kept locally — see [Recover a change that was not applied](#recover-a-change-t
 Any participating machine holds a full copy, so a lost hub is rebuilt from one of them.
 
 1. Choose a machine to host the new hub and select **Host the hub on this machine**.
-2. On each other machine, open **Connected hub → Connect to a different hub** and connect to
+2. Add every other machine's public key to the new hub machine's `~/.ssh/authorized_keys`,
+   and check `guildbotics` answers over SSH there, as in
+   [Set up the first machine](#set-up-the-first-machine). A new hub machine knows nothing
+   about the keys the old one held.
+3. On each other machine, open **Connected hub → Connect to a different hub** and connect to
    the new address.
 
 Content only one machine has is sent to the new hub rather than discarded, so the order the
@@ -612,7 +654,7 @@ rejected ref is removed. Nothing prunes them automatically.
 | In sync | This machine and the hub hold the same content | Nothing |
 | Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
 | Receiving | Content from the hub is being taken in | Wait |
-| Hub unreachable | Local work continues; sharing is delayed | Wait, or select **Try again** |
+| Hub unreachable | Local work continues; sharing is delayed | Wait, or select **Try again**. If it never recovers, check the SSH prerequisites in [Set up the first machine](#set-up-the-first-machine) |
 | Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync and devices** for the list and the reason |
 | Shared data problem | Content could not be reconciled automatically | Open **Sync and devices** |
 | Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |

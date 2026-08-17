@@ -389,8 +389,23 @@ class WorkspaceSyncService:
 
 
 def _location(target: HubTarget) -> HubLocation:
+    """Resolve which hub an operation is about.
+
+    An empty address means the hub on this machine, so a machine that hosts
+    none is refused here rather than further in. Every hub operation resolves
+    its location first, and the ones that follow have side effects: registering
+    mints this workspace's identifier before it discovers there is nothing to
+    register with.
+    """
     endpoint = target.endpoint.strip()
     if not endpoint:
+        if host.read_hub() is None:
+            raise AppApiError(
+                "hub_not_hosted",
+                "This machine hosts no hub. Give the address of the machine "
+                "that does, as user@host, or make this one a hub first.",
+                status_code=409,
+            )
         return HubLocation()
     try:
         return HubLocation(endpoint=connection.parse_hub_endpoint(endpoint))

@@ -54,6 +54,9 @@ const resources = {
         settings: {
           title: "Sync and devices",
           subtitle: "Share this workspace with your other machines through a hub you run yourself.",
+          noWorkspaceTitle: "No workspace is selected on this machine",
+          noWorkspaceBody:
+            "Hosting the hub and this device's SSH key belong to the machine, so they can be set up now. Sharing content needs a workspace: create one in Project, or take a copy from a hub.",
         },
         clone: {
           action: "Take a copy from a hub",
@@ -72,6 +75,9 @@ const resources = {
           endpointHint:
             "The machine hosting the hub, as user@host. GuildBotics decides where the repositories live on it.",
           inspect: "Look up",
+          useLocal: "Use the hub on this machine",
+          useLocalHint:
+            "This machine hosts a hub, so a workspace here reaches it without a network.",
           failed: "Could not connect",
           chooseTitle: "What to do with this workspace",
           register: "Register this workspace on the hub",
@@ -1754,6 +1760,9 @@ const resources = {
         settings: {
           title: "同期・device 設定",
           subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
+          noWorkspaceTitle: "このマシンではワークスペースが選択されていません",
+          noWorkspaceBody:
+            "Hub のホストとこの device の SSH 鍵はマシン単位の設定なので、このままでも設定できます。内容の共有にはワークスペースが必要です。「プロジェクト」で作成するか、Hub から取得してください。",
         },
         clone: {
           action: "Hub から取得して作成",
@@ -1772,6 +1781,9 @@ const resources = {
           endpointHint:
             "Hub を動かしているマシンを user@host の形で指定します。マシン内のどこに置くかは GuildBotics が決めます。",
           inspect: "確認する",
+          useLocal: "このマシンの Hub を使う",
+          useLocalHint:
+            "このマシンは Hub を動かしているため、ここにあるワークスペースはネットワークを介さずに接続できます。",
           failed: "接続できませんでした",
           chooseTitle: "このワークスペースをどうするか",
           register: "このワークスペースを Hub に登録する",

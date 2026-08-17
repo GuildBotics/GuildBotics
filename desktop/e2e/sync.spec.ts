@@ -86,9 +86,14 @@ async function openSyncSettings(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Sync and devices" })).toBeVisible();
 }
 
-/** Reach the hub on this machine: an empty address means no network and no host key. */
+/**
+ * Reach the hub on this machine: no network, no host key, and no address.
+ *
+ * It is a choice of its own rather than an empty address, so that a machine
+ * hosting no hub is never carried on to registering with one.
+ */
 async function lookUpLocalHub(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Look up" }).click();
+  await page.getByRole("button", { name: "Use the hub on this machine" }).click();
 }
 
 /**

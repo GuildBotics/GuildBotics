@@ -1,10 +1,16 @@
 import { Alert, Button, Code, Group, Stack, Text, TextInput } from "@mantine/core";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 
-import { ApiRequestError, inspectHub, trustHub, type HubConnection } from "../api/client";
+import {
+  ApiRequestError,
+  getHubStatus,
+  inspectHub,
+  trustHub,
+  type HubConnection,
+} from "../api/client";
 
 /**
  * Reaching a hub, and confirming it is the machine the user meant.
@@ -12,19 +18,25 @@ import { ApiRequestError, inspectHub, trustHub, type HubConnection } from "../ap
  * Both the connect flow and taking a copy need the same three steps before they
  * differ, so they share them here: address, host key, then the hub's workspace
  * list. What to do with a chosen workspace is the caller's business.
+ *
+ * The hub on this machine is a choice of its own rather than an empty address.
+ * An empty field means the user has not said where the hub is yet, and reading
+ * it as "here" would carry them to a register button that only this machine's
+ * own hub could answer.
  */
 export function HubConnector({
   children,
   onEndpointChange,
 }: {
   /** Rendered once the hub is reachable and trusted. */
-  children: (connection: HubConnection, endpoint: string) => ReactNode;
+  children: (connection: HubConnection) => ReactNode;
   onEndpointChange?: () => void;
 }) {
   const { t } = useTranslation();
   const [endpoint, setEndpoint] = useState("");
   const [connection, setConnection] = useState<HubConnection | null>(null);
   const [error, setError] = useState("");
+  const hub = useQuery({ queryKey: ["hub"], queryFn: getHubStatus });
 
   const report = (cause: unknown) => {
     setError(cause instanceof ApiRequestError ? cause.message : String(cause));
@@ -33,16 +45,25 @@ export function HubConnector({
     setError("");
     setConnection(found);
   };
+  // The address is passed per call rather than read from state, because
+  // choosing the hub here clears the field and would otherwise race the
+  // mutation reading it.
   const inspect = useMutation({
-    mutationFn: () => inspectHub({ endpoint: endpoint.trim() }),
+    mutationFn: (target: string) => inspectHub({ endpoint: target }),
     onSuccess: accept,
     onError: report,
   });
   const trust = useMutation({
-    mutationFn: (fingerprint: string) => trustHub({ endpoint: endpoint.trim(), fingerprint }),
+    mutationFn: (fingerprint: string) =>
+      trustHub({ endpoint: connection?.endpoint ?? "", fingerprint }),
     onSuccess: accept,
     onError: report,
   });
+  const reset = () => {
+    setConnection(null);
+    setError("");
+    onEndpointChange?.();
+  };
 
   return (
     <Stack gap="sm">
@@ -54,18 +75,38 @@ export function HubConnector({
           label={t("sync.connect.endpoint")}
           onChange={(event) => {
             setEndpoint(event.currentTarget.value);
-            setConnection(null);
-            setError("");
-            onEndpointChange?.();
+            reset();
           }}
           placeholder="user@hub.local"
           style={{ flex: 1 }}
           value={endpoint}
         />
-        <Button loading={inspect.isPending} onClick={() => inspect.mutate()}>
+        <Button
+          disabled={endpoint.trim() === ""}
+          loading={inspect.isPending}
+          onClick={() => inspect.mutate(endpoint.trim())}
+        >
           {t("sync.connect.inspect")}
         </Button>
       </Group>
+      {hub.data?.hosted ? (
+        <Group align="center" gap="sm">
+          <Button
+            onClick={() => {
+              setEndpoint("");
+              reset();
+              inspect.mutate("");
+            }}
+            size="xs"
+            variant="light"
+          >
+            {t("sync.connect.useLocal")}
+          </Button>
+          <Text c="dimmed" size="xs">
+            {t("sync.connect.useLocalHint")}
+          </Text>
+        </Group>
+      ) : null}
       {error ? (
         <Alert color="danger" icon={<CircleAlert size={18} />} title={t("sync.connect.failed")}>
           {error}
@@ -79,9 +120,7 @@ export function HubConnector({
           pending={trust.isPending}
         />
       ) : null}
-      {connection !== null && connection.host_key_trusted
-        ? children(connection, endpoint.trim())
-        : null}
+      {connection !== null && connection.host_key_trusted ? children(connection) : null}
     </Stack>
   );
 }

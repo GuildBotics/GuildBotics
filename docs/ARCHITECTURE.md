@@ -694,7 +694,10 @@ a monorepo on purpose.
   than one button because each step means something: the hub must be reachable before its
   workspaces can be listed, the host key is confirmed by a person (synchronization runs SSH
   non-interactively, so this is the only opportunity), and joining an existing workspace is
-  previewed while registering a new one is not.
+  previewed while registering a new one is not. Hosting the hub and this device's key belong
+  to the machine rather than to a workspace, so the section is reachable — and those two
+  cards are shown — before any workspace is selected; only the sharing itself waits for one.
+  The machine that hosts the hub is usually the one that never gets a workspace of its own.
 - **Config saves are explicit and revision-checked**: every settings screen saves on a
   button, and sends back the revisions its read reported. A refused save reloads the screen
   instead of resending, since resending is exactly the overwrite that was refused.

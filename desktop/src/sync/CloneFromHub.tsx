@@ -72,7 +72,7 @@ export function CloneFromHubButton({
             <Code style={{ overflowWrap: "anywhere" }}>{destination}</Code>
           </Group>
           <HubConnector onEndpointChange={() => setError("")}>
-            {(connection, endpoint) =>
+            {(connection) =>
               connection.workspace_ids.length === 0 ? (
                 <Text c="dimmed" size="sm">
                   {t("sync.clone.empty")}
@@ -87,7 +87,7 @@ export function CloneFromHubButton({
                       <Code style={{ overflowWrap: "anywhere" }}>{workspaceId}</Code>
                       <Button
                         disabled={clone.isPending}
-                        onClick={() => clone.mutate({ endpoint, workspaceId })}
+                        onClick={() => clone.mutate({ endpoint: connection.endpoint, workspaceId })}
                         size="xs"
                         variant="light"
                       >

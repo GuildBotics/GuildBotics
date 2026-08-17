@@ -204,6 +204,10 @@ const CORE_SETUP_SECTIONS_INITIAL = [
   "intelligence",
   "members",
   "github",
+  // Hosting a hub and this device's key belong to the machine rather than to a
+  // workspace, so the section has to be reachable before there is one: a
+  // machine that only hosts the hub never gets a project of its own.
+  "sync",
   "verification",
 ] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = [
@@ -214,11 +218,19 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   // Hotkeys are an everyday convenience rather than part of getting running,
   // so they are offered only once the workspace is configured.
   "shortcuts",
-  // Sharing a workspace presupposes there is one to share.
   "sync",
   "verification",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
+const CORE_SECTION_LABEL_KEYS = {
+  project: "setup.nav.project",
+  intelligence: "setup.nav.intelligence",
+  members: "setup.nav.members",
+  github: "setup.nav.github",
+  shortcuts: "setup.nav.shortcuts",
+  sync: "setup.nav.sync",
+  verification: "setup.nav.verification",
+} as const satisfies Record<CoreSection, string>;
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const label = useMemberCliAgentLabel(personId, enabled);
   if (!label) {
@@ -702,7 +714,12 @@ export function SetupPage() {
       />
 
       <div className="setup-layout">
-        <SetupSectionNav active={activeSection} onChange={setSection} status={visibleStatus} />
+        <SetupSectionNav
+          active={activeSection}
+          onChange={setSection}
+          sections={coreSections}
+          status={visibleStatus}
+        />
         <Stack gap="md">
           {activeSection === "project" ? (
             <ProjectSection
@@ -889,36 +906,37 @@ function isWorkspaceSwitchBlocked(error: unknown): boolean {
   );
 }
 
+/**
+ * The sections of Setup, as the only way to move between them.
+ *
+ * Only the sections that can actually be opened are listed: a button that
+ * silently leaves the screen where it was reads as a broken app, so which
+ * sections exist is decided in one place rather than drawn here and filtered
+ * where the section is rendered.
+ */
 function SetupSectionNav({
   active,
   onChange,
+  sections,
   status,
 }: {
   active: string;
   onChange: (value: CoreSection) => void;
+  sections: readonly CoreSection[];
   status: SetupStatus;
 }) {
   const { t } = useTranslation();
-  const items: Array<readonly [CoreSection, string, boolean]> = [
-    ["project", t("setup.nav.project"), status.projectReady],
-    ["intelligence", t("setup.nav.intelligence"), status.intelligenceReady],
-    ["members", t("setup.nav.members"), status.membersReady],
-    ["github", t("setup.nav.github"), status.githubReady],
-    ["shortcuts", t("setup.nav.shortcuts"), true],
-    ["sync", t("setup.nav.sync"), true],
-    ["verification", t("setup.nav.verification"), status.verificationReady],
-  ];
   return (
     <Card withBorder radius="md" p="xs" className="setup-nav">
-      {items.map(([value, label, ok]) => (
+      {sections.map((value) => (
         <button
           className={`setup-nav-item ${active === value ? "active" : ""}`}
           key={value}
           type="button"
           onClick={() => onChange(value)}
         >
-          <StatusIcon ok={ok} />
-          <span>{label}</span>
+          <StatusIcon ok={isCoreSectionReady(value, status)} />
+          <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
         </button>
       ))}
     </Card>
@@ -5797,7 +5815,10 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   if (section === "verification") {
     return status.verificationReady;
   }
-  return false;
+  // Hotkeys and synchronization ask for nothing before the project can run, so
+  // they are never the step that is still missing -- and never the step that
+  // stops the first-run walkthrough from moving on.
+  return true;
 }
 
 function getInitialCoreStatus(

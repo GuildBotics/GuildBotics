@@ -183,7 +183,13 @@ def list_workspace_ids() -> list[str]:
 
 
 def default_ssh_endpoint() -> str:
-    """Return the ``user@host`` this machine suggests to devices."""
+    """Return this machine's ``user@host``.
+
+    A hub offers it to devices as the address to connect to, and a device
+    writes it into the comment of its own key so that one line of a hub's
+    ``authorized_keys`` can be told from another. Neither use can verify it:
+    only the user knows which name their machines resolve to.
+    """
     try:
         user = getpass.getuser()
     except OSError:

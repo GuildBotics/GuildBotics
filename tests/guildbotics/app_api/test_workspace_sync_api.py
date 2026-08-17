@@ -12,6 +12,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.app_api import workspace_sync
 from guildbotics.sync import current_sync_manager, deactivate_workspace_sync
+from guildbotics.workspace.identity import read_workspace_identity
 
 HTTP_OK = 200
 HTTP_CONFLICT = 409
@@ -85,6 +86,21 @@ def test_a_local_hub_reports_the_workspaces_it_holds(client: TestClient) -> None
     assert len(payload["workspace_ids"]) == 1
 
 
+def test_this_machine_is_not_offered_as_a_hub_unless_it_hosts_one(
+    client: TestClient,
+) -> None:
+    """An empty address means the hub on this machine.
+
+    A machine hosting none answers an empty workspace list just as a hub with
+    nothing in it does, so without this the caller is led on to registering
+    with a hub that is not there.
+    """
+    response = client.post("/hub/inspect", headers=AUTH_HEADERS, json={})
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "hub_not_hosted"
+
+
 def test_an_address_that_names_nothing_is_refused(client: TestClient) -> None:
     response = client.post(
         "/hub/inspect", headers=AUTH_HEADERS, json={"endpoint": "not a host"}
@@ -120,14 +136,23 @@ def test_enabling_registers_the_workspace_and_starts_the_queue(
     assert payload["workspace_id"]
 
 
-def test_enabling_without_a_hub_reports_why(client: TestClient) -> None:
-    """The hub has to exist before a workspace can be registered with it."""
+def test_enabling_without_a_hub_reports_why(
+    client: TestClient, workspace: Path
+) -> None:
+    """The hub has to exist before a workspace can be registered with it.
+
+    Refused while resolving the address rather than while registering: what
+    follows has side effects, and registering mints this workspace's
+    identifier -- which it then keeps for good -- before it can discover there
+    is no hub to register with.
+    """
     response = client.post(
         "/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}
     )
 
     assert response.status_code == HTTP_CONFLICT
-    assert response.json()["code"] == "hub_register_failed"
+    assert response.json()["code"] == "hub_not_hosted"
+    assert read_workspace_identity(workspace) is None
 
 
 def test_a_hub_that_does_not_hold_this_workspace_has_nothing_to_preview(
@@ -267,6 +292,8 @@ def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
 def test_a_workspace_identifier_that_is_not_one_is_refused(
     client: TestClient, tmp_path: Path
 ) -> None:
+    client.post("/hub", headers=AUTH_HEADERS)
+
     response = client.post(
         "/workspace/sync/clone",
         headers=AUTH_HEADERS,

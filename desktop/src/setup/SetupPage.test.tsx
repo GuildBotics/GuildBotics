@@ -101,6 +101,38 @@ vi.mock("../api/client", async (importOriginal) => {
       host_key_changed: false,
       workspace_ids: ["1f0a0000-0000-7000-8000-00000000000a"],
     })),
+    getHubStatus: vi.fn(async () => ({
+      hosted: false,
+      hub_root: "/home/u/.guildbotics/hub",
+      hub_id: null,
+      created_at: null,
+      ssh_endpoint: null,
+      workspace_ids: [],
+    })),
+    getDeviceSshKey: vi.fn(async () => ({
+      exists: false,
+      path: null,
+      public_key: "",
+      fingerprint: "",
+    })),
+    getWorkspaceSyncStatus: vi.fn(async () => ({
+      enabled: false,
+      workspace_id: null,
+      device_id: "1f0a0000-0000-7000-8000-0000000000d1",
+      hub_url: null,
+      state: "disabled",
+      local_head: null,
+      remote_head: null,
+      ahead_count: 0,
+      behind_count: 0,
+      unsendable_changes: [],
+      last_success_at: null,
+      last_error_code: null,
+    })),
+    getWorkspaceDevices: vi.fn(async () => ({
+      device_id: "1f0a0000-0000-7000-8000-0000000000d1",
+      devices: [],
+    })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
     getCliAgentDetections: vi.fn(async () => ({
       agents: [
@@ -624,6 +656,40 @@ describe("SetupPage", () => {
     // description starts empty.
     expect(screen.getByLabelText("Project description")).toHaveValue("");
     expect(screen.getByText(t("setup.project.agentLanguage"))).toBeInTheDocument();
+  });
+
+  it("opens the sync section before the project is saved", async () => {
+    // The machine that hosts the hub never gets a project of its own, and the
+    // one that joins takes its content from the hub, so the section cannot
+    // wait for a saved project.
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+    await screen.findByRole("heading", { name: "First setup" });
+
+    await user.click(screen.getByRole("button", { name: t("setup.nav.sync") }));
+
+    expect(await screen.findByText(t("sync.host.title"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("sync.host.create") })).toBeInTheDocument();
+  });
+
+  it("lists only the sections that can be opened", async () => {
+    // A nav entry that leaves the screen where it was reads as a broken app,
+    // so sections the first-setup flow does not serve are not offered.
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+    await screen.findByRole("heading", { name: "First setup" });
+
+    expect(screen.getByRole("button", { name: t("setup.nav.sync") })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: t("setup.nav.shortcuts") }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the LLM provider and AI CLI tool selection with API-key availability", async () => {

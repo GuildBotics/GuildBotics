@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cloneWorkspaceFromHub, inspectHub, type ConfigStatus } from "../api/client";
+import { cloneWorkspaceFromHub, getHubStatus, inspectHub, type ConfigStatus } from "../api/client";
 import i18n from "../i18n";
 import { CloneFromHubButton } from "./CloneFromHub";
 
@@ -15,6 +15,7 @@ vi.mock("../api/client", async () => {
   return {
     ...actual,
     cloneWorkspaceFromHub: vi.fn(),
+    getHubStatus: vi.fn(),
     inspectHub: vi.fn(),
     trustHub: vi.fn(),
   };
@@ -43,6 +44,14 @@ function renderButton(onCloned = vi.fn(), destination = "/tmp/second") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getHubStatus).mockResolvedValue({
+    hosted: false,
+    hub_root: "/home/u/.guildbotics/hub",
+    hub_id: null,
+    created_at: null,
+    ssh_endpoint: null,
+    workspace_ids: [],
+  });
   vi.mocked(inspectHub).mockResolvedValue({
     endpoint: "user@hub.local",
     is_local: false,

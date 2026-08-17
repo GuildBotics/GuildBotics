@@ -291,7 +291,10 @@ def ensure_ssh_key() -> HubSshKey:
 
     A key per device is what makes a lost machine revocable on its own: the
     user removes that one public key from the hub instead of rotating a secret
-    every other device also holds.
+    every other device also holds. The comment names the machine, because it
+    is the only readable part of an ``authorized_keys`` line and deleting the
+    right line is the whole of revoking. A constant would leave every device's
+    line identical, and the user matching fingerprints by hand.
     """
     existing = read_ssh_key()
     if existing is not None:
@@ -304,7 +307,17 @@ def ensure_ssh_key() -> HubSshKey:
     private = _ssh_dir() / f"id_{SSH_KEY_TYPE}"
     private.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _run(
-        [keygen, "-t", SSH_KEY_TYPE, "-N", "", "-C", "guildbotics", "-f", str(private)],
+        [
+            keygen,
+            "-t",
+            SSH_KEY_TYPE,
+            "-N",
+            "",
+            "-C",
+            f"guildbotics {host.default_ssh_endpoint()}",
+            "-f",
+            str(private),
+        ],
         "generate an SSH key",
     )
     return _ssh_key(private.with_suffix(".pub"))

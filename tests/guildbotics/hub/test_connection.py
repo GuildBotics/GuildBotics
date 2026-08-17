@@ -296,3 +296,33 @@ def test_only_the_confirmed_key_is_trusted_when_several_are_offered(
     assert ED25519 in known_hosts
     assert "ssh-rsa" not in known_hosts
     assert result.fingerprints == ("SHA256:confirmed",)
+
+
+def test_a_generated_key_names_the_machine_in_its_comment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Revoking a lost device means deleting its line from the hub's
+    ``authorized_keys``, and the comment is the only part of that line a person
+    reads. A constant would leave every device's line identical, with nothing
+    but fingerprints to tell them apart."""
+    ssh_dir = tmp_path / ".ssh"
+    monkeypatch.setattr(connection, "_ssh_dir", lambda: ssh_dir)
+    monkeypatch.setattr(connection, "keygen_executable", lambda: "ssh-keygen")
+    monkeypatch.setattr(host, "default_ssh_endpoint", lambda: "alice@mac-studio")
+    commands: list[list[str]] = []
+
+    def _keygen(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        if "-t" in command:
+            (ssh_dir / f"id_{connection.SSH_KEY_TYPE}.pub").write_text(
+                "ssh-ed25519 AAAAC3Nz guildbotics alice@mac-studio\n", encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, "256 SHA256:device key", "")
+
+    monkeypatch.setattr(connection.subprocess, "run", _keygen)
+
+    key = connection.ensure_ssh_key()
+
+    generated = commands[0]
+    assert generated[generated.index("-C") + 1] == "guildbotics alice@mac-studio"
+    assert key.fingerprint == "SHA256:device"

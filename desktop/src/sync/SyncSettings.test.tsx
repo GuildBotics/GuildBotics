@@ -11,6 +11,7 @@ import {
   createDeviceSshKey,
   createHub,
   enableWorkspaceSync,
+  getConfigStatus,
   getDeviceSshKey,
   getHubStatus,
   getWorkspaceDevices,
@@ -19,6 +20,7 @@ import {
   previewWorkspaceSync,
   renameThisDevice,
   trustHub,
+  type ConfigStatus,
   type HubConnection,
   type WorkspaceSyncPreview,
   type WorkspaceSyncStatus,
@@ -36,6 +38,7 @@ vi.mock("../api/client", async () => {
     createDeviceSshKey: vi.fn(),
     createHub: vi.fn(),
     enableWorkspaceSync: vi.fn(),
+    getConfigStatus: vi.fn(),
     getDeviceSshKey: vi.fn(),
     getHubStatus: vi.fn(),
     getWorkspaceDevices: vi.fn(),
@@ -61,6 +64,18 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     unsendable_changes: [],
     last_success_at: null,
     last_error_code: null,
+    ...overrides,
+  };
+}
+
+function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
+  return {
+    cwd: "/home/u",
+    workspace: "/home/u/workspace",
+    config_dir: "/home/u/workspace/.guildbotics/config",
+    project_file: "/home/u/workspace/.guildbotics/config/team/project.yml",
+    project_file_exists: true,
+    storage_dir: "/home/u/workspace",
     ...overrides,
   };
 }
@@ -110,6 +125,7 @@ async function lookUpHub(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getConfigStatus).mockResolvedValue(configStatus());
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
   vi.mocked(getWorkspaceDevices).mockResolvedValue({ devices: [], device_id: "d1" });
   vi.mocked(getDeviceSshKey).mockResolvedValue({
@@ -203,6 +219,49 @@ describe("confirming the hub's host key", () => {
     await user.click(await screen.findByRole("button", { name: t("sync.hostKey.confirm") }));
 
     expect(await screen.findByText(/different host key/)).toBeInTheDocument();
+  });
+});
+
+describe("saying where the hub is", () => {
+  it("cannot look up a hub before an address is given", async () => {
+    // An empty field means the user has not said where the hub is. Reading it
+    // as "this machine" carried them to a register button that a machine
+    // hosting no hub could only fail at -- after minting a workspace id.
+    renderSettings();
+
+    expect(await screen.findByLabelText(t("sync.connect.endpoint"))).toHaveValue("");
+    expect(screen.getByRole("button", { name: t("sync.connect.inspect") })).toBeDisabled();
+    expect(inspectHub).not.toHaveBeenCalled();
+  });
+
+  it("offers the hub on this machine as its own choice, only when there is one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getHubStatus).mockResolvedValue({
+      hosted: true,
+      hub_root: "/home/u/.guildbotics/hub",
+      hub_id: "hub-1",
+      created_at: "2026-07-01T00:00:00+00:00",
+      ssh_endpoint: "user@hub.local",
+      workspace_ids: [],
+    });
+    vi.mocked(inspectHub).mockResolvedValue(connection({ endpoint: "", is_local: true }));
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: t("sync.connect.useLocal") }));
+
+    expect(inspectHub).toHaveBeenCalledWith({ endpoint: "" });
+    expect(
+      await screen.findByRole("button", { name: t("sync.connect.register") }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not offer this machine when it hosts no hub", async () => {
+    renderSettings();
+
+    expect(await screen.findByLabelText(t("sync.connect.endpoint"))).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: t("sync.connect.useLocal") }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -397,6 +456,34 @@ describe("this device's SSH key", () => {
 });
 
 describe("hosting the hub here", () => {
+  it("can be set up before this machine has a workspace", async () => {
+    // The machine that hosts the hub is often the one that never gets a
+    // workspace of its own, so hosting must not wait for one. Only the parts
+    // that need something to share step aside.
+    const user = userEvent.setup();
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ workspace: null }));
+    vi.mocked(createHub).mockResolvedValue({
+      hosted: true,
+      hub_root: "/home/u/.guildbotics/hub",
+      hub_id: "hub-1",
+      created_at: "2026-07-01T00:00:00+00:00",
+      ssh_endpoint: "user@hub.local",
+      workspace_ids: [],
+    });
+    renderSettings();
+
+    expect(await screen.findByText(t("sync.settings.noWorkspaceTitle"))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t("sync.connect.endpoint"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("sync.devices.title"))).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("sync.host.create") }));
+
+    await waitFor(() =>
+      expect(screen.getByText(t("sync.host.hosted", { count: 0 }))).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: t("sync.sshKey.create") })).toBeInTheDocument();
+  });
+
   it("reports what this machine holds once it is a hub", async () => {
     const user = userEvent.setup();
     vi.mocked(createHub).mockResolvedValue({
