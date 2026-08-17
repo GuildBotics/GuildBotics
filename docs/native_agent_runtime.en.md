@@ -189,7 +189,11 @@ GitHub, Git, and SSH write credentials are deliberately removed from native
 agent process environments. Every inherited variable whose name contains `TOKEN`,
 `SECRET`, `PASSWORD`, `PRIVATE_KEY`, or `API_KEY` is dropped; the rule is a name
 pattern rather than a list because a list only ever keeps the secrets nobody
-remembered to add to it. That covers the member's own
+remembered to add to it. Keys stored in the workspace SecretStore are dropped
+regardless of their name: `guildbotics secrets set` accepts any key name
+(say, `DATABASE_URL`), so the fact that a key was stored is itself the
+classification, and the name pattern remains as a safety net for credentials
+the operator's shell exports outside GuildBotics. That covers the member's own
 `{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN` and the LLM
 provider API keys (`OPENAI_API_KEY` and friends): all of them are consumed inside the
 GuildBotics process, and the member CLI loads its own from the OS keychain, so removing

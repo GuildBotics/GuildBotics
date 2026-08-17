@@ -18,6 +18,7 @@ import re
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,29 @@ ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES = ("_GITHUB_PRIVATE_KEY",)
 # rather than by an enumeration that has to be extended for every new secret.
 _SECRET_ENV_NAME_PARTS = ("TOKEN", "SECRET", "PASSWORD", "PRIVATE_KEY", "API_KEY")
 
+# Environment keys whose values are held by the workspace SecretStore. The
+# store accepts any key name (`guildbotics secrets set DATABASE_URL ...`), so
+# a name pattern cannot classify these; the fact that the key was stored is
+# kept as provenance instead. The set only grows for the process lifetime:
+# once a key may have reached `os.environ`, a workspace switch or reload must
+# not demote it to an ordinary inheritable variable.
+_KNOWN_SECRET_ENV_KEYS: set[str] = set()
+
+
+def register_secret_env_keys(keys: Iterable[str]) -> None:
+    """Record environment keys whose values are held by the SecretStore.
+
+    Callers register key names before deciding whether to fetch or publish
+    them, so keys that are skipped (already supplied as real environment
+    variables) or whose fetch later fails are still classified as secret.
+    """
+    _KNOWN_SECRET_ENV_KEYS.update(keys)
+
+
+def known_secret_env_keys() -> frozenset[str]:
+    """Return the environment keys registered as SecretStore-held."""
+    return frozenset(_KNOWN_SECRET_ENV_KEYS)
+
 
 def is_environment_secret(key: str) -> bool:
     """True when the secret may be published to ``os.environ``."""
@@ -60,12 +84,15 @@ def is_environment_secret(key: str) -> bool:
 
 
 def is_secret_env_key(key: str) -> bool:
-    """True when an environment variable's name marks it as a credential.
+    """True when an environment variable carries a credential value.
 
-    Used both to keep such values out of AI CLI subprocess environments and to
-    redact them from anything a member writes down, so the two answers cannot
-    drift apart.
+    A key qualifies by name pattern or by provenance: keys seen in the
+    workspace SecretStore are secret whatever they are called. Used both to
+    keep such values out of AI CLI subprocess environments and to redact them
+    from anything a member writes down, so the two answers cannot drift apart.
     """
+    if key in _KNOWN_SECRET_ENV_KEYS:
+        return True
     upper = key.upper()
     return any(part in upper for part in _SECRET_ENV_NAME_PARTS)
 

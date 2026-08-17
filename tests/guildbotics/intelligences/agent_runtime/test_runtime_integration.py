@@ -791,6 +791,34 @@ def test_native_environment_removes_member_tokens_and_provider_api_keys(
         remove_isolated_config(gh_config_dir)
 
 
+def test_native_environment_removes_secret_store_keys_without_marker_names(
+    tmp_path, monkeypatch
+) -> None:
+    # `secrets set` accepts any key name and `load_guildbotics_env()` publishes
+    # every stored key, so a value can be a credential while its name matches
+    # no pattern. Provenance -- the key was stored -- must strip it too, even
+    # when the value arrives via a real environment variable (skip path).
+    from guildbotics.utils.env_loader import load_guildbotics_env
+    from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("DATABASE_URL", "postgres://user:hunter2@db/example")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:hunter2@db/example")
+    monkeypatch.setenv("GUILDBOTICS_EDITION", "simple")
+
+    load_guildbotics_env(override=False)
+
+    env, gh_config_dir = isolated_agent_environment()
+    try:
+        assert "DATABASE_URL" not in env
+        # Ordinary variables are still inherited.
+        assert env["GUILDBOTICS_EDITION"] == "simple"
+    finally:
+        remove_isolated_config(gh_config_dir)
+
+
 def test_member_command_environment_carries_only_execution_metadata(tmp_path) -> None:
     from guildbotics.capabilities.task_runs import RUN_ENV
     from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext

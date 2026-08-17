@@ -208,7 +208,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - ローカライズ対応ファイルは `.<lang>` → `.en` → 素のファイル名の順で探索
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 - シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。バックエンドは OS キーチェーンだけで、平文への fallback は無い（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）。キーチェーンが使えなければ `SecretStoreError`。解決優先順位は実環境変数 > キーチェーンの 2 段で、ワークスペースの `.env` は読まない（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは `tests/conftest.py` の autouse fixture `fake_keyring` が in-memory キーチェーンを入れるため、実 OS キーチェーンには触れない
-- 環境変数名が認証情報を表すか（`TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含むか）の判定は `secret_store.is_secret_env_key()` が正本。AI CLI 子プロセスの環境からの除去（`intelligences/agent_runtime/environment.py`）と member memory の redaction（`capabilities/member_memory.py`）は両方ここから導出する。除去対象を名前の列挙で持たない（列挙は「追加を忘れた秘密」だけを残す）
+- 環境変数が認証情報を運ぶかの判定は `secret_store.is_secret_env_key()` が正本。名前パターン（`TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含むか）と、SecretStore に保存されたキー名の provenance レジストリ（`register_secret_env_keys()`。`env_loader.read_workspace_secrets()` が skip 判定・値取得より前に登録し、プロセス生存中は単調増加）の和集合で判定する。AI CLI 子プロセスの環境からの除去（`intelligences/agent_runtime/environment.py`）と member memory の redaction（`capabilities/member_memory.py`）は両方ここから導出する。除去対象を名前の列挙で持たない（列挙は「追加を忘れた秘密」だけを残す）し、非規約名の secret（例: `DATABASE_URL`）を断片リストへの追加で塞がない（provenance が塞ぐ）
 
 ### 5. スケジューラ
 

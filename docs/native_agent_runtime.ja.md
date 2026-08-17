@@ -171,7 +171,11 @@ GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、�
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
 親プロセスの環境変数のうち、名前に`TOKEN`、`SECRET`、`PASSWORD`、`PRIVATE_KEY`、`API_KEY`を
 含むものはすべて取り除きます。除外する名前を列挙するのではなくパターンで判定するのは、列挙は
-「追加を忘れた秘密」だけを残す形になるためです。これにより、メンバー自身の
+「追加を忘れた秘密」だけを残す形になるためです。さらに、ワークスペースのSecretStoreに保存された
+キーは名前に関係なく取り除きます。`guildbotics secrets set`は任意のキー名を受け付けるため
+（例: `DATABASE_URL`）、「秘密ストアに保存された」という出所そのものを判定根拠にします。
+名前パターンは、シェルからexportされたGuildBotics管理外の認証情報を拾う保険として機能します。
+これにより、メンバー自身の
 `{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN`と、
 LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）も渡りません。いずれもGuildBoticsのプロセス内で
 消費するものであり、member CLIは自分でOSキーチェーンから読み込むため、この除去の影響を
