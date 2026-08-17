@@ -26,20 +26,21 @@ from guildbotics.runtime.person_lease import (
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.processes import terminate_posix_process_group
+from guildbotics.utils.secret_store import is_secret_env_key
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 _WINDOWS = os.name == "nt"
 
-#: Ambient parent values an AI CLI process must never inherit: the direct
-#: write credentials, and the execution metadata that authorises a nested
+#: Ambient parent values an AI CLI process must never inherit even though their
+#: names do not read as credentials: the helpers and sockets that hand out a
+#: credential on demand, and the execution metadata that authorises a nested
 #: member CLI call. A live lease is a usable grant, so inheriting it lets the
 #: provider process bypass the boundary its own transport was given. Paths that
 #: legitimately carry that metadata re-inject it from the execution context
-#: right after this builder runs.
+#: right after this builder runs. Variables that hold a credential *value* are
+#: not listed here: they are removed by name pattern, because an enumeration
+#: only ever holds the secrets somebody remembered to add to it.
 _STRIPPED_PARENT_ENV = (
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "GITHUB_ENTERPRISE_TOKEN",
     "GH_CONFIG_DIR",
     "GIT_ASKPASS",
     "SSH_ASKPASS",
@@ -60,10 +61,19 @@ STREAM_READ_LIMIT = 10 * 1024 * 1024
 def isolated_agent_environment() -> tuple[dict[str, str], str]:
     """Return an AI CLI environment with inherited credentials and grants removed.
 
+    Every variable whose name marks it as a credential is dropped, which covers
+    the member's own ``{PERSON_ID}_GITHUB_ACCESS_TOKEN`` / ``_SLACK_BOT_TOKEN``
+    / ``_SLACK_APP_TOKEN`` and the LLM provider API keys. Those are consumed
+    inside the GuildBotics process (and by the member CLI, which loads them
+    from the keychain itself), so an AI CLI tool has no use for them beyond
+    calling the provider APIs directly and bypassing the member entrypoint.
+
     The workspace is identified only by explicit environment variables the
     caller already holds; the agent cwd is never used to guess one.
     """
-    env = os.environ.copy()
+    env = {
+        key: value for key, value in os.environ.items() if not is_secret_env_key(key)
+    }
     env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
     gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
     for key in _STRIPPED_PARENT_ENV:

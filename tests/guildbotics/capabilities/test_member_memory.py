@@ -81,6 +81,34 @@ def test_record_recall_get_and_digest_redact_secret(
     assert service.load_digest(limit=1)[0]["doc_id"] == doc_id
 
 
+def test_record_redacts_secret_store_values_without_marker_names(
+    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
+) -> None:
+    # A `DATABASE_URL` published from the SecretStore carries a credential even
+    # though its name matches no pattern; redaction must follow provenance.
+    from guildbotics.utils.secret_store import register_secret_env_keys
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:hunter2@db/example")
+    register_secret_env_keys(["DATABASE_URL"])
+    service = MemberMemoryService(person)
+
+    result = service.record(
+        scope="personal",
+        title="DB tips",
+        summary="Connect via postgres://user:hunter2@db/example first.",
+        keywords=["db"],
+        body="The url postgres://user:hunter2@db/example is handy.",
+    )
+
+    doc_id = result["doc_id"]
+    meta = load_yaml_file(
+        data_root / "documents" / "personal" / "aiko" / doc_id / "meta.yml"
+    )
+    assert isinstance(meta, dict)
+    assert meta["summary"] == "Connect via *** first."
+    assert service.get(doc_id=doc_id)["body"] == "The url *** is handy."
+
+
 def test_record_rejects_set_for_note(person: Person) -> None:
     service = MemberMemoryService(person)
 

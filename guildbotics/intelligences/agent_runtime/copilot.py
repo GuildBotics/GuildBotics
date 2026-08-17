@@ -102,7 +102,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
             "read_only": context.read_only,
         }
 
-    async def _authenticate(self, result: dict[str, Any], env: dict[str, str]) -> None:
+    async def _authenticate(self, result: dict[str, Any]) -> None:
         methods = [
             str(as_dict(method).get("id", ""))
             for method in result.get("authMethods", [])

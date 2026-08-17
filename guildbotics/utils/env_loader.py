@@ -15,6 +15,7 @@ from guildbotics.utils.secret_store import (
     SecretStore,
     is_environment_secret,
     read_env_values,
+    register_secret_env_keys,
     resolve_secret_store,
     write_env_values,
 )
@@ -56,6 +57,12 @@ def read_workspace_secrets(
     values: dict[str, str] = {}
     try:
         stored_keys = store.keys()
+        # Register provenance before the skip decision and before any fetch:
+        # a stored key stays classified as secret even when its value is
+        # supplied as a real environment variable or the keychain fails here.
+        register_secret_env_keys(
+            key for key in stored_keys if is_environment_secret(key)
+        )
         for key in stored_keys:
             if not is_environment_secret(key) or key in skip:
                 continue
