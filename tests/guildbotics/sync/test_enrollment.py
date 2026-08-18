@@ -174,6 +174,26 @@ def test_a_folder_this_device_only_opened_can_still_take_a_copy(
     assert (scratch / "diagnostics.jsonl").is_file()
 
 
+def test_a_copy_that_could_not_be_taken_leaves_nothing_behind(
+    tmp_path: Path, hub: Path
+) -> None:
+    """What a failed copy would leave is a repository carrying the hub as its
+    remote, which the next activation reads as a connected workspace: it starts
+    a queue, the queue mints an identity into ``state/``, and the folder then
+    holds a workspace of its own that no retry can copy into."""
+    destination = tmp_path / "windows"
+
+    with pytest.raises(enrollment.EnrollmentError):
+        enrollment.clone_workspace(str(tmp_path / "missing-hub.git"), destination)
+
+    assert not (destination / ".guildbotics" / ".git").exists()
+    assert not (destination / ".guildbotics" / "state").exists()
+    # And the folder can still be copied into once the hub is reachable.
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: d\n"}))
+    enrollment.clone_workspace(str(hub), destination)
+    assert (destination / ".guildbotics" / CONFIG).read_text() == "name: d\n"
+
+
 def test_a_workspace_that_already_exists_is_not_replaced_by_a_copy(
     tmp_path: Path, hub: Path
 ) -> None:

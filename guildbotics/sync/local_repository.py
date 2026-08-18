@@ -17,6 +17,7 @@ settle a concurrent update belong to
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -169,10 +170,25 @@ class LocalSyncRepository:
                 "on it instead of taking a second copy."
             )
         self.initialize()
-        repository = self._repo()
-        repository.create_remote(SYNC_REMOTE, url)
-        repository.git.fetch(SYNC_REMOTE, SYNC_BRANCH)
-        repository.git.checkout("-B", SYNC_BRANCH, f"{SYNC_REMOTE}/{SYNC_BRANCH}")
+        try:
+            repository = self._repo()
+            repository.create_remote(SYNC_REMOTE, url)
+            repository.git.fetch(SYNC_REMOTE, SYNC_BRANCH)
+            repository.git.checkout("-B", SYNC_BRANCH, f"{SYNC_REMOTE}/{SYNC_BRANCH}")
+        except Exception:
+            # A copy that could not be taken leaves nothing behind. What it
+            # made is a repository carrying the hub as its remote, and the next
+            # activation reads that as a connected workspace: it starts a
+            # queue, which mints an identity into ``state/`` -- so the folder
+            # the user was copying into ends up holding a workspace of its own,
+            # and no second attempt can copy into it any more.
+            self._discard()
+            raise
+
+    def _discard(self) -> None:
+        """Undo :meth:`initialize`, leaving the folder as the copy found it."""
+        shutil.rmtree(self.path / ".git", ignore_errors=True)
+        (self.path / ".gitignore").unlink(missing_ok=True)
 
     def working_tree_changes(self) -> list[WorkingTreeChange]:
         """Return every shared file that differs from the current commit.
