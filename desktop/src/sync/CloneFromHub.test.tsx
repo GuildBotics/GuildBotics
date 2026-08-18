@@ -41,6 +41,7 @@ function syncStatus(workspaceId: string | null): WorkspaceSyncStatus {
     ahead_count: 0,
     behind_count: 0,
     unsendable_changes: [],
+    rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
   };

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiRequestError,
   changeWorkspaceSyncHub,
+  discardWorkspaceSyncRejection,
   enableWorkspaceSync,
   getHubStatus,
   getWorkspaceDevices,
@@ -30,6 +31,7 @@ vi.mock("../api/client", async () => {
   return {
     ...actual,
     changeWorkspaceSyncHub: vi.fn(),
+    discardWorkspaceSyncRejection: vi.fn(),
     enableWorkspaceSync: vi.fn(),
     getHubStatus: vi.fn(),
     getWorkspaceDevices: vi.fn(),
@@ -53,6 +55,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     ahead_count: 0,
     behind_count: 0,
     unsendable_changes: [],
+    rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
     ...overrides,
@@ -437,5 +440,61 @@ describe("devices", () => {
     await user.click(screen.getByRole("button", { name: t("sync.devices.renameAction") }));
 
     expect(renameThisDevice).toHaveBeenCalledWith("Work laptop");
+  });
+});
+
+describe("changes the hub did not accept", () => {
+  const held = {
+    rejection_id: "01a01500-0000-7000-8000-00000000000a",
+    occurred_at: "2026-08-18T12:07:02Z",
+    paths: ["config/team/project.yml"],
+  };
+
+  it("names what was set aside and how to find it again", async () => {
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ enabled: true, state: "idle", rejected_changes: [held] }),
+    );
+    renderSettings();
+
+    expect(await screen.findByText(t("sync.rejected.title"))).toBeInTheDocument();
+    expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
+    // The identifier is the whole of the manual recovery procedure's input.
+    expect(screen.getByText(held.rejection_id)).toBeInTheDocument();
+  });
+
+  it("says the copy is the only one before discarding it", async () => {
+    // Nothing else holds this content -- not the hub, not another device -- so
+    // the confirmation says so rather than asking a bare "are you sure".
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ enabled: true, state: "idle", rejected_changes: [held] }),
+    );
+    vi.mocked(discardWorkspaceSyncRejection).mockResolvedValue(
+      status({ enabled: true, state: "idle" }),
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: t("sync.rejected.discard") }));
+
+    expect(await screen.findByText(t("sync.rejected.discardBody"))).toBeInTheDocument();
+    expect(discardWorkspaceSyncRejection).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: t("sync.rejected.discardConfirm") }));
+
+    expect(discardWorkspaceSyncRejection).toHaveBeenCalledWith(held.rejection_id);
+  });
+
+  it("keeps the change when the confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ enabled: true, state: "idle", rejected_changes: [held] }),
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: t("sync.rejected.discard") }));
+    await user.click(await screen.findByRole("button", { name: t("sync.rejected.cancel") }));
+
+    expect(discardWorkspaceSyncRejection).not.toHaveBeenCalled();
+    expect(screen.getByText(held.rejection_id)).toBeInTheDocument();
   });
 });

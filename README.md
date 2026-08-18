@@ -650,6 +650,11 @@ content without going through the rules above:
 A set aside change cannot be recovered if the machine that made it is lost, or if its
 rejected ref is removed. Nothing prunes them automatically.
 
+Once you are done looking, discard it from **Settings → Sync**, under "Changes set
+aside". Discarding removes the rejected ref and clears the warning. This machine
+holds the only copy, so look at the content with the steps above before
+discarding; the activity history record stays either way.
+
 #### What the sidebar is telling you
 
 | State | Meaning | What to do |

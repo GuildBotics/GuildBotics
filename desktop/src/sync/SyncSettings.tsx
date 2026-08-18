@@ -20,12 +20,14 @@ import { useTranslation } from "react-i18next";
 
 import {
   changeWorkspaceSyncHub,
+  discardWorkspaceSyncRejection,
   enableWorkspaceSync,
   getWorkspaceDevices,
   getWorkspaceSyncStatus,
   previewWorkspaceSync,
   renameThisDevice,
   type HubConnection,
+  type RejectedChange,
   type WorkspaceSyncPreview,
 } from "../api/client";
 import { HubConnector } from "./HubConnector";
@@ -61,6 +63,7 @@ export function SyncSettings() {
         <ConnectCard />
       )}
       <UnsendableChangesCard />
+      <RejectedChangesCard />
       <DevicesCard />
     </Stack>
   );
@@ -325,6 +328,113 @@ function UnsendableChangesCard() {
           </Table.Tbody>
         </Table>
       </Stack>
+    </Card>
+  );
+}
+
+/**
+ * The commits the hub did not accept, still held on this machine.
+ *
+ * Nothing removes these on their own, so this list is what the user is left
+ * with, and discarding is what ends it. The content is not shown, compared, or
+ * exported here: it lives in one Git ref on this device, and reading it is a
+ * manual procedure the README carries. Discarding is the one operation this
+ * screen can offer without touching that content at all.
+ */
+function RejectedChangesCard() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [discarding, setDiscarding] = useState<RejectedChange | null>(null);
+  const status = useQuery({
+    queryKey: ["workspace-sync"],
+    queryFn: getWorkspaceSyncStatus,
+    refetchInterval: 5000,
+  });
+  const discard = useMutation({
+    mutationFn: (rejectionId: string) => discardWorkspaceSyncRejection(rejectionId),
+    onSuccess: (next) => {
+      setDiscarding(null);
+      queryClient.setQueryData(["workspace-sync"], next);
+    },
+  });
+  const changes = status.data?.rejected_changes ?? [];
+  if (changes.length === 0) {
+    return null;
+  }
+  return (
+    <Card withBorder radius="md" p="md">
+      <Stack gap="sm">
+        <Title order={4}>{t("sync.rejected.title")}</Title>
+        <Text c="dimmed" size="sm">
+          {t("sync.rejected.body")}
+        </Text>
+        <Table striped>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t("sync.rejected.when")}</Table.Th>
+              <Table.Th>{t("sync.rejected.paths")}</Table.Th>
+              <Table.Th>{t("sync.rejected.id")}</Table.Th>
+              <Table.Th />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {changes.map((change) => (
+              <Table.Tr key={change.rejection_id}>
+                <Table.Td>{new Date(change.occurred_at).toLocaleString()}</Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    {change.paths.map((path) => (
+                      <Code key={path} style={{ overflowWrap: "anywhere" }}>
+                        {path}
+                      </Code>
+                    ))}
+                  </Stack>
+                </Table.Td>
+                <Table.Td>
+                  <Code style={{ overflowWrap: "anywhere" }}>{change.rejection_id}</Code>
+                </Table.Td>
+                <Table.Td>
+                  <Button onClick={() => setDiscarding(change)} size="xs" variant="light">
+                    {t("sync.rejected.discard")}
+                  </Button>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Stack>
+      <Modal
+        centered
+        onClose={() => setDiscarding(null)}
+        opened={discarding !== null}
+        title={t("sync.rejected.discardTitle")}
+      >
+        <Stack gap="sm">
+          <Text size="sm">{t("sync.rejected.discardBody")}</Text>
+          <Stack gap={2}>
+            {(discarding?.paths ?? []).map((path) => (
+              <Code key={path} style={{ overflowWrap: "anywhere" }}>
+                {path}
+              </Code>
+            ))}
+          </Stack>
+          <Text c="dimmed" size="xs">
+            {t("sync.rejected.discardHint")}
+          </Text>
+          <Group justify="flex-end">
+            <Button onClick={() => setDiscarding(null)} variant="default">
+              {t("sync.rejected.cancel")}
+            </Button>
+            <Button
+              color="danger"
+              loading={discard.isPending}
+              onClick={() => discard.mutate(discarding?.rejection_id ?? "")}
+            >
+              {t("sync.rejected.discardConfirm")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Card>
   );
 }

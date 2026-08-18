@@ -425,6 +425,18 @@ def create_app(
         return sync_service.retry()
 
     @app.post(
+        "/workspace/sync/rejections/{rejection_id}/discard",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_discard_rejection(
+        rejection_id: str,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        """Drop one displaced commit the user has finished with."""
+        return sync_service.discard_rejection(rejection_id)
+
+    @app.post(
         "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses
     )
     def workspace_sync_clone(

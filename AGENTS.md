@@ -129,7 +129,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - composition root 以外の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
 - 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
 - ファイル内容の domain 知識を持つこと
-- 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）
+- 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）。**ただし退避の破棄（rejected ref の削除）は利用者の明示的な指示でのみ行い、UI から提供してよい。** 禁止しているのは*自動*削除であり、破棄は退避内容を一切露出しない唯一の操作なので、「内容を読ませない」境界を保ったまま警告を終わらせられる。破棄させないと、ref は永久に残るため（README の回復手順も ref を消さない）、退避に基づく警告表示が終わらない
 - ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
 - 参加前の差分表示（preview）で remote を設定すること。実行しなかった preview が「同期有効」に見えると、次の起動で queue が回りはじめる
 

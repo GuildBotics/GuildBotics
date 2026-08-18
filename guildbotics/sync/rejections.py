@@ -15,6 +15,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from guildbotics.observability.activity_event_store import ActivityEventStore
+from guildbotics.observability.diagnostics_events import record_correlated_log
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.timestamps import utc_now_iso
@@ -45,6 +46,17 @@ def record_update_rejected(
             ``rejection_id`` can actually be resolved against, rather than in
             whichever workspace happens to be selected.
     """
+    # Also on this device's own diagnostics log. The activity event is shared,
+    # so it describes something that happened on some machine; the log is where
+    # a person looks to find out what happened on *this* one, and the ref being
+    # discussed exists nowhere else.
+    record_correlated_log(
+        level="warning",
+        message=(
+            f"Update not applied: {len(paths)} file(s) set aside as {rejection_id} "
+            f"({', '.join(paths)})"
+        ),
+    )
     ActivityEventStore(
         get_workspace_state_path("events", workspace_root=workspace_root),
         workspace_root=workspace_root,

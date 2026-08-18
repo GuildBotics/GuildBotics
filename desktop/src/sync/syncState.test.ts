@@ -15,6 +15,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     ahead_count: 0,
     behind_count: 0,
     unsendable_changes: [],
+    rejected_changes: [],
     last_success_at: "2026-07-01T00:00:00+00:00",
     last_error_code: null,
     ...overrides,

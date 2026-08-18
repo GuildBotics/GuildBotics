@@ -70,6 +70,10 @@ ELSEWHERE = {
     ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/hub"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/preview"): "compares two histories, writes no config",
+    (
+        "POST",
+        "/workspace/sync/rejections/{rejection_id}/discard",
+    ): "deletes a local ref, writes no config",
     ("POST", "/workspace/sync/retry"): "a whole workspace, not one config file",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",

@@ -24,6 +24,7 @@ from guildbotics.app_api.models import (
     HubStatus,
     HubTarget,
     HubTrustRequest,
+    RejectedChangeModel,
     UnsendableChangeModel,
     WorkspaceDevice,
     WorkspaceDevices,
@@ -44,6 +45,7 @@ from guildbotics.sync import (
     EnrollmentError,
     GitSyncStatus,
     LocalSyncRepository,
+    RejectedChange,
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
@@ -297,8 +299,31 @@ class WorkspaceSyncService:
                 device_id=ensure_device_identity().device_id,
                 hub_url=repository.remote_url(),
                 state="idle",
+                rejected_changes=_rejected(repository),
             )
-        return _status_model(manager.status(), repository.remote_url())
+        return _status_model(
+            manager.status(), repository.remote_url(), _rejected(repository)
+        )
+
+    def discard_rejection(self, rejection_id: str) -> WorkspaceSyncStatus:
+        """Drop one displaced commit because the user said they are done with it.
+
+        The user is never asked to do this, and nothing does it for them: the
+        ref is the only copy, held only here. It exists so the warning can end
+        without a second record of what the user has already looked at.
+        """
+        repository = _repository()
+        if repository is None:
+            raise AppApiError(
+                "workspace_not_configured",
+                "Select a workspace before discarding a rejected change.",
+                status_code=409,
+            )
+        with _reporting(
+            "sync_discard_failed", "The rejected change could not be discarded."
+        ):
+            repository.discard_rejected(rejection_id)
+        return self.get_status()
 
     def activate(self) -> WorkspaceSyncStatus:
         """Start the queue for the selected workspace, if it has a hub."""
@@ -470,6 +495,23 @@ def _device_records() -> list[DeviceRecord]:
     return list_device_records(root) if root is not None else []
 
 
+def _rejected(repository: LocalSyncRepository) -> list[RejectedChangeModel]:
+    """List what this device is still holding for the user to look at.
+
+    Read from the refs rather than remembered, so it is right after a restart
+    and after a discard, and so nothing has to be kept in step with them.
+    """
+    return [_rejection_model(change) for change in repository.list_rejected()]
+
+
+def _rejection_model(change: RejectedChange) -> RejectedChangeModel:
+    return RejectedChangeModel(
+        rejection_id=change.rejection_id,
+        occurred_at=change.occurred_at,
+        paths=list(change.paths),
+    )
+
+
 def _unsendable(changes: Sequence[UnsendableChange]) -> list[UnsendableChangeModel]:
     return [
         UnsendableChangeModel(path=change.path, reason=change.reason)
@@ -488,7 +530,11 @@ def _ssh_key_model(key: connection.HubSshKey | None) -> DeviceSshKey:
     )
 
 
-def _status_model(status: GitSyncStatus, hub_url: str | None) -> WorkspaceSyncStatus:
+def _status_model(
+    status: GitSyncStatus,
+    hub_url: str | None,
+    rejected: list[RejectedChangeModel],
+) -> WorkspaceSyncStatus:
     return WorkspaceSyncStatus(
         enabled=True,
         workspace_id=status.workspace_id,
@@ -500,6 +546,7 @@ def _status_model(status: GitSyncStatus, hub_url: str | None) -> WorkspaceSyncSt
         ahead_count=status.ahead_count,
         behind_count=status.behind_count,
         unsendable_changes=_unsendable(status.invalid_paths),
+        rejected_changes=rejected,
         last_success_at=status.last_success_at,
         last_error_code=status.last_error_code,
     )

@@ -969,6 +969,18 @@ export type UnsendableChange = {
   reason: string;
 };
 
+/**
+ * A local change the hub did not accept, still held on this machine.
+ *
+ * The content is not here and is not fetchable: recovery is a manual procedure
+ * on this device, so what travels is what makes the stashed commit findable.
+ */
+export type RejectedChange = {
+  rejection_id: string;
+  occurred_at: string;
+  paths: string[];
+};
+
 export type WorkspaceSyncStatus = {
   enabled: boolean;
   workspace_id: string | null;
@@ -980,6 +992,7 @@ export type WorkspaceSyncStatus = {
   ahead_count: number;
   behind_count: number;
   unsendable_changes: UnsendableChange[];
+  rejected_changes: RejectedChange[];
   last_success_at: string | null;
   last_error_code: string | null;
 };
@@ -1143,6 +1156,14 @@ export async function getConfigStatus(): Promise<ConfigStatus> {
 
 export async function setWorkspace(body: WorkspaceChangeRequest): Promise<ConfigStatus> {
   return request("/workspace", { method: "POST", body });
+}
+
+export async function discardWorkspaceSyncRejection(
+  rejectionId: string,
+): Promise<WorkspaceSyncStatus> {
+  return request(`/workspace/sync/rejections/${encodeURIComponent(rejectionId)}/discard`, {
+    method: "POST",
+  });
 }
 
 export async function getHotkeys(): Promise<HotkeySettings> {

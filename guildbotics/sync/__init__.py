@@ -35,6 +35,7 @@ from guildbotics.sync.enrollment import (
 )
 from guildbotics.sync.local_repository import (
     LocalSyncRepository,
+    RejectedChange,
     SyncRepositoryError,
     WorkingTreeChange,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "GitSyncStatus",
     "LocalSyncRepository",
     "PreviewMode",
+    "RejectedChange",
     "SharedDataAnomaly",
     "SyncRepositoryError",
     "SyncState",

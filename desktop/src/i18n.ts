@@ -130,6 +130,25 @@ const resources = {
           path: "File",
           reason: "Reason",
         },
+        rejected: {
+          title: "Changes set aside",
+          body: "Another machine's version of these files reached the hub first, so this machine's version was set aside instead of being merged. It is kept here, and only here.",
+          when: "Set aside",
+          paths: "Files",
+          id: "Recovery ID",
+          discard: "Discard…",
+          discardTitle: "Discard this set-aside change?",
+          discardBody:
+            "This machine holds the only copy. It is on no other device and not on the hub, and discarding cannot be undone.",
+          discardHint:
+            "To look at the content first, follow the recovery procedure in the README on this machine. Discard it once you are done with it.",
+          discardConfirm: "Discard",
+          cancel: "Cancel",
+          alert_one: "One change of yours was set aside and is still held on this machine.",
+          alert_other:
+            "{{count}} changes of yours were set aside and are still held on this machine.",
+          alertTitle: "Changes set aside",
+        },
         devices: {
           title: "Devices",
           empty: "No device has joined this workspace yet.",
@@ -1843,6 +1862,24 @@ const resources = {
           body: "これらのファイルは、このマシンで直すまで送信されずに残ります。破棄はされません。",
           path: "ファイル",
           reason: "理由",
+        },
+        rejected: {
+          title: "退避された変更",
+          body: "同じファイルについて別マシンの内容が先に Hub へ確定したため、このマシンの内容は統合されずに退避されました。このマシンだけが持っています。",
+          when: "退避日時",
+          paths: "対象ファイル",
+          id: "回復用 ID",
+          discard: "破棄する…",
+          discardTitle: "この退避を破棄しますか？",
+          discardBody:
+            "控えを持っているのはこのマシンだけです。他の device にも Hub にも存在せず、破棄すると元に戻せません。",
+          discardHint:
+            "内容を先に確認する場合は、このマシンで README の回復手順を実行してください。確認が済んでから破棄してください。",
+          discardConfirm: "破棄する",
+          cancel: "キャンセル",
+          alert_one: "あなたの変更 1 件が退避され、このマシンに残っています。",
+          alert_other: "あなたの変更 {{count}} 件が退避され、このマシンに残っています。",
+          alertTitle: "退避された変更があります",
         },
         devices: {
           title: "device 一覧",

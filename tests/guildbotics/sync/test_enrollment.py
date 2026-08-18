@@ -205,6 +205,38 @@ def test_a_workspace_that_already_exists_is_not_replaced_by_a_copy(
         enrollment.clone_workspace(str(hub), existing)
 
 
+def test_a_join_leaves_the_displaced_commit_where_the_user_can_find_it(
+    tmp_path: Path, hub: Path
+) -> None:
+    """The activity event names a ``rejection_id``; this is the other half of
+    that promise. The commit is the first one this workspace made, so it is
+    also the case where naming its files takes ``--root``."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+
+    result = enrollment.enroll(str(hub), joining)
+
+    held = LocalSyncRepository(joining).list_rejected()
+    assert [item.rejection_id for item in held] == [result.rejection_id]
+    assert CONFIG in held[0].paths
+    assert held[0].occurred_at
+
+
+def test_a_discarded_rejection_is_gone_and_saying_so_twice_is_not_an_error(
+    tmp_path: Path, hub: Path
+) -> None:
+    """A screen that asked twice -- two windows, a stale list -- is describing
+    the state it wanted, so the second answer is the same as the first."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
+    joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
+    result = enrollment.enroll(str(hub), joining)
+    repository = LocalSyncRepository(joining)
+
+    assert repository.discard_rejected(str(result.rejection_id)) is True
+    assert repository.discard_rejected(str(result.rejection_id)) is False
+    assert repository.list_rejected() == ()
+
+
 # -- Joining with existing content --------------------------------------------
 
 

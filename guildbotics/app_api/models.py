@@ -113,6 +113,19 @@ class UnsendableChangeModel(BaseModel):
     reason: str
 
 
+class RejectedChangeModel(BaseModel):
+    """A local change the hub did not accept, still held on this device.
+
+    The content is deliberately absent. Recovery is a manual procedure on this
+    machine, so what is published is only what makes the stashed commit
+    findable -- and what lets the user say they are done with it.
+    """
+
+    rejection_id: str
+    occurred_at: str
+    paths: list[str]
+
+
 class WorkspaceDevice(BaseModel):
     """A machine sharing this workspace, as the other machines see it.
 
@@ -156,6 +169,7 @@ class WorkspaceSyncStatus(BaseModel):
     ahead_count: int = 0
     behind_count: int = 0
     unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
+    rejected_changes: list[RejectedChangeModel] = Field(default_factory=list)
     last_success_at: str | None = None
     last_error_code: str | None = None
 

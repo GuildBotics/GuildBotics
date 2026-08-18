@@ -287,6 +287,72 @@ def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
     assert response.json()["code"] == "workspace_already_exists"
 
 
+# -- What the hub did not accept ----------------------------------------------
+
+
+def _reject(workspace: Path) -> str:
+    """Displace one local commit, the way a lost race does."""
+    from guildbotics.sync import LocalSyncRepository
+
+    repository = LocalSyncRepository(workspace)
+    head = repository.head() or ""
+    repository.save_rejected("01a01500-0000-7000-8000-00000000000a", head)
+    return "01a01500-0000-7000-8000-00000000000a"
+
+
+def test_the_displaced_commits_this_device_holds_are_reported(
+    client: TestClient, workspace: Path
+) -> None:
+    """The warning has to be able to end, and the refs are what says whether it
+    should: nothing deletes them on its own, so a device holding none is a
+    device with nothing left for the user to look at."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    rejection_id = _reject(workspace)
+
+    payload = _json(client.get("/workspace/sync", headers=AUTH_HEADERS))
+
+    held = payload["rejected_changes"]
+    assert [item["rejection_id"] for item in held] == [rejection_id]
+    assert CONFIG in held[0]["paths"]
+    assert held[0]["occurred_at"]
+
+
+def test_the_user_can_say_they_are_done_with_a_displaced_commit(
+    client: TestClient, workspace: Path
+) -> None:
+    """Discarding is the one thing the screen can offer without reading the
+    content, and the only way the warning ends: the recovery procedure itself
+    leaves the ref in place on purpose."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    rejection_id = _reject(workspace)
+
+    payload = _json(
+        client.post(
+            f"/workspace/sync/rejections/{rejection_id}/discard", headers=AUTH_HEADERS
+        )
+    )
+
+    assert payload["rejected_changes"] == []
+
+
+def test_a_rejection_id_that_names_no_ref_is_refused(
+    client: TestClient, workspace: Path
+) -> None:
+    """The identifier reaches Git as part of a ref name, so anything that is
+    not one of ours is turned away before it gets there."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+
+    response = client.post(
+        "/workspace/sync/rejections/heads-main/discard", headers=AUTH_HEADERS
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "sync_discard_failed"
+
+
 # -- Registering this device with a hub ---------------------------------------
 
 

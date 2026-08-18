@@ -18,6 +18,7 @@ settle a concurrent update belong to
 from __future__ import annotations
 
 import shutil
+import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -67,6 +68,24 @@ class WorkingTreeChange:
 
     path: str
     deleted: bool
+
+
+@dataclass(frozen=True)
+class RejectedChange:
+    """One displaced commit this device still holds.
+
+    Attributes:
+        rejection_id (str): Names the ref holding it, and ties it to the
+            activity event recorded when it was displaced.
+        occurred_at (str): When the displaced commit was made.
+        paths (tuple[str, ...]): The shared files that commit changed. The
+            content itself is not read here: recovery is a manual procedure on
+            this device, and naming the files is what makes it findable.
+    """
+
+    rejection_id: str
+    occurred_at: str
+    paths: tuple[str, ...]
 
 
 class LocalSyncRepository:
@@ -432,6 +451,65 @@ class LocalSyncRepository:
         ref = f"{REJECTED_REF_PREFIX}/{rejection_id}"
         self._repo().git.update_ref(ref, commit)
         return ref
+
+    def list_rejected(self) -> tuple[RejectedChange, ...]:
+        """Return the displaced commits this device is still holding.
+
+        Rejected refs are never pushed, so this is the whole of what can be
+        recovered here -- and the whole of what the user can discard once they
+        are done with it. Nothing is read out of the commits but the names of
+        the files they touched.
+        """
+        listed = self._repo().git.for_each_ref(
+            "--format=%(refname)%09%(committerdate:iso-strict)", REJECTED_REF_PREFIX
+        )
+        rejected: list[RejectedChange] = []
+        for line in listed.splitlines():
+            refname, _, occurred_at = line.partition("\t")
+            if not refname:
+                continue
+            # ``--root`` because the displaced commit is often the workspace's
+            # first: a machine joining a hub commits its own content once, and
+            # that commit is what the hub's version displaces. Without it, the
+            # files of a root commit are named nowhere.
+            paths = self._repo().git.diff_tree(
+                "--no-commit-id", "--name-only", "-r", "--root", refname
+            )
+            rejected.append(
+                RejectedChange(
+                    rejection_id=refname.rsplit("/", 1)[-1],
+                    occurred_at=occurred_at,
+                    paths=tuple(sorted(path for path in paths.splitlines() if path)),
+                )
+            )
+        return tuple(rejected)
+
+    def discard_rejected(self, rejection_id: str) -> bool:
+        """Drop one rejected ref because the user said to.
+
+        Nothing deletes these on its own: the ref is the only copy of the
+        content it holds, on the only device holding it. Discarding is also the
+        one thing the screen can offer without reading that content -- looking
+        at it and exporting it stay a manual procedure on this device -- which
+        is why it is the operation that exists here.
+
+        Returns:
+            bool: False when no such rejection is held, so a stale screen
+                asking twice is an answer rather than an error.
+        """
+        try:
+            uuid.UUID(rejection_id)
+        except ValueError as exc:
+            raise SyncRepositoryError(
+                f"{rejection_id!r} does not name a rejected change."
+            ) from exc
+        ref = f"{REJECTED_REF_PREFIX}/{rejection_id}"
+        try:
+            self._repo().git.show_ref("--verify", "--quiet", ref)
+        except GitCommandError:
+            return False
+        self._repo().git.update_ref("-d", ref)
+        return True
 
     def rejected_id_for(self, commit: str) -> str | None:
         """Return the rejection identifier already stashing ``commit``, if any.

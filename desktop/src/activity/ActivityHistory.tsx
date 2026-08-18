@@ -310,19 +310,20 @@ function ActivityChart({
               ))}
         </div>
       </div>
-      {view === "day" ? (
-        <ActivityTimelineRow
-          label={t("activity.events")}
-          avatar={<RotateCcwClock size={15} />}
-          sessions={[]}
-          events={sharedEvents}
-          range={range}
-          view={view}
-          now={now}
-          matches={matches}
-          team
-        />
-      ) : null}
+      {/* Events with no member of their own -- synchronization among them --
+          get a row like anyone else. Drawing it only in the day view meant a
+          week's worth of them was reachable from nowhere. */}
+      <ActivityTimelineRow
+        label={t("activity.events")}
+        avatar={<RotateCcwClock size={15} />}
+        sessions={[]}
+        events={sharedEvents}
+        range={range}
+        view={view}
+        now={now}
+        matches={matches}
+        team
+      />
       {data.members.map((member) => (
         <ActivityTimelineRow
           key={member.person_id}
@@ -376,7 +377,11 @@ function ActivityTimelineRow({
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
-  const visibleEvents = view === "week" ? [] : events;
+  // Week view drops event pins because a member row spends it stacking session
+  // chips in day columns, and a pin positioned over them lands on top. The
+  // shared row has no sessions at all, so there is nothing for its pins to
+  // collide with -- and it is the only home the events without a member have.
+  const visibleEvents = view === "week" && !team ? [] : events;
   const eventTops = stackedEventTops(visibleEvents, eventTop);
   const eventRows = Math.max(
     1,
