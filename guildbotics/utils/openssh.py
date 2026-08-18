@@ -49,11 +49,12 @@ def git_ssh_command() -> str:
     a client that stopped to ask about an unknown host key or a passphrase
     would hang that thread instead of reporting the hub as unreachable.
     """
-    executable = ssh_executable()
-    # Git splits this value like a shell would, so a path with spaces -- the
-    # normal case on Windows -- has to arrive quoted.
-    quoted = f'"{executable}"' if " " in executable else executable
-    return f"{quoted} -o BatchMode=yes"
+    # Git splits this value the way a shell would, so the path is always
+    # quoted rather than only when it holds a space. A Windows path is full of
+    # backslashes, and unquoted they are read as escapes: the client arrives as
+    # ``C:WindowsSystem32OpenSSHssh.exe``, and every fetch and push fails as a
+    # repository that could not be read from.
+    return f'"{ssh_executable()}" -o BatchMode=yes'
 
 
 def _companion(name: str) -> str | None:
