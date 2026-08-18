@@ -16,15 +16,12 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from guildbotics.hub import host
-from guildbotics.utils.openssh import (
-    keygen_executable,
-    keyscan_executable,
-    ssh_executable,
-)
+from guildbotics.utils.openssh import keygen_executable, ssh_executable
 
 #: Where a hub keeps its repositories, relative to the hub user's home. Devices
 #: use it as a remote path, so it stays in the ``host:path`` form Git accepts
@@ -40,8 +37,8 @@ SSH_KEY_TYPE = "ed25519"
 #: ``host keytype key`` is the shortest line either OpenSSH tool prints.
 _HOST_KEY_FIELDS = 3
 
-#: A leading ``-`` would reach ``ssh`` and ``ssh-keyscan`` as an option rather
-#: than as the machine to contact, so neither part may start with one.
+#: A leading ``-`` would reach ``ssh`` as an option rather than as the machine
+#: to contact, so neither part may start with one.
 _HOST = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._\-]*$")
 #: Backslash and ``$`` are here for Windows: ``DOMAIN\user`` and the trailing
 #: ``$`` of a machine account are ordinary login names there.
@@ -342,19 +339,67 @@ def _run_hub_command(endpoint: HubEndpoint, arguments: list[str]) -> str:
 
 
 def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:
-    keyscan = keyscan_executable()
-    if keyscan is None:
-        raise HubUnreachableError(
-            "ssh-keyscan was not found. Install OpenSSH to connect to a hub."
-        )
-    output = _run(
-        [keyscan, "-T", str(int(PROBE_TIMEOUT_SECONDS)), endpoint.host],
-        f"read the host key of {endpoint.host}",
-    )
-    lines = [line for line in output.splitlines() if line and not line.startswith("#")]
+    """Return the host key a hub presents, read by the client that will use it.
+
+    ``ssh-keyscan`` is the tool named for this and cannot do it everywhere: the
+    Windows build proposes key exchange algorithms it has not implemented, so
+    against an OpenSSH 9 server it agrees on one and then aborts, while the very
+    next ``ssh`` to the same machine succeeds. It has no option to narrow the
+    proposal either, so there is nothing to pass it. Reading the key with
+    ``ssh`` removes the asymmetry instead of working around it: the probe now
+    sees what the connection will see, ``~/.ssh/config`` included, which
+    ``ssh-keyscan`` never read.
+
+    The key arrives through a ``known_hosts`` of our own that starts empty, so
+    ``accept-new`` records exactly what this machine presented and nothing that
+    was already stored. It is written during key exchange, before
+    authentication, which is why a device whose public key is not registered on
+    the hub yet still gets a fingerprint to confirm -- and why the exit status
+    is ignored here. What the connection proves is which key was offered; being
+    let in is a later question, asked by the hub commands.
+    """
+    with tempfile.TemporaryDirectory(prefix="guildbotics-hostkey-") as directory:
+        store = Path(directory) / "known_hosts"
+        command = [
+            ssh_executable(),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            # Quoted because the value reaches OpenSSH's own configuration
+            # parser, which splits on whitespace: the temporary directory is
+            # under the user's profile on Windows and can hold spaces.
+            "-o",
+            f'UserKnownHostsFile="{store}"',
+            "-o",
+            f'GlobalKnownHostsFile="{Path(directory) / "global_known_hosts"}"',
+            "-o",
+            "HashKnownHosts=no",
+            "-o",
+            f"ConnectTimeout={int(PROBE_TIMEOUT_SECONDS)}",
+            endpoint.target,
+            "exit",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise HubUnreachableError(
+                f"Could not read the host key of {endpoint.host}: {exc}"
+            ) from exc
+        offered = store.read_text(encoding="utf-8") if store.is_file() else ""
+    lines = [line for line in offered.splitlines() if line and not line.startswith("#")]
     if not lines:
+        detail = (result.stderr or result.stdout).strip().splitlines()
         raise HubUnreachableError(
-            f"{endpoint.host} did not answer with an SSH host key."
+            f"Could not read the host key of {endpoint.host}: "
+            f"{detail[-1] if detail else 'no host key was offered'}"
         )
     return lines
 

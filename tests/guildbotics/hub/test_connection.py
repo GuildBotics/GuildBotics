@@ -202,6 +202,82 @@ def test_a_host_no_key_is_stored_for_is_a_first_contact(
     assert (result.trusted, result.changed) == (False, False)
 
 
+def _connecting(
+    monkeypatch: pytest.MonkeyPatch, presented: str | None, stderr: str = ""
+) -> list[list[str]]:
+    """Answer the probe's ``ssh`` call, writing what the machine presented.
+
+    A real client records the key during key exchange and then fails on
+    authentication, so the exit status is non-zero while the file is written.
+    """
+    calls: list[list[str]] = []
+
+    def _ssh(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        store = Path(_option(command, "UserKnownHostsFile").strip('"'))
+        if presented is not None:
+            store.write_text(f"{presented}\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 255, "", stderr)
+
+    monkeypatch.setattr(connection.subprocess, "run", _ssh)
+    return calls
+
+
+def _option(command: list[str], name: str) -> str:
+    """Return the value of one ``-o name=value`` in a command."""
+    return next(
+        argument.split("=", 1)[1]
+        for argument in command
+        if argument.startswith(f"{name}=")
+    )
+
+
+def test_the_host_key_is_read_before_this_device_is_let_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The key is recorded during key exchange, so a device whose public key is
+    not registered on the hub yet still gets a fingerprint to confirm. Treating
+    the refused login as a failed probe would leave the user no way to start."""
+    calls = _connecting(monkeypatch, ED25519, stderr="Permission denied (publickey).")
+
+    assert connection._scan_host_keys(HubEndpoint(host="hub.local")) == [ED25519]
+    assert calls[0][-2:] == ["hub.local", "exit"]
+
+
+def test_the_probe_never_reads_the_keys_this_device_already_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`accept-new` records only what is unknown, so a `known_hosts` holding the
+    host would leave the probe with nothing to report -- and a stored key read
+    back as though the machine had just offered it would confirm itself."""
+    calls = _connecting(monkeypatch, ED25519)
+
+    connection._scan_host_keys(HubEndpoint(host="hub.local", user="me"))
+
+    for name in ("UserKnownHostsFile", "GlobalKnownHostsFile"):
+        assert _option(calls[0], name).strip('"') not in (
+            str(connection._known_hosts_path()),
+            "/etc/ssh/ssh_known_hosts",
+        )
+    assert calls[0][-2] == "me@hub.local"
+
+
+def test_a_machine_that_offered_no_host_key_reports_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reason belongs in the message: "could not be reached" alone covers a
+    name that does not resolve, a refused connection, and a client that cannot
+    negotiate, which are three different things to do next."""
+    _connecting(
+        monkeypatch,
+        None,
+        stderr="ssh: connect to host hub.local port 22: Connection timed out",
+    )
+
+    with pytest.raises(HubUnreachableError, match="Connection timed out"):
+        connection._scan_host_keys(HubEndpoint(host="hub.local"))
+
+
 @pytest.mark.parametrize(
     ("line", "expected"),
     [

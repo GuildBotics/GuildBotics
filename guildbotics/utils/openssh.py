@@ -37,11 +37,6 @@ def ssh_executable() -> str:
     return found
 
 
-def keyscan_executable() -> str | None:
-    """Return ``ssh-keyscan``, or None when it is not installed."""
-    return _companion("ssh-keyscan")
-
-
 def keygen_executable() -> str | None:
     """Return ``ssh-keygen``, or None when it is not installed."""
     return _companion("ssh-keygen")

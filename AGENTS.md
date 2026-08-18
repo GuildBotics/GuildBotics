@@ -162,6 +162,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
 - 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
 - **OpenSSH の判定を自前で再現すること。** `probe_host_key` の `trusted` は「無印の `known_hosts` entry が、提示された鍵のどれかを持っている」だけを主張する。`@revoked` / `@cert-authority` などの marker 付き行は一律で候補から外す（fail-closed）。marker の意味を parser で解こうとすると、OpenSSH が拒否する鍵を trusted と言ってしまう。**権威は接続そのもの**であり、この probe は「trusted と言うなら ssh も通る」側へだけ保守的であればよい
+- **ホスト鍵の取得に `ssh-keyscan` を使うこと。** Windows 版は実装していない鍵交換アルゴリズムを提案するため、OpenSSH 9 以降のサーバーとは必ず negotiation で落ちる（`-o` が無いので絞れない）。取得は実接続と同じ `ssh` で行い、空の `known_hosts` へ `accept-new` で書かせて読む。**probe と実接続で別の client を使わない**——設定の見え方（`~/.ssh/config`）まで含めて非対称になり、「手動 ssh は通るのにアプリだけ繋がらない」という切り分け不能な症状になる
 - 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
 
 #### App API (`guildbotics/app_api/*`)
