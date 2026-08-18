@@ -686,9 +686,11 @@ a monorepo on purpose.
   app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.
-- **Sync and devices**: a settings section (`desktop/src/sync/`) covering hub hosting,
-  connecting, reconnecting to a rebuilt hub, the changes that cannot be sent, the devices
-  that joined, and this device's SSH key. A sidebar indicator derives one of seven states
+- **Sync / Device and hub**: two settings sections (`desktop/src/sync/`). "Sync" covers
+  connecting, reconnecting to a rebuilt hub, the changes that cannot be sent, and the
+  devices that joined; "Device and hub" holds what belongs to the machine rather than to
+  a workspace — hub hosting and this device's SSH key — and is listed in the settings
+  nav under its own "This machine" group. A sidebar indicator derives one of seven states
   from `GET /workspace/sync`, ordering them so that what waiting will not fix comes first;
   only those states also reach the app-wide warning band. Connecting is a sequence rather
   than one button because each step means something: the hub must be reachable before its

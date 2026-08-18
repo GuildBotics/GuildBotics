@@ -133,6 +133,7 @@ import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { CloneFromHubButton } from "../sync/CloneFromHub";
+import { DeviceSettings } from "../sync/DeviceSettings";
 import { SyncSettings } from "../sync/SyncSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
@@ -204,11 +205,11 @@ const CORE_SETUP_SECTIONS_INITIAL = [
   "intelligence",
   "members",
   "github",
+  "verification",
   // Hosting a hub and this device's key belong to the machine rather than to a
   // workspace, so the section has to be reachable before there is one: a
   // machine that only hosts the hub never gets a project of its own.
-  "sync",
-  "verification",
+  "device",
 ] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = [
   "project",
@@ -216,12 +217,17 @@ const CORE_SETUP_SECTIONS_CONFIGURED = [
   "members",
   "github",
   // Hotkeys are an everyday convenience rather than part of getting running,
-  // so they are offered only once the workspace is configured.
+  // and sharing needs a workspace to share, so both are offered only once the
+  // workspace is configured.
   "shortcuts",
   "sync",
   "verification",
+  "device",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
+// Sections that configure this machine rather than the selected workspace.
+// The nav draws them under their own heading so the boundary is visible.
+const MACHINE_SECTIONS: ReadonlySet<CoreSection> = new Set(["device"]);
 const CORE_SECTION_LABEL_KEYS = {
   project: "setup.nav.project",
   intelligence: "setup.nav.intelligence",
@@ -230,6 +236,7 @@ const CORE_SECTION_LABEL_KEYS = {
   shortcuts: "setup.nav.shortcuts",
   sync: "setup.nav.sync",
   verification: "setup.nav.verification",
+  device: "setup.nav.device",
 } as const satisfies Record<CoreSection, string>;
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const label = useMemberCliAgentLabel(personId, enabled);
@@ -328,7 +335,7 @@ function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: Slo
 
 export function SetupPage() {
   const { t, i18n } = useTranslation();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
   const team = useQuery({
@@ -413,12 +420,17 @@ export function SetupPage() {
   const selectedCliAgentDetected = cliDetections.isLoading
     ? true
     : detectedCliAgentNames.has(form.values.cliAgent);
+  // The URL is the single source of truth for which section is open. Holding
+  // it in state instead would go stale: reaching Settings again through a link
+  // (the sidebar's "Sync settings", a hash URL) changes only the search params
+  // and never remounts this page, so a mount-time copy would keep showing the
+  // section the page was first opened at.
   const sectionParam = searchParams.get("section");
-  const initialSection =
+  const section =
     sectionParam && (CORE_SETUP_SECTIONS_CONFIGURED as readonly string[]).includes(sectionParam)
       ? (sectionParam as CoreSection)
       : "project";
-  const [section, setSection] = useState<CoreSection>(initialSection);
+  const setSection = (value: CoreSection) => setSearchParams({ section: value }, { replace: true });
   const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
     requestedMemberTab && MEMBER_EDITOR_TABS.has(requestedMemberTab as MemberEditorTab)
@@ -748,6 +760,7 @@ export function SetupPage() {
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
           {activeSection === "shortcuts" ? <ShortcutsSection /> : null}
           {activeSection === "sync" ? <SyncSettings /> : null}
+          {activeSection === "device" ? <DeviceSettings /> : null}
           {activeSection === "verification" ? (
             <VerificationSection
               config={config.data}
@@ -926,19 +939,33 @@ function SetupSectionNav({
   status: SetupStatus;
 }) {
   const { t } = useTranslation();
+  const groups = [
+    { labelKey: "setup.nav.groupWorkspace", machine: false },
+    { labelKey: "setup.nav.groupMachine", machine: true },
+  ].map((group) => ({
+    ...group,
+    sections: sections.filter((value) => MACHINE_SECTIONS.has(value) === group.machine),
+  }));
   return (
     <Card withBorder radius="md" p="xs" className="setup-nav">
-      {sections.map((value) => (
-        <button
-          className={`setup-nav-item ${active === value ? "active" : ""}`}
-          key={value}
-          type="button"
-          onClick={() => onChange(value)}
-        >
-          <StatusIcon ok={isCoreSectionReady(value, status)} />
-          <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
-        </button>
-      ))}
+      {groups.map((group) =>
+        group.sections.length === 0 ? null : (
+          <div className="setup-nav-group" key={group.labelKey}>
+            <div className="nav-label">{t(group.labelKey)}</div>
+            {group.sections.map((value) => (
+              <button
+                className={`setup-nav-item ${active === value ? "active" : ""}`}
+                key={value}
+                type="button"
+                onClick={() => onChange(value)}
+              >
+                <StatusIcon ok={isCoreSectionReady(value, status)} />
+                <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
+              </button>
+            ))}
+          </div>
+        ),
+      )}
     </Card>
   );
 }
@@ -981,18 +1008,6 @@ function ProjectSection({
         save={persisted ? { state: saveState, saving, onSave: () => void onSave() } : undefined}
       />
       <Stack mt="md">
-        <LabeledSegmentedControl
-          label={t("setup.project.agentLanguage")}
-          description={t("setup.project.agentLanguageDescription")}
-          data={[
-            { label: t("app.language.english"), value: "en" },
-            { label: t("app.language.japanese"), value: "ja" },
-          ]}
-          value={form.values.language}
-          onChange={(value) =>
-            form.setFieldValue("language", value as ProjectFormValues["language"])
-          }
-        />
         <Stack gap="xs">
           <FolderPicker value={form.values.workspaceDir} onChange={onWorkspaceChange} />
           <Group>
@@ -1010,6 +1025,18 @@ function ProjectSection({
           autosize
           minRows={2}
           {...form.getInputProps("description")}
+        />
+        <LabeledSegmentedControl
+          label={t("setup.project.agentLanguage")}
+          description={t("setup.project.agentLanguageDescription")}
+          data={[
+            { label: t("app.language.english"), value: "en" },
+            { label: t("app.language.japanese"), value: "ja" },
+          ]}
+          value={form.values.language}
+          onChange={(value) =>
+            form.setFieldValue("language", value as ProjectFormValues["language"])
+          }
         />
         <Select
           label={<RequiredLabel text={t("setup.github.decision")} />}
@@ -5815,9 +5842,9 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
   if (section === "verification") {
     return status.verificationReady;
   }
-  // Hotkeys and synchronization ask for nothing before the project can run, so
-  // they are never the step that is still missing -- and never the step that
-  // stops the first-run walkthrough from moving on.
+  // Hotkeys, synchronization, and this machine's own settings ask for nothing
+  // before the project can run, so they are never the step that is still
+  // missing -- and never the step that stops the first-run walkthrough.
   return true;
 }
 

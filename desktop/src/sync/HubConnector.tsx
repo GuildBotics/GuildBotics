@@ -2,15 +2,10 @@ import { Alert, Button, Code, Group, Stack, Text, TextInput } from "@mantine/cor
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleAlert, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
-import {
-  ApiRequestError,
-  getHubStatus,
-  inspectHub,
-  trustHub,
-  type HubConnection,
-} from "../api/client";
+import { getHubStatus, inspectHub, trustHub, type HubConnection } from "../api/client";
+import { RequestErrorAlert } from "./RequestErrorAlert";
 
 /**
  * Reaching a hub, and confirming it is the machine the user meant.
@@ -35,14 +30,11 @@ export function HubConnector({
   const { t } = useTranslation();
   const [endpoint, setEndpoint] = useState("");
   const [connection, setConnection] = useState<HubConnection | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
   const hub = useQuery({ queryKey: ["hub"], queryFn: getHubStatus });
 
-  const report = (cause: unknown) => {
-    setError(cause instanceof ApiRequestError ? cause.message : String(cause));
-  };
   const accept = (found: HubConnection) => {
-    setError("");
+    setError(null);
     setConnection(found);
   };
   // The address is passed per call rather than read from state, because
@@ -51,17 +43,17 @@ export function HubConnector({
   const inspect = useMutation({
     mutationFn: (target: string) => inspectHub({ endpoint: target }),
     onSuccess: accept,
-    onError: report,
+    onError: setError,
   });
   const trust = useMutation({
     mutationFn: (fingerprint: string) =>
       trustHub({ endpoint: connection?.endpoint ?? "", fingerprint }),
     onSuccess: accept,
-    onError: report,
+    onError: setError,
   });
   const reset = () => {
     setConnection(null);
-    setError("");
+    setError(null);
     onEndpointChange?.();
   };
 
@@ -107,11 +99,7 @@ export function HubConnector({
           </Text>
         </Group>
       ) : null}
-      {error ? (
-        <Alert color="danger" icon={<CircleAlert size={18} />} title={t("sync.connect.failed")}>
-          {error}
-        </Alert>
-      ) : null}
+      <RequestErrorAlert cause={error} title={t("sync.connect.failed")} />
       {connection !== null && !connection.host_key_trusted ? (
         <HostKeyConfirmation
           changed={connection.host_key_changed}

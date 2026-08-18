@@ -52,11 +52,13 @@ const resources = {
           aria: "Synchronization: {{state}}",
         },
         settings: {
-          title: "Sync and devices",
+          title: "Sync",
           subtitle: "Share this workspace with your other machines through a hub you run yourself.",
-          noWorkspaceTitle: "No workspace is selected on this machine",
-          noWorkspaceBody:
-            "Hosting the hub and this device's SSH key belong to the machine, so they can be set up now. Sharing content needs a workspace: create one in Project, or take a copy from a hub.",
+        },
+        device: {
+          title: "Device and hub",
+          subtitle:
+            "These settings belong to this machine rather than to a workspace. The machine that hosts the hub needs nothing else.",
         },
         clone: {
           action: "Take a copy from a hub",
@@ -65,11 +67,14 @@ const resources = {
           destination: "Created in:",
           chooseTitle: "Which workspace to take",
           take: "Take",
+          current: "Open on this machine",
           empty: "This hub holds no workspace yet.",
           failed: "Could not take a copy",
         },
         connect: {
           title: "Connect to a hub",
+          cloneHint:
+            'This shares the workspace already on this machine. A machine that has none yet uses "Take a copy from a hub" in Project settings instead.',
           changeTitle: "Connect to a different hub",
           endpoint: "Hub address",
           endpointHint:
@@ -209,7 +214,7 @@ const resources = {
         },
         actions: {
           retry: "Try again",
-          settings: "Sync and devices",
+          settings: "Sync settings",
         },
       },
       systemAlerts: {
@@ -625,13 +630,16 @@ const resources = {
           next: "Next",
         },
         nav: {
+          groupWorkspace: "Workspace",
+          groupMachine: "This machine",
           project: "Project",
           intelligence: "LLM / AI CLI tools",
           members: "Members",
           github: "GitHub",
           shortcuts: "Shortcuts",
-          sync: "Sync and devices",
+          sync: "Sync",
           verification: "Verification",
+          device: "Device and hub",
         },
         verification: {
           title: "Verification",
@@ -1758,11 +1766,13 @@ const resources = {
           aria: "同期: {{state}}",
         },
         settings: {
-          title: "同期・device 設定",
+          title: "同期設定",
           subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
-          noWorkspaceTitle: "このマシンではワークスペースが選択されていません",
-          noWorkspaceBody:
-            "Hub のホストとこの device の SSH 鍵はマシン単位の設定なので、このままでも設定できます。内容の共有にはワークスペースが必要です。「プロジェクト」で作成するか、Hub から取得してください。",
+        },
+        device: {
+          title: "device・Hub 設定",
+          subtitle:
+            "ワークスペースではなく、このマシン自体に属する設定です。Hub 役のマシンでは、ここ以外の設定は必要ありません。",
         },
         clone: {
           action: "Hub から取得して作成",
@@ -1771,11 +1781,14 @@ const resources = {
           destination: "作成先:",
           chooseTitle: "取得するワークスペース",
           take: "取得する",
+          current: "このマシンで開いているワークスペース",
           empty: "この Hub にはまだワークスペースがありません。",
           failed: "取得できませんでした",
         },
         connect: {
           title: "Hub へ接続する",
+          cloneHint:
+            "この操作は、このマシンにあるワークスペースを共有するためのものです。まだワークスペースが無いマシンでは、プロジェクト設定の「Hub から取得して作成」を使います。",
           changeTitle: "別の Hub へ接続する",
           endpoint: "Hub のアドレス",
           endpointHint:
@@ -1914,7 +1927,7 @@ const resources = {
         },
         actions: {
           retry: "再試行",
-          settings: "同期・device 設定",
+          settings: "同期設定",
         },
       },
       systemAlerts: {
@@ -2026,13 +2039,16 @@ const resources = {
           next: "次へ",
         },
         nav: {
+          groupWorkspace: "ワークスペース",
+          groupMachine: "このマシン",
           project: "プロジェクト",
           intelligence: "LLM・AI CLIツール",
           members: "メンバー",
           github: "GitHub",
           shortcuts: "ショートカット",
-          sync: "同期・device",
+          sync: "同期",
           verification: "検証",
+          device: "device・Hub",
         },
         verification: {
           title: "検証",

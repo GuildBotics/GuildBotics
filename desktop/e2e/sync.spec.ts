@@ -83,7 +83,15 @@ async function syncStatus(): Promise<{
 
 async function openSyncSettings(page: Page): Promise<void> {
   await page.goto("/#/setup?section=sync");
-  await expect(page.getByRole("heading", { name: "Sync and devices" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sync", exact: true })).toBeVisible();
+}
+
+/** Hosting lives with the machine's own settings, not with the workspace. */
+async function hostHubHere(page: Page): Promise<void> {
+  await page.goto("/#/setup?section=device");
+  await expect(page.getByRole("heading", { name: "Device and hub" })).toBeVisible();
+  await page.getByRole("button", { name: "Host the hub here" }).click();
+  await expect(page.getByText(/Hosting the hub/)).toBeVisible();
 }
 
 /**
@@ -121,10 +129,8 @@ function pushFromAnotherDevice(workspaceId: string, description: string): string
 test.describe.configure({ mode: "serial" });
 
 test("⑦ enables synchronization on an existing workspace", async ({ page }) => {
+  await hostHubHere(page);
   await openSyncSettings(page);
-
-  await page.getByRole("button", { name: "Host the hub here" }).click();
-  await expect(page.getByText(/Hosting the hub/)).toBeVisible();
 
   await lookUpLocalHub(page);
   await page.getByRole("button", { name: "Register this workspace on the hub" }).click();
@@ -270,9 +276,8 @@ test("⑨ reconnects to a hub rebuilt somewhere else", async ({ page }) => {
   // repository, which is what makes rebuilding possible at all.
   rmSync(hubRoot(), { recursive: true, force: true });
 
+  await hostHubHere(page);
   await openSyncSettings(page);
-  await page.getByRole("button", { name: "Host the hub here" }).click();
-  await expect(page.getByText(/Hosting the hub/)).toBeVisible();
 
   await page.getByRole("button", { name: "Connect to a different hub" }).click();
   await lookUpLocalHub(page);

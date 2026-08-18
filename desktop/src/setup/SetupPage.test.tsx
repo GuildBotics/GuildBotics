@@ -3,7 +3,7 @@ import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { Link, MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -658,10 +658,9 @@ describe("SetupPage", () => {
     expect(screen.getByText(t("setup.project.agentLanguage"))).toBeInTheDocument();
   });
 
-  it("opens the sync section before the project is saved", async () => {
-    // The machine that hosts the hub never gets a project of its own, and the
-    // one that joins takes its content from the hub, so the section cannot
-    // wait for a saved project.
+  it("opens this machine's section before the project is saved", async () => {
+    // The machine that hosts the hub never gets a project of its own, so the
+    // machine-scoped section cannot wait for a saved project.
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
@@ -670,7 +669,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
     await screen.findByRole("heading", { name: "First setup" });
 
-    await user.click(screen.getByRole("button", { name: t("setup.nav.sync") }));
+    await user.click(screen.getByRole("button", { name: t("setup.nav.device") }));
 
     expect(await screen.findByText(t("sync.host.title"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("sync.host.create") })).toBeInTheDocument();
@@ -679,6 +678,8 @@ describe("SetupPage", () => {
   it("lists only the sections that can be opened", async () => {
     // A nav entry that leaves the screen where it was reads as a broken app,
     // so sections the first-setup flow does not serve are not offered.
+    // Sharing needs a workspace to share, so before one exists only the
+    // machine-scoped section of the machine group is listed.
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
@@ -686,10 +687,42 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
     await screen.findByRole("heading", { name: "First setup" });
 
-    expect(screen.getByRole("button", { name: t("setup.nav.sync") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.nav.device") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("setup.nav.sync") })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: t("setup.nav.shortcuts") }),
     ).not.toBeInTheDocument();
+  });
+
+  it("follows a section link while the page is already open", async () => {
+    // A link into Settings (the sidebar's "Sync settings") changes only the
+    // search params and never remounts the page, so the open section must
+    // track the URL rather than a mount-time copy of it.
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MantineProvider
+        theme={createTheme({ primaryColor: "dark", defaultRadius: "md" })}
+        env="test"
+      >
+        <Notifications />
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={["/setup?section=device"]}>
+            <Link to="/setup?section=sync">open sync from outside</Link>
+            <SetupPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </MantineProvider>,
+    );
+    expect(
+      await screen.findByRole("heading", { name: t("sync.device.title") }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "open sync from outside" }));
+
+    expect(
+      await screen.findByRole("heading", { name: t("sync.settings.title") }),
+    ).toBeInTheDocument();
   });
 
   it("shows the LLM provider and AI CLI tool selection with API-key availability", async () => {

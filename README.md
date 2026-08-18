@@ -503,17 +503,19 @@ Sharing runs through a **hub**: one machine you choose, holding a Git repository
 push to and fetch from over SSH. It is not a service and it is not hosted by anyone else —
 it is a directory under `~/.guildbotics/hub` on a machine you already own.
 
-Everything below is done in **Settings → Sync and devices** in the desktop app.
+Everything below is done in the desktop app's **Settings**. Hosting the hub and this
+device's SSH key are under **Device and hub** (they belong to the machine, not to a
+workspace); connecting a workspace is under **Sync**.
 
 #### Set up the first machine
 
-1. On the machine that will be the hub, select **Host the hub on this machine**. Make sure
-   its OpenSSH server is running (see [What You Need](#what-you-need)). This creates
-   `~/.guildbotics/hub/` and its `hub.json`; the repository for a workspace is created later,
-   when the first machine registers one.
-2. On the machine holding the workspace, select **Create a key** under **This device's SSH
-   key**, then copy the key it shows. It is `~/.ssh/id_ed25519`, and an existing key of that
-   name is used as it is rather than replaced.
+1. On the machine that will be the hub, select **Host the hub on this machine** under
+   **Device and hub**. Make sure its OpenSSH server is running (see
+   [What You Need](#what-you-need)). This creates `~/.guildbotics/hub/` and its `hub.json`;
+   the repository for a workspace is created later, when the first machine registers one.
+2. On the machine holding the workspace, select **Create a key** under **Device and hub →
+   This device's SSH key**, then copy the key it shows. It is `~/.ssh/id_ed25519`, and an
+   existing key of that name is used as it is rather than replaced.
 3. Add that public key to the hub machine's `~/.ssh/authorized_keys`. On the hub machine:
 
    ```bash
@@ -535,7 +537,8 @@ Everything below is done in **Settings → Sync and devices** in the desktop app
    on the PATH that non-interactive SSH sessions get — which is not always the one an
    interactive login has. If it is not found, see
    [`guildbotics` is not found over SSH](#guildbotics-is-not-found-over-ssh).
-5. Back in the desktop app, enter the hub as `user@host` and select **Look up**.
+5. Back in the desktop app, under **Sync**, enter the hub as `user@host` and select
+   **Look up**.
 6. Compare the fingerprint shown against the hub machine's own, then confirm it. On the hub
    machine, print it with:
 
@@ -655,8 +658,8 @@ rejected ref is removed. Nothing prunes them automatically.
 | Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
 | Receiving | Content from the hub is being taken in | Wait |
 | Hub unreachable | Local work continues; sharing is delayed | Wait, or select **Try again**. If it never recovers, check the SSH prerequisites in [Set up the first machine](#set-up-the-first-machine) |
-| Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync and devices** for the list and the reason |
-| Shared data problem | Content could not be reconciled automatically | Open **Sync and devices** |
+| Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
+| Shared data problem | Content could not be reconciled automatically | Open **Sync** |
 | Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |
 
 ### Configuration Files

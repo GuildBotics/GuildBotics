@@ -17,17 +17,10 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleAlert, Server } from "lucide-react";
 
 import {
-  ApiRequestError,
   changeWorkspaceSyncHub,
-  createDeviceSshKey,
-  createHub,
   enableWorkspaceSync,
-  getConfigStatus,
-  getDeviceSshKey,
-  getHubStatus,
   getWorkspaceDevices,
   getWorkspaceSyncStatus,
   previewWorkspaceSync,
@@ -36,11 +29,13 @@ import {
   type WorkspaceSyncPreview,
 } from "../api/client";
 import { HubConnector } from "./HubConnector";
+import { RequestErrorAlert } from "./RequestErrorAlert";
 
 /**
  * Everything about sharing this workspace with the user's other machines:
- * which hub it uses, which devices joined, what cannot be sent, and this
- * device's SSH key.
+ * which hub it uses, which devices joined, and what cannot be sent. What
+ * belongs to the machine instead -- its SSH key, hosting the hub -- lives in
+ * `DeviceSettings`.
  *
  * Connecting is deliberately a sequence rather than one button. The hub has to
  * be reachable before its workspaces can be listed, its host key has to be
@@ -49,39 +44,17 @@ import { HubConnector } from "./HubConnector";
  */
 export function SyncSettings() {
   const { t } = useTranslation();
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
-  // Hosting a hub and this device's key are properties of the machine, not of
-  // a workspace, and the machine that hosts the hub is often the one that has
-  // no workspace at all. Only the sharing itself waits for one.
-  const hasWorkspace = Boolean(config.data?.workspace);
-  return (
-    <Stack gap="md">
-      <Title order={3}>{t("sync.settings.title")}</Title>
-      <Text c="dimmed" size="sm">
-        {t("sync.settings.subtitle")}
-      </Text>
-      {hasWorkspace ? (
-        <WorkspaceSharing />
-      ) : (
-        <Alert color="neutral" title={t("sync.settings.noWorkspaceTitle")}>
-          {t("sync.settings.noWorkspaceBody")}
-        </Alert>
-      )}
-      <SshKeyCard />
-      <HostThisMachineCard />
-    </Stack>
-  );
-}
-
-/** The hub this workspace uses, what it cannot send, and who else holds it. */
-function WorkspaceSharing() {
   const status = useQuery({
     queryKey: ["workspace-sync"],
     queryFn: getWorkspaceSyncStatus,
     refetchInterval: 5000,
   });
   return (
-    <>
+    <Stack gap="md">
+      <Title order={3}>{t("sync.settings.title")}</Title>
+      <Text c="dimmed" size="sm">
+        {t("sync.settings.subtitle")}
+      </Text>
       {status.data?.enabled ? (
         <ConnectedHubCard hubUrl={status.data.hub_url ?? ""} />
       ) : (
@@ -89,7 +62,7 @@ function WorkspaceSharing() {
       )}
       <UnsendableChangesCard />
       <DevicesCard />
-    </>
+    </Stack>
   );
 }
 
@@ -105,11 +78,8 @@ function ConnectCard({ change = false }: { change?: boolean }) {
   const queryClient = useQueryClient();
   const [preview, setPreview] = useState<WorkspaceSyncPreview | null>(null);
   const [pending, setPending] = useState({ endpoint: "", workspaceId: "" });
-  const [error, setError] = useState("");
+  const [error, setError] = useState<unknown>(null);
 
-  const report = (cause: unknown) => {
-    setError(cause instanceof ApiRequestError ? cause.message : String(cause));
-  };
   const connect = useMutation({
     mutationFn: ({ endpoint, workspaceId }: { endpoint: string; workspaceId: string }) => {
       const body = { hub: { endpoint }, workspace_id: workspaceId };
@@ -117,11 +87,11 @@ function ConnectCard({ change = false }: { change?: boolean }) {
     },
     onSuccess: async (next) => {
       setPreview(null);
-      setError("");
+      setError(null);
       queryClient.setQueryData(["workspace-sync"], next);
       await queryClient.invalidateQueries({ queryKey: ["workspace-devices"] });
     },
-    onError: report,
+    onError: setError,
   });
   // Registering has nothing on the other side to compare against, so only
   // joining is previewed; asking anyway answers 409.
@@ -129,7 +99,7 @@ function ConnectCard({ change = false }: { change?: boolean }) {
     mutationFn: async ({ endpoint, workspaceId }: { endpoint: string; workspaceId: string }) =>
       workspaceId ? previewWorkspaceSync({ hub: { endpoint }, workspace_id: workspaceId }) : null,
     onSuccess: (found, variables) => {
-      setError("");
+      setError(null);
       if (found === null) {
         connect.mutate(variables);
         return;
@@ -137,14 +107,19 @@ function ConnectCard({ change = false }: { change?: boolean }) {
       setPending(variables);
       setPreview(found);
     },
-    onError: report,
+    onError: setError,
   });
 
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
         <Title order={4}>{t(change ? "sync.connect.changeTitle" : "sync.connect.title")}</Title>
-        <HubConnector onEndpointChange={() => setError("")}>
+        {change ? null : (
+          <Text c="dimmed" size="xs">
+            {t("sync.connect.cloneHint")}
+          </Text>
+        )}
+        <HubConnector onEndpointChange={() => setError(null)}>
           {(connection) => (
             <WorkspaceChoice
               connection={connection}
@@ -155,11 +130,7 @@ function ConnectCard({ change = false }: { change?: boolean }) {
             />
           )}
         </HubConnector>
-        {error ? (
-          <Alert color="danger" icon={<CircleAlert size={18} />} title={t("sync.connect.failed")}>
-            {error}
-          </Alert>
-        ) : null}
+        <RequestErrorAlert cause={error} title={t("sync.connect.failed")} />
         <JoinPreviewModal
           onCancel={() => setPreview(null)}
           onConfirm={() => {
@@ -436,97 +407,6 @@ function DevicesCard() {
             </Button>
           </Group>
         ) : null}
-      </Stack>
-    </Card>
-  );
-}
-
-/**
- * This device's public key, to be registered on the hub machine.
- *
- * GuildBotics cannot install it there: adding a key to a machine's
- * `authorized_keys` is exactly the step that proves the person doing it already
- * has access. So the key is shown to copy, and the hub side stays manual.
- */
-function SshKeyCard() {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const key = useQuery({ queryKey: ["device-ssh-key"], queryFn: getDeviceSshKey });
-  const create = useMutation({
-    mutationFn: createDeviceSshKey,
-    onSuccess: (next) => queryClient.setQueryData(["device-ssh-key"], next),
-  });
-  return (
-    <Card withBorder radius="md" p="md">
-      <Stack gap="sm">
-        <Title order={4}>{t("sync.sshKey.title")}</Title>
-        <Text c="dimmed" size="sm">
-          {t("sync.sshKey.body")}
-        </Text>
-        {key.data?.exists ? (
-          <Stack gap="xs">
-            <Code block style={{ overflowWrap: "anywhere" }}>
-              {key.data.public_key}
-            </Code>
-            <Group gap="xs">
-              <CopyButton value={key.data.public_key}>
-                {({ copied, copy }) => (
-                  <Button onClick={copy} size="xs" variant="light">
-                    {t(copied ? "sync.sshKey.copied" : "sync.sshKey.copy")}
-                  </Button>
-                )}
-              </CopyButton>
-              <Text c="dimmed" size="xs">
-                {key.data.fingerprint}
-              </Text>
-            </Group>
-          </Stack>
-        ) : (
-          <Group>
-            <Button loading={create.isPending} onClick={() => create.mutate()} size="xs">
-              {t("sync.sshKey.create")}
-            </Button>
-          </Group>
-        )}
-      </Stack>
-    </Card>
-  );
-}
-
-/** Make this machine the one the others connect to. */
-function HostThisMachineCard() {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const hub = useQuery({ queryKey: ["hub"], queryFn: getHubStatus });
-  const create = useMutation({
-    mutationFn: createHub,
-    onSuccess: (next) => queryClient.setQueryData(["hub"], next),
-  });
-  return (
-    <Card withBorder radius="md" p="md">
-      <Stack gap="sm">
-        <Group gap="xs">
-          <Server size={18} />
-          <Title order={4}>{t("sync.host.title")}</Title>
-        </Group>
-        <Text c="dimmed" size="sm">
-          {t("sync.host.body")}
-        </Text>
-        {hub.data?.hosted ? (
-          <Stack gap="xs">
-            <Text size="sm">{t("sync.host.hosted", { count: hub.data.workspace_ids.length })}</Text>
-            <Code style={{ overflowWrap: "anywhere" }}>{String(hub.data.hub_root)}</Code>
-            <Text c="dimmed" size="xs">
-              {t("sync.host.sshdHint")}
-            </Text>
-          </Stack>
-        ) : (
-          <Group>
-            <Button loading={create.isPending} onClick={() => create.mutate()} size="xs">
-              {t("sync.host.create")}
-            </Button>
-          </Group>
-        )}
       </Stack>
     </Card>
   );
