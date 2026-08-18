@@ -112,6 +112,20 @@ class LocalSyncRepository:
         """True when ``.guildbotics`` is already a Git repository."""
         return (self.path / ".git").exists()
 
+    @property
+    def holds_shared_content(self) -> bool:
+        """True when this workspace already has content of its own to keep.
+
+        ``local/`` is deliberately not part of the answer. It is this device's
+        own scratch -- opening a folder in the Desktop writes diagnostics there
+        before the user has done anything with it -- so counting it would make
+        every folder that was merely looked at indistinguishable from a
+        workspace that must not be copied over.
+        """
+        return self.initialized or any(
+            (self.path / root).exists() for root in SHARED_ROOTS
+        )
+
     def initialize(self) -> None:
         """Make ``.guildbotics`` a repository holding the current shared state.
 
@@ -131,28 +145,34 @@ class LocalSyncRepository:
         repository.git.config("commit.gpgsign", "false")
 
     def clone(self, url: str) -> None:
-        """Create this repository as a copy of a hub's shared content.
+        """Fill this repository with a copy of a hub's shared content.
 
         This is how a machine takes a workspace it has never held before. A
-        workspace that already has content joins instead, so that its own files
-        are committed and kept rather than overwritten by the copy.
+        workspace that already has content of its own joins instead, so that
+        its files are committed and kept rather than overwritten by the copy.
+
+        The destination is fetched into rather than cloned into, because
+        ``.guildbotics`` is usually already there: selecting a folder in the
+        Desktop opens it as a workspace, and this device's diagnostics land
+        under ``local/`` before the copy is asked for. ``git clone`` refuses a
+        directory that is not empty, which made the intended way of reaching
+        this the one way that could not work.
 
         Raises:
-            SyncRepositoryError: When this workspace already has a repository.
+            SyncRepositoryError: When this workspace already holds content of
+                its own.
         """
         self.verify_boundary()
-        if self.initialized:
+        if self.holds_shared_content:
             raise SyncRepositoryError(
-                f"{self.path} already exists. Enable synchronization on it "
-                "instead of taking a second copy."
+                f"{self.path} already holds a workspace. Enable synchronization "
+                "on it instead of taking a second copy."
             )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        environment = {"GIT_TERMINAL_PROMPT": "0"}
-        with suppress(OpenSshNotFoundError):
-            environment["GIT_SSH_COMMAND"] = git_ssh_command()
-        Repo.clone_from(
-            url, self.path, branch=SYNC_BRANCH, origin=SYNC_REMOTE, env=environment
-        )
+        self.initialize()
+        repository = self._repo()
+        repository.create_remote(SYNC_REMOTE, url)
+        repository.git.fetch(SYNC_REMOTE, SYNC_BRANCH)
+        repository.git.checkout("-B", SYNC_BRANCH, f"{SYNC_REMOTE}/{SYNC_BRANCH}")
 
     def working_tree_changes(self) -> list[WorkingTreeChange]:
         """Return every shared file that differs from the current commit.

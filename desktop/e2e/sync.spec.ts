@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -162,9 +162,13 @@ test("⑦ the sidebar reports the workspace as shared", async ({ page }) => {
 test("⑦ takes a copy of the workspace into a new directory", async ({ page }) => {
   const status = await syncStatus();
   const destination = mkdtempSync(join(tmpdir(), "guildbotics-e2e-copy-"));
-  // The clone endpoint refuses a directory that already holds a workspace, so
-  // the copy goes into a fresh child of it.
   const target = join(destination, "workspace");
+  // The destination is a folder the Desktop has already opened: naming it in
+  // the workspace field is what selects it, and this device's diagnostics land
+  // under local/ before the copy is asked for. Copying into an untouched
+  // directory was the one case the real screen could never produce.
+  mkdirSync(join(target, ".guildbotics", "local", "run"), { recursive: true });
+  writeFileSync(join(target, ".guildbotics", "local", "run", "diagnostics.jsonl"), "{}\n");
 
   const response = await api("/workspace/sync/clone", {
     method: "POST",

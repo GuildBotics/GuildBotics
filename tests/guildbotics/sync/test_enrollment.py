@@ -153,6 +153,27 @@ def test_a_copy_keeps_device_only_content_out_of_the_repository(
     assert ".env" in ignore
 
 
+def test_a_folder_this_device_only_opened_can_still_take_a_copy(
+    tmp_path: Path, hub: Path
+) -> None:
+    """Selecting a folder in the Desktop opens it as a workspace, which writes
+    this device's diagnostics under ``local/`` before anything is asked for.
+    Treating that as a workspace already present refused every folder the user
+    had picked -- the only way the screen offers to name a destination."""
+    enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: d\n"}))
+    opened = tmp_path / "windows"
+    scratch = opened / ".guildbotics" / "local" / "run"
+    scratch.mkdir(parents=True)
+    (scratch / "diagnostics.jsonl").write_text("{}\n", encoding="utf-8")
+
+    enrollment.clone_workspace(str(hub), opened)
+
+    assert (opened / ".guildbotics" / CONFIG).read_text() == "name: d\n"
+    # The device's own scratch is still there: a copy adds shared content, it
+    # does not clear the folder out.
+    assert (scratch / "diagnostics.jsonl").is_file()
+
+
 def test_a_workspace_that_already_exists_is_not_replaced_by_a_copy(
     tmp_path: Path, hub: Path
 ) -> None:

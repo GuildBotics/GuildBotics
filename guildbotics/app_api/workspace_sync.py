@@ -260,7 +260,10 @@ class WorkspaceSyncService:
         """
         location = _location(request.hub)
         destination = request.workspace_dir.expanduser().resolve()
-        if (destination / ".guildbotics").exists():
+        # Not "does .guildbotics exist": selecting this folder is what opened
+        # it as a workspace, and that alone writes this device's diagnostics
+        # under local/. Refusing on that refuses every folder the user picked.
+        if LocalSyncRepository(destination).holds_shared_content:
             raise AppApiError(
                 "workspace_already_exists",
                 "That directory already holds a GuildBotics workspace. "

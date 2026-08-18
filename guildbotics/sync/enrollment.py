@@ -295,7 +295,7 @@ def clone_workspace(remote_url: str, workspace_root: Path) -> str:
     Args:
         remote_url (str): The hub repository to copy.
         workspace_root (Path): The new workspace root, which must not already
-            hold a ``.guildbotics`` directory.
+            hold shared content or a repository of its own.
 
     Returns:
         str: The identifier of the workspace this machine has now joined.
@@ -307,7 +307,6 @@ def clone_workspace(remote_url: str, workspace_root: Path) -> str:
     repository = LocalSyncRepository(workspace_root)
     with _as_enrollment_error("The workspace could not be taken from the hub"):
         repository.clone(remote_url)
-        repository.initialize()
     identity = _local_identity(repository)
     publish_device_record(repository.workspace_root)
     return identity.workspace_id

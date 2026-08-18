@@ -233,6 +233,38 @@ def test_a_copy_becomes_the_selected_workspace(
     assert (destination / ".guildbotics" / CONFIG).read_text() == "name: demo\n"
 
 
+def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """The Desktop takes the destination from the workspace field, and setting
+    that field opens the folder -- which writes this device's diagnostics under
+    ``local/``. Refusing on the directory rather than on its content made the
+    screen's own way of naming a destination the one that could not work."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    enabled = _json(
+        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    )
+    destination = tmp_path / "second"
+    scratch = destination / ".guildbotics" / "local" / "run"
+    scratch.mkdir(parents=True)
+    (scratch / "diagnostics.jsonl").write_text("{}\n", encoding="utf-8")
+
+    payload = _json(
+        client.post(
+            "/workspace/sync/clone",
+            headers=AUTH_HEADERS,
+            json={
+                "hub": {},
+                "workspace_id": enabled["workspace_id"],
+                "workspace_dir": str(destination),
+            },
+        )
+    )
+
+    assert Path(payload["workspace"]) == destination
+    assert (destination / ".guildbotics" / CONFIG).read_text() == "name: demo\n"
+
+
 def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
     client: TestClient, workspace: Path
 ) -> None:
