@@ -579,19 +579,22 @@ class SimpleProjectSetupService:
             native_policy_template = (
                 get_template_path() / "intelligences/native_agent_policy.yml"
             )
-            native_policy_file.write_text(
-                native_policy_template.read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            shutil.copy2(native_policy_template, native_policy_file)
             files.append(CreatedFile(path=native_policy_file, action="create"))
 
         # Tool definitions live at `cli_agents/<tool>/default.yml`, so the copy
-        # walks one level down rather than the directory root.
+        # walks one level down rather than the directory root. These templates
+        # are copied as bytes rather than read and written as text: a text
+        # round trip rewrites the newlines to the ones this OS uses, so the
+        # same template would land as CRLF on Windows and LF elsewhere -- and
+        # every device that joined a hub would find these files differing for
+        # no reason anyone chose.
         cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
         cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
         for src_file in sorted(cli_agent_config_src_dir.glob("*/*.yml")):
             dst_file = cli_agent_config_dst_dir / src_file.parent.name / src_file.name
             dst_file.parent.mkdir(parents=True, exist_ok=True)
-            dst_file.write_text(src_file.read_text())
+            shutil.copy2(src_file, dst_file)
             files.append(CreatedFile(path=dst_file, action="create"))
 
         files.extend(self.ensure_sample_commands(config.config_dir, config.language))
