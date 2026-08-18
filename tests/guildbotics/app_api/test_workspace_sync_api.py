@@ -291,13 +291,21 @@ def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
 
 
 def _reject(workspace: Path) -> str:
-    """Displace one local commit, the way a lost race does."""
-    from guildbotics.sync import LocalSyncRepository
+    """Displace one local commit, the way a lost race does, and record it."""
+    from guildbotics.sync import LocalSyncRepository, record_update_rejected
 
+    rejection_id = "01a01500-0000-7000-8000-00000000000a"
     repository = LocalSyncRepository(workspace)
     head = repository.head() or ""
-    repository.save_rejected("01a01500-0000-7000-8000-00000000000a", head)
-    return "01a01500-0000-7000-8000-00000000000a"
+    repository.save_rejected(rejection_id, head)
+    record_update_rejected(
+        rejection_id=rejection_id,
+        paths=[CONFIG],
+        device_id="1f0a0000-0000-7000-8000-0000000000d1",
+        workspace_id="1f0a0000-0000-7000-8000-00000000000a",
+        workspace_root=workspace,
+    )
+    return rejection_id
 
 
 def test_the_displaced_commits_this_device_holds_are_reported(
@@ -314,7 +322,10 @@ def test_the_displaced_commits_this_device_holds_are_reported(
 
     held = payload["rejected_changes"]
     assert [item["rejection_id"] for item in held] == [rejection_id]
-    assert CONFIG in held[0]["paths"]
+    # The files come from what was recorded when the change was displaced. The
+    # commit cannot answer it: a workspace that has just joined a hub has one
+    # commit, holding everything it owns rather than the few paths that lost.
+    assert held[0]["paths"] == [CONFIG]
     assert held[0]["occurred_at"]
 
 

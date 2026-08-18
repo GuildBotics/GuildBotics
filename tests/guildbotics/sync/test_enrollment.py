@@ -209,8 +209,7 @@ def test_a_join_leaves_the_displaced_commit_where_the_user_can_find_it(
     tmp_path: Path, hub: Path
 ) -> None:
     """The activity event names a ``rejection_id``; this is the other half of
-    that promise. The commit is the first one this workspace made, so it is
-    also the case where naming its files takes ``--root``."""
+    that promise."""
     enrollment.enroll(str(hub), _workspace(tmp_path / "mac", **{CONFIG: "name: hub\n"}))
     joining = _workspace(tmp_path / "windows", **{CONFIG: "name: mine\n"})
 
@@ -218,7 +217,6 @@ def test_a_join_leaves_the_displaced_commit_where_the_user_can_find_it(
 
     held = LocalSyncRepository(joining).list_rejected()
     assert [item.rejection_id for item in held] == [result.rejection_id]
-    assert CONFIG in held[0].paths
     assert held[0].occurred_at
 
 

@@ -1,5 +1,6 @@
 import {
   Alert,
+  Anchor,
   Badge,
   Button,
   Card,
@@ -68,6 +69,9 @@ export function SyncSettings() {
     </Stack>
   );
 }
+
+/** How many of a rejection's files a row shows before the rest is asked for. */
+const VISIBLE_REJECTED_PATHS = 3;
 
 // -- Connecting ---------------------------------------------------------------
 
@@ -380,15 +384,11 @@ function RejectedChangesCard() {
           <Table.Tbody>
             {changes.map((change) => (
               <Table.Tr key={change.rejection_id}>
-                <Table.Td>{new Date(change.occurred_at).toLocaleString()}</Table.Td>
+                <Table.Td style={{ whiteSpace: "nowrap" }}>
+                  {new Date(change.occurred_at).toLocaleString()}
+                </Table.Td>
                 <Table.Td>
-                  <Stack gap={2}>
-                    {change.paths.map((path) => (
-                      <Code key={path} style={{ overflowWrap: "anywhere" }}>
-                        {path}
-                      </Code>
-                    ))}
-                  </Stack>
+                  <RejectedPaths paths={change.paths} />
                 </Table.Td>
                 <Table.Td>
                   <Code style={{ overflowWrap: "anywhere" }}>{change.rejection_id}</Code>
@@ -436,6 +436,34 @@ function RejectedChangesCard() {
         </Stack>
       </Modal>
     </Card>
+  );
+}
+
+/**
+ * The files one set-aside change holds back.
+ *
+ * A rejection can name many of them, and a row whose height follows the list
+ * stops being a table the moment there are two rows. The count is what the
+ * user reads first anyway; the rest opens on demand.
+ */
+function RejectedPaths({ paths }: { paths: string[] }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? paths : paths.slice(0, VISIBLE_REJECTED_PATHS);
+  const hidden = paths.length - shown.length;
+  return (
+    <Stack gap={2}>
+      {shown.map((path) => (
+        <Code key={path} style={{ overflowWrap: "anywhere" }}>
+          {path}
+        </Code>
+      ))}
+      {hidden > 0 || expanded ? (
+        <Anchor component="button" onClick={() => setExpanded(!expanded)} size="xs" type="button">
+          {expanded ? t("sync.rejected.less") : t("sync.rejected.more", { count: hidden })}
+        </Anchor>
+      ) : null}
+    </Stack>
   );
 }
 

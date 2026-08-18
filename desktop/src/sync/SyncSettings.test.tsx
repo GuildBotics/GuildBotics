@@ -450,6 +450,30 @@ describe("changes the hub did not accept", () => {
     paths: ["config/team/project.yml"],
   };
 
+  it("keeps a long list of files from taking the row over", async () => {
+    // A rejection can hold many files, and rows of unbounded height stop being
+    // a table the moment there are two of them.
+    const many = {
+      ...held,
+      paths: Array.from({ length: 16 }, (_, index) => `config/commands/c${index}.md`),
+    };
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ enabled: true, state: "idle", rejected_changes: [many] }),
+    );
+    renderSettings();
+
+    // Three are shown; the rest is one click away.
+    expect(await screen.findByText("config/commands/c0.md")).toBeInTheDocument();
+    expect(screen.queryByText("config/commands/c15.md")).toBe(null);
+    const more = screen.getByRole("button", {
+      name: t("sync.rejected.more", { count: many.paths.length - 3 }),
+    });
+
+    await userEvent.setup().click(more);
+
+    expect(await screen.findByText("config/commands/c15.md")).toBeInTheDocument();
+  });
+
   it("names what was set aside and how to find it again", async () => {
     vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
       status({ enabled: true, state: "idle", rejected_changes: [held] }),

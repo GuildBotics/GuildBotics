@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from guildbotics.app_api.errors import AppApiError
@@ -41,11 +42,12 @@ from guildbotics.hub import (
     connection,
     host,
 )
+from guildbotics.observability.activity_event_store import ActivityEventStore
+from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.sync import (
     EnrollmentError,
     GitSyncStatus,
     LocalSyncRepository,
-    RejectedChange,
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
@@ -498,18 +500,53 @@ def _device_records() -> list[DeviceRecord]:
 def _rejected(repository: LocalSyncRepository) -> list[RejectedChangeModel]:
     """List what this device is still holding for the user to look at.
 
-    Read from the refs rather than remembered, so it is right after a restart
-    and after a discard, and so nothing has to be kept in step with them.
+    Which refs exist is read from the repository rather than remembered, so it
+    is right after a restart and after a discard. Which files each one holds
+    back comes from the event recorded when it happened: it was decided against
+    the hub's version at that moment, and the commit cannot say it afterwards.
+
+    The events are only read when there is a ref to describe, which is almost
+    never -- so the usual answer costs one ``for-each-ref`` and nothing else.
     """
-    return [_rejection_model(change) for change in repository.list_rejected()]
+    held = repository.list_rejected()
+    if not held:
+        return []
+    recorded = _recorded_rejections()
+    return [
+        RejectedChangeModel(
+            rejection_id=change.rejection_id,
+            occurred_at=recorded.get(change.rejection_id, ("", []))[0]
+            or change.occurred_at,
+            paths=recorded.get(change.rejection_id, ("", []))[1],
+        )
+        for change in held
+    ]
 
 
-def _rejection_model(change: RejectedChange) -> RejectedChangeModel:
-    return RejectedChangeModel(
-        rejection_id=change.rejection_id,
-        occurred_at=change.occurred_at,
-        paths=list(change.paths),
-    )
+def _recorded_rejections() -> dict[str, tuple[str, list[str]]]:
+    """Return ``rejection_id -> (time, paths)`` from this workspace's events.
+
+    A ref whose event is missing still appears in the list: the identifier and
+    the ref are what the recovery procedure needs, and saying nothing about a
+    change that is being held would be worse than saying less about it.
+    """
+    recorded: dict[str, tuple[str, list[str]]] = {}
+    for event in ActivityEventStore().list_between(
+        datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    ):
+        if event.get("kind") != SYNC_UPDATE_REJECTED:
+            continue
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        rejection_id = str(payload.get("rejection_id") or "")
+        if not rejection_id:
+            continue
+        paths = payload.get("paths")
+        recorded[rejection_id] = (
+            str(event.get("occurred_at") or ""),
+            [str(path) for path in paths] if isinstance(paths, list) else [],
+        )
+    return recorded
 
 
 def _unsendable(changes: Sequence[UnsendableChange]) -> list[UnsendableChangeModel]:

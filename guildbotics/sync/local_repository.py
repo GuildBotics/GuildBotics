@@ -74,18 +74,20 @@ class WorkingTreeChange:
 class RejectedChange:
     """One displaced commit this device still holds.
 
+    Which files were not accepted is deliberately absent. It was decided when
+    the commit was displaced -- against the hub's version at that moment -- and
+    recorded then; the commit itself cannot answer it afterwards. A workspace
+    that joined a hub has exactly one commit, so reading the files out of it
+    would name everything the workspace had rather than the few that lost.
+
     Attributes:
         rejection_id (str): Names the ref holding it, and ties it to the
             activity event recorded when it was displaced.
         occurred_at (str): When the displaced commit was made.
-        paths (tuple[str, ...]): The shared files that commit changed. The
-            content itself is not read here: recovery is a manual procedure on
-            this device, and naming the files is what makes it findable.
     """
 
     rejection_id: str
     occurred_at: str
-    paths: tuple[str, ...]
 
 
 class LocalSyncRepository:
@@ -468,18 +470,10 @@ class LocalSyncRepository:
             refname, _, occurred_at = line.partition("\t")
             if not refname:
                 continue
-            # ``--root`` because the displaced commit is often the workspace's
-            # first: a machine joining a hub commits its own content once, and
-            # that commit is what the hub's version displaces. Without it, the
-            # files of a root commit are named nowhere.
-            paths = self._repo().git.diff_tree(
-                "--no-commit-id", "--name-only", "-r", "--root", refname
-            )
             rejected.append(
                 RejectedChange(
                     rejection_id=refname.rsplit("/", 1)[-1],
                     occurred_at=occurred_at,
-                    paths=tuple(sorted(path for path in paths.splitlines() if path)),
                 )
             )
         return tuple(rejected)
