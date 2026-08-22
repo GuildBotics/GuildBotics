@@ -46,12 +46,18 @@
 - `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`）
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
+- `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）。共有書き込みを直列化する lock は `utils/shared_write_lock.py`（`observability` からも取れる必要があるため `utils` にある）
+- `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、commit 境界（`commits.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）、Hub への接続と参加（`enrollment.py`）、queue の install（`activation.py`）
+- `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）。中身の意味は知らない
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
 
 - `guildbotics/app_api/*` は最上位層であり、他の guildbotics package から import してはならない。app_api と core の両方が必要とする知識（provider / AI CLIツールカタログなど）は core 側（例: `guildbotics/intelligences/*`）に置き、app_api は API model への変換だけを持つ
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
+- `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
+- `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py` の1つだけ）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。**composition root を増やさない。** activation の防御は module state なので process をまたいで効かず、2 process が同じ Workspace を activate すると同じ repository に queue が2本走る（`service.lock` は Desktop が scheduler 開始時にしか取らないので、この衝突を防がない）。マシン全体の所有者ができる（#418 の Device Agent）までは Desktop backend の1本だけとする
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -105,6 +111,59 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - `guildbotics.utils` 以外の guildbotics package への依存
 - 表示用の title / label / link kind の決定（それは app_api の normalizer の仕事）
 - provider 固有 payload の解釈
+
+#### Git Sync Manager (`guildbotics/sync/*`)
+
+責務:
+
+- ローカル同期 repository（`<workspace>/.guildbotics` 自体を独立 Git repo にする）の初期化と境界検証
+- Workspace Sync Port の唯一の購読者として、device ごとに1本の同期 queue を回す
+- commit / fetch / 自動収束 / push、first-committer-wins、後着 commit の `refs/guildbotics/rejected/<rejection_id>` への退避
+- 送信前と受信時に同じ `validate_shared_file()` を通し、通らないローカル変更は「送信できない変更」として保留、受信側で通らなければ共有データ異常として停止（検証の中身は「4.1 共有 state の書き込み」を参照）
+- `await_pushed(change_id)` の同期 barrier と `GitSyncStatus` の算出
+- 作業ツリーに触れる区間（commit と、converge の全体）で `shared_write_lock()` を保持する。網羅範囲と理由は「4.1 共有 state の書き込み」を参照
+- Hub への接続（新規登録 / 既存 Workspace への参加 / 複製の取得）と、参加前の差分の算出
+
+禁止:
+
+- composition root 以外の package から import されること（同期へは Workspace Sync Port 越しにだけ届く）
+- 呼び出し元から repository path を受け取ること（検証済み Workspace root から毎回導出する）
+- ファイル内容の domain 知識を持つこと
+- 退避内容を Activity / API へ載せること（`rejection_id` と対象 path だけを記録し、回復は変更元 device 上の手動手順）。**ただし退避の破棄（rejected ref の削除）は利用者の明示的な指示でのみ行い、UI から提供してよい。** 禁止しているのは*自動*削除であり、破棄は退避内容を一切露出しない唯一の操作なので、「内容を読ませない」境界を保ったまま警告を終わらせられる。破棄させないと、ref は永久に残るため（README の回復手順も ref を消さない）、退避に基づく警告表示が終わらない
+- ambient に選択中の Workspace を解決すること。manager が扱う Workspace root を、Activity の保存先と write 通知の path 解決まで引き回す（別 root の初期参加・切替と競合するため）
+- 参加前の差分表示（preview）で remote を設定すること。実行しなかった preview が「同期有効」に見えると、次の起動で queue が回りはじめる
+
+参加フローの規約:
+
+- 参加は上書きではない。**このマシンの内容を先に commit してから** Hub の内容を採用し、押し出された commit は rejected ref と Activity に残す
+- **参加（`_join`）も全体が1つの lock 区間で、その最初に commit 境界を再実行する。** Hub へ到達する区間は lock を持てない（network を跨ぐため）ので、その間に**正しく lock を取って**保存された変更が未 commit のまま `restore_from_index` の checkout で消えうる。未 commit なので rejected ref にも残らない。converge と同じ問題・同じ対処であり、再 commit 後の head に対して分類し直す
+- **preview するのは参加のときだけ。** 新規登録は比較する相手がいないので、preview のために repository を作らない（作ると、有効化しなかった Workspace に `.git` と Workspace ID が残る）
+- preview と実行は同じ前半（`initialize` → identity → commit）と同じ分類関数を共有する。preview が実行と違う起点や違う結論を語らないようにするため
+- 同じ path は Hub 側を採用、Hub に無い path は保持して送信、Workspace ID は Hub 側を採用する
+- **tree の直接比較でよいのは履歴を共有していない相手だけ。** 共通の commit がある相手（Hub 再構築後の再接続など）では「両方が持っている」は何も意味しない。`merge_base` があれば通常の収束（manager）へ委譲し、参加側で別の規則を作らない
+- **検証を通らないファイルを Hub の内容で上書きしない。** これは競争に負けた側ではなく、まだ送れていない利用者の編集であり、commit されていないので rejected ref にも残らない。`restore_from_index` の対象から必ず引く（manager 側と同じ）
+- **接続に失敗したら remote を残さない。** 残すと次の起動が「同期有効」と判定して、利用者が使えないと言われた Hub に対して queue が回りはじめる
+- **Git の例外を境界の外へ出さない。** Hub が落ちている・鍵が未登録・アドレスが違うは最も普通の異常系なので、`EnrollmentError` などへ変換して API が利用者に見せられる形にする。`_HUB_FAILURES` のような一覧は「利用者に見せられるもの」の宣言であって、下位の例外を捕まえる網ではない
+- **停止しなかった queue を手放さない。** timeout した worker は repository を掴んだままなので、忘れると次の activate が同じ repository に2本目を作る。`stop()` の戻り値を呼び出し側まで返し、Workspace 切替はそれで中止する
+
+#### Hub (`guildbotics/hub/*`)
+
+責務:
+
+- `~/.guildbotics/hub/` の作成と、Workspace ごとの bare repository（`host.py`）
+- fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
+- device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
+- Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+
+禁止:
+
+- 共有 record の意味を知ること（`utils` 以外へ依存しない）
+- Workspace root の path を保存すること（Hub は Workspace ID だけで対応づける）
+- 接続先文字列から port や path を受け取ること（Hub 内の配置は GuildBotics が決める）
+- 生の Git command を Hub へ ssh で送り込むこと（Hub 側の CLI を呼ぶ）
+- **OpenSSH の判定を自前で再現すること。** `probe_host_key` の `trusted` は「無印の `known_hosts` entry が、提示された鍵のどれかを持っている」だけを主張する。`@revoked` / `@cert-authority` などの marker 付き行は一律で候補から外す（fail-closed）。marker の意味を parser で解こうとすると、OpenSSH が拒否する鍵を trusted と言ってしまう。**権威は接続そのもの**であり、この probe は「trusted と言うなら ssh も通る」側へだけ保守的であればよい
+- **ホスト鍵の取得に `ssh-keyscan` を使うこと。** Windows 版は実装していない鍵交換アルゴリズムを提案するため、OpenSSH 9 以降のサーバーとは必ず negotiation で落ちる（`-o` が無いので絞れない）。取得は実接続と同じ `ssh` で行い、空の `known_hosts` へ `accept-new` で書かせて読む。**probe と実接続で別の client を使わない**——設定の見え方（`~/.ssh/config`）まで含めて非対称になり、「手動 ssh は通るのにアプリだけ繋がらない」という切り分け不能な症状になる
+- 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
 
 #### App API (`guildbotics/app_api/*`)
 
@@ -209,6 +268,51 @@ help / docstring が正であり、member コマンドの一行説明は
 - メンバー別コマンドは `team/members/<person_id>/...` を優先し、なければ共通設定へフォールバック
 - シークレット（API キー / トークン）は `guildbotics/utils/secret_store.py` の SecretStore 経由で扱う。バックエンドは OS キーチェーンだけで、平文への fallback は無い（`.guildbotics/config/secrets.yml` はキー名インデックスのみで値を持たない）。キーチェーンが使えなければ `SecretStoreError`。解決優先順位は実環境変数 > キーチェーンの 2 段で、ワークスペースの `.env` は読まない（詳細: `docs/ARCHITECTURE.md` の「Secret Storage (SecretStore)」）。テストでは `tests/conftest.py` の autouse fixture `fake_keyring` が in-memory キーチェーンを入れるため、実 OS キーチェーンには触れない
 - 環境変数が認証情報を運ぶかの判定は `secret_store.is_secret_env_key()` が正本。名前パターン（`TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含むか）と、SecretStore に保存されたキー名の provenance レジストリ（`register_secret_env_keys()`。`env_loader.read_workspace_secrets()` が skip 判定・値取得より前に登録し、プロセス生存中は単調増加）の和集合で判定する。AI CLI 子プロセスの環境からの除去（`intelligences/agent_runtime/environment.py`）と member memory の redaction（`capabilities/member_memory.py`）は両方ここから導出する。除去対象を名前の列挙で持たない（列挙は「追加を忘れた秘密」だけを残す）し、非規約名の secret（例: `DATABASE_URL`）を断片リストへの追加で塞がない（provenance が塞ぐ）
+
+### 4.1 共有 state の書き込み（Workspace Sync Port）
+
+`<workspace>/.guildbotics/config` と `state` はマシン間で共有する領域、`local` はこの device 限定。**マシンの形をしたものは `local` へ置く。** 絶対パス（`clones/`）と同じ意味で、ホットキー（`local/hotkeys.yml`）もそう扱う: ある組み合わせが空いているかは OS 標準ショートカット・他アプリ・キーボード配列で決まり、Workspace ではなくマシンの性質である。共有領域への書き込みは
+`guildbotics/utils/workspace_sync_port.py` の `write_shared_*` / `delete_shared_path` / `notify_shared_state_changed` を通し、
+完了後に `ChangeSet` を Workspace Sync Port へ通知する。
+
+- 保存側（capability / observability / integration）は Git を知らない。port の購読者は同期実装だけとし、個別機能から同期を直接呼ばない
+- `local/` 配下の path は port が自動的に落とすため、呼び出し側で共有・非共有を判定しない
+- 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
+- device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
+- 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
+- **directory 全体を reconcile する画面（intelligences）は、読んだファイルの revision だけでなく path 集合そのものも申告する**（`tree_revisions()` が返す `<dir>/` の entry）。読んだ時点で存在しなかったファイルには名前が無く、file 単位の比較では表せないため、他 device が足したファイルを黙って prune できてしまう。空 mapping を返すと `guarded_config_write()` が検査自体を省略する点にも注意する（team defaults を継承中の member がこれに当たる）
+- **書き込み API は「書き込み後の revision」を応答に載せる**（`ConfigWriteResponse.revisions`）。画面は保存後も開いたままで次の保存をしうるので、refetch を待たせず応答で cache を更新する。refetch 頼みだと保存が refetch を追い越したときに偽 409 になる
+- **共有ファイルへの書き込みは port が `guildbotics/utils/shared_write_lock.py` の `shared_write_lock()` を取る。** 同期は「Hub の内容の checkout〜commit」の全体を保持する。片方だけが慎重でも意味が無く、比較を通った保存が、その最中に採用された他 device の内容の上に着地しうる。これは Git から見れば普通のローカル書き込みなので、次の cycle で commit / push され、失われたことがどこにも残らない。network 区間では保持しない（保存が Hub を待つことになる）
+- **「この writer は lock が要るか」を writer ごとに判断しない。** 共有 path への変更は全部 port を通り、port の書き込み helper（`write_shared_*` / `append_shared_text` / `delete_shared_path` / `update_shared_text` / `update_shared_json`）が lock を**取る**。読まずに書く writer は宣言すべき span を持たないので、writer の分類テーブルは存在しない。`local/` と Workspace 未選択では取らない（sync port が change を落とすのと同じ判断であり、待たせても何とも順序づかない）
+- **`notify_shared_state_changed` は lock を取らない。** 呼ばれた時点でファイルは既に変わっており、そこから queue を締め出しても何も守らない。rename や自前の unlink をする writer は、変更と announce をまとめて `shared_write_lock()` の中に置く
+- **read-modify-write は `update_shared_text(path, apply)` / `update_shared_json(path, apply)` を使う。** helper が lock を取り、読み、`apply` に渡し、返ってきた内容を書く（`None` を返すと削除、同一内容なら書かない）。**完成した文字列を渡す形にしない**——渡す時点で呼び出し側は既に読み終わっており、その読みが span に入っていたかは `with` の置き場所次第になる。`ConfigRepository.write(apply, expected, report)` と同じ形であり、同じ理由（並べ損ねる場所を作らない）
+- **これは config に限らない。** Conversation 制御状態（`state/chat_state`）と member memory（`state/documents`）は Git を知らないまま同じ喪失をする側で、失われるのは Slack の応答1回分と memory 文書まるごとである。process 内の `threading.Lock` / `RLock` は同じ runtime の thread しか並べないので、別 process の member CLI にも同期 queue にも効かない
+- **lock で塞ぐのは「無記録の喪失」だけ。** memory / Conversation へ CAS（revision 引数）を広げない（「楽観ロックは Config だけ」と同じ理由）。記録付きの first-committer-wins は設計どおり残す
+- **1つの書き込みより span が広い操作だけが、自分で `shared_write_lock()` を取る。** 該当するのは、追記か全書き換えかを大きさで決める journal（`MemoryAuditStore.record`。closure 形にすると毎回 8MB を読み書きすることになる）、書いてよいかを別ファイルから決める操作（`RunStore.complete_run` の evidence 検査）、directory 走査で決める操作（`MemberMemoryService.record(kind="policy")` の一意性判定）、複数ファイルや rename がひとまとまりの操作（memory の各公開操作、setup service、`KeyringSecretStore`）。**理由を docstring に書く**
+- **`shared_write_lock` は同一 thread 内で再入する。** 「呼び出し元がすでに持っているか」を writer ごとに答えるのをやめるため。config 保存は複数ファイルの比較と書き込みにまたがって保持し、その内側の writer は test・CLI・将来の呼び出し元からも直接呼ばれる。外側の span が内側を包含する。別 thread は従来どおり待つ
+- **Workspace が選択されていないときは lock を取らない**（`shared_write_lock` が素通りする）。共有ファイルも queue も無い状態であり、sync port が `shared_relative_path` で change を落とすのと同じ判断。ここで例外にすると、ambient に Workspace を解決する writer の数だけ同じ try/except が増える
+- **2つの lock を取る順序を writer ごとに変えない。** 共有 lock が外側、module 内の `threading.Lock` / `RLock` が内側で統一する。片方の writer だけ逆順にすると、そこが deadlock になる（`FileConversationStateStore.append_thread_message` は device-local な cache の span と共有 state の span を分けてこれを避けている）
+- **raw に `open()` / `write_text()` で共有ファイルへ書かない。** journal の追記も `append_shared_text` を通す。通さないと lock が掛からない
+- **Config の書き込みは `ConfigRepository.write(apply, expected, report)` 1本に通す。** lock の取得・比較・書き込み・応答用 revision の観測を、呼び出し側が組み立てない。**部品にすると、並べ損ねる場所が writer の数だけできる**（実際に、比較を省略した writer・lock の外で revision を読む writer・応答が実在しない状態を述べる writer が同時に生まれた）。app_api 側は `config_revisions.py` の `apply_config_write()` だけを使い、**config を書く経路は1つ残らずそこを通す**。比較する対象が無い（`expected=None`）ことは、mutex が要らないことを意味しない
+- **writer の母集団を URL の prefix で決めない。** config は `/config` 配下からだけ書かれるわけではない（`/commands/files*` と `/commands/author/apply` は `config/commands`、`/transcripts/settings` は `config/transcripts.yml`、`guildbotics secrets` CLI は `config/secrets.yml` を書く）。`tests/guildbotics/app_api/test_config_write_boundary.py` は **routing table の POST/PUT/DELETE 全部**を「共有 config を書く」「書かない」へ分類させるので、新しい endpoint は分類しないと落ちる。「書く」側は `ConfigRepository.write` を通ることと、lock 競合時に 503 を返すことの両方を検査する（lock 保持そのものは port が保証するので、この検査の対象は比較の方である）
+- **broad な `except Exception` を挟む経路では、`SharedWriteBusyError` を先に再送出する。** そうしないとその経路だけ 500 になり、症状はその1本にしか出ない
+- **commit 境界は「これから commit するもの」を検証する。** stage してから index の内容（`:0:<path>`）を検証し、不合格を unstage して held へ回す。disk を2回読む（検証で1回、`git add` で1回）形だと、その間に変わった内容がそのまま履歴になる。削除として列挙された path が commit までに再作成される経路も、同じ変更で閉じている
+- **converge は全体が1つの lock 区間で、その最初に commit 境界を再実行する。** fetch 区間は lock を持たない（network を跨ぐため）ので、その間に**正しく lock を取って**保存された変更が未 commit のまま checkout で消えうる。これは writer 側 lock では閉じられない唯一のケース。先に commit すれば、採用されるか rejected として記録されるかのどちらかになる。commit ができたら `local` は古いので cycle をやり直す。**採用の判断（`merge_base` / `changed_paths` / rejected の記録）を lock の外や区間の切れ目に置かない**——converge に network 呼び出しは1つも無く、そこで開いた窓に入った writer は、正しく lock を取っていても未 commit のまま checkout に消される（rejected にも残らない）
+- **1つの操作が2つの保存へ連鎖する画面では、前段が失敗したら後段を走らせない。** 前段が「保存しませんでした」と言ったのに後段だけ適用されるのは、部分適用であり、利用者に見せた文言とも矛盾する（frontend は前段の戻り値を `ConfigRevisions | null` にして表現する）
+- **lock 競合は `SharedWriteBusyError`（`OSError` 系譜の外）**。`LockTimeoutError` は `TimeoutError` → `OSError` なので、そのままだと同期の「環境障害」を捕まえる網に吸われて Hub 不達と表示される。呼び出し側ごとに変換して回らず、型で網から外し、API 側は exception handler 1個で 503 にする
+- **同期境界の検証（`guildbotics/workspace/validation.py`）に、種別ごとの意味検証を足さない。** 共有 record はすべて GuildBotics 自身がコードで形を決めて書くため、境界で field を再確認しても writer が既に保証していることの繰り返しにしかならない（それは writer の test の仕事）。利用者が書くファイル（commands、手で編集する設定）は壊れていても製品の通常経路でどの device でも同じように失敗するので、書きかけを「送信できない変更」にすると同期を下手にするだけ
+- 境界が見るのは3つだけ。**(1) 共有 root 内・サイズ上限・decode・構文**（サイズは同期が負う2つの保証の一方＝履歴を肥大させない）、**(2) `schema_version` が現在値より新しい record**（新しい build が書いたものは古い build には読めない。writer もローカルの test も捕まえられず、受け取った device にしか分からない）、**(3) `config/secrets.yml` の構造**（もう一方の保証＝Secret 値を共有履歴へ入れない）
+- 新しい共有 record を追加しても、原則として validation.py に手を入れる必要はない。`schema_version` を現在値で持たせれば世代差は自動的に検知される
+- 読み手が壊れた入力を黙って skip する形（例: ID / timestamp 欠落の pending event）を見つけたら、**同期境界ではなく読み手を直す**。境界にチェックを足すと読み手の沈黙が温存され、同じ device 内の同じ欠陥は残る
+- 共有 record は `schema_version` を現在値へ固定する。旧 schema の fallback 読み込みは作らない
+- **世代の正本は `guildbotics/utils/workspace_sync_port.py` の `SHARED_RECORD_SCHEMA_VERSION` 1つだけ。** 種別ごとに定数を持たせない。境界は送信側でも同じ検査を通すので、1種別だけ版を上げると**書いた device 自身が自分の record を拒否して queue が止まる**（`ACTIVITY_EVENT_SCHEMA_VERSION` が実際にこの形だった）。`utils` に置くのは、writer が層をまたぐため（`observability` は `utils` にしか依存できない）
+- **`state/` 配下の構造化 record は全部 `schema_version` を持つ。** 母集団は `tests/guildbotics/workspace/test_shared_schema_version.py` が実際の writer を走らせて `state/` を走査することで決まる。record ではない拡張子（`.md` / `.txt`）だけが理由つきで除外され、新しい record 種別は分類しないと落ちる。付与は書き込みの choke point で行い（chat state なら `_write_json`、memory meta なら `_write_doc`）、呼び出し側に持たせない
+- **`config/secrets.yml` だけは例外で `schema_version` を持てない。** 境界の `_validate_secret_index` が top-level を `{store_id, keys}` に限定するため、付けると境界が拒否する。Secret 値の入る余地を構造的に無くすための制約なので正しい取引だが、このファイルだけ世代検知が効かない（`validation.py` の docstring に明記）
+- 共有 payload の Secret マスキングとサイズ上限は `guildbotics/utils/shared_redaction.py` の `redact_for_sharing()` に一本化する。field 名の列挙で守らない（Activity event と task run journal が利用者）
+- 「値の入る余地がそもそも無い」形で構造的に守れるものは、そちらを選ぶ。例: `config/secrets.yml` は key 名と generation 以外の field を拒否するため、Secret 値の混入を内容検査なしに防げる
+- **書き手は、境界が拒否するものを受理しない。** サイズ上限は境界にしか見えない唯一のクラス（構文や schema と違い、製品の通常経路はどこも失敗しない）なので、書き手側の上限を境界の定数から導出する。例: `MAX_AVATAR_BYTES = MAX_SHARED_AVATAR_BYTES`、`DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES`、`MAX_COMMAND_FILE_BYTES = MAX_SHARED_FILE_BYTES`。同じ資産に書き込み経路が複数ある場合（アップロードと URL 取り込みなど）は全部に掛ける
+- `tests/guildbotics/workspace/test_shared_size_limits.py` が2つを見る。**(1)** 導出のペアを名前つきで突き合わせ、alias が数値に書き戻されたら落とす。**(2)** package 内の `*_BYTES` / `*_CHARS` を全列挙し、「共有ファイルを縛る（境界定数から導出する）」「共有されないものを縛る（何を）」へ分類させる。**上限を書き直すのは読みにくい重複ではなく欠陥で、2つの差分がそのまま「保存は成功するが永久に送信できない」範囲になる**。共有と無関係な上限（log の末尾、agent へ渡す prompt）にも1行の分類を課すが、この検査が立っているのは**まだ書かれていない writer** が独自の数値を持ち込む場所であり、そこを見張るものは他に無い
+- 1つの文書が複数ファイルに分かれる場合（memory の `meta.yml` と `body.md`）は、**どちらも書く前に両方を測る**。片方が着地して片方が拒否された文書は、古い文書でも新しい文書でもない
 
 ### 5. スケジューラ
 

@@ -18,11 +18,21 @@ from guildbotics.capabilities.member_memory_audit import append_memory_event
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
+    dump_yaml,
     get_workspace_state_path,
     load_yaml_file,
-    save_yaml_file,
 )
 from guildbotics.utils.secret_store import is_secret_env_key
+from guildbotics.utils.shared_write_lock import (
+    SharedWriteBusyError,
+    shared_write_lock,
+)
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    notify_shared_state_changed,
+    write_shared_text,
+)
+from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
 DEFAULT_DIGEST_N = 20
@@ -48,12 +58,41 @@ class MemberMemoryError(RuntimeError):
     pass
 
 
+#: What the audit journal is allowed to fail with without failing the operation
+#: it is recording. The document has already been written by the time the entry
+#: is made, so reporting the operation as failed would be untrue -- and an
+#: agent that retries a `record` on that report creates a second document.
+#: ``SharedWriteBusyError`` is here because it is deliberately outside the
+#: ``OSError`` family, which is exactly why it would otherwise slip past.
+_AUDIT_IS_BEST_EFFORT = (OSError, SharedWriteBusyError)
+
+
 @dataclass(frozen=True)
 class PolicyParams:
     digest_n: int = DEFAULT_DIGEST_N
 
 
 class MemberMemoryService:
+    """Read and change one member's shared memory documents.
+
+    A document is metadata plus a body, and every change reads the whole of it
+    before writing the whole of it back. Team memory is written by several
+    members from several machines, so the other writer may be a member CLI in
+    another process, or the synchronization queue checking a hub's content out
+    over these files. A read taken before that checkout and written back after
+    it restores the superseded document as an ordinary local edit, so what the
+    other machine wrote disappears without being recorded as a conflict -- and
+    for memory the unit lost is a whole document.
+
+    Each operation therefore holds the workspace's shared-write lock from the
+    read it derives from to the last file it writes. Declaring it here rather
+    than leaving it to the write helpers is what the shape of these operations
+    forces: a document is two files, the recency list is a third, and archiving
+    and promoting rename a directory -- none of which any single write can
+    infer. The audit journal is written after that span and takes its own, so
+    a journal that cannot be written does not undo a document that already was.
+    """
+
     def __init__(self, person: Person) -> None:
         self.person = person
         self.root = get_workspace_state_path("documents")
@@ -75,46 +114,54 @@ class MemberMemoryService:
         kind = _normalize_kind(kind)
         if params and kind != "policy":
             raise MemberMemoryError("--set is only available for policy memory.")
-        if kind == "policy":
-            self._ensure_policy_write_allowed(policy_approved)
-            existing = self._team_policy_doc()
-            if existing is not None:
-                return self.update(
-                    doc_id=existing.name,
-                    scope="team",
-                    title=title,
-                    body=body,
-                    summary=summary,
-                    keywords=keywords,
-                    source=source,
-                    pinned=True,
-                    kind="policy",
-                    policy_approved=True,
-                    params=params,
-                )
-            scope = "team"
-            pinned = True
+        # There is at most one team policy, so "is there one already?" decides
+        # whether this call creates or replaces -- which makes the lookup part
+        # of the write, and it is a scan of the whole team directory rather
+        # than a read of the file being written, so no write helper can put it
+        # inside the span. Asked outside one, it can be answered "no" a moment
+        # before the queue adopts another device's policy, and then a second
+        # one is created beside it. The delegation below re-enters this span.
+        with shared_write_lock():
+            if kind == "policy":
+                self._ensure_policy_write_allowed(policy_approved)
+                existing = self._team_policy_doc()
+                if existing is not None:
+                    return self.update(
+                        doc_id=existing.name,
+                        scope="team",
+                        title=title,
+                        body=body,
+                        summary=summary,
+                        keywords=keywords,
+                        source=source,
+                        pinned=True,
+                        kind="policy",
+                        policy_approved=True,
+                        params=params,
+                    )
+                scope = "team"
+                pinned = True
 
-        scope_dir = self._scope_dir(scope)
-        scope_dir.mkdir(parents=True, exist_ok=True)
-        doc_id = self._new_doc_id(scope_dir)
-        now = _now()
-        meta = {
-            "title": title.strip(),
-            "summary": summary.strip(),
-            "keywords": list(keywords or []),
-            "source": list(source or []),
-            "created_at": now,
-            "created_by": self.person.person_id,
-            "updated_at": now,
-            "updated_by": self.person.person_id,
-            "pinned": pinned,
-            "kind": kind,
-        }
-        if params:
-            meta.update(params)
-        self._write_doc(scope_dir / doc_id, meta, body)
-        self._touch_recent(doc_id)
+            scope_dir = self._scope_dir(scope)
+            scope_dir.mkdir(parents=True, exist_ok=True)
+            doc_id = self._new_doc_id(scope_dir)
+            now = _now()
+            meta = {
+                "title": title.strip(),
+                "summary": summary.strip(),
+                "keywords": list(keywords or []),
+                "source": list(source or []),
+                "created_at": now,
+                "created_by": self.person.person_id,
+                "updated_at": now,
+                "updated_by": self.person.person_id,
+                "pinned": pinned,
+                "kind": kind,
+            }
+            if params:
+                meta.update(params)
+            self._write_doc(scope_dir / doc_id, meta, body)
+            self._touch_recent(doc_id)
         self._record_audit("record", self._read_doc(scope, scope_dir / doc_id))
         return self._document_result(scope, scope_dir / doc_id)
 
@@ -249,17 +296,7 @@ class MemberMemoryService:
     def get(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
         doc = self._resolve_doc(doc_id, scope)
         payload = _summary_payload(doc)
-        payload.update(
-            {
-                "meta": doc.meta,
-                "body": doc.body,
-                "assets": [
-                    f"documents/{path.relative_to(self.root)}"
-                    for path in sorted((doc.path / "assets").glob("**/*"))
-                    if path.is_file()
-                ],
-            }
-        )
+        payload.update({"meta": doc.meta, "body": doc.body})
         self._record_audit("get", doc)
         return payload
 
@@ -280,44 +317,51 @@ class MemberMemoryService:
         policy_approved: bool = False,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        doc = self._resolve_doc(doc_id, scope)
-        original_kind = str(doc.meta.get("kind") or "note")
-        next_kind = _normalize_kind(kind or original_kind)
-        if original_kind == "policy" or next_kind == "policy" or params:
-            if next_kind != "policy":
-                raise MemberMemoryError("--set is only available for policy memory.")
-            self._ensure_policy_write_allowed(policy_approved)
-        meta = dict(doc.meta)
-        if title is not None:
-            meta["title"] = title.strip()
-        if summary is not None:
-            meta["summary"] = summary.strip()
-        if keywords is not None:
-            meta["keywords"] = list(keywords)
-        else:
-            current_keywords = [str(item) for item in meta.get("keywords") or []]
-            for keyword in add_keywords or []:
-                if keyword not in current_keywords:
-                    current_keywords.append(keyword)
-            remove_set = set(remove_keywords or [])
-            if remove_set:
-                current_keywords = [
-                    keyword for keyword in current_keywords if keyword not in remove_set
-                ]
-            meta["keywords"] = current_keywords
-        if source is not None:
-            meta["source"] = list(source)
-        if pinned is not None:
-            meta["pinned"] = pinned
-        if kind is not None:
-            meta["kind"] = next_kind
-        if params:
-            meta.update(params)
-        changed_fields = _changed_fields(doc.meta, meta, body_changed=body is not None)
-        meta["updated_at"] = _now()
-        meta["updated_by"] = self.person.person_id
-        self._write_doc(doc.path, meta, doc.body if body is None else body)
-        self._touch_recent(doc.doc_id)
+        with shared_write_lock():
+            doc = self._resolve_doc(doc_id, scope)
+            original_kind = str(doc.meta.get("kind") or "note")
+            next_kind = _normalize_kind(kind or original_kind)
+            if original_kind == "policy" or next_kind == "policy" or params:
+                if next_kind != "policy":
+                    raise MemberMemoryError(
+                        "--set is only available for policy memory."
+                    )
+                self._ensure_policy_write_allowed(policy_approved)
+            meta = dict(doc.meta)
+            if title is not None:
+                meta["title"] = title.strip()
+            if summary is not None:
+                meta["summary"] = summary.strip()
+            if keywords is not None:
+                meta["keywords"] = list(keywords)
+            else:
+                current_keywords = [str(item) for item in meta.get("keywords") or []]
+                for keyword in add_keywords or []:
+                    if keyword not in current_keywords:
+                        current_keywords.append(keyword)
+                remove_set = set(remove_keywords or [])
+                if remove_set:
+                    current_keywords = [
+                        keyword
+                        for keyword in current_keywords
+                        if keyword not in remove_set
+                    ]
+                meta["keywords"] = current_keywords
+            if source is not None:
+                meta["source"] = list(source)
+            if pinned is not None:
+                meta["pinned"] = pinned
+            if kind is not None:
+                meta["kind"] = next_kind
+            if params:
+                meta.update(params)
+            changed_fields = _changed_fields(
+                doc.meta, meta, body_changed=body is not None
+            )
+            meta["updated_at"] = _now()
+            meta["updated_by"] = self.person.person_id
+            self._write_doc(doc.path, meta, doc.body if body is None else body)
+            self._touch_recent(doc.doc_id)
         self._record_audit(
             "update",
             self._read_doc(doc.scope, doc.path),
@@ -326,8 +370,9 @@ class MemberMemoryService:
         return self._document_result(doc.scope, doc.path)
 
     def touch(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
-        doc = self._resolve_doc(doc_id, scope)
-        self._touch_recent(doc.doc_id)
+        with shared_write_lock():
+            doc = self._resolve_doc(doc_id, scope)
+            self._touch_recent(doc.doc_id)
         self._record_audit("touch", doc)
         return {"doc_id": doc.doc_id, "path": _document_path(doc)}
 
@@ -338,16 +383,18 @@ class MemberMemoryService:
         scope: Scope | None = None,
         policy_approved: bool = False,
     ) -> dict[str, Any]:
-        doc = self._resolve_doc(doc_id, scope)
-        if str(doc.meta.get("kind") or "note") == "policy":
-            self._ensure_policy_write_allowed(policy_approved)
-        archived_root = self._scope_dir(doc.scope) / ARCHIVED_DIR
-        archived_root.mkdir(parents=True, exist_ok=True)
-        target = archived_root / doc.doc_id
-        if target.exists():
-            raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
-        doc.path.rename(target)
-        self._remove_recent(doc.doc_id)
+        with shared_write_lock():
+            doc = self._resolve_doc(doc_id, scope)
+            if str(doc.meta.get("kind") or "note") == "policy":
+                self._ensure_policy_write_allowed(policy_approved)
+            archived_root = self._scope_dir(doc.scope) / ARCHIVED_DIR
+            archived_root.mkdir(parents=True, exist_ok=True)
+            target = archived_root / doc.doc_id
+            if target.exists():
+                raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
+            doc.path.rename(target)
+            _notify_document_moved(doc.path, target)
+            self._remove_recent(doc.doc_id)
         self._record_audit(
             "archive",
             doc,
@@ -359,16 +406,18 @@ class MemberMemoryService:
         }
 
     def promote(self, *, doc_id: str) -> dict[str, Any]:
-        doc = self._resolve_doc(doc_id, "personal")
-        if str(doc.meta.get("kind") or "note") == "policy":
-            raise MemberMemoryError("Policy memory cannot be promoted.")
-        team_dir = self._scope_dir("team")
-        team_dir.mkdir(parents=True, exist_ok=True)
-        target = team_dir / doc.doc_id
-        if target.exists():
-            raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
-        doc.path.rename(target)
-        self._touch_recent(doc.doc_id)
+        with shared_write_lock():
+            doc = self._resolve_doc(doc_id, "personal")
+            if str(doc.meta.get("kind") or "note") == "policy":
+                raise MemberMemoryError("Policy memory cannot be promoted.")
+            team_dir = self._scope_dir("team")
+            team_dir.mkdir(parents=True, exist_ok=True)
+            target = team_dir / doc.doc_id
+            if target.exists():
+                raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
+            doc.path.rename(target)
+            _notify_document_moved(doc.path, target)
+            self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
             self._read_doc("team", target),
@@ -438,7 +487,7 @@ class MemberMemoryService:
                 source_entries=_source_entries_from_meta(doc.meta),
                 changed_fields=changed_fields,
             )
-        except OSError:
+        except _AUDIT_IS_BEST_EFFORT:
             return
 
     def _record_recall_audit(
@@ -463,7 +512,7 @@ class MemberMemoryService:
                 result_count=result_count,
                 duration_ms=(perf_counter() - started_at) * 1000,
             )
-        except OSError:
+        except _AUDIT_IS_BEST_EFFORT:
             return
 
     def _iter_active_docs(self) -> list[tuple[Scope, Path]]:
@@ -538,10 +587,30 @@ class MemberMemoryService:
         raise MemberMemoryError(f"Memory document not found: {doc_id}")
 
     def _write_doc(self, doc_dir: Path, meta: dict[str, Any], body: str) -> None:
+        """Write both halves of one document, under the caller's span.
+
+        A document is two files, and either alone is neither the old document
+        nor the new one, so the span that covers them is the operation's --
+        every caller here is already inside one.
+        """
+        # Stamped at the write rather than by the caller, so the generation
+        # never reaches ``_changed_fields`` and is never reported as an edit
+        # the member made.
+        stamped = {
+            **_redact_meta(meta),
+            "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+        }
+        meta_text = dump_yaml(stamped)
+        body_text = _redact_secrets(body)
+        # Both are measured before either is written: a document whose metadata
+        # landed and whose body was refused is neither the old document nor the
+        # new one.
+        _require_shareable_size(META_FILE, meta_text)
+        _require_shareable_size(BODY_FILE, body_text)
+
         doc_dir.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(doc_dir / META_FILE, _redact_meta(meta))
-        (doc_dir / BODY_FILE).write_text(_redact_secrets(body), encoding="utf-8")
-        (doc_dir / "assets").mkdir(exist_ok=True)
+        write_shared_text(doc_dir / META_FILE, meta_text)
+        write_shared_text(doc_dir / BODY_FILE, body_text)
 
     def _scope_dir(self, scope: Scope) -> Path:
         if scope == "team":
@@ -562,11 +631,8 @@ class MemberMemoryService:
         ]
 
     def _write_recent(self, doc_ids: list[str]) -> None:
-        path = self._recent_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "\n".join(doc_ids) + ("\n" if doc_ids else ""),
-            encoding="utf-8",
+        write_shared_text(
+            self._recent_path(), "\n".join(doc_ids) + ("\n" if doc_ids else "")
         )
 
     def _touch_recent(self, doc_id: str) -> None:
@@ -617,6 +683,17 @@ class _MemoryDoc:
     meta_text: str
 
 
+def _notify_document_moved(source: Path, target: Path) -> None:
+    """Announce a moved document as the delete and create it actually is.
+
+    Archiving and promoting rename a document directory. A consumer that
+    stages or coalesces by operation would drop one half of the move if both
+    paths arrived under a single operation.
+    """
+    notify_shared_state_changed("delete", [source])
+    notify_shared_state_changed("create", [target])
+
+
 def _summary_payload(doc: _MemoryDoc, *, snippet: str = "") -> dict[str, Any]:
     payload = {
         "doc_id": doc.doc_id,
@@ -665,6 +742,27 @@ def _source_entries_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _require_shareable_size(filename: str, text: str) -> None:
+    """Refuse content the commit boundary would then hold back forever.
+
+    A size limit is the one thing the boundary rejects that the product's own
+    paths accept: an agent can pour a long answer into a memory document, the
+    save succeeds, the agent reports success, and only the synchronization
+    queue -- on every cycle from then on -- says the change cannot be sent. So
+    the limit is answered here, where the writer can still say no, and it is
+    the boundary's own limit rather than a second opinion about it.
+
+    Raises:
+        MemberMemoryError: When the content is above the shared size limit.
+    """
+    size = len(text.encode("utf-8"))
+    if size > MAX_SHARED_FILE_BYTES:
+        raise MemberMemoryError(
+            f"Memory {filename} is {size} bytes, above the "
+            f"{MAX_SHARED_FILE_BYTES} byte limit for a shared file."
+        )
 
 
 def _validate_doc_id(doc_id: str) -> str:

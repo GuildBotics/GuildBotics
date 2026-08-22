@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
-from guildbotics.runtime.advisory_lock import (
+from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     open_lock_file,
     unlock_file,

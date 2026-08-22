@@ -35,6 +35,7 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
+from guildbotics.utils.shared_write_lock import shared_write_operation
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
@@ -182,7 +183,17 @@ class SecretStore(ABC):
 
 
 class KeyringSecretStore(SecretStore):
-    """OS keychain storage with a non-secret key index in the workspace."""
+    """OS keychain storage with a non-secret key index in the workspace.
+
+    Every change here reads the shared index, moves values in the keychain, and
+    writes the index back, so the whole operation is one span rather than the
+    write at the end of it: read outside one, the index that gets written back
+    is the one from before a hub's version was adopted, and the generations
+    another device published are silently reverted. The operations declare that
+    span with :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`
+    because it is simply the method -- there is nothing in them that waits on
+    anything remote.
+    """
 
     def __init__(
         self,
@@ -232,6 +243,7 @@ class KeyringSecretStore(SecretStore):
     def set(self, key: str, value: str) -> None:
         self.set_many({key: value})
 
+    @shared_write_operation
     def set_many(self, values: dict[str, str]) -> None:
         index = self._read_index()
         service = self._service(index)
@@ -250,6 +262,7 @@ class KeyringSecretStore(SecretStore):
             raise SecretStoreError(str(exc)) from exc
         self._record_keys(index, written_keys)
 
+    @shared_write_operation
     def delete(self, key: str) -> None:
         index = self._read_index()
         try:
@@ -263,6 +276,7 @@ class KeyringSecretStore(SecretStore):
             self._write_index(index)
             self._drop_local_generation(key)
 
+    @shared_write_operation
     def rename(self, old_key: str, new_key: str) -> None:
         """Move a key's shared metadata, local generation, and stored value.
 
@@ -298,8 +312,13 @@ class KeyringSecretStore(SecretStore):
     def keys(self) -> list[str]:
         return list(self._read_index()["keys"])
 
+    @shared_write_operation
     def ensure_initialized(self) -> None:
-        """Persist the index file, pinning this workspace to the OS keychain."""
+        """Persist the index file, pinning this workspace to the OS keychain.
+
+        The span starts at the read: what is written is the index that was
+        read, so a queue checkout in between would be written back over.
+        """
         self._write_index(self._read_index())
 
     def adopt_shared_generations(self) -> None:

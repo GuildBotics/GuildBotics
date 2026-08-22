@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunStore
@@ -129,13 +131,40 @@ def test_task_run_accepts_pr_review_comment_evidence(tmp_path):
     assert asking.evidence_types == ["pr_review_comment"]
 
 
-def test_task_run_redacts_secret_like_payload_keys(tmp_path):
-    store = TaskRunStore(tmp_path)
-    store.append_evidence("run-1", "issue_comment", {"access_token": "secret"})
-    text = (tmp_path / "run-1.jsonl").read_text(encoding="utf-8")
+def test_task_run_enforces_shared_boundary_guarantees(
+    tmp_path, monkeypatch, fake_keyring
+):
+    """A run journal is shared state, so it obeys the same boundary as activity:
+    known secret values are masked wherever they appear, every string is
+    bounded, and bulk log bodies never enter it."""
+    from guildbotics.utils.secret_store import KeyringSecretStore
 
-    assert "secret" not in text
-    assert "***" in text
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "GITHUB_TOKEN", "ghp-live-secret-12345"
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-live-secret-12345")
+    store = TaskRunStore(tmp_path)
+
+    store.append_evidence(
+        "run-1",
+        "issue_comment",
+        {
+            "url": "https://example.invalid/1",
+            "detail": "push failed for ghp-live-secret-12345" + "x" * 1000,
+            "stdout": "full stdout",
+            "nested": {"note": "ghp-live-secret-12345 again"},
+        },
+    )
+
+    text = (tmp_path / "run-1.jsonl").read_text(encoding="utf-8")
+    payload = json.loads(text)["payload"]
+    assert "ghp-live-secret-12345" not in text
+    assert payload["detail"].startswith("push failed for ***")
+    assert len(payload["detail"]) <= 500
+    assert payload["nested"]["note"] == "*** again"
+    assert "stdout" not in payload
+    assert payload["url"] == "https://example.invalid/1"
 
 
 def test_chat_run_done_accepts_noop_evidence(tmp_path):

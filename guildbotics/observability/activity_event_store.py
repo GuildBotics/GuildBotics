@@ -3,33 +3,26 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability.event_types import COMMAND_LIFECYCLE_EVENT_TYPES
-from guildbotics.utils.fileio import (
-    get_workspace_config_dir,
-    get_workspace_state_path,
+from guildbotics.observability.event_types import (
+    COMMAND_LIFECYCLE_EVENT_TYPES,
+    SYNC_UPDATE_REJECTED,
+)
+from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.shared_redaction import (
+    MAX_SHARED_TEXT_CHARS,
+    redact_for_sharing,
+)
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    write_shared_json,
 )
 
-ACTIVITY_EVENT_SCHEMA_VERSION = 1
-_MAX_SAFE_SUMMARY_CHARS = 500
-_MAX_SHARED_TEXT_CHARS = 500
-# Values shorter than this are too collision-prone to mask ("1", "true", ...).
-_MIN_MASKED_LENGTH = 8
-# The shared store is synchronized between the single user's own machines, so
-# the boundary protects exactly two things (and deliberately nothing more):
-# secret values must not enter the durable synced history, and the history
-# must stay small. Both are enforced uniformly in ``_shared_value`` (secret
-# masking + size bounds) instead of per-field rules, so new fields and new
-# requirements need no bookkeeping. Full console / prompt bodies stay local
-# because they are bulk log data (§8.1), not because of their field names.
-_LOCAL_ONLY_PAYLOAD_KEYS = frozenset(
-    {"stdout", "stderr", "prompt", "response", "messages"}
-)
+_MAX_SAFE_SUMMARY_CHARS = MAX_SHARED_TEXT_CHARS
 # Explicit allowlist of what shared activity history carries (workspace sync
 # plan §8.1): provider domain outcomes, workflow / command start, completion,
 # and failure, and retry / abandonment decisions. Device-health events
@@ -46,6 +39,7 @@ _DOMAIN_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
         "workflow.rate_limited",
         "chat_dispatch.retry_scheduled",
         "chat_dispatch.abandoned",
+        SYNC_UPDATE_REJECTED,
     }
 )
 
@@ -60,21 +54,35 @@ def default_events_root() -> Path:
 
 
 class ActivityEventStore:
-    """Write and list shared activity events as one JSON file per event."""
+    """Write and list shared activity events as one JSON file per event.
 
-    def __init__(self, root: Path | None = None) -> None:
+    Args:
+        root (Path | None): The events directory, or None for the selected
+            workspace's.
+        workspace_root (Path | None): The workspace the events belong to. A
+            caller that already knows which workspace it is acting for passes
+            it, so recording does not resolve the selected workspace a second
+            time and land in a different one while workspaces are switching.
+    """
+
+    def __init__(
+        self, root: Path | None = None, *, workspace_root: Path | None = None
+    ) -> None:
         self.root = root if root is not None else default_events_root()
+        self.workspace_root = workspace_root
 
     def record(self, record: dict[str, Any]) -> Path:
+        """Write one event and announce it.
+
+        Every event gets its own file under a fresh identifier, so nothing
+        here is read before being written and the write helper's own span is
+        the whole of it.
+        """
         event = _to_activity_event(record)
         occurred = str(event["occurred_at"])
         year, month = _year_month(occurred)
         path = self.root / year / month / f"{event['event_id']}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(event, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_shared_json(path, event, workspace_root=self.workspace_root)
         return path
 
     def list_between(
@@ -130,7 +138,7 @@ def _to_activity_event(record: dict[str, Any]) -> dict[str, Any]:
     payload = record.get("payload")
     attributes = record.get("attributes")
     event = {
-        "schema_version": ACTIVITY_EVENT_SCHEMA_VERSION,
+        "schema_version": SHARED_RECORD_SCHEMA_VERSION,
         "event_id": event_id,
         "workspace_id": str(record.get("workspace_id") or ""),
         "occurred_at": occurred_at,
@@ -152,55 +160,8 @@ def _to_activity_event(record: dict[str, Any]) -> dict[str, Any]:
     }
     # One uniform pass over the whole event enforces both shared-boundary
     # guarantees for every current and future field.
-    result: dict[str, Any] = _shared_value(event, _workspace_secret_values())
+    result: dict[str, Any] = redact_for_sharing(event)
     return result
-
-
-def _shared_value(value: Any, secret_values: tuple[str, ...]) -> Any:
-    """Apply the two shared-boundary guarantees to a payload value.
-
-    Every string is masked against the workspace's known secret values and
-    truncated to a bound. Working value-first (not field-name-first) means a
-    new field or event cannot leak a secret or bloat the synced history no
-    matter what shape it arrives in. Bulk log bodies (stdout/prompt/...) are
-    additionally dropped by key since they have no cross-device value.
-    """
-    if isinstance(value, dict):
-        return {
-            str(key): _shared_value(item, secret_values)
-            for key, item in value.items()
-            if str(key) not in _LOCAL_ONLY_PAYLOAD_KEYS
-        }
-    if isinstance(value, list):
-        return [_shared_value(item, secret_values) for item in value]
-    if isinstance(value, str):
-        masked = value
-        for secret in secret_values:
-            if secret in masked:
-                masked = masked.replace(secret, "***")
-        return masked[:_MAX_SHARED_TEXT_CHARS]
-    return value
-
-
-def _workspace_secret_values() -> tuple[str, ...]:
-    """Secret values currently visible to this process, for masking.
-
-    Read from ``os.environ`` for the keys named in the workspace secrets
-    index — the realistic way a secret ends up inside an error message —
-    so recording an event never has to open the OS keychain.
-    """
-    try:
-        from guildbotics.utils.secret_store import KeyringSecretStore
-
-        keys = KeyringSecretStore(get_workspace_config_dir()).keys()
-    except Exception:
-        return ()
-    values = {
-        value
-        for key in keys
-        if (value := os.environ.get(key, "")) and len(value) >= _MIN_MASKED_LENGTH
-    }
-    return tuple(sorted(values, key=len, reverse=True))
 
 
 def _as_diagnostics_record(event: dict[str, Any]) -> dict[str, Any]:

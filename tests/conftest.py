@@ -18,6 +18,23 @@ def _isolate_workspace_data(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_machine_home(monkeypatch, tmp_path):
+    """Keep ``~/.guildbotics`` out of the developer's real home directory.
+
+    Device identity, the service lock, and a hub all live under the home
+    directory rather than under a workspace, so a test that touches any of them
+    would otherwise write into the machine the suite is running on -- and read
+    back whatever that machine already had.
+    """
+    # Not created here: many tests create this same directory themselves, and
+    # writers make their own parents anyway.
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    # ``Path.home()`` reads USERPROFILE on Windows and HOME everywhere else.
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.fixture(autouse=True)
 def _ignore_ambient_workflow_run(monkeypatch):
     """Keep tests off the workflow execution path of the member CLI guard.
 

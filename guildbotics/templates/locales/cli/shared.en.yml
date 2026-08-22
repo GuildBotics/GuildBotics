@@ -1,0 +1,2 @@
+en:
+  write_busy: "Another writer is changing this workspace's shared files. Wait for it to finish and try again."

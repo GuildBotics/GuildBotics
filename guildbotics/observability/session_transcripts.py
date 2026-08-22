@@ -118,6 +118,7 @@ def read_transcript_settings() -> dict[str, Any]:
 
 
 def write_transcript_settings(*, detail: str, retention_days: int) -> None:
+    """Save the shared transcript settings."""
     from guildbotics.utils.fileio import save_yaml_file
 
     path = transcript_settings_path()

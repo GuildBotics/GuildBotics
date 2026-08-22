@@ -14,8 +14,8 @@ from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
+    dump_yaml,
     load_yaml_file,
-    save_yaml_file,
 )
 
 EXPECTED_DIGEST_N = 3
@@ -77,7 +77,6 @@ def test_record_recall_get_and_digest_redact_secret(
 
     full = service.get(doc_id=doc_id)
     assert full["body"] == "Do not store ***. Retry after refresh."
-    assert full["assets"] == []
     assert service.load_digest(limit=1)[0]["doc_id"] == doc_id
 
 
@@ -156,7 +155,9 @@ def test_updating_legacy_memory_does_not_fabricate_creator(
     assert isinstance(legacy_meta, dict)
     legacy_meta.pop("created_by")
     legacy_meta.pop("updated_by")
-    save_yaml_file(meta_path, legacy_meta)
+    # Fixture content simulating a file an older build wrote; no current
+    # writer produces it, so it is written directly rather than through one.
+    meta_path.write_text(dump_yaml(legacy_meta), encoding="utf-8")
 
     updater = Person(person_id="yuki", name="Yuki", person_type="agent")
     MemberMemoryService(updater).update(

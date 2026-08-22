@@ -56,6 +56,14 @@ describe("ShortcutsSection", () => {
     await waitFor(() => expect(syncHotkeysMock).toHaveBeenCalled());
   });
 
+  it("says hotkeys stay on this machine", async () => {
+    // Every other setting on this screen is shared once a hub is connected, so
+    // the one that is not has to say so.
+    renderSection();
+
+    expect(await screen.findByText(t("hotkey.deviceLocal"))).toBeInTheDocument();
+  });
+
   it("names the combinations the OS refused so they are not silently dead", async () => {
     syncHotkeysMock.mockResolvedValue(["Control+Alt+G"]);
     const user = userEvent.setup();

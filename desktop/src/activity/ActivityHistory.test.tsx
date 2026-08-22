@@ -203,6 +203,7 @@ beforeEach(() => {
   vi.mocked(getActivityHistory).mockResolvedValue(ACTIVITY_FIXTURE);
   vi.mocked(getIntelligenceConfig).mockResolvedValue({
     config_dir: "",
+    revisions: {},
     person_id: "alice",
     inherited: false,
     model_mapping: {},
@@ -545,6 +546,7 @@ describe("ActivityHistoryPage", () => {
   ) {
     vi.mocked(getIntelligenceConfig).mockResolvedValue({
       config_dir: "",
+      revisions: {},
       person_id: "alice",
       inherited: false,
       model_mapping: {},
@@ -825,7 +827,11 @@ describe("ActivityHistoryPage", () => {
     expect(container.querySelector(".activity-now-line")).toBe(null);
   });
 
-  it("hides all event pins in week view", async () => {
+  it("hides a member's event pins in week view but keeps the shared ones", async () => {
+    // A member row spends the week view stacking session chips in day columns,
+    // and a pin positioned over them lands on top. The shared row holds no
+    // sessions, and for events with no member of their own it is the only row
+    // there is -- hiding those made a week's worth reachable from nowhere.
     const user = userEvent.setup();
     renderActivity();
 
@@ -837,7 +843,7 @@ describe("ActivityHistoryPage", () => {
     expect(screen.queryByRole("button", { name: "Improve activity history event context" })).toBe(
       null,
     );
-    expect(screen.queryByRole("button", { name: "PR #7 Merged" })).toBe(null);
+    expect(screen.getByRole("button", { name: "PR #7 Merged" })).toBeInTheDocument();
   });
 });
 
@@ -1241,3 +1247,73 @@ function renderActivity() {
     </MantineProvider>,
   );
 }
+
+describe("a change the hub did not accept", () => {
+  const rejectionEvent = {
+    id: "rejection-1",
+    timestamp: "2026-07-01T11:00:00+00:00",
+    person_id: "",
+    type: "sync_rejected" as const,
+    title: "Update not applied: 2 file(s)",
+    detail: "config/team/project.yml, state/devices/d1.json",
+    url: "",
+    links: [],
+    rejection: {
+      rejection_id: "01932a7c-0000-7000-8000-00000000000f",
+      paths: ["config/team/project.yml", "state/devices/d1.json"],
+      source_device_id: "1f0a0000-0000-7000-8000-0000000000d1",
+    },
+  };
+
+  it("shows the paths, the device that made it, and the recovery id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      sessions: [],
+      events: [rejectionEvent],
+    });
+    renderActivity();
+
+    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
+
+    expect(await screen.findByText(i18n.t("activity.rejection.title"))).toBeInTheDocument();
+    expect(screen.getByText("config/team/project.yml")).toBeInTheDocument();
+    expect(screen.getByText("state/devices/d1.json")).toBeInTheDocument();
+    expect(screen.getByText("1f0a0000-0000-7000-8000-0000000000d1")).toBeInTheDocument();
+    expect(screen.getByText("01932a7c-0000-7000-8000-00000000000f")).toBeInTheDocument();
+  });
+
+  it("stays reachable in the week view, where it has no member row to sit in", async () => {
+    // Events with no member of their own were drawn only in the day view, so a
+    // week's worth of rejections could be reached from nowhere.
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      sessions: [],
+      events: [rejectionEvent],
+    });
+    renderActivity();
+    await user.click(await screen.findByText("1 week"));
+
+    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
+
+    expect(await screen.findByText(i18n.t("activity.rejection.title"))).toBeInTheDocument();
+  });
+
+  it("points recovery at the machine that made the change, not at this screen", async () => {
+    // The held-back content exists on one device only, and nothing here fetches
+    // it, so the guidance has to say where to go instead of offering a button.
+    const user = userEvent.setup();
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      sessions: [],
+      events: [rejectionEvent],
+    });
+    renderActivity();
+
+    await user.hover(await screen.findByRole("button", { name: rejectionEvent.title }));
+
+    expect(await screen.findByText(i18n.t("activity.rejection.recovery"))).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /restore|recover/i })).not.toBeInTheDocument();
+  });
+});

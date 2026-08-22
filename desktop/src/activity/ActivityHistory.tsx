@@ -25,6 +25,7 @@ import {
   Clock3,
   ExternalLink,
   FileText,
+  FileWarning,
   GitBranch,
   GitCommitHorizontal,
   GitMerge,
@@ -38,6 +39,7 @@ import {
   type ActivityHistoryEvent,
   type ActivityHistoryLink,
   type ActivityHistoryMember,
+  type ActivityHistoryRejection,
   type ActivityHistoryResponse,
   type ActivityHistorySession,
   type CliAgentUsage,
@@ -308,19 +310,20 @@ function ActivityChart({
               ))}
         </div>
       </div>
-      {view === "day" ? (
-        <ActivityTimelineRow
-          label={t("activity.events")}
-          avatar={<RotateCcwClock size={15} />}
-          sessions={[]}
-          events={sharedEvents}
-          range={range}
-          view={view}
-          now={now}
-          matches={matches}
-          team
-        />
-      ) : null}
+      {/* Events with no member of their own -- synchronization among them --
+          get a row like anyone else. Drawing it only in the day view meant a
+          week's worth of them was reachable from nowhere. */}
+      <ActivityTimelineRow
+        label={t("activity.events")}
+        avatar={<RotateCcwClock size={15} />}
+        sessions={[]}
+        events={sharedEvents}
+        range={range}
+        view={view}
+        now={now}
+        matches={matches}
+        team
+      />
       {data.members.map((member) => (
         <ActivityTimelineRow
           key={member.person_id}
@@ -374,7 +377,11 @@ function ActivityTimelineRow({
   const blocks = buildActivityBlocks(sessions);
   const weekSessionCount = view === "week" ? maxWeekSessionCount(sessions, range) : 0;
   const eventTop = team ? 10 : view === "week" ? Math.max(48, weekSessionCount * 30 + 16) : 48;
-  const visibleEvents = view === "week" ? [] : events;
+  // Week view drops event pins because a member row spends it stacking session
+  // chips in day columns, and a pin positioned over them lands on top. The
+  // shared row has no sessions at all, so there is nothing for its pins to
+  // collide with -- and it is the only home the events without a member have.
+  const visibleEvents = view === "week" && !team ? [] : events;
   const eventTops = stackedEventTops(visibleEvents, eventTop);
   const eventRows = Math.max(
     1,
@@ -788,6 +795,9 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
 
 function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
   const { t } = useTranslation();
+  if (event.rejection) {
+    return <RejectionDetail rejection={event.rejection} timestamp={event.timestamp} />;
+  }
   return (
     <Stack gap="xs">
       <Group gap="xs">
@@ -815,6 +825,63 @@ function ActivityEventDetail({ event }: { event: ActivityHistoryEvent }) {
               : []
         }
       />
+    </Stack>
+  );
+}
+
+/**
+ * A local change the hub did not accept.
+ *
+ * This is normal operation, not an error, so it says what happened and where
+ * the held-back content still is -- and stops there. The content itself is not
+ * fetched, compared, or exported from any machine: recovery is a manual
+ * procedure on the device that made the change, which is the only one holding
+ * it.
+ */
+function RejectionDetail({
+  rejection,
+  timestamp,
+}: {
+  rejection: ActivityHistoryRejection;
+  timestamp: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Stack gap="xs">
+      <Group gap="xs">
+        <Badge color="warning" variant="light">
+          {t("activity.eventTypes.sync_rejected")}
+        </Badge>
+        <Text c="dimmed" size="xs">
+          {formatTime(timestamp)}
+        </Text>
+      </Group>
+      <Text fw={700} size="sm">
+        {t("activity.rejection.title")}
+      </Text>
+      <Text c="dimmed" size="xs">
+        {t("activity.rejection.body")}
+      </Text>
+      <Stack gap={2}>
+        <Text fw={600} size="xs">
+          {t("activity.rejection.paths")}
+        </Text>
+        {rejection.paths.map((path) => (
+          <Text className="mono-text" key={path} size="xs">
+            {path}
+          </Text>
+        ))}
+      </Stack>
+      <Text size="xs">
+        {t("activity.rejection.sourceDevice")}:{" "}
+        <span className="mono-text">{rejection.source_device_id}</span>
+      </Text>
+      <Text size="xs">
+        {t("activity.rejection.id")}: <span className="mono-text">{rejection.rejection_id}</span>
+      </Text>
+      <Text c="dimmed" size="xs">
+        {t("activity.rejection.recovery")}
+      </Text>
     </Stack>
   );
 }
@@ -1465,6 +1532,8 @@ function eventIcon(type: ActivityHistoryEvent["type"]) {
       return <CircleDot size={12} />;
     case "issue_resolve":
       return <CheckCircle2 size={12} />;
+    case "sync_rejected":
+      return <FileWarning size={12} />;
     case "external":
       return <GitBranch size={12} />;
   }
@@ -1478,6 +1547,7 @@ function eventColor(type: ActivityHistoryEvent["type"]): string {
     push: "warning",
     issue_create: "info",
     issue_resolve: "success",
+    sync_rejected: "warning",
     external: "neutral",
   }[type];
 }

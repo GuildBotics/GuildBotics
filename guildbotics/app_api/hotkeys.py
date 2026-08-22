@@ -1,10 +1,17 @@
 """Global hotkey assignments for the desktop quick-run window.
 
-Assignments live in the workspace config (``.guildbotics/config/hotkeys.yml``)
-next to the commands they refer to, so they travel with the workspace instead of
-being pinned to one machine. This module owns the file format, the accelerator
-grammar and the conflict rules; the desktop only registers what it is told and
-never decides which combination is legal.
+Assignments are device-local (``.guildbotics/local/hotkeys.yml``) rather than
+part of the shared workspace, because what decides a hotkey is a property of
+the machine and not of the workspace: whether a combination is free depends on
+that operating system's own shortcuts, on the other applications installed
+there, and on the physical keyboard. A combination chosen on a Mac precisely to
+avoid the system shortcuts can collide with them on Windows, and the modifier a
+Mac calls Command is the Windows key there. Carrying the choice between
+machines would therefore register something the user never picked.
+
+This module owns the file format, the accelerator grammar and the conflict
+rules; the desktop only registers what it is told and never decides which
+combination is legal.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import HotkeySettings
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
-    get_primary_config_path,
+    get_workspace_local_path,
     load_yaml_file,
     save_yaml_file,
 )
@@ -38,8 +45,8 @@ _FUNCTION_KEY = re.compile(r"^F(?:[1-9]|1\d|2[0-4])$")
 
 
 def hotkeys_file() -> Path:
-    """Return the workspace hotkey settings file (which may not exist)."""
-    return get_primary_config_path(Path(HOTKEYS_FILE))
+    """Return this device's hotkey settings file (which may not exist)."""
+    return get_workspace_local_path(HOTKEYS_FILE)
 
 
 def validate_accelerator(accelerator: str, *, label: str) -> None:
@@ -115,7 +122,7 @@ def _normalized(settings: HotkeySettings) -> HotkeySettings:
 
 
 def load_hotkeys() -> HotkeySettings:
-    """Read the workspace hotkey assignments, defaulting to none."""
+    """Read this device's hotkey assignments, defaulting to none."""
     try:
         path = hotkeys_file()
     except WorkspaceNotConfiguredError:
@@ -145,8 +152,13 @@ def save_hotkeys(settings: HotkeySettings) -> HotkeySettings:
     """Validate and persist hotkey assignments, dropping empty entries."""
     normalized = _normalized(settings)
     validate_settings(normalized)
+    path = hotkeys_file()
+    # ``local/`` is created by whatever writes there first, and setting a hotkey
+    # can be that. The shared ``config/`` this used to live in was always there
+    # because setup had already written to it.
+    path.parent.mkdir(parents=True, exist_ok=True)
     save_yaml_file(
-        hotkeys_file(),
+        path,
         {"quick_run": normalized.quick_run, "commands": normalized.commands},
     )
     return normalized

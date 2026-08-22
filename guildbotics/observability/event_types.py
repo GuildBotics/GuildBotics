@@ -13,3 +13,9 @@ COMMAND_LIFECYCLE_EVENT_TYPES = frozenset(
         "member.command.failed",
     }
 )
+
+#: A local change the hub did not accept because another device changed the
+#: same file first. Provider-neutral by construction: it names the paths, the
+#: device that made the change, and the ``rejection_id`` that locates the
+#: stashed commit on that device. The stashed content itself is never recorded.
+SYNC_UPDATE_REJECTED = "sync.update_rejected"

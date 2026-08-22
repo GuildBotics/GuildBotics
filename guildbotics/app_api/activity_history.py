@@ -11,6 +11,7 @@ from guildbotics.app_api.activity_events import (
     event_label,
     event_url,
     github_attrs_from_payload,
+    rejected_paths,
 )
 from guildbotics.app_api.activity_links import (
     MEMORY_READ_ONLY_ACTIONS,
@@ -22,6 +23,7 @@ from guildbotics.app_api.models import (
     ActivityHistoryLink,
     ActivityHistoryMember,
     ActivityHistoryRateLimit,
+    ActivityHistoryRejection,
     ActivityHistoryResponse,
     ActivityHistorySession,
 )
@@ -261,6 +263,11 @@ def _activity_event(
     person_id = str(item.get("person_id") or "")
     if person_id and person_id not in display_member_ids:
         return None
+    rejection = None
+    if classification == "sync_rejected":
+        rejection = _rejection(payload)
+        if rejection is None:
+            return None
     link_attrs = dict(attributes)
     link_attrs.update(github_attrs_from_payload(payload))
     links = links_from_record(payload, link_attrs, item)
@@ -272,9 +279,30 @@ def _activity_event(
         person_id=person_id,
         type=classification,
         title=label,
-        detail=event_detail(item, payload, attributes),
+        detail=(
+            ", ".join(rejection.paths)
+            if rejection is not None
+            else event_detail(item, payload, attributes)
+        ),
         url=url,
         links=links,
+        rejection=rejection,
+    )
+
+
+def _rejection(payload: dict[str, Any]) -> ActivityHistoryRejection | None:
+    """Describe a rejected local change, or nothing when it cannot be found again.
+
+    A record without a ``rejection_id`` names no stashed commit, so it would
+    tell the user something happened without telling them where to look.
+    """
+    rejection_id = str(payload.get("rejection_id") or "")
+    if not rejection_id:
+        return None
+    return ActivityHistoryRejection(
+        rejection_id=rejection_id,
+        paths=rejected_paths(payload),
+        source_device_id=str(payload.get("source_device_id") or ""),
     )
 
 

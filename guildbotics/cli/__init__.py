@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from guildbotics.cli.diagnostics import diagnostics
+from guildbotics.cli.hub import hub
 from guildbotics.cli.member import member
 from guildbotics.cli.secrets import secrets
 from guildbotics.cli.workspace import workspace
@@ -49,6 +50,7 @@ from guildbotics.utils.fileio import get_machine_state_path, get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.processes import force_terminate_pid, pid_exists
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.workspace_state import (
     WorkspaceUnresolvedError,
     apply_workspace_for_cli,
@@ -95,7 +97,25 @@ def _configure_windows_standard_streams() -> None:
             reconfigure(encoding="utf-8")
 
 
-@click.group(context_settings={"show_default": True})
+class _GuildBoticsCli(click.Group):
+    """The CLI group, with the one failure every command shares.
+
+    Any command that changes a workspace's shared files can find another
+    writer -- the synchronization queue, or a second GuildBotics process --
+    holding the lock for longer than the wait. That is not a fault of the
+    command, and every command would otherwise need its own handler for a
+    condition none of them causes, so it is answered once here. The API layer
+    answers the same condition once, in its own exception handler.
+    """
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except SharedWriteBusyError as exc:
+            raise click.ClickException(t("cli.shared.write_busy")) from exc
+
+
+@click.group(cls=_GuildBoticsCli, context_settings={"show_default": True})
 @click.version_option(
     version=_resolve_version(),
     prog_name="guildbotics",
@@ -108,6 +128,7 @@ def main() -> None:
 
 
 main.add_command(diagnostics)
+main.add_command(hub)
 main.add_command(member)
 main.add_command(secrets)
 main.add_command(workspace)

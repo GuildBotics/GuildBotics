@@ -15,6 +15,9 @@ import { defineConfig, devices } from "@playwright/test";
 //                     so mutating the member list never perturbs ③ ④.
 //   * "diagnostics" — pre-seeded workspace for the readiness / scenario
 //                     diagnostics journey (journey ⑤, `diagnostics.spec.ts`).
+//   * "sync"        — pre-seeded workspace for the synchronization journeys
+//                     (journeys ⑦–⑩, `sync.spec.ts`). Its temp HOME holds the hub,
+//                     so the whole journey runs on one machine without SSH.
 //   * "down"        — frontend booted against a NOT-yet-serving backend; the
 //                     spec brings the real backend up on demand via a control
 //                     server (critical-failure journey ⑥, `failure.spec.ts`).
@@ -40,6 +43,8 @@ const DIAGNOSTICS_BACKEND_PORT = Number(
 const DIAGNOSTICS_FRONTEND_PORT = Number(
   process.env.GUILDBOTICS_E2E_DIAGNOSTICS_FRONTEND_PORT ?? "1424",
 );
+const SYNC_BACKEND_PORT = Number(process.env.GUILDBOTICS_E2E_SYNC_BACKEND_PORT ?? "8772");
+const SYNC_FRONTEND_PORT = Number(process.env.GUILDBOTICS_E2E_SYNC_FRONTEND_PORT ?? "1426");
 const DOWN_BACKEND_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_BACKEND_PORT ?? "8770");
 const DOWN_FRONTEND_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_FRONTEND_PORT ?? "1425");
 const DOWN_CONTROL_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_CONTROL_PORT ?? "8771");
@@ -48,6 +53,7 @@ const SETUP_BASE_URL = `http://${HOST}:${SETUP_FRONTEND_PORT}`;
 const CONFIGURED_BASE_URL = `http://${HOST}:${CONFIGURED_FRONTEND_PORT}`;
 const MEMBERS_BASE_URL = `http://${HOST}:${MEMBERS_FRONTEND_PORT}`;
 const DIAGNOSTICS_BASE_URL = `http://${HOST}:${DIAGNOSTICS_FRONTEND_PORT}`;
+const SYNC_BASE_URL = `http://${HOST}:${SYNC_FRONTEND_PORT}`;
 const DOWN_BASE_URL = `http://${HOST}:${DOWN_FRONTEND_PORT}`;
 
 export default defineConfig({
@@ -84,6 +90,11 @@ export default defineConfig({
       name: "diagnostics",
       testMatch: /diagnostics\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], baseURL: DIAGNOSTICS_BASE_URL },
+    },
+    {
+      name: "sync",
+      testMatch: /sync\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], baseURL: SYNC_BASE_URL },
     },
     {
       name: "down",
@@ -154,6 +165,21 @@ export default defineConfig({
         GUILDBOTICS_E2E_HOST: HOST,
         GUILDBOTICS_E2E_BACKEND_PORT: String(DIAGNOSTICS_BACKEND_PORT),
         GUILDBOTICS_E2E_FRONTEND_PORT: String(DIAGNOSTICS_FRONTEND_PORT),
+      },
+    },
+    {
+      command: "node e2e/start-stack.mjs",
+      url: `${SYNC_BASE_URL}/`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        GUILDBOTICS_E2E_STACK: "sync",
+        GUILDBOTICS_E2E_SEED: "1",
+        GUILDBOTICS_E2E_HOST: HOST,
+        GUILDBOTICS_E2E_BACKEND_PORT: String(SYNC_BACKEND_PORT),
+        GUILDBOTICS_E2E_FRONTEND_PORT: String(SYNC_FRONTEND_PORT),
       },
     },
     {

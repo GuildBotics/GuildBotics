@@ -58,6 +58,9 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
   - Google Gemini API: [Google AI Studio](https://aistudio.google.com/app/apikey)
   - OpenAI API: [OpenAI Platform](https://platform.openai.com/api-keys)
   - Anthropic Claude API: [Anthropic Console](https://console.anthropic.com/settings/keys)
+- **OpenSSH** (only to share one workspace across several machines):
+  - Every participating machine needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
+  - The machine acting as the hub also needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
 - **An AI CLI tool** (install one of the following in advance, launch it once, and complete authentication):
   - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
@@ -489,6 +492,191 @@ GuildBotics stores three kinds of local data:
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
 - Shared workspace state — memory, chat control, task-run evidence, activity events — is stored in `<workspace>/.guildbotics/state`
 - Device-local data — diagnostics, transcripts, chat cache, member clones, AI CLI sessions — is stored in `<workspace>/.guildbotics/local`
+
+### Share a Workspace Across Machines
+
+One workspace can be shared by several of your machines. Settings, members, memory, chat
+state, and activity history are kept in step; API keys, member clones, diagnostics, and
+hotkeys stay on the machine they were made on.
+
+Sharing runs through a **hub**: one machine you choose, holding a Git repository the others
+push to and fetch from over SSH. It is not a service and it is not hosted by anyone else —
+it is a directory under `~/.guildbotics/hub` on a machine you already own.
+
+Everything below is done in the desktop app's **Settings**. Hosting the hub and this
+device's SSH key are under **Device and hub** (they belong to the machine, not to a
+workspace); connecting a workspace is under **Sync**.
+
+#### Set up the first machine
+
+1. On the machine that will be the hub, select **Host the hub on this machine** under
+   **Device and hub**. Make sure its OpenSSH server is running (see
+   [What You Need](#what-you-need)). This creates `~/.guildbotics/hub/` and its `hub.json`;
+   the repository for a workspace is created later, when the first machine registers one.
+2. On the machine holding the workspace, select **Create a key** under **Device and hub →
+   This device's SSH key**, then copy the key it shows. It is `~/.ssh/id_ed25519`, and an
+   existing key of that name is used as it is rather than replaced.
+3. Add that public key to the hub machine's `~/.ssh/authorized_keys`. On the hub machine:
+
+   ```bash
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' 'ssh-ed25519 AAAA... guildbotics alice@mac-studio' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+   ```
+
+   GuildBotics cannot do this for you: that step is what proves you already have access to
+   the machine. It is a prerequisite rather than a fallback — the next step asks the hub for
+   its workspace list over SSH, and synchronization runs SSH non-interactively, so an
+   unregistered key fails there instead of prompting for a password.
+4. Check that the hub machine answers its own command over SSH, from the machine holding the
+   workspace:
+
+   ```bash
+   ssh user@hub-host guildbotics hub status
+   ```
+
+   GuildBotics reaches the hub by running `guildbotics hub …` there, so the command has to be
+   on the PATH that non-interactive SSH sessions get — which is not always the one an
+   interactive login has. If it is not found, see
+   [`guildbotics` is not found over SSH](#guildbotics-is-not-found-over-ssh).
+5. Back in the desktop app, under **Sync**, enter the hub as `user@host` and select
+   **Look up**.
+6. Compare the fingerprint shown against the hub machine's own, then confirm it. On the hub
+   machine, print it with:
+
+   ```bash
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+
+   This is the only point at which the key is checked: synchronization runs SSH
+   non-interactively afterwards, so its usual first-contact prompt never appears.
+7. Select **Register this workspace on the hub**. The hub's repository for this workspace,
+   `~/.guildbotics/hub/workspaces/<workspace id>/repository.git`, is created now.
+
+##### `guildbotics` is not found over SSH
+
+A non-interactive SSH session does not read the shell startup files an interactive login
+does, so a `guildbotics` installed under `~/.local/bin` is often invisible to it. The
+shortest fix is a link from a directory that is always on the PATH, made on the hub machine:
+
+```bash
+sudo ln -sf ~/.guildbotics/bin/guildbotics /usr/local/bin/guildbotics
+```
+
+`~/.guildbotics/bin/guildbotics` is the managed shim, so it keeps working across
+reinstalls of the CLI itself. On Windows the installer puts the managed bin on the user
+PATH, which SSH sessions also get.
+
+#### Add another machine
+
+On the new machine, create its SSH key and register it with the hub as above, then either:
+
+- **Take a copy**: choose the workspace from the hub's list to create a new workspace
+  directory from it, or
+- **Join with what you already have**: on a machine that already has a workspace, look up
+  the hub and select **Join…** next to the matching workspace.
+
+Joining is not an overwrite. This machine's content is committed first; for any file both
+sides hold, the hub's version wins; files only this machine has are sent to the hub. What
+is shown before you confirm is exactly that division. A commit pushed aside this way is
+kept locally — see [Recover a change that was not applied](#recover-a-change-that-was-not-applied).
+
+#### Rebuild the hub
+
+Any participating machine holds a full copy, so a lost hub is rebuilt from one of them.
+
+1. Choose a machine to host the new hub and select **Host the hub on this machine**.
+2. Add every other machine's public key to the new hub machine's `~/.ssh/authorized_keys`,
+   and check `guildbotics` answers over SSH there, as in
+   [Set up the first machine](#set-up-the-first-machine). A new hub machine knows nothing
+   about the keys the old one held.
+3. On each other machine, open **Connected hub → Connect to a different hub** and connect to
+   the new address.
+
+Content only one machine has is sent to the new hub rather than discarded, so the order the
+machines reconnect in does not lose anything.
+
+#### When two machines change the same file
+
+Whichever change reaches the hub first is the one that is kept. The other machine's commit
+is not merged and not discarded: it is set aside locally, and it appears on that machine
+under **Settings → Sync**, in "Changes set aside", with the time, the files, and a recovery
+ID (the warning band's "Sync settings" button opens the same screen). Activity History keeps
+the same record. Synchronization does not stop, and no one is asked to resolve anything.
+
+Content that was not adopted when a machine with an existing `.guildbotics/` joined the hub
+is listed there the same way.
+
+#### Recover a change that was not applied
+
+This is an exception procedure, not part of normal use. GuildBotics never restores a set
+aside change automatically, and neither the desktop app nor the API will show its contents.
+Reading it takes the Git commands below.
+
+The set aside content exists **only on the machine that made the change**. Run the commands
+on the machine whose **Settings → Sync** lists the change under "Changes set aside", and
+fill in the placeholders as follows.
+
+| Placeholder | What goes there |
+| --- | --- |
+| `<workspace>` | The workspace directory, as shown in the "Workspace" field under "Settings → Project" |
+| `<recovery ID>` | The value in the "Recovery ID" column |
+| `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/person.yml`) |
+| `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/person.yml`) |
+
+1. Read what was set aside. This shows the difference from what is in use now (`+` lines
+   are the set aside side):
+
+   ```bash
+   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<recovery ID>" -- <path>...
+   ```
+
+   To print the set aside side in full rather than as a diff, name one file at a time:
+
+   ```bash
+   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<recovery ID>:<path>"
+   ```
+
+   A file the set aside change deleted has no content to show, so `git diff` reports only the
+   deletion. Binary files such as images do not display usefully; export them in the next
+   step instead.
+
+2. If you need the files outside Git, export them together as a zip. Point
+   `<output-directory>` outside `<workspace>/.guildbotics/`; `<output-name>` is up to you.
+   A zip is used because saving through shell redirection (`>`) can change the text
+   encoding or corrupt binary files, depending on the shell.
+
+   ```bash
+   git -C "<workspace>/.guildbotics" archive --format=zip --output="<output-directory>/<output-name>.zip" "refs/guildbotics/rejected/<recovery ID>" -- <path>...
+   ```
+
+3. Make the changes you still want again through GuildBotics, starting from the content
+   currently in use. They are shared like any other edit.
+
+Do not do any of the following to the synchronization repository, as they replace shared
+content without going through the rules above:
+
+- `checkout`, `switch`, `reset`, `merge`, `rebase`, `cherry-pick`, or `push` a
+  `refs/guildbotics/rejected/...` ref
+- Write the export into `<workspace>/.guildbotics/`
+
+A set aside change cannot be recovered if the machine that made it is lost, or if it has
+been discarded there. Nothing prunes them automatically.
+
+Once you are done looking, discard it from **Settings → Sync**, under "Changes set
+aside". Discarding removes the set aside content and clears the warning. This machine
+holds the only copy, so look at the content with the steps above before
+discarding; the activity history record stays either way.
+
+#### What the sidebar is telling you
+
+| State | Meaning | What to do |
+| --- | --- | --- |
+| In sync | This machine and the hub hold the same content | Nothing |
+| Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
+| Receiving | Content from the hub is being taken in | Wait |
+| Hub unreachable | Local work continues; sharing is delayed | Wait, or select **Try again**. If it never recovers, check the SSH prerequisites in [Set up the first machine](#set-up-the-first-machine) |
+| Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
+| Shared data problem | Content could not be reconciled automatically | Open **Sync** |
+| Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |
 
 ### Configuration Files
 

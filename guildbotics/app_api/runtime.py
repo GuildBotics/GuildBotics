@@ -17,6 +17,7 @@ from typing import Any, cast
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.command_files import CommandFileService, file_revision
+from guildbotics.app_api.config_revisions import apply_config_write
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
@@ -78,6 +79,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.trace_presentations import normalize_trace_presentation
 from guildbotics.app_api.verify import VerifyService
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
@@ -259,6 +261,7 @@ class AppRuntime:
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
         self._loaded_dotenv_keys: set[str] = set()
+        self._workspace_sync = WorkspaceSyncService()
         if load_workspace_environment:
             self._load_workspace_env()
         self._lifecycle = RuntimeLifecycleService(
@@ -332,6 +335,17 @@ class AppRuntime:
             raise _workspace_switch_blocked_error(stopped)
         if self._diagnostics_store is not None:
             self._diagnostics_store.finish_system_session()
+        # Stopped before the switch so the queue of the workspace being left
+        # cannot commit into the one being entered. A queue still finishing a
+        # fetch or push holds that workspace's repository, so the switch waits
+        # rather than leaving two of them running side by side.
+        if not self._workspace_sync.deactivate():
+            raise AppApiError(
+                "workspace_switch_blocked",
+                "Synchronization for the current workspace is still stopping. "
+                "Try again in a moment.",
+                status_code=409,
+            )
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)
@@ -339,6 +353,7 @@ class AppRuntime:
         if self._diagnostics_store is not None:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
             self._diagnostics_store.start_maintenance()
+        self._workspace_sync.activate()
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
@@ -374,6 +389,22 @@ class AppRuntime:
         language_code = self._get_context().team.project.get_language_code()
         return CommandFileService(language_code)
 
+    def _write_shared_commands[T](self, apply: Callable[[], T]) -> T:
+        """Run a change to the shared command files through the write boundary.
+
+        Commands live under ``config/commands``, so they are shared state like
+        the rest of config: the service compares a revision and then writes,
+        and synchronization must not check the hub's content out between the
+        two. Applying a reviewed change set writes several files, which is one
+        change for the same reason.
+        """
+        config_dir = get_primary_config_dir()
+        if config_dir is None:
+            raise WorkspaceNotConfiguredError(
+                "No workspace is selected, so there are no shared commands."
+            )
+        return apply_config_write(config_dir, apply).result
+
     def list_command_files(self) -> CommandFilesResponse:
         return self._command_file_service().list_files()
 
@@ -383,21 +414,27 @@ class AppRuntime:
     def create_command_file(
         self, request: CommandFileCreateRequest
     ) -> CommandFileDetail:
-        return self._command_file_service().create_file(
-            request.command, request.format, request.content
+        return self._write_shared_commands(
+            lambda: self._command_file_service().create_file(
+                request.command, request.format, request.content
+            )
         )
 
     def update_command_file(
         self, file_id: str, request: CommandFileUpdateRequest
     ) -> CommandFileDetail:
-        return self._command_file_service().update_file(
-            file_id, request.content, request.expected_revision
+        return self._write_shared_commands(
+            lambda: self._command_file_service().update_file(
+                file_id, request.content, request.expected_revision
+            )
         )
 
     def delete_command_file(
         self, file_id: str, expected_revision: str
     ) -> CommandFilesResponse:
-        return self._command_file_service().delete_file(file_id, expected_revision)
+        return self._write_shared_commands(
+            lambda: self._command_file_service().delete_file(file_id, expected_revision)
+        )
 
     @asynccontextmanager
     async def _assistant_turn(
@@ -539,7 +576,11 @@ class AppRuntime:
     ) -> CommandAuthoringApplyResponse:
         """Apply a user-reviewed AI command change set."""
         return CommandAuthoringApplyResponse(
-            files=self._command_file_service().apply_authoring_changes(request.changes)
+            files=self._write_shared_commands(
+                lambda: self._command_file_service().apply_authoring_changes(
+                    request.changes
+                )
+            )
         )
 
     def _command_authoring_context(self) -> list[dict[str, str]]:
@@ -1051,8 +1092,17 @@ class AppRuntime:
             write_transcript_settings,
         )
 
-        write_transcript_settings(
-            detail=request.detail, retention_days=request.retention_days
+        config_dir = get_primary_config_dir()
+        if config_dir is None:
+            raise WorkspaceNotConfiguredError(
+                "No workspace is selected, so there are no transcript settings."
+            )
+        # `config/transcripts.yml` is shared like the rest of config.
+        apply_config_write(
+            config_dir,
+            lambda: write_transcript_settings(
+                detail=request.detail, retention_days=request.retention_days
+            ),
         )
         return self.get_transcript_settings()
 

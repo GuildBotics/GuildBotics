@@ -26,6 +26,7 @@ from guildbotics.utils.secret_store import (
     SecretStore,
     resolve_secret_store,
 )
+from guildbotics.utils.shared_write_lock import shared_write_operation
 
 BASE_DIR = Path(__file__).parent
 TEMPLATE_PATH = BASE_DIR / "templates"
@@ -337,10 +338,30 @@ class PersonConfigSnapshot(BaseModel):
     routine_commands: list[str] = Field(default_factory=list)
     task_schedules: list[PersonTaskScheduleInput] = Field(default_factory=list)
     avatar_timestamp: int = 0
+    # Config-relative path -> revision, to be sent back with the save so an
+    # edit made elsewhere since this read is refused instead of overwritten.
+    revisions: dict[str, str] = Field(default_factory=dict)
 
 
 class PersonUpdateInput(PersonSetupInput):
     original_person_id: str
+    # Revisions this form was composed against; empty for a member being added.
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
+
+
+#: Config files the project screen reads and writes, relative to the config
+#: directory. The screen saves all of them together, so a stale-write check has
+#: to cover the set rather than the one file the user visibly edited.
+PROJECT_CONFIG_PATHS = (
+    "team/project.yml",
+    "intelligences/model_mapping.yml",
+    "intelligences/cli_agent_mapping.yml",
+)
+
+
+def person_config_paths(person_id: str) -> tuple[str, ...]:
+    """Return the config files the member screen reads and writes."""
+    return (f"team/members/{person_id}/person.yml",)
 
 
 def _project_config_file(config_dir: Path) -> Path:
@@ -410,6 +431,22 @@ def _write_default_person_id(config_dir: Path, person_id: str) -> CreatedFile | 
 
 
 class SimpleProjectSetupService:
+    """Create and change a workspace's project-level config.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_project_config(self, *, config_dir: Path) -> ProjectConfigSnapshot:
         project_file = _project_config_file(config_dir)
         if not project_file.exists():
@@ -454,6 +491,7 @@ class SimpleProjectSetupService:
             provider_api_keys=provider_api_keys,
         )
 
+    @shared_write_operation
     def set_default_person(
         self, *, config_dir: Path, person_id: str
     ) -> ProjectSetupResult:
@@ -510,6 +548,7 @@ class SimpleProjectSetupService:
             url=f"{GITHUB_URL}{project_type}/{owner}/projects/{project_id}",
         )
 
+    @shared_write_operation
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
 
@@ -540,19 +579,22 @@ class SimpleProjectSetupService:
             native_policy_template = (
                 get_template_path() / "intelligences/native_agent_policy.yml"
             )
-            native_policy_file.write_text(
-                native_policy_template.read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            shutil.copy2(native_policy_template, native_policy_file)
             files.append(CreatedFile(path=native_policy_file, action="create"))
 
         # Tool definitions live at `cli_agents/<tool>/default.yml`, so the copy
-        # walks one level down rather than the directory root.
+        # walks one level down rather than the directory root. These templates
+        # are copied as bytes rather than read and written as text: a text
+        # round trip rewrites the newlines to the ones this OS uses, so the
+        # same template would land as CRLF on Windows and LF elsewhere -- and
+        # every device that joined a hub would find these files differing for
+        # no reason anyone chose.
         cli_agent_config_src_dir = get_template_path() / "intelligences/cli_agents"
         cli_agent_config_dst_dir = config.config_dir / "intelligences/cli_agents"
         for src_file in sorted(cli_agent_config_src_dir.glob("*/*.yml")):
             dst_file = cli_agent_config_dst_dir / src_file.parent.name / src_file.name
             dst_file.parent.mkdir(parents=True, exist_ok=True)
-            dst_file.write_text(src_file.read_text())
+            shutil.copy2(src_file, dst_file)
             files.append(CreatedFile(path=dst_file, action="create"))
 
         files.extend(self.ensure_sample_commands(config.config_dir, config.language))
@@ -575,6 +617,7 @@ class SimpleProjectSetupService:
             if value and provider in env_keys:
                 store.set(env_keys[provider], value)
 
+    @shared_write_operation
     def ensure_sample_commands(
         self, config_dir: Path, language: str
     ) -> list[CreatedFile]:
@@ -602,6 +645,7 @@ class SimpleProjectSetupService:
             files.append(CreatedFile(path=dst_file, action="create"))
         return files
 
+    @shared_write_operation
     def update_project(self, config: ProjectUpdateInput) -> ProjectSetupResult:
         files: list[CreatedFile] = []
         project_config_file = _project_config_file(config.config_dir)
@@ -754,6 +798,22 @@ class SimpleProjectSetupService:
 
 
 class SimplePersonSetupService:
+    """Create, change, and remove a workspace's members.
+
+    The writing operations are marked
+    :func:`~guildbotics.utils.shared_write_lock.shared_write_operation`: each
+    lays down several config files that only make sense together, and several
+    of them decide what to write by reading the config already there. Either
+    on its own makes the span the whole method rather than the individual
+    writes, which is all the port can see.
+
+    That decorator locks the selected workspace, while these methods take the
+    config directory as an argument. The two are the same workspace for every
+    caller today -- the Desktop backend selects it before calling, and the CLI
+    resolves it the same way -- and a caller that means a different one has to
+    take the lock for that workspace itself.
+    """
+
     def read_slack_tokens(self, *, config_dir: Path, person_id: str) -> tuple[str, str]:
         """Return the member's stored Slack bot and app tokens.
 
@@ -924,6 +984,7 @@ class SimplePersonSetupService:
             git_email=f"{github_user_id}+{github_username}@users.noreply.github.com",
         )
 
+    @shared_write_operation
     def write_person(self, config: PersonSetupInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         person_config_file = _person_config_file(config.config_dir, config.person_id)
@@ -944,6 +1005,7 @@ class SimplePersonSetupService:
 
         return PersonSetupResult(files=files)
 
+    @shared_write_operation
     def update_person(self, config: PersonUpdateInput) -> PersonSetupResult:
         files: list[CreatedFile] = []
         original_person_file = _person_config_file(
@@ -994,6 +1056,7 @@ class SimplePersonSetupService:
 
         return PersonSetupResult(files=files)
 
+    @shared_write_operation
     def delete_person(self, *, config_dir: Path, person_id: str) -> PersonSetupResult:
         files: list[CreatedFile] = []
         person_dir = _person_config_dir(config_dir, person_id)

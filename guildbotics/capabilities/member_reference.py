@@ -202,7 +202,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ),
             (
                 "guildbotics member memory get --person <person> --id <doc-id> [--team]",
-                "Read one memory document's metadata, body, and asset paths without changing recency.",
+                "Read one memory document's metadata and body without changing recency.",
             ),
             (
                 "guildbotics member memory update --person <person> --id <doc-id> "

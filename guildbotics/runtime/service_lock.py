@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import IO, Literal
 from uuid import uuid4
 
-from guildbotics.runtime.advisory_lock import (
+from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking as _lock_file_nonblocking,
 )
-from guildbotics.runtime.advisory_lock import open_lock_file as _open_lock_file
-from guildbotics.runtime.advisory_lock import read_lock_data as _read_lock_data
-from guildbotics.runtime.advisory_lock import unlock_file as _unlock_file
-from guildbotics.runtime.advisory_lock import write_lock_data as _write_lock_data
+from guildbotics.utils.advisory_lock import open_lock_file as _open_lock_file
+from guildbotics.utils.advisory_lock import read_lock_data as _read_lock_data
+from guildbotics.utils.advisory_lock import unlock_file as _unlock_file
+from guildbotics.utils.advisory_lock import write_lock_data as _write_lock_data
 from guildbotics.utils.fileio import get_machine_state_path
 
 ServiceOwner = Literal["cli", "desktop"]

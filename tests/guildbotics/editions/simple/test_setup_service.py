@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from guildbotics.editions.simple import setup_service
@@ -11,7 +12,7 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
 )
 from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
-from guildbotics.utils.fileio import load_yaml_file, save_yaml_file
+from guildbotics.utils.fileio import dump_yaml, load_yaml_file
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 
@@ -555,7 +556,9 @@ def test_read_person_config_skips_invalid_task_schedules(tmp_path: Path) -> None
         {"command": "bad", "schedules": ["invalid cron"]},
         "not a schedule",
     ]
-    save_yaml_file(person_file, person_data)
+    # Hand-written fixture content simulating a user's manual edit; no product
+    # writer produces it, so it is written directly rather than through one.
+    person_file.write_text(dump_yaml(person_data), encoding="utf-8")
 
     snapshot = service.read_person_config(
         config_dir=config_dir,
@@ -694,3 +697,35 @@ def test_update_person_preserves_existing_secrets_when_blank(
     assert store.get("ALICE_RENAMED_GITHUB_ACCESS_TOKEN") == "github-token"
     assert store.get("ALICE_RENAMED_SLACK_BOT_TOKEN") == "xoxb-token"
     assert store.get("ALICE_RENAMED_SLACK_APP_TOKEN") == "xapp-token"
+
+
+def test_intelligence_templates_are_copied_byte_for_byte(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Reading a template as text and writing it back rewrites its newlines to
+    the ones this OS uses, so the same template landed as CRLF on Windows and
+    LF elsewhere. Every device that joined a hub then found these files
+    differing -- a difference nobody made, in files nobody edited."""
+    templates = tmp_path / "templates"
+    shutil.copytree(setup_service.get_template_path(), templates)
+    crlf = [
+        templates / "intelligences/native_agent_policy.yml",
+        *sorted((templates / "intelligences/cli_agents").glob("*/*.yml")),
+    ]
+    for template in crlf:
+        template.write_bytes(template.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(setup_service, "get_template_path", lambda: templates)
+    config_dir = tmp_path / ".guildbotics/config"
+
+    SimpleProjectSetupService().write_project(
+        ProjectSetupInput(
+            config_dir=config_dir,
+            language="en",
+            llm_api_type="openai",
+            cli_agent="codex",
+        )
+    )
+
+    for template in crlf:
+        copied = config_dir / template.relative_to(templates)
+        assert copied.read_bytes() == template.read_bytes(), copied

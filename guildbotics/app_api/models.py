@@ -51,6 +51,164 @@ class WorkspaceChangeRequest(BaseModel):
     workspace_dir: Path
 
 
+class HubStatus(BaseModel):
+    """Whether this machine hosts a hub, and what it holds."""
+
+    hosted: bool
+    hub_root: Path
+    hub_id: str | None = None
+    created_at: str | None = None
+    ssh_endpoint: str | None = None
+    workspace_ids: list[str] = Field(default_factory=list)
+
+
+class HubTarget(BaseModel):
+    """Which hub an operation is about.
+
+    An empty ``endpoint`` means this machine, which needs no network and no
+    host key: the hub repositories are right there on disk.
+    """
+
+    endpoint: str = ""
+
+
+class HubTrustRequest(BaseModel):
+    """Trust a hub machine's host key, naming the one the user confirmed.
+
+    The fingerprint comes back from the caller so that what is stored is what
+    was shown, rather than whatever the machine answers when asked again.
+    """
+
+    endpoint: str = ""
+    fingerprint: str = ""
+
+
+class HubConnection(BaseModel):
+    """What this device can see of a hub before connecting a workspace to it."""
+
+    endpoint: str = ""
+    is_local: bool
+    host_key_fingerprints: list[str] = Field(default_factory=list)
+    host_key_trusted: bool = True
+    #: True when this device holds a key for the host but the host is offering
+    #: another one, so the screen asks the user to look again rather than
+    #: presenting a first contact.
+    host_key_changed: bool = False
+    workspace_ids: list[str] = Field(default_factory=list)
+
+
+class DeviceSshKey(BaseModel):
+    """This device's public key, for registration on a hub machine."""
+
+    exists: bool
+    path: Path | None = None
+    public_key: str = ""
+    fingerprint: str = ""
+
+
+class UnsendableChangeModel(BaseModel):
+    """A local change that cannot be shared until the file is repaired."""
+
+    path: str
+    reason: str
+
+
+class RejectedChangeModel(BaseModel):
+    """A local change the hub did not accept, still held on this device.
+
+    The content is deliberately absent. Recovery is a manual procedure on this
+    machine, so what is published is only what makes the stashed commit
+    findable -- and what lets the user say they are done with it.
+    """
+
+    rejection_id: str
+    occurred_at: str
+    paths: list[str]
+
+
+class WorkspaceDevice(BaseModel):
+    """A machine sharing this workspace, as the other machines see it.
+
+    Online state and what a device is currently running are deliberately
+    absent: nothing reports them yet, and an unqualified "offline" would be
+    read as a fault rather than as an absence of information.
+    """
+
+    device_id: str
+    display_name: str
+    os: str
+    joined_at: str
+    status: str = "active"
+    ssh_public_key_fingerprint: str = ""
+    # Whether this record is the machine the Desktop is running on, which is
+    # the only one whose name it can change.
+    is_self: bool = False
+
+
+class WorkspaceDevices(BaseModel):
+    devices: list[WorkspaceDevice] = Field(default_factory=list)
+    device_id: str = ""
+
+
+class DeviceRenameRequest(BaseModel):
+    """Rename this machine. Other devices are named on the machines themselves."""
+
+    display_name: str
+
+
+class WorkspaceSyncStatus(BaseModel):
+    """The synchronization state of the selected workspace."""
+
+    enabled: bool
+    workspace_id: str | None = None
+    device_id: str | None = None
+    hub_url: str | None = None
+    state: str = "disabled"
+    local_head: str | None = None
+    remote_head: str | None = None
+    ahead_count: int = 0
+    behind_count: int = 0
+    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
+    rejected_changes: list[RejectedChangeModel] = Field(default_factory=list)
+    last_success_at: str | None = None
+    last_error_code: str | None = None
+
+
+class WorkspaceSyncEnableRequest(BaseModel):
+    """Connect the selected workspace to a hub.
+
+    ``workspace_id`` names the hub workspace to join. Leaving it empty
+    registers this workspace on the hub under its own identifier.
+    """
+
+    hub: HubTarget = Field(default_factory=HubTarget)
+    workspace_id: str = ""
+
+
+class WorkspaceSyncPreview(BaseModel):
+    """What joining the workspace a hub already holds would do.
+
+    Registering is not previewed: a hub with no copy of this workspace has
+    nothing to compare against.
+    """
+
+    hub_workspace_id: str | None = None
+    workspace_id: str
+    mode: Literal["join", "reconnect"]
+    hub_only: list[str] = Field(default_factory=list)
+    device_only: list[str] = Field(default_factory=list)
+    differing: list[str] = Field(default_factory=list)
+    unsendable_changes: list[UnsendableChangeModel] = Field(default_factory=list)
+
+
+class WorkspaceSyncCloneRequest(BaseModel):
+    """Create a new workspace root from a copy of a hub's shared content."""
+
+    hub: HubTarget = Field(default_factory=HubTarget)
+    workspace_id: str
+    workspace_dir: Path
+
+
 class ProjectSummary(BaseModel):
     name: str = ""
     language_code: str
@@ -502,6 +660,19 @@ class ActivityHistorySession(BaseModel):
     rate_limit: ActivityHistoryRateLimit | None = None
 
 
+class ActivityHistoryRejection(BaseModel):
+    """What identifies a local change the hub did not accept.
+
+    Only enough to find the stashed commit is carried: recovery is a manual
+    procedure on the device that made the change, and the stashed content is
+    deliberately absent from every API.
+    """
+
+    rejection_id: str
+    paths: list[str] = Field(default_factory=list)
+    source_device_id: str = ""
+
+
 class ActivityHistoryEvent(BaseModel):
     id: str
     timestamp: str
@@ -511,6 +682,9 @@ class ActivityHistoryEvent(BaseModel):
     detail: str = ""
     url: str = ""
     links: list[ActivityHistoryLink] = Field(default_factory=list)
+    # Present only on ``sync_rejected``, whose facts are structured rather than
+    # a link to somewhere else.
+    rejection: ActivityHistoryRejection | None = None
 
 
 class ActivityHistoryResponse(BaseModel):
@@ -820,6 +994,7 @@ class LlmProvidersResponse(BaseModel):
 
 class IntelligenceConfigResponse(BaseModel):
     config_dir: Path
+    revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherited: bool = False
     model_mapping: dict[str, str] = Field(default_factory=dict)
@@ -840,6 +1015,7 @@ class IntelligenceConfigResponse(BaseModel):
 
 class IntelligenceConfigUpdateRequest(BaseModel):
     config_dir: Path
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherit_team_defaults: bool = False
     model_mapping: dict[str, str] = Field(default_factory=dict)
@@ -852,6 +1028,9 @@ class IntelligenceConfigUpdateRequest(BaseModel):
 
 class ProjectConfigResponse(BaseModel):
     config_dir: Path
+    # Config-relative path -> revision, to be sent back with the save so an
+    # edit made elsewhere since this read is refused instead of overwritten.
+    revisions: dict[str, str] = Field(default_factory=dict)
     language: str
     description: str = ""
     llm_api_type: str
@@ -912,6 +1091,9 @@ class AgentFieldStateResponse(BaseModel):
 
 class ProjectConfigUpdateRequest(GitHubProjectInput):
     config_dir: Path
+    # Revisions this form was composed against. Empty during first-time setup,
+    # where there is no earlier content to be composed against.
+    expected_revisions: dict[str, str] = Field(default_factory=dict)
     language: Literal["en", "ja"]
     description: str = ""
     llm_api_type: str

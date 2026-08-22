@@ -1,9 +1,10 @@
-import { MantineProvider } from "@mantine/core";
+import { MantineProvider, createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { startBackend } from "../api/backend";
+import { comboboxThemeComponents } from "../comboboxTheme";
 import { onWorkspaceChange } from "../appEvents";
 import { followAppLanguage } from "../i18n";
 import "../i18n";
@@ -14,6 +15,8 @@ import "../styles.css";
 import "./quick.css";
 
 const queryClient = new QueryClient();
+// This window keeps the default look; it only needs the dropdown behaviour.
+const theme = createTheme({ components: comboboxThemeComponents });
 
 /** Bridge the host's hotkey event onto the component's activation callback. */
 function subscribeToHotkey(handler: (trigger: QuickRunTrigger) => void): () => void {
@@ -60,7 +63,7 @@ function QuickWindow() {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <MantineProvider defaultColorScheme="auto">
+    <MantineProvider theme={theme} defaultColorScheme="auto">
       <QueryClientProvider client={queryClient}>
         <QuickWindow />
       </QueryClientProvider>

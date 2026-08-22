@@ -13,27 +13,31 @@ if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   exit 0
 fi
 
+# The wrappers stand in for binaries that carry their own interpreter, so they
+# must not depend on the PATH of whoever launches them. That is not the
+# developer's shell: the desktop app is started from a launcher, and the
+# managed CLI copied out of the wrapper is run by AI CLI tools and by
+# non-interactive SSH sessions on a hub machine. `uv` is therefore resolved
+# here, once, and written in as an absolute path.
+UV_BIN="$(command -v uv || true)"
+if [[ -z "$UV_BIN" ]]; then
+  echo "uv was not found. Install uv before building the desktop app." >&2
+  exit 1
+fi
+
 mkdir -p "$BIN_DIR"
 cat >"$SIDECAR_PATH" <<SH
 #!/bin/sh
 set -eu
-REPO_ROOT="$REPO_ROOT"
 cd "$REPO_ROOT"
-if command -v uv >/dev/null 2>&1; then
-  exec uv run --no-sync python -m guildbotics.app_api "\$@"
-fi
-exec python3 -m guildbotics.app_api "\$@"
+exec "$UV_BIN" run --no-sync python -m guildbotics.app_api "\$@"
 SH
 chmod +x "$SIDECAR_PATH"
 
 cat >"$CLI_PATH" <<SH
 #!/bin/sh
 set -eu
-REPO_ROOT="$REPO_ROOT"
 cd "$REPO_ROOT"
-if command -v uv >/dev/null 2>&1; then
-  exec uv run --no-sync guildbotics "\$@"
-fi
-exec python3 -m guildbotics.cli "\$@"
+exec "$UV_BIN" run --no-sync guildbotics "\$@"
 SH
 chmod +x "$CLI_PATH"

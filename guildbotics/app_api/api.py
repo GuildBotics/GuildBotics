@@ -20,18 +20,26 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api.command_input_files import CommandInputFileStore
+from guildbotics.app_api.config_revisions import (
+    apply_config_write,
+    config_repository,
+)
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
-from guildbotics.app_api.intelligences import IntelligenceConfigService
+from guildbotics.app_api.intelligences import (
+    IntelligenceConfigService,
+    intelligence_config_dir,
+)
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     AgentFieldStateResponse,
@@ -54,10 +62,16 @@ from guildbotics.app_api.models import (
     CommandRunResponse,
     ConfigStatus,
     DefaultPersonUpdateRequest,
+    DeviceRenameRequest,
+    DeviceSshKey,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
     HealthResponse,
     HotkeySettings,
+    HubConnection,
+    HubStatus,
+    HubTarget,
+    HubTrustRequest,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     LlmProvidersResponse,
@@ -91,14 +105,21 @@ from guildbotics.app_api.models import (
     TroubleshootingResponse,
     VerifyResponse,
     WorkspaceChangeRequest,
+    WorkspaceDevices,
+    WorkspaceSyncCloneRequest,
+    WorkspaceSyncEnableRequest,
+    WorkspaceSyncPreview,
+    WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
 from guildbotics.editions.simple.github_app_setup import (
     GitHubAppRegistration,
     GitHubAppRegistrationService,
 )
 from guildbotics.editions.simple.setup_service import (
+    PROJECT_CONFIG_PATHS,
     PersonConfigSnapshot,
     PersonSetupInput,
     PersonSetupResult,
@@ -111,6 +132,7 @@ from guildbotics.editions.simple.setup_service import (
     SimplePersonSetupService,
     SimpleProjectSetupService,
     github_app_key_dir,
+    person_config_paths,
 )
 from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
@@ -124,6 +146,7 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
 )
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 # Origins the packaged desktop webview serves the app from. Windows uses the
@@ -139,6 +162,10 @@ class ConfigWriteResponse(BaseModel):
     project: ProjectSetupResult | None = None
     member: PersonSetupResult | None = None
     intelligence: dict[str, Any] | None = None
+    # Where the files this write touched now stand. The screen that saved is
+    # still open and will very likely save again, so handing it the new
+    # revisions is what keeps its next save from colliding with this one.
+    revisions: dict[str, str] = Field(default_factory=dict)
 
 
 class AvatarMutationResponse(BaseModel):
@@ -175,6 +202,9 @@ def create_app(
         app_runtime, "system_service_run_id", secrets.token_urlsafe(16)
     )
     input_file_store = command_input_file_store or CommandInputFileStore()
+    # The service holds no state of its own: the queue it starts and stops
+    # is process-wide, so this instance and the runtime's act on the same one.
+    sync_service = WorkspaceSyncService()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -186,6 +216,7 @@ def create_app(
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
+            sync_service.activate()
             if not any(
                 isinstance(handler, EventBusLogHandler) for handler in logger.handlers
             ):
@@ -199,6 +230,7 @@ def create_app(
             finally:
                 try:
                     app_runtime.stop_scheduler(force=True)
+                    sync_service.deactivate()
                 finally:
                     if added_app_handler:
                         logger.removeHandler(log_handler)
@@ -236,6 +268,19 @@ def create_app(
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(_, exc: AppApiError) -> JSONResponse:
         return _error_response(exc.status_code, exc.code, exc.message, exc.context)
+
+    @app.exception_handler(SharedWriteBusyError)
+    async def shared_write_busy_handler(_, exc: SharedWriteBusyError) -> JSONResponse:
+        # One handler rather than one translation per route: every config
+        # change and every enrollment step can meet a busy lock, and none of
+        # them should have to name it.
+        return _error_response(
+            503,
+            "config_busy",
+            "Synchronization is still writing to this workspace, so nothing "
+            "was saved. Try again in a moment.",
+            {},
+        )
 
     @app.exception_handler(WorkspaceNotConfiguredError)
     async def workspace_not_configured_handler(
@@ -278,6 +323,129 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigStatus:
         return app_runtime.set_workspace(request.workspace_dir)
+
+    @app.get("/hub", response_model=HubStatus, responses=error_responses)
+    def hub_status(_: None = Depends(require_token)) -> HubStatus:
+        return sync_service.get_hub()
+
+    @app.post("/hub", response_model=HubStatus, responses=error_responses)
+    def hub_create(_: None = Depends(require_token)) -> HubStatus:
+        return sync_service.create_hub()
+
+    @app.post("/hub/inspect", response_model=HubConnection, responses=error_responses)
+    def hub_inspect(
+        request: HubTarget,
+        _: None = Depends(require_token),
+    ) -> HubConnection:
+        return sync_service.inspect_hub(request)
+
+    @app.post("/hub/trust", response_model=HubConnection, responses=error_responses)
+    def hub_trust(
+        request: HubTrustRequest,
+        _: None = Depends(require_token),
+    ) -> HubConnection:
+        return sync_service.trust_hub(request)
+
+    @app.get("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
+    def hub_ssh_key(_: None = Depends(require_token)) -> DeviceSshKey:
+        return sync_service.get_ssh_key()
+
+    @app.post("/hub/ssh-key", response_model=DeviceSshKey, responses=error_responses)
+    def hub_ssh_key_create(_: None = Depends(require_token)) -> DeviceSshKey:
+        return sync_service.create_ssh_key()
+
+    @app.get(
+        "/workspace/devices",
+        response_model=WorkspaceDevices,
+        responses=error_responses,
+    )
+    def workspace_devices(_: None = Depends(require_token)) -> WorkspaceDevices:
+        return sync_service.get_devices()
+
+    @app.post(
+        "/workspace/devices/self",
+        response_model=WorkspaceDevices,
+        responses=error_responses,
+    )
+    def workspace_device_rename(
+        request: DeviceRenameRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceDevices:
+        return sync_service.rename_device(request)
+
+    @app.get(
+        "/workspace/sync",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_status(
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.get_status()
+
+    @app.post(
+        "/workspace/sync/preview",
+        response_model=WorkspaceSyncPreview,
+        responses=error_responses,
+    )
+    def workspace_sync_preview(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncPreview:
+        return sync_service.preview(request)
+
+    @app.post(
+        "/workspace/sync/enable",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_enable(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.enable(request)
+
+    @app.post(
+        "/workspace/sync/hub",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_change_hub(
+        request: WorkspaceSyncEnableRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        return sync_service.change_hub(request)
+
+    @app.post(
+        "/workspace/sync/retry",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_retry(_: None = Depends(require_token)) -> WorkspaceSyncStatus:
+        return sync_service.retry()
+
+    @app.post(
+        "/workspace/sync/rejections/{rejection_id}/discard",
+        response_model=WorkspaceSyncStatus,
+        responses=error_responses,
+    )
+    def workspace_sync_discard_rejection(
+        rejection_id: str,
+        _: None = Depends(require_token),
+    ) -> WorkspaceSyncStatus:
+        """Drop one displaced commit the user has finished with."""
+        return sync_service.discard_rejection(rejection_id)
+
+    @app.post(
+        "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses
+    )
+    def workspace_sync_clone(
+        request: WorkspaceSyncCloneRequest,
+        _: None = Depends(require_token),
+    ) -> ConfigStatus:
+        """Take a copy of a hub's workspace and switch to it."""
+        destination = sync_service.clone(request)
+        return app_runtime.set_workspace(destination)
 
     @app.get("/team", response_model=TeamSummary, responses=error_responses)
     def team(_: None = Depends(require_token)) -> TeamSummary:
@@ -737,13 +905,17 @@ def create_app(
         _: None = Depends(require_token),
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
+        revisions = config_repository(config_dir).tree_revisions(
+            intelligence_config_dir(person_id)
+        )
         try:
-            return IntelligenceConfigService().read_config(
+            response = IntelligenceConfigService().read_config(
                 config_dir=config_dir,
                 person_id=person_id,
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
+        return response.model_copy(update={"revisions": revisions})
 
     @app.put(
         "/config/intelligences",
@@ -754,12 +926,23 @@ def create_app(
         request: IntelligenceConfigUpdateRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
+        scope = intelligence_config_dir(request.person_id)
         try:
-            result = IntelligenceConfigService().update_config(request)
+            receipt = apply_config_write(
+                request.config_dir,
+                lambda: IntelligenceConfigService().update_config(request),
+                expected=request.expected_revisions,
+                report=lambda: config_repository(request.config_dir).tree_revisions(
+                    scope
+                ),
+            )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
         return ConfigWriteResponse(
-            intelligence={"files": [file.model_dump() for file in result.files]}
+            intelligence={
+                "files": [file.model_dump() for file in receipt.result.files]
+            },
+            revisions=receipt.revisions,
         )
 
     @app.post(
@@ -771,11 +954,20 @@ def create_app(
         request: ProjectSetupInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
+        # Nothing to compare against on a first setup, but the workspace may
+        # already be synchronized -- taking a copy from a hub creates one, and
+        # its queue is running while this writes.
         try:
-            result = SimpleProjectSetupService().write_project(request)
+            receipt = apply_config_write(
+                request.config_dir,
+                lambda: SimpleProjectSetupService().write_project(request),
+                report=lambda: config_repository(request.config_dir).revisions(
+                    PROJECT_CONFIG_PATHS
+                ),
+            )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(project=result)
+        return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.get(
         "/config/project",
@@ -792,6 +984,10 @@ def create_app(
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
+        # Revisions first: pairing content read earlier with a revision read
+        # later would describe a state that never existed, and a save composed
+        # against it would slip past the very check it feeds.
+        revisions = config_repository(config_dir).revisions(PROJECT_CONFIG_PATHS)
         try:
             snapshot: ProjectConfigSnapshot = (
                 SimpleProjectSetupService().read_project_config(
@@ -800,7 +996,9 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ProjectConfigResponse.model_validate(snapshot.model_dump())
+        return ProjectConfigResponse.model_validate(
+            snapshot.model_dump() | {"revisions": revisions}
+        )
 
     @app.post(
         "/config/project/status-options",
@@ -845,12 +1043,19 @@ def create_app(
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
         try:
-            result = SimpleProjectSetupService().update_project(
-                ProjectUpdateInput.model_validate(request.model_dump())
+            receipt = apply_config_write(
+                request.config_dir,
+                lambda: SimpleProjectSetupService().update_project(
+                    ProjectUpdateInput.model_validate(request.model_dump())
+                ),
+                expected=request.expected_revisions,
+                report=lambda: config_repository(request.config_dir).revisions(
+                    PROJECT_CONFIG_PATHS
+                ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(project=result)
+        return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.put(
         "/config/project/default-person",
@@ -861,14 +1066,21 @@ def create_app(
         request: DefaultPersonUpdateRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
+        config_dir = _resolve_existing_config_dir(app_runtime)
         try:
-            result = SimpleProjectSetupService().set_default_person(
-                config_dir=_resolve_existing_config_dir(app_runtime),
-                person_id=request.person_id,
+            receipt = apply_config_write(
+                config_dir,
+                lambda: SimpleProjectSetupService().set_default_person(
+                    config_dir=config_dir,
+                    person_id=request.person_id,
+                ),
+                report=lambda: config_repository(config_dir).revisions(
+                    PROJECT_CONFIG_PATHS
+                ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(project=result)
+        return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.post(
         "/config/members",
@@ -884,13 +1096,18 @@ def create_app(
             status = app_runtime.get_config_status()
             if _get_existing_config_dir(status) is not None:
                 payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
+            member = PersonSetupInput.model_validate(payload)
 
-            result = SimplePersonSetupService().write_person(
-                PersonSetupInput.model_validate(payload)
+            receipt = apply_config_write(
+                member.config_dir,
+                lambda: SimplePersonSetupService().write_person(member),
+                report=lambda: config_repository(member.config_dir).revisions(
+                    person_config_paths(member.person_id)
+                ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(member=result)
+        return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.get(
         "/config/members/{person_id}",
@@ -910,6 +1127,9 @@ def create_app(
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
+        revisions = config_repository(config_dir).revisions(
+            person_config_paths(person_id)
+        )
         try:
             snapshot: PersonConfigSnapshot = (
                 SimplePersonSetupService().read_person_config(
@@ -919,7 +1139,7 @@ def create_app(
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return snapshot
+        return snapshot.model_copy(update={"revisions": revisions})
 
     @app.put(
         "/config/members/{person_id}",
@@ -939,14 +1159,25 @@ def create_app(
                     "original_person_id must match the path parameter.",
                     status_code=400,
                 )
-            payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
+            config_dir = _resolve_existing_config_dir(app_runtime)
+            payload["config_dir"] = config_dir
 
-            result = SimplePersonSetupService().update_person(
-                PersonUpdateInput.model_validate(payload)
+            receipt = apply_config_write(
+                config_dir,
+                lambda: SimplePersonSetupService().update_person(
+                    PersonUpdateInput.model_validate(payload)
+                ),
+                expected=request.expected_revisions,
+                # The member may have been renamed, so the paths that matter
+                # now are the new ones, not the ones the request was composed
+                # against.
+                report=lambda: config_repository(config_dir).revisions(
+                    person_config_paths(request.person_id)
+                ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(member=result)
+        return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.delete(
         "/config/members/{person_id}",
@@ -958,14 +1189,21 @@ def create_app(
         request: MemberDeleteRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
+        config_dir = _resolve_existing_config_dir(app_runtime)
         try:
-            result = SimplePersonSetupService().delete_person(
-                config_dir=_resolve_existing_config_dir(app_runtime),
-                person_id=person_id,
+            receipt = apply_config_write(
+                config_dir,
+                lambda: SimplePersonSetupService().delete_person(
+                    config_dir=config_dir,
+                    person_id=person_id,
+                ),
+                report=lambda: config_repository(config_dir).revisions(
+                    person_config_paths(person_id)
+                ),
             )
         except SetupServiceError as exc:
             raise AppApiError(exc.code, exc.message) from exc
-        return ConfigWriteResponse(member=result)
+        return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.post(
         "/config/members/resolve",
@@ -1150,7 +1388,7 @@ def create_app(
         response_model=AvatarMutationResponse,
         responses=error_responses,
     )
-    async def config_member_avatar_upload(
+    def config_member_avatar_upload(
         person_id: str,
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
@@ -1163,13 +1401,21 @@ def create_app(
                 "Project config was not found.",
                 status_code=400,
             )
-        from guildbotics.app_api.avatar import save_avatar_file
+        from guildbotics.app_api.avatar import read_upload, store_avatar
 
         try:
-            dest_path = save_avatar_file(config_dir, person_id, file)
+            content, suffix = read_upload(file)
+            dest_path = apply_config_write(
+                config_dir,
+                lambda: store_avatar(config_dir, person_id, content, suffix),
+            ).result
         except ValueError as exc:
             # Validation failures (e.g. too large) carry a safe, stable message.
             raise AppApiError("avatar_invalid", str(exc), status_code=400) from exc
+        except (AppApiError, SharedWriteBusyError):
+            # Both already say what happened, and the catch-all below would
+            # bury them under a generic 500.
+            raise
         except Exception as exc:
             logger.exception("Failed to save avatar for %s", person_id)
             raise AppApiError(
@@ -1212,14 +1458,15 @@ def create_app(
                 status_code=400,
             )
 
-        from guildbotics.app_api.avatar import (
-            get_github_avatar_url,
-            import_avatar_from_url,
-        )
+        from guildbotics.app_api.avatar import get_github_avatar_url
 
         try:
             avatar_url = await get_github_avatar_url(github_username)
-            dest_path = await import_avatar_from_url(config_dir, person_id, avatar_url)
+            dest_path = await _store_downloaded_avatar(
+                config_dir, person_id, avatar_url
+            )
+        except (AppApiError, SharedWriteBusyError):
+            raise
         except Exception as exc:
             logger.exception("Failed to import avatar from GitHub for %s", person_id)
             raise AppApiError(
@@ -1288,14 +1535,15 @@ def create_app(
                 status_code=400,
             )
 
-        from guildbotics.app_api.avatar import (
-            get_slack_avatar_url,
-            import_avatar_from_url,
-        )
+        from guildbotics.app_api.avatar import get_slack_avatar_url
 
         try:
             avatar_url = await get_slack_avatar_url(slack_user_id, slack_bot_token)
-            dest_path = await import_avatar_from_url(config_dir, person_id, avatar_url)
+            dest_path = await _store_downloaded_avatar(
+                config_dir, person_id, avatar_url
+            )
+        except (AppApiError, SharedWriteBusyError):
+            raise
         except Exception as exc:
             if "missing_scope" in str(exc):
                 raise AppApiError(
@@ -1321,6 +1569,25 @@ def create_app(
         await _stream(websocket, token_query, token, bus.subscribe_logs)
 
     return app
+
+
+async def _store_downloaded_avatar(config_dir: Path, person_id: str, url: str) -> Path:
+    """Fetch an avatar from a provider and put it in place.
+
+    The download waits on a remote server, so it stays outside the workspace's
+    shared-write lock; replacing the file is one change to the shared state, so
+    it happens inside one. That lock blocks, and this runs on the event loop,
+    hence the thread.
+    """
+    from guildbotics.app_api.avatar import download_avatar, store_avatar
+
+    content, suffix = await download_avatar(url)
+    receipt = await run_in_threadpool(
+        apply_config_write,
+        config_dir,
+        lambda: store_avatar(config_dir, person_id, content, suffix),
+    )
+    return receipt.result
 
 
 def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:

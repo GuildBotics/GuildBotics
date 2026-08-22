@@ -1,4 +1,6 @@
 import os
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -31,14 +33,64 @@ def find_package_subdir(subpath: Path) -> Path:
         current = current.parent
 
 
+def get_machine_root() -> Path:
+    """Return the machine-wide GuildBotics directory, ``~/.guildbotics``.
+
+    Everything that belongs to the machine rather than to a workspace lives
+    under it: the managed CLI, this device's state, and a hub when this machine
+    hosts one.
+    """
+    return Path.home() / ".guildbotics"
+
+
 def get_machine_state_root() -> Path:
     """Return the machine-local GuildBotics state root."""
-    return Path.home() / ".guildbotics" / "data"
+    return get_machine_root() / "data"
 
 
 def get_machine_state_path(*parts: str) -> Path:
     """Return a path under the machine-local GuildBotics state root."""
     return get_machine_state_root().joinpath(*parts)
+
+
+#: What an in-progress atomic write is called while it exists. It is created
+#: beside its destination, which for a shared file means inside the tree the
+#: sync queue enumerates, so the queue has to be told to ignore it by name.
+ATOMIC_WRITE_SUFFIX = ".tmp"
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data`` so readers never observe a partial file.
+
+    Args:
+        path (Path): The destination file. Parent directories are created.
+        data (bytes): The complete new file content.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=ATOMIC_WRITE_SUFFIX,
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            tmp_path = Path(handle.name)
+        tmp_path.replace(path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace ``path`` with UTF-8 encoded ``text`` atomically."""
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def _resolve_path(path: Path) -> Path:
@@ -323,6 +375,26 @@ def load_yaml_file(file: Path) -> dict | list[dict]:
         return yaml.safe_load(f)
 
 
+def dump_yaml(data: dict | list[dict]) -> str:
+    """Serialize ``data`` the one way this project writes YAML.
+
+    Keys whose value is None or an empty string are omitted, so a config file
+    describes only what was actually set.
+
+    Args:
+        data (dict or list of dict): Data to serialize.
+
+    Returns:
+        str: The YAML text.
+    """
+    return yaml.dump(
+        _clean_data(data),
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
 def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
     """
     Save the given data to a YAML file, omitting keys with None or empty-string values.
@@ -334,12 +406,13 @@ def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
     Returns:
         None
     """
-    # Clean data by removing keys with None or empty-string values
-    cleaned = _clean_data(data)
-    with file_path.open("w", encoding="utf-8") as f:
-        yaml.dump(
-            cleaned, f, allow_unicode=True, sort_keys=False, default_flow_style=False
-        )
+    # Imported here because the port itself builds on this module. Config is a
+    # shared root, so every YAML save under it has to reach the sync queue;
+    # routing it through the port keeps that true for callers that never learn
+    # synchronization exists, and paths outside the shared roots are dropped.
+    from guildbotics.utils.workspace_sync_port import write_shared_text
+
+    write_shared_text(file_path, dump_yaml(data))
 
 
 def _clean_data(data):
