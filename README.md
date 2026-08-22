@@ -597,61 +597,72 @@ machines reconnect in does not lose anything.
 #### When two machines change the same file
 
 Whichever change reaches the hub first is the one that is kept. The other machine's commit
-is not merged and not discarded: it is set aside locally, and an entry appears in Activity
-History naming the files, the device, the time, and a recovery ID. Synchronization does not
-stop, and no one is asked to resolve anything.
+is not merged and not discarded: it is set aside locally, and it appears on that machine
+under **Settings → Sync**, in "Changes set aside", with the time, the files, and a recovery
+ID (the warning band's "Sync settings" button opens the same screen). Activity History keeps
+the same record. Synchronization does not stop, and no one is asked to resolve anything.
+
+Content that was not adopted when a machine with an existing `.guildbotics/` joined the hub
+is listed there the same way.
 
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set
 aside change automatically, and neither the desktop app nor the API will show its contents.
+Reading it takes the Git commands below.
 
-The set aside commit exists **only on the machine that made the change**, so every command
-below runs there. Take `<workspace>`, `<path>`, and `<rejection_id>` from the Activity
-History entry.
+The set aside content exists **only on the machine that made the change**. Run the commands
+on the machine whose **Settings → Sync** lists the change under "Changes set aside", and
+fill in the placeholders as follows.
 
-1. Confirm the set aside commit is present:
+| Placeholder | What goes there |
+| --- | --- |
+| `<workspace>` | The workspace directory, as shown in the "Workspace" field under "Settings → Project" |
+| `<recovery ID>` | The value in the "Recovery ID" column |
+| `<path>` | One entry from the "Files" column (for example `config/team/members/yuki/person.yml`) |
+| `<path>...` | The "Files" entries separated by spaces (for example `config/team/project.yml config/team/members/yuki/person.yml`) |
 
-   ```bash
-   git -C "<workspace>/.guildbotics" show-ref --verify "refs/guildbotics/rejected/<rejection_id>"
-   ```
-
-2. List the files it covers:
-
-   ```bash
-   git -C "<workspace>/.guildbotics" diff-tree --no-commit-id --name-status -r "refs/guildbotics/rejected/<rejection_id>"
-   ```
-
-3. Read what it held, or compare it against what is in use now:
+1. Read what was set aside. This shows the difference from what is in use now (`+` lines
+   are the set aside side):
 
    ```bash
-   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
-   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<rejection_id>:<path>"
+   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<recovery ID>" -- <path>...
    ```
 
-   A file the set aside commit deleted has no content to show, so `git diff` reports only the
-   deletion. Binary files do not display usefully; export them in the next step instead.
-
-4. If you need the files outside Git, export just the paths from step 2:
+   To print the set aside side in full rather than as a diff, name one file at a time:
 
    ```bash
-   git -C "<workspace>/.guildbotics" archive --format=zip --output="<output-directory>/guildbotics-rejected-<rejection_id>.zip" "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
+   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<recovery ID>:<path>"
    ```
 
-5. Make the changes you still want again through GuildBotics, starting from the content
+   A file the set aside change deleted has no content to show, so `git diff` reports only the
+   deletion. Binary files such as images do not display usefully; export them in the next
+   step instead.
+
+2. If you need the files outside Git, export them together as a zip. Point
+   `<output-directory>` outside `<workspace>/.guildbotics/`; `<output-name>` is up to you.
+   A zip is used because saving through shell redirection (`>`) can change the text
+   encoding or corrupt binary files, depending on the shell.
+
+   ```bash
+   git -C "<workspace>/.guildbotics" archive --format=zip --output="<output-directory>/<output-name>.zip" "refs/guildbotics/rejected/<recovery ID>" -- <path>...
+   ```
+
+3. Make the changes you still want again through GuildBotics, starting from the content
    currently in use. They are shared like any other edit.
 
 Do not do any of the following to the synchronization repository, as they replace shared
 content without going through the rules above:
 
-- `checkout`, `switch`, `reset`, `merge`, `rebase`, `cherry-pick`, or `push` a rejected ref
+- `checkout`, `switch`, `reset`, `merge`, `rebase`, `cherry-pick`, or `push` a
+  `refs/guildbotics/rejected/...` ref
 - Write the export into `<workspace>/.guildbotics/`
 
-A set aside change cannot be recovered if the machine that made it is lost, or if its
-rejected ref is removed. Nothing prunes them automatically.
+A set aside change cannot be recovered if the machine that made it is lost, or if it has
+been discarded there. Nothing prunes them automatically.
 
 Once you are done looking, discard it from **Settings → Sync**, under "Changes set
-aside". Discarding removes the rejected ref and clears the warning. This machine
+aside". Discarding removes the set aside content and clears the warning. This machine
 holds the only copy, so look at the content with the steps above before
 discarding; the activity history record stays either way.
 

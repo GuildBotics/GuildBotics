@@ -594,58 +594,67 @@ Windows では installer が managed bin を user PATH へ追加するため、S
 #### 2 台が同じファイルを変更したとき
 
 先に Hub へ確定した変更が残ります。もう一方のマシンの commit は、マージも破棄もされません。
-ローカルに退避され、対象ファイル・device・時刻・回復用 ID が Activity 履歴に記録されます。
-同期は停止せず、利用者が解決を求められることもありません。
+ローカルに退避され、そのマシンの**設定 → 同期**の「退避された変更」に、退避日時・対象ファイル・
+回復用 ID が一覧されます（警告バンドの「同期設定」からも開けます）。Activity 履歴にも同じ記録が
+残ります。同期は停止せず、利用者が解決を求められることもありません。
+
+既存の `.guildbotics/` を持つマシンが Hub へ参加したときに採用されなかった内容も、同じ一覧に
+退避として並びます。
 
 #### 反映されなかった変更を回復する
 
 これは通常操作ではなく、例外的な手順です。GuildBotics が退避内容を自動で復元することはなく、
-デスクトップアプリからも API からも内容は参照できません。
+デスクトップアプリからも API からも内容は参照できません。内容を読むには、以下の Git コマンドを
+使います。
 
-退避された commit は**変更したマシンにだけ**存在するため、以下のコマンドはすべてそのマシンで
-実行します。`<workspace>`・`<path>`・`<rejection_id>` は Activity 履歴の記録から取ります。
+退避された内容は**変更したマシンにだけ**存在します。**設定 → 同期**の「退避された変更」に
+その退避が表示されているマシンで、以下のコマンドを実行してください。コマンド中の記号は次の
+とおり置き換えます。
 
-1. 退避された commit があることを確認します。
+| 記号 | 入れるもの |
+| --- | --- |
+| `<workspace>` | そのワークスペースのディレクトリ（「設定 → プロジェクト」の「ワークスペース」欄の値） |
+| `<回復用 ID>` | 一覧の「回復用 ID」の値 |
+| `<path>` | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/person.yml`） |
+| `<path>...` | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/person.yml`） |
+
+1. 退避された内容を読みます。現在採用されている内容との差分を表示します（`+` の行が退避された側）。
 
    ```bash
-   git -C "<workspace>/.guildbotics" show-ref --verify "refs/guildbotics/rejected/<rejection_id>"
+   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<回復用 ID>" -- <path>...
    ```
 
-2. 対象のファイルを確認します。
+   差分ではなく退避された側の全文を見たい場合は、ファイルを 1 つずつ指定します。
 
    ```bash
-   git -C "<workspace>/.guildbotics" diff-tree --no-commit-id --name-status -r "refs/guildbotics/rejected/<rejection_id>"
-   ```
-
-3. 退避された内容を読むか、現在採用されている内容と比較します。
-
-   ```bash
-   git -C "<workspace>/.guildbotics" diff HEAD "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
-   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<rejection_id>:<path>"
+   git -C "<workspace>/.guildbotics" show "refs/guildbotics/rejected/<回復用 ID>:<path>"
    ```
 
    退避側で削除されたファイルは表示する内容が無いため、`git diff` では削除の事実だけが分かります。
-   バイナリファイルは表示に適さないので、次の手順で書き出して確認してください。
+   画像などのバイナリファイルは表示に適さないので、次の手順で書き出して確認してください。
 
-4. Git の外にファイルが必要な場合は、手順 2 で確認した path だけを書き出します。
+2. Git の外にファイルとして取り出したい場合は、対象ファイルをまとめて zip に書き出します。
+   `<出力先ディレクトリ>` には `<workspace>/.guildbotics/` の外を指定します。`<出力ファイル名>` は任意です。
+   リダイレクト（`>`）で保存すると環境によって文字コードが変わったりバイナリが壊れたりするため、
+   zip を使います。
 
    ```bash
-   git -C "<workspace>/.guildbotics" archive --format=zip --output="<出力先ディレクトリ>/guildbotics-rejected-<rejection_id>.zip" "refs/guildbotics/rejected/<rejection_id>" -- "<path>"
+   git -C "<workspace>/.guildbotics" archive --format=zip --output="<出力先ディレクトリ>/<出力ファイル名>.zip" "refs/guildbotics/rejected/<回復用 ID>" -- <path>...
    ```
 
-5. 必要な変更は、現在採用されている内容を起点に、GuildBotics の通常の編集操作で改めて作成します。
+3. 必要な変更は、現在採用されている内容を起点に、GuildBotics の通常の編集操作で改めて作成します。
    保存した変更は他の編集と同じように共有されます。
 
 同期リポジトリに対して次の操作はしないでください。上の規則を経由せずに共有内容を置き換えてしまいます。
 
-- rejected ref に対する `checkout` / `switch` / `reset` / `merge` / `rebase` / `cherry-pick` / `push`
+- `refs/guildbotics/rejected/...` に対する `checkout` / `switch` / `reset` / `merge` / `rebase` / `cherry-pick` / `push`
 - 書き出し先を `<workspace>/.guildbotics/` 配下にすること
 
-変更したマシンを失った場合や、そのマシンの rejected ref が失われた場合は回復できません。
+変更したマシンを失った場合や、そのマシンの退避が破棄された場合は回復できません。
 自動削除は行いません。
 
 内容の確認が済んだら、**設定 → 同期**の「退避された変更」から破棄できます。破棄すると
-rejected ref が削除され、警告表示も消えます。控えを持っているのはこのマシンだけなので、
+退避された内容が削除され、警告表示も消えます。控えを持っているのはこのマシンだけなので、
 破棄する前に上の手順で内容を確認してください。破棄しても Activity 履歴の記録は残ります。
 
 #### sidebar の表示の意味
