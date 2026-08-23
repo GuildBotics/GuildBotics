@@ -36,28 +36,18 @@ An outer span simply subsumes the inner ones.
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 
-from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
-from guildbotics.utils.fileio import (
-    WorkspaceNotConfiguredError,
-    get_workspace_local_path,
-    get_workspace_root,
-)
+from guildbotics.utils.advisory_lock import workspace_reentrant_lock
+from guildbotics.utils.fileio import get_workspace_local_path
 
 #: How long each side waits for the other. Generous on purpose: a first copy
 #: from a hub restores thousands of files inside this lock, and a save refused
 #: there would be reported as an error the user can do nothing about.
 LOCK_TIMEOUT_SECONDS = 30.0
-
-#: Workspaces whose lock the current thread holds, and how deep. Ownership is
-#: per thread because that is what the lock actually orders: a second thread of
-#: the same process blocks on the file lock like any other process would.
-_held = threading.local()
 
 
 class SharedWriteBusyError(RuntimeError):
@@ -69,14 +59,6 @@ class SharedWriteBusyError(RuntimeError):
     this, and a caller that has to tell the two apart should not have to name
     a lock timeout to do it.
     """
-
-
-def _held_depths() -> dict[Path, int]:
-    depths: dict[Path, int] | None = getattr(_held, "depths", None)
-    if depths is None:
-        depths = {}
-        _held.depths = depths
-    return depths
 
 
 def shared_write_lock_path(workspace_root: Path | None = None) -> Path:
@@ -109,38 +91,16 @@ def shared_write_lock(
         SharedWriteBusyError: When the other side holds it past ``timeout``.
     """
     wait = LOCK_TIMEOUT_SECONDS if timeout is None else timeout
-    try:
-        path = shared_write_lock_path(workspace_root)
-        root = get_workspace_root(workspace_root)
-    except WorkspaceNotConfiguredError:
+    with workspace_reentrant_lock(
+        workspace_root,
+        path_parts=("run", "shared-write.lock"),
+        key_prefix="shared-write",
+        timeout=wait,
+        timeout_error=lambda locked_path, locked_timeout: SharedWriteBusyError(
+            f"Another writer held {locked_path} for longer than {locked_timeout:g}s."
+        ),
+    ):
         yield
-        return
-    depths = _held_depths()
-    if root in depths:
-        # Already this thread's: a wider span is in progress and subsumes this
-        # one. Taking the file lock again would block on this thread's own
-        # handle until the timeout and then blame a writer that is not there.
-        depths[root] += 1
-        try:
-            yield
-        finally:
-            depths[root] -= 1
-        return
-    stack = ExitStack()
-    # Only the acquisition is translated. A timeout raised by the body belongs
-    # to whatever the body was doing, not to waiting for this lock.
-    try:
-        stack.enter_context(held_lock(path, timeout=wait))
-    except LockTimeoutError as exc:
-        raise SharedWriteBusyError(
-            f"Another writer held {path} for longer than {wait:g}s."
-        ) from exc
-    depths[root] = 1
-    try:
-        with stack:
-            yield
-    finally:
-        del depths[root]
 
 
 def shared_write_operation[**P, R](func: Callable[P, R]) -> Callable[P, R]:

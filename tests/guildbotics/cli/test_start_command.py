@@ -30,6 +30,7 @@ class _FakeScheduler:
         scheduled_source_enabled=True,
         routine_source_enabled=True,
         event_queue_source_enabled=True,
+        execution_coordinator=None,
     ):
         self.context = context
         self.consecutive_error_limit = consecutive_error_limit
@@ -37,6 +38,7 @@ class _FakeScheduler:
         self.scheduled_source_enabled = scheduled_source_enabled
         self.routine_source_enabled = routine_source_enabled
         self.event_queue_source_enabled = event_queue_source_enabled
+        self.execution_coordinator = execution_coordinator
         self.start_called = 0
         self.shutdown_called = 0
         self.shutdown_calls: list[dict[str, object]] = []
@@ -312,6 +314,7 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
         scheduled_source_enabled=True,
         routine_source_enabled=True,
         event_queue_source_enabled=True,
+        execution_coordinator=None,
     ):
         nonlocal original_factory
         inst = _FakeScheduler(
@@ -321,6 +324,7 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
             scheduled_source_enabled,
             routine_source_enabled,
             event_queue_source_enabled,
+            execution_coordinator,
         )
         original_factory = inst
         created["scheduler"] = inst

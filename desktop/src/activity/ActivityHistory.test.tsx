@@ -25,6 +25,7 @@ import {
   getIntelligenceConfig,
   getSchedulerStatus,
   getTraceDetail,
+  getWorkspaceLive,
 } from "../api/client";
 import type {
   ActivityHistoryResponse,
@@ -33,6 +34,7 @@ import type {
   RuntimeStatus,
   RuntimeUnitStatus,
   TraceRecord,
+  WorkspaceLiveState,
 } from "../api/client";
 import i18n from "../i18n";
 
@@ -46,6 +48,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getIntelligenceConfig: vi.fn(),
     getSchedulerStatus: vi.fn(),
     getTraceDetail: vi.fn(),
+    getWorkspaceLive: vi.fn(),
     memberAvatarUrl: (personId: string) => `http://avatar.test/${personId}`,
   };
 });
@@ -167,6 +170,33 @@ const ALICE_ROUTINE = {
   next_routine_at: "2026-07-01T11:59:00Z",
 };
 
+const REMOTE_LIVE: WorkspaceLiveState = {
+  schema_version: 1,
+  workspace_id: "workspace-1",
+  device_id: "device-2",
+  publisher_id: "publisher-2",
+  observed_at: "2026-07-01T11:59:30Z",
+  status: "delayed",
+  works: [
+    {
+      work_id: "remote-work",
+      run_id: "remote-run",
+      member_id: "alice",
+      workflow_name: "workflows/ticket_driven_workflow",
+      presentation: {
+        label_key: "",
+        label_fallback: "",
+        message_key: "",
+        message: "remote step",
+        message_params: {},
+        tone: "info",
+        effort: "",
+      },
+      retry_at: null,
+    },
+  ],
+};
+
 function liveTraceRecord(message: string): TraceRecord {
   return {
     kind: "event",
@@ -236,6 +266,7 @@ beforeEach(() => {
     summary: null,
     records: [],
   });
+  vi.mocked(getWorkspaceLive).mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -333,6 +364,16 @@ describe("ActivityHistoryPage", () => {
 
     const status = await screen.findByRole("link", { name: "Current work" });
     expect(status).toHaveTextContent("workflows/ticket_driven_workflow");
+  });
+
+  it("shows remote current work and its delayed device status", async () => {
+    vi.mocked(getWorkspaceLive).mockResolvedValue([REMOTE_LIVE]);
+    renderActivity();
+
+    expect(await screen.findByText("Updates delayed: remote step")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Updates from device device-2 are delayed."),
+    ).toBeInTheDocument();
   });
 
   it("shows no running-work status for idle members", async () => {

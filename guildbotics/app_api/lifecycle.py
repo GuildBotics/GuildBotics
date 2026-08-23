@@ -15,7 +15,11 @@ from guildbotics.app_api.models import (
     SchedulerStartRequest,
 )
 from guildbotics.drivers import EventListenerRunner, TaskScheduler
-from guildbotics.drivers.execution import ActiveWork, ExecutionCoordinator
+from guildbotics.drivers.execution import (
+    ActiveWork,
+    ExecutionCoordinator,
+    TaskRunCoordinator,
+)
 from guildbotics.observability import new_id
 from guildbotics.runtime import Context
 from guildbotics.runtime.service_lock import ServiceLock
@@ -34,9 +38,11 @@ class RuntimeLifecycleService:
         stop_timeout_seconds: float = 10.0,
         execution_coordinator: ExecutionCoordinator | None = None,
         service_lock: ServiceLock | None = None,
+        before_start: Callable[[], None] | None = None,
     ) -> None:
-        self._execution = execution_coordinator or ExecutionCoordinator()
+        self._execution = execution_coordinator or TaskRunCoordinator()
         self._service_lock = service_lock or ServiceLock()
+        self._before_start = before_start
         self._start_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._active_targets: set[RuntimeTarget] = set()
@@ -76,6 +82,8 @@ class RuntimeLifecycleService:
             self._start_in_progress = True
 
         try:
+            if self._before_start is not None:
+                self._before_start()
             sources = request.sources
             scheduled_source_enabled = sources.scheduled
             routine_source_enabled = sources.routine

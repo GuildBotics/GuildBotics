@@ -325,12 +325,34 @@ def update_shared_json(
             caller that tolerates a damaged file decides that for itself, in
             :func:`update_shared_text`.
     """
-    written: Any = None
-
-    def _apply(current: str | None) -> str | None:
-        nonlocal written
-        written = apply(json.loads(current) if current is not None else None)
-        return None if written is None else dump_shared_json(written)
-
-    update_shared_text(path, _apply, workspace_root=workspace_root)
+    written, _ = update_shared_json_with_change(
+        path, apply, workspace_root=workspace_root
+    )
     return written
+
+
+def update_shared_json_with_change(
+    path: Path,
+    apply: Callable[[Any | None], Any],
+    workspace_root: Path | None = None,
+) -> tuple[Any, ChangeSet | None]:
+    """Update JSON and return the notification created by the write.
+
+    Most writers only need the resulting payload. Execution boundaries also
+    need to wait for the exact write they just made to reach the Hub, so this
+    variant keeps the ``ChangeSet`` without weakening the read-modify-write
+    lock span or making callers reconstruct a path-based identity.
+    """
+    written: Any = None
+    change: ChangeSet | None = None
+
+    with _writing([path], workspace_root):
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        written = apply(json.loads(current) if current is not None else None)
+        if written is None:
+            change = delete_shared_path(path, workspace_root=workspace_root)
+        else:
+            updated = dump_shared_json(written)
+            if updated != current:
+                change = write_shared_text(path, updated, workspace_root=workspace_root)
+    return written, change

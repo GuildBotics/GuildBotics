@@ -174,6 +174,7 @@ def enroll(
     workspace_root: Path | None = None,
     *,
     record_rejection: RejectionRecorder = record_update_rejected,
+    ssh_public_key_fingerprint: str | None = None,
 ) -> EnrollmentResult:
     """Connect this workspace to the hub at ``remote_url``.
 
@@ -212,7 +213,10 @@ def enroll(
             raise
     # Published last so the record carries the identity the join settled on,
     # and left for the sync queue to send with everything else.
-    publish_device_record(repository.workspace_root)
+    publish_device_record(
+        repository.workspace_root,
+        ssh_public_key_fingerprint=ssh_public_key_fingerprint,
+    )
     return result
 
 
@@ -289,7 +293,12 @@ def _reconnect(
     )
 
 
-def clone_workspace(remote_url: str, workspace_root: Path) -> str:
+def clone_workspace(
+    remote_url: str,
+    workspace_root: Path,
+    *,
+    ssh_public_key_fingerprint: str | None = None,
+) -> str:
     """Create a new workspace holding a copy of a hub's shared content.
 
     Args:
@@ -308,7 +317,10 @@ def clone_workspace(remote_url: str, workspace_root: Path) -> str:
     with _as_enrollment_error("The workspace could not be taken from the hub"):
         repository.clone(remote_url)
     identity = _local_identity(repository)
-    publish_device_record(repository.workspace_root)
+    publish_device_record(
+        repository.workspace_root,
+        ssh_public_key_fingerprint=ssh_public_key_fingerprint,
+    )
     return identity.workspace_id
 
 

@@ -77,7 +77,6 @@ from guildbotics.app_api.models import (
     to_command_inputs,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
-from guildbotics.app_api.trace_presentations import normalize_trace_presentation
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.capabilities.github_activity_events import (
@@ -117,7 +116,8 @@ from guildbotics.drivers import (
     PersonSelectionRequiredError,
 )
 from guildbotics.drivers.execution import (
-    ExecutionCoordinator,
+    ExecutionStatusPublisher,
+    TaskRunCoordinator,
     WorkRejectedError,
     WorkSource,
 )
@@ -145,9 +145,11 @@ from guildbotics.observability.session_transcripts import (
     transcript_retention_days,
 )
 from guildbotics.runtime import Context
+from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.local_command_executor import LocalCommandExecutor
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.service_lock import ServiceLockUnavailableError
+from guildbotics.runtime.trace_presentations import normalize_trace_presentation
 from guildbotics.utils.env_loader import (
     HOME_ENV_PROTECTED_KEYS,
     apply_debug_env_to_process,
@@ -257,11 +259,15 @@ class AppRuntime:
         self._activity_sync_lock = threading.Lock()
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
         self._running_command_id: str | None = None
-        self._execution = ExecutionCoordinator()
+        self._execution_status = ExecutionStatusPublisher()
+        self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
         self._loaded_dotenv_keys: set[str] = set()
-        self._workspace_sync = WorkspaceSyncService()
+        self._workspace_sync = WorkspaceSyncService(
+            on_live_publisher=self.set_live_state,
+            on_owner_transfer=self._execution.mark_interrupted,
+        )
         if load_workspace_environment:
             self._load_workspace_env()
         self._lifecycle = RuntimeLifecycleService(
@@ -269,11 +275,21 @@ class AppRuntime:
             context_factory=self._get_context,
             stop_timeout_seconds=stop_timeout_seconds,
             execution_coordinator=self._execution,
+            before_start=self._prepare_runtime_start,
         )
 
     @property
     def system_service_run_id(self) -> str:
         return self._system_service_run_id
+
+    def set_live_state(self, live_state: LiveStatePort | None) -> None:
+        """Attach the process-wide Hub relay to the shared execution boundary."""
+        self._execution_status.set_live_state(live_state)
+
+    @property
+    def workspace_sync_service(self) -> WorkspaceSyncService:
+        """Expose the process-wide sync/relay service to the API composition root."""
+        return self._workspace_sync
 
     def get_config_status(self) -> ConfigStatus:
         try:
@@ -986,9 +1002,18 @@ class AppRuntime:
                     else {}
                 ),
             ) from exc
+        except Exception:
+            self._execution.set_owner_check(None)
+            raise
+
+    def _prepare_runtime_start(self) -> None:
+        """Prepare synchronization and ownership after service.lock is held."""
+        self._execution.set_owner_check(self._workspace_sync.prepare_service_owner())
 
     def stop_scheduler(self, *, force: bool = False) -> RuntimeStatus:
-        return self._lifecycle.stop(force=force)
+        status = self._lifecycle.stop(force=force)
+        self._execution.set_owner_check(None)
+        return status
 
     def get_scheduler_status(self) -> RuntimeStatus:
         return self._lifecycle.get_status()

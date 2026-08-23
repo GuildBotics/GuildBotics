@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -25,6 +26,7 @@ from guildbotics.drivers import (
     PersonSelectionRequiredError,
     TaskScheduler,
 )
+from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
 from guildbotics.editions import get_edition
 from guildbotics.observability import new_id
 from guildbotics.observability.diagnostics_events import (
@@ -32,7 +34,9 @@ from guildbotics.observability.diagnostics_events import (
     install_diagnostics_log_handler,
     start_system_session,
 )
+from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.local_command_executor import LocalCommandExecutor
+from guildbotics.runtime.relay_runtime import RelayRuntime
 from guildbotics.runtime.service_control import (
     ServiceControlWatcher,
     StopStage,
@@ -45,6 +49,19 @@ from guildbotics.runtime.service_lock import (
     ServiceLockUnavailableError,
     inspect_service_lock,
 )
+from guildbotics.runtime.service_owner import (
+    ServiceOwnerError,
+    create_relay_runtime,
+)
+from guildbotics.runtime.service_owner import (
+    prepare_service_owner as prepare_relay_service_owner,
+)
+from guildbotics.sync.activation import (
+    activate_workspace_sync,
+    deactivate_workspace_sync,
+)
+from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.env_loader import load_guildbotics_env
 from guildbotics.utils.fileio import get_machine_state_path, get_workspace_root
 from guildbotics.utils.i18n_tool import t
@@ -55,6 +72,7 @@ from guildbotics.utils.workspace_state import (
     WorkspaceUnresolvedError,
     apply_workspace_for_cli,
 )
+from guildbotics.workspace.identity import ensure_device_identity
 
 
 def _resolve_version() -> str:
@@ -167,14 +185,29 @@ def start(
             _service_lock_conflict_message(exc.metadata)
         ) from exc
 
+    relay_runtime: RelayRuntime | None = None
     try:
+        sync_manager = activate_workspace_sync(workspace)
+        relay_runtime = (
+            _prepare_service_owner(workspace, sync_manager)
+            if sync_manager is not None
+            else None
+        )
         _run_cli_background_service(
             only_target=only_target,
             max_consecutive_errors=max_consecutive_errors,
             service_instance_id=metadata.service_instance_id,
             request_path=request_path,
+            live_state=relay_runtime.publisher if relay_runtime is not None else None,
+            owner_check=relay_runtime.check_owner
+            if relay_runtime is not None
+            else None,
         )
     finally:
+        if relay_runtime is not None:
+            relay_runtime.stop()
+        if not deactivate_workspace_sync():
+            get_logger().warning("The synchronization queue did not stop cleanly.")
         clear_stop_request(request_path)
         service_lock.release()
 
@@ -185,6 +218,8 @@ def _run_cli_background_service(
     max_consecutive_errors: int,
     service_instance_id: str,
     request_path: Path,
+    live_state: LiveStatePort | None = None,
+    owner_check: Callable[[], bool | None] | None = None,
 ) -> None:
     start_system_session(new_id())
     try:
@@ -193,9 +228,49 @@ def _run_cli_background_service(
             max_consecutive_errors=max_consecutive_errors,
             service_instance_id=service_instance_id,
             request_path=request_path,
+            live_state=live_state,
+            owner_check=owner_check,
         )
     finally:
         finish_system_session()
+
+
+def _prepare_service_owner(
+    workspace: Path, sync_manager: GitSyncManager
+) -> RelayRuntime | None:
+    """Settle synchronization, then require this device to own the service."""
+    status = sync_manager.synchronize()
+    if status.state != "idle" or status.last_error_code is not None:
+        detail = status.last_error_code or status.state
+        raise click.ClickException(
+            f"The service cannot start because workspace synchronization failed: {detail}."
+        )
+    repository = LocalSyncRepository(workspace)
+    remote_url = repository.remote_url()
+    if not remote_url:
+        return None
+    device_id = ensure_device_identity().device_id
+    runtime: RelayRuntime | None = None
+    try:
+        runtime = create_relay_runtime(
+            remote_url,
+            status.workspace_id,
+            device_id,
+            on_head_updated=sync_manager.wake,
+        )
+        return prepare_relay_service_owner(runtime, device_id)
+    except ServiceOwnerError as exc:
+        if runtime is not None:
+            runtime.stop()
+        if exc.code == "service_owner_conflict":
+            current = exc.owner_device_id or "unknown"
+            message = (
+                "This device is not the service owner "
+                f"(current owner: {current}). Transfer ownership explicitly first."
+            )
+        else:
+            message = str(exc)
+        raise click.ClickException(f"The service cannot start: {message}") from exc
 
 
 def _run_cli_background_service_session(
@@ -204,12 +279,19 @@ def _run_cli_background_service_session(
     max_consecutive_errors: int,
     service_instance_id: str,
     request_path: Path,
+    live_state: LiveStatePort | None = None,
+    owner_check: Callable[[], bool | None] | None = None,
 ) -> None:
     edition = get_edition()
 
     scheduler_sources_enabled = only_target in (None, "scheduler")
     start_events = only_target in (None, "events")
     start_member_worker = scheduler_sources_enabled or start_events
+
+    execution = TaskRunCoordinator(
+        ExecutionStatusPublisher(live_state),
+        owner_check=owner_check,
+    )
 
     scheduler = (
         TaskScheduler(
@@ -218,6 +300,7 @@ def _run_cli_background_service_session(
             scheduled_source_enabled=scheduler_sources_enabled,
             routine_source_enabled=scheduler_sources_enabled,
             event_queue_source_enabled=start_events,
+            execution_coordinator=execution,
         )
         if start_member_worker
         else None

@@ -103,7 +103,7 @@ def test_a_remote_hub_lists_the_workspaces_its_own_command_reports(
 ) -> None:
     monkeypatch.setattr(
         connection,
-        "_run_hub_command",
+        "run_hub_command",
         lambda endpoint, arguments: json.dumps({"workspaces": [WORKSPACE_ID]}),
     )
     location = HubLocation(endpoint=HubEndpoint(host="hub.local"))
@@ -117,7 +117,7 @@ def test_a_machine_without_guildbotics_is_reported_as_such(
     """A shell answering something else is the PATH problem, not a bad hub."""
     monkeypatch.setattr(
         connection,
-        "_run_hub_command",
+        "run_hub_command",
         lambda endpoint, arguments: "guildbotics: command not found\n",
     )
     location = HubLocation(endpoint=HubEndpoint(host="hub.local"))

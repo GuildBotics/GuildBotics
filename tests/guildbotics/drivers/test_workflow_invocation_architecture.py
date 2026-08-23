@@ -363,7 +363,7 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
                 routine_commands,
                 routine_command_index,
                 None,
-                start_time,
+                start_time + datetime.timedelta(minutes=1),
                 consecutive_errors,
             )
         )

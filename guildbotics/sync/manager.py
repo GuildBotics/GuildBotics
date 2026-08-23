@@ -42,6 +42,7 @@ from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
     shared_write_lock,
 )
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
 from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import ChangeSet
 from guildbotics.workspace.identity import (
@@ -192,6 +193,10 @@ class GitSyncManager:
         self._wake.set()
         return True
 
+    def wake(self) -> None:
+        """Wake the queue for a Hub head hint without changing its contract."""
+        self._wake.set()
+
     def await_pushed(self, change_id: str) -> bool:
         """Block until a commit containing ``change_id`` reaches the hub.
 
@@ -282,21 +287,54 @@ class GitSyncManager:
 
     def synchronize(self) -> GitSyncStatus:
         """Send, receive, and converge once, reporting the resulting status."""
-        with self._sync_lock:
-            if self._halted():
-                return self.status()
+        try:
+            with sync_repository_lock(self._repository.workspace_root), self._sync_lock:
+                return self._synchronize_status()
+        except SyncRepositoryBusyError:
+            # A one-shot member command is allowed to own the repository for
+            # the duration of its push. The queue simply retries next cycle.
+            self._last_error_code = "sync_busy"
+            return self.status()
+
+    def commit_and_push_once(self, *, timeout: float | None = None) -> GitSyncStatus:
+        """Commit and make one push attempt without fetching or converging.
+
+        This is the member CLI's one-shot synchronization boundary. It runs
+        under the same process-wide lock as the background queue, commits all
+        currently sendable shared changes, and makes at most one push attempt.
+        A hub race or outage is left for the next queue cycle; the returned
+        status records whether this one-shot reached the hub. A local lock
+        timeout is raised so the caller cannot report an uncoordinated write
+        as successful.
+        """
+        with (
+            sync_repository_lock(self._repository.workspace_root, timeout=timeout),
+            self._sync_lock,
+        ):
             try:
-                self._synchronize()
+                self._repository.verify_boundary()
+                self._verify_local_identity()
+                self._commit_working_tree()
+                if not self._repository.has_remote():
+                    self._state = "unreachable"
+                    self._last_error_code = "hub_not_configured"
+                    return self.status()
+                self._state = "pushing"
+                self._repository.push()
             except SharedDataAnomaly as anomaly:
                 self._halt(anomaly)
+                return self.status()
             except SharedWriteBusyError:
-                # A save is holding the workspace's files. Nothing is wrong
-                # with the hub, and the next cycle picks the work up, so the
-                # state stays as it was rather than claiming unreachable.
                 self._last_error_code = "local_write_busy"
+                return self.status()
             except (GitCommandError, SyncRepositoryError, OSError) as exc:
                 self._state = "unreachable"
                 self._last_error_code = type(exc).__name__
+                return self.status()
+            self._state = "idle"
+            self._last_error_code = None
+            self._last_success_at = utc_now_iso()
+            self._resolve_shared()
             return self.status()
 
     def resume(self) -> GitSyncStatus:
@@ -305,11 +343,29 @@ class GitSyncManager:
         Damage is not retried on its own; the user repairs it and asks for
         another attempt.
         """
-        with self._sync_lock:
+        with sync_repository_lock(self._repository.workspace_root), self._sync_lock:
             if self._halted():
                 self._state = "idle"
                 self._last_error_code = None
-            return self.synchronize()
+            return self._synchronize_status()
+
+    def _synchronize_status(self) -> GitSyncStatus:
+        """Run one cycle with both outer locks already held."""
+        if self._halted():
+            return self.status()
+        try:
+            self._synchronize()
+        except SharedDataAnomaly as anomaly:
+            self._halt(anomaly)
+        except SharedWriteBusyError:
+            # A save is holding the workspace's files. Nothing is wrong with
+            # the hub, and the next cycle picks the work up, so the state stays
+            # as it was rather than claiming unreachable.
+            self._last_error_code = "local_write_busy"
+        except (GitCommandError, SyncRepositoryError, OSError) as exc:
+            self._state = "unreachable"
+            self._last_error_code = type(exc).__name__
+        return self.status()
 
     def status(self) -> GitSyncStatus:
         """Report the current queue state, recomputed from the repository."""
