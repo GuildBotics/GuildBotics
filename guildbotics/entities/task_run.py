@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +17,9 @@ TaskRunState = Literal[
     "interrupted",
     "result_unknown",
 ]
+TASK_RUN_TERMINAL_STATES = frozenset(
+    state for state in get_args(TaskRunState) if state != "running"
+)
 
 
 class TaskRunResult(BaseModel):

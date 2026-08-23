@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from guildbotics.entities.task_run import (
+    TASK_RUN_TERMINAL_STATES,
     TaskRunExecutionMode,
     TaskRunRecord,
     TaskRunResult,
@@ -233,13 +234,7 @@ class RunStore:
         safe_summary: str = "",
     ) -> tuple[TaskRunRecord, ChangeSet | None]:
         """Finish a run and expose the sync notification for a barrier."""
-        if status not in {
-            "succeeded",
-            "failed",
-            "cancelled",
-            "interrupted",
-            "result_unknown",
-        }:
+        if status not in TASK_RUN_TERMINAL_STATES:
             raise TaskRunError(f"Task run has invalid terminal status '{status}'.")
 
         def _finish(current: TaskRunRecord) -> TaskRunRecord:
