@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.app_api import workspace_sync
+from guildbotics.runtime.live_state import LiveState
 from guildbotics.sync import current_sync_manager, deactivate_workspace_sync
 from guildbotics.workspace.identity import read_workspace_identity
 
@@ -51,6 +52,43 @@ def client(workspace: Path) -> TestClient:
 def _json(response) -> dict:
     assert response.status_code == HTTP_OK, response.text
     return response.json()
+
+
+def test_expired_live_publisher_is_removed_from_the_service_cache() -> None:
+    service = workspace_sync.WorkspaceSyncService()
+    state = LiveState(
+        workspace_id="0198ab00-0000-7000-8000-000000000001",
+        device_id="0198ab00-0000-7000-8000-000000000002",
+        publisher_id="0198ab00-0000-7000-8000-000000000003",
+        observed_at="2026-08-23T00:00:00+00:00",
+    )
+
+    service._receive_live_state(state)
+    assert [item.publisher_id for item in service.get_live_states()] == [
+        state.publisher_id
+    ]
+
+    service._receive_live_expired(
+        state.device_id, state.publisher_id, state.observed_at
+    )
+
+    assert service.get_live_states() == []
+
+
+def test_desktop_owner_transfer_accepts_only_this_device(
+    client: TestClient,
+) -> None:
+    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+
+    response = client.post(
+        "/workspace/service-owner/transfer",
+        headers=AUTH_HEADERS,
+        json={"device_id": "0198ab00-0000-7000-8000-000000000002"},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "service_owner_target_invalid"
 
 
 # -- Hosting a hub ------------------------------------------------------------

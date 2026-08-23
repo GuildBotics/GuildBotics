@@ -62,9 +62,10 @@ Hard dependency rules (enforced by `tests/guildbotics/test_layer_boundaries.py`)
   never about what the shared records mean.
 - `sync` may be imported **only by a composition root**, listed in
   `tests/guildbotics/test_layer_boundaries.py` (`SYNC_COMPOSITION_ROOTS`). Everything
-  else reaches synchronization through the Workspace Sync Port. The list must not grow:
-  the guard against two queues on one repository is module state, so it does not hold
-  across processes.
+  else reaches synchronization through the Workspace Sync Port. The Desktop backend
+  and `guildbotics start` install a queue; member CLI uses the same boundary for one
+  locked commit/push. The process-local activation guard is supplemented by
+  `local/run/sync.lock`, so two processes cannot operate the same repository at once.
 - Lower layers (`entities`, `utils`) never depend on orchestration layers
   (`commands`, `templates`, `drivers`).
 
@@ -451,6 +452,27 @@ invoked over SSH by the joining device (`guildbotics/hub/connection.py`). Raw Gi
 are never sent across. Synchronization pins `GIT_SSH_COMMAND` to the OS OpenSSH so that a
 host key the user confirmed once is the same one `git fetch` sees.
 
+**Live relay and service owner.** The Hub has two kinds of state outside the Git
+repository. `live/<device>/<publisher>.json` is a transient complete snapshot of
+one process's current work. The process that runs the work publishes it through
+`guildbotics/hub/relay_client.py`; a Desktop backend or `guildbotics start`
+process watches the same stream. Heartbeats make delayed and expired states
+observable, while expiry deletes the relay file and the viewer drops its cached
+snapshot. A newer relay `schema_version` is reported as a client-update error;
+it is not silently discarded or partially decoded.
+
+`service-owner.json` is different: it is one persistent owner device per
+workspace, managed by `hub owner get/claim/transfer`. Starting a service requires
+an owner answer from the Hub and refuses a different owner. The common execution
+boundary checks ownership before accepting service work, before the command
+starts, and when publishing service-derived live state. A lost Hub connection
+does not stop work already in progress, but blocks new service work. An explicit
+transfer is allowed only after the user has directly confirmed that the old
+service stopped; ownership is never changed by a live timeout. The same boundary
+records TaskRun start and terminal state and waits for the corresponding sync
+barrier, which prevents a completed input from being accepted again after a
+service handoff.
+
 **Workspace Sync Port** (`utils/workspace_sync_port.py`). Storage layers announce a
 completed shared write as a `ChangeSet` and never learn that Git is involved. Writes go
 through `write_shared_*` / `delete_shared_path`; paths under `local/` are dropped by the
@@ -568,10 +590,14 @@ a head that no longer exists, so the cycle is redone. Joining a hub has the same
 for the same reason, and closes it the same way — the join commits again inside its own lock
 and compares against the head that produced.
 
-**Queue ownership.** Only the Desktop backend activates the queue
-(`app_api/workspace_sync.py`). The exclusion lives in `sync/activation.py` as module state,
-which does not hold across processes, so a second long-lived process would put two workers
-on one repository. `run/service.lock` is the scheduler's exclusion, not the queue's.
+**Queue ownership.** The Desktop backend and `guildbotics start` may activate a queue;
+member CLI writes use a short-lived queue boundary after the capability completes. If
+another process holds `local/run/sync.lock`, the member command reports `sync: pending`
+and exits successfully; its next invocation or the queue will recover the working-tree
+commit. `sync/activation.py` keeps one queue per process, while
+`local/run/sync.lock` serializes each cycle, one-shot commit/push, and workspace pause
+across processes. The machine-wide `run/service.lock` is the background-service exclusion,
+not the repository lock.
 
 ## 9. Secret Storage (SecretStore)
 

@@ -23,6 +23,23 @@ from guildbotics.utils.workspace_state import (
 member_module = importlib.import_module("guildbotics.cli.member")
 
 
+def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, capsys):
+    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+
+    def busy(*, timeout):
+        raise member_module.SyncRepositoryBusyError("sync.lock is busy")
+
+    monkeypatch.setattr(member_module, "commit_and_push_once", busy)
+
+    async def command_result():
+        return {"doc_id": "doc-1"}
+
+    result = member_module._run(command_result(), output_format="json")
+
+    assert result == {"doc_id": "doc-1", "sync": "pending"}
+    assert json.loads(capsys.readouterr().out) == result
+
+
 def _set_workflow_delegation(monkeypatch, person_id="aiko", run_id="run-1"):
     from guildbotics.runtime.person_lease import (
         PersonExecutionLease,

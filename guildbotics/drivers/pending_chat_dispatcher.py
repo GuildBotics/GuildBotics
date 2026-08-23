@@ -12,8 +12,13 @@ from guildbotics.capabilities.workflow_completion_events import (
 from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_from_exception,
 )
-from guildbotics.drivers.execution import ExecutionCoordinator, WorkRejectedError
+from guildbotics.drivers.execution import (
+    ExecutionCoordinator,
+    TaskRunCoordinator,
+    WorkRejectedError,
+)
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
+from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_state_store import (
     ConversationStateStore,
@@ -54,7 +59,7 @@ class PendingChatDispatcher:
         self._workflow_command = workflow_command
         self._state_store = state_store or FileConversationStateStore()
         self._service_run_id = service_run_id
-        self._execution = execution_coordinator or ExecutionCoordinator()
+        self._execution = execution_coordinator or TaskRunCoordinator()
 
     async def process_person(
         self, person: Person, stop_event: threading.Event | None = None
@@ -160,10 +165,13 @@ class PendingChatDispatcher:
         pending: PendingChatEvent,
     ) -> int:
         event_id = pending.event.event_id
+        if not pending.run_id:
+            pending.run_id = uuid4().hex
         with trace_scope(
             "event_listener",
             person_id=person.person_id,
             command=self._workflow_command,
+            trace_id=pending.run_id,
         ) as trace:
             try:
                 with self._execution.track_work(
@@ -171,12 +179,16 @@ class PendingChatDispatcher:
                     person_id=person.person_id,
                     command=self._workflow_command,
                     work_id=trace.trace_id,
+                    work_identity={
+                        "kind": "chat-event",
+                        "event_id": event_id,
+                        "service": service,
+                        "channel_id": channel_id,
+                    },
                 ):
                     # Consume a retry attempt only once the work is accepted, so a
                     # dispatch rejected while the runtime drains does not burn the
                     # event's retry budget without ever running the workflow.
-                    if not pending.run_id:
-                        pending.run_id = uuid4().hex
                     if pending.attempt_count <= 0:
                         pending.max_attempts = _max_pending_attempts()
                     pending.attempt_count = max(0, pending.attempt_count) + 1
@@ -186,7 +198,19 @@ class PendingChatDispatcher:
                         service, person.person_id, channel_id, pending
                     )
                     await self._run_workflow(person, service, channel_id, pending)
-            except WorkRejectedError:
+            except WorkRejectedError as exc:
+                if (
+                    exc.reason == "duplicate"
+                    and isinstance(exc.holder, TaskRunRecord)
+                    and exc.holder.finished_at
+                ):
+                    self._state_store.mark_processed_event(
+                        service, person.person_id, channel_id, event_id
+                    )
+                    self._state_store.remove_pending_event(
+                        service, person.person_id, channel_id, event_id
+                    )
+                    return 1
                 return 0
             except Exception as exc:  # leave queued for retry; do not block the queue
                 if _thread_context_unavailable(exc):

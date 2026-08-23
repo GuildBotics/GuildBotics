@@ -16,6 +16,7 @@ from guildbotics.observability.session_transcripts import (
     SYSTEM_TRACE_PREFIX,
     SessionTranscriptStore,
 )
+from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     get_workspace_local_path,
@@ -111,6 +112,7 @@ class DiagnosticsStore:
             return self._path
 
     def record(self, item: dict[str, Any]) -> None:
+        notify_diagnostics_record(item)
         with self._lock:
             self._refresh_path_locked()
             if self._transcripts is None:

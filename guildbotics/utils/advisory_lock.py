@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Hashable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
+
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_workspace_local_path,
+    get_workspace_root,
+)
 
 _WINDOWS = os.name == "nt"
 _windows_locking: Any
@@ -51,6 +58,17 @@ class LockTimeoutError(TimeoutError):
     """Raised when an advisory lock stays held past the caller's deadline."""
 
 
+_held = threading.local()
+
+
+def _held_depths() -> dict[Hashable, int]:
+    depths: dict[Hashable, int] | None = getattr(_held, "depths", None)
+    if depths is None:
+        depths = {}
+        _held.depths = depths
+    return depths
+
+
 @contextmanager
 def held_lock(
     path: Path, timeout: float = 5.0, poll_interval: float = 0.01
@@ -91,6 +109,71 @@ def held_lock(
             unlock_file(handle)
     finally:
         handle.close()
+
+
+@contextmanager
+def reentrant_held_lock(
+    path: Path,
+    *,
+    key: Hashable,
+    timeout: float,
+    timeout_error: Callable[[Path, float], Exception],
+) -> Iterator[None]:
+    """Hold ``path`` with thread-local re-entry and a caller-specific error.
+
+    The OS lock remains process-wide. Only a thread that already owns the
+    same logical lock may re-enter it; another thread still waits on the file
+    descriptor just like another process. ``timeout_error`` is evaluated only
+    for an acquisition timeout, never for a matching exception raised by the
+    protected body.
+    """
+    depths = _held_depths()
+    if key in depths:
+        depths[key] += 1
+        try:
+            yield
+        finally:
+            depths[key] -= 1
+        return
+
+    acquired = False
+    try:
+        with held_lock(path, timeout=timeout):
+            acquired = True
+            depths[key] = 1
+            try:
+                yield
+            finally:
+                del depths[key]
+    except LockTimeoutError as exc:
+        if acquired:
+            raise
+        raise timeout_error(path, timeout) from exc
+
+
+@contextmanager
+def workspace_reentrant_lock(
+    workspace_root: Path | None,
+    *,
+    path_parts: tuple[str, ...],
+    key_prefix: str,
+    timeout: float,
+    timeout_error: Callable[[Path, float], Exception],
+) -> Iterator[None]:
+    """Apply :func:`reentrant_held_lock` to a selected workspace path."""
+    try:
+        root = get_workspace_root(workspace_root)
+    except WorkspaceNotConfiguredError:
+        yield
+        return
+    path = get_workspace_local_path(*path_parts, workspace_root=root)
+    with reentrant_held_lock(
+        path,
+        key=(key_prefix, root),
+        timeout=timeout,
+        timeout_error=timeout_error,
+    ):
+        yield
 
 
 def unlock_file(handle: IO[str]) -> None:

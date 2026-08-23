@@ -32,6 +32,14 @@ HUB_BRANCH = "main"
 #: the shared-record generation that travels between devices.
 HUB_SCHEMA_VERSION = 1
 
+# The hook is deliberately a shell one-liner with no payload parsing. A hook
+# failure must never turn a successful fast-forward into a failed push; the
+# next watch poll and the regular sync fallback remain authoritative.
+POST_RECEIVE_HOOK = """#!/bin/sh
+touch "$(dirname "$0")/../../head-updated" 2>/dev/null || :
+exit 0
+"""
+
 
 class HubSettings(BaseModel):
     """What this machine records about the hub it hosts (``hub.json``).
@@ -69,6 +77,17 @@ def workspaces_root() -> Path:
     return hub_root() / "workspaces"
 
 
+def require_uuid(value: str, label: str) -> str:
+    """Return a value only when it is a canonical UUID."""
+    try:
+        canonical = str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise InvalidWorkspaceIdError(f"{label} must be a canonical UUID.") from exc
+    if canonical != value:
+        raise InvalidWorkspaceIdError(f"{label} must be a canonical UUID.")
+    return canonical
+
+
 def require_workspace_id(workspace_id: str) -> str:
     """Return ``workspace_id`` once it is certainly a workspace identifier.
 
@@ -83,17 +102,11 @@ def require_workspace_id(workspace_id: str) -> str:
         InvalidWorkspaceIdError: When ``workspace_id`` is not a canonical UUID.
     """
     try:
-        canonical = str(uuid.UUID(workspace_id))
-    except (ValueError, AttributeError, TypeError) as exc:
+        return require_uuid(workspace_id, "workspace_id")
+    except InvalidWorkspaceIdError as exc:
         raise InvalidWorkspaceIdError(
             f"{workspace_id!r} is not a workspace identifier."
         ) from exc
-    if canonical != workspace_id:
-        raise InvalidWorkspaceIdError(
-            f"{workspace_id!r} is not the canonical form of a workspace "
-            f"identifier ({canonical})."
-        )
-    return canonical
 
 
 def workspace_repository_path(workspace_id: str) -> Path:
@@ -163,6 +176,7 @@ def create_workspace_repository(workspace_id: str) -> Path:
             path.mkdir(parents=True, exist_ok=True)
             Repo.init(path, bare=True, initial_branch=HUB_BRANCH)
         _apply_fast_forward_only(path)
+        _apply_post_receive_hook(path)
     except (GitCommandError, OSError) as exc:
         raise HubError(
             f"The repository for {workspace_id} was not created: {exc}"
@@ -220,3 +234,10 @@ def _apply_fast_forward_only(path: Path) -> None:
     repository = Repo(path)
     repository.git.config("receive.denyNonFastForwards", "true")
     repository.git.config("receive.denyDeletes", "true")
+
+
+def _apply_post_receive_hook(path: Path) -> None:
+    """Install the workspace head marker hook on every repository creation."""
+    hook = path / "hooks" / "post-receive"
+    atomic_write_text(hook, POST_RECEIVE_HOOK)
+    hook.chmod(0o755)

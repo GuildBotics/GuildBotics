@@ -106,6 +106,9 @@ from guildbotics.app_api.models import (
     VerifyResponse,
     WorkspaceChangeRequest,
     WorkspaceDevices,
+    WorkspaceLiveState,
+    WorkspaceServiceOwner,
+    WorkspaceServiceOwnerTransferRequest,
     WorkspaceSyncCloneRequest,
     WorkspaceSyncEnableRequest,
     WorkspaceSyncPreview,
@@ -204,7 +207,12 @@ def create_app(
     input_file_store = command_input_file_store or CommandInputFileStore()
     # The service holds no state of its own: the queue it starts and stops
     # is process-wide, so this instance and the runtime's act on the same one.
-    sync_service = WorkspaceSyncService()
+    # The runtime owns the common execution boundary; the sync service only
+    # attaches/detaches its relay publisher there.
+    if isinstance(app_runtime, AppRuntime):
+        sync_service = app_runtime.workspace_sync_service
+    else:
+        sync_service = WorkspaceSyncService()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -372,6 +380,35 @@ def create_app(
         _: None = Depends(require_token),
     ) -> WorkspaceDevices:
         return sync_service.rename_device(request)
+
+    @app.get(
+        "/workspace/live",
+        response_model=list[WorkspaceLiveState],
+        responses=error_responses,
+    )
+    def workspace_live(_: None = Depends(require_token)) -> list[WorkspaceLiveState]:
+        return sync_service.get_live_states()
+
+    @app.get(
+        "/workspace/service-owner",
+        response_model=WorkspaceServiceOwner,
+        responses=error_responses,
+    )
+    def workspace_service_owner(
+        _: None = Depends(require_token),
+    ) -> WorkspaceServiceOwner:
+        return sync_service.get_service_owner()
+
+    @app.post(
+        "/workspace/service-owner/transfer",
+        response_model=WorkspaceServiceOwner,
+        responses=error_responses,
+    )
+    def workspace_service_owner_transfer(
+        request: WorkspaceServiceOwnerTransferRequest,
+        _: None = Depends(require_token),
+    ) -> WorkspaceServiceOwner:
+        return sync_service.transfer_service_owner(request.device_id)
 
     @app.get(
         "/workspace/sync",

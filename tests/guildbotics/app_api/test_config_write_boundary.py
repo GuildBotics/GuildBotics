@@ -34,6 +34,7 @@ from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
 HTTP_OK = 200
+HTTP_SERVICE_UNAVAILABLE = 503
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 
@@ -75,6 +76,7 @@ ELSEWHERE = {
         "/workspace/sync/rejections/{rejection_id}/discard",
     ): "deletes a local ref, writes no config",
     ("POST", "/workspace/sync/retry"): "a whole workspace, not one config file",
+    ("POST", "/workspace/service-owner/transfer"): "Hub service-owner relay state",
     ("PUT", "/hotkeys"): "local/hotkeys.yml is device-specific by design",
     ("PUT", "/runtime/debug"): "a runtime flag",
 }
@@ -402,5 +404,5 @@ def test_a_change_that_cannot_take_the_lock_is_a_503_rather_than_a_crash(
         response = MUTATIONS[route](client, workspace)
 
     assert response is not None
-    assert response.status_code == 503, response.text
+    assert response.status_code == HTTP_SERVICE_UNAVAILABLE, response.text
     assert response.json()["code"] == "config_busy"

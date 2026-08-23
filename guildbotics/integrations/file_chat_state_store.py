@@ -20,9 +20,6 @@ from guildbotics.integrations.chat_state_store import (
     ThreadMessageState,
     ThreadSystemNoticeState,
 )
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
 from guildbotics.intelligences.effort import normalize_effort
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -275,47 +272,13 @@ class FileConversationStateStore(ConversationStateStore):
             if not isinstance(raw_items, list):
                 return []
             out: list[PendingChatEvent] = []
-            for item in raw_items:
-                if not isinstance(item, dict):
-                    continue
-                event_id = _to_str_or_none(item.get("event_id"))
-                message_ts = _to_str_or_none(item.get("message_ts"))
-                thread_ts = _to_str_or_none(item.get("thread_ts"))
-                if not event_id or not message_ts or not thread_ts:
-                    continue
-                mentions = item.get("mentions") or []
-                if not isinstance(mentions, list):
-                    mentions = []
+            for index, item in enumerate(raw_items):
                 out.append(
-                    PendingChatEvent(
-                        event=ChatEvent(
-                            event_id=event_id,
-                            channel_id=str(item.get("channel_id", channel_id)),
-                            message_ts=message_ts,
-                            thread_ts=thread_ts,
-                            author_id=_to_str_or_none(item.get("author_id")),
-                            text=str(item.get("text", "") or ""),
-                            mentions=[str(x) for x in mentions if str(x)],
-                            is_edit_or_delete=bool(
-                                item.get("is_edit_or_delete", False)
-                            ),
-                            is_bot_message=bool(item.get("is_bot_message", False)),
-                            is_thread_reply=bool(item.get("is_thread_reply", False)),
-                            metadata=_pending_metadata(item.get("metadata")),
-                        ),
-                        chat_participation=str(
-                            item.get("chat_participation", "strict") or "strict"
-                        ),
-                        attempt_count=_to_non_negative_int(item.get("attempt_count")),
-                        max_attempts=max(
-                            1, _to_non_negative_int(item.get("max_attempts")) or 5
-                        ),
-                        next_attempt_at=_to_str_or_none(item.get("next_attempt_at")),
-                        run_id=str(item.get("run_id", "") or ""),
-                        last_error_category=str(
-                            item.get("last_error_category", "") or ""
-                        ),
-                        wake_cursor=str(item.get("wake_cursor", "") or ""),
+                    PendingChatEvent.from_record(
+                        item,
+                        index=index,
+                        default_channel_id=channel_id,
+                        location=f"{service}/{person_id}/{channel_id}",
                     )
                 )
             return out
@@ -332,22 +295,15 @@ class FileConversationStateStore(ConversationStateStore):
             def _replacement(raw: dict) -> dict:
                 # An event already queued keeps its retry bookkeeping: this is
                 # the same message arriving again, not a new attempt at it.
-                return _pending_event_to_item(
-                    PendingChatEvent(
-                        event=event,
-                        chat_participation=chat_participation,
-                        attempt_count=_to_non_negative_int(raw.get("attempt_count")),
-                        max_attempts=max(
-                            1, _to_non_negative_int(raw.get("max_attempts")) or 5
-                        ),
-                        next_attempt_at=_to_str_or_none(raw.get("next_attempt_at")),
-                        run_id=str(raw.get("run_id", "") or ""),
-                        last_error_category=str(
-                            raw.get("last_error_category", "") or ""
-                        ),
-                        wake_cursor=str(raw.get("wake_cursor", "") or ""),
-                    )
+                pending = PendingChatEvent.from_record(
+                    raw,
+                    index=0,
+                    default_channel_id=channel_id,
+                    location=f"{service}/{person_id}/{channel_id}",
                 )
+                pending.event = event
+                pending.chat_participation = chat_participation
+                return _pending_event_to_item(pending)
 
             return self._merged_events(
                 data,
@@ -390,10 +346,11 @@ class FileConversationStateStore(ConversationStateStore):
             raw_items = []
         merged: list[dict] = []
         replaced = False
-        for raw in raw_items:
-            if not isinstance(raw, dict):
-                continue
-            if _to_str_or_none(raw.get("event_id")) == event_id:
+        for index, raw in enumerate(raw_items):
+            pending = PendingChatEvent.from_record(
+                raw, index=index, default_channel_id=""
+            )
+            if pending.event.event_id == event_id:
                 merged.append(replacement(raw))
                 replaced = True
             else:
@@ -412,11 +369,12 @@ class FileConversationStateStore(ConversationStateStore):
                 # Nothing this method understands, including the absent file
                 # that reads as an empty mapping: leave it as it is.
                 return data or None
+            for index, raw in enumerate(raw_items):
+                PendingChatEvent.from_record(raw, index=index, default_channel_id="")
             filtered = [
                 raw
                 for raw in raw_items
-                if isinstance(raw, dict)
-                and _to_str_or_none(raw.get("event_id")) != event_id
+                if isinstance(raw, dict) and str(raw.get("event_id") or "") != event_id
             ]
             # An empty queue is stored as no file, so a channel that goes quiet
             # stops appearing in list_pending_channels. A removal that fails is
@@ -738,35 +696,8 @@ def _to_str_object_dict(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items() if str(key)}
 
 
-def _pending_metadata(value: object) -> dict[str, object]:
-    """The only metadata a persisted pending event carries is GuildBotics'
-    own workflow-status marker, rebuilt from its schema; everything else
-    (provider metadata included) has no slot in the shared file."""
-    return normalize_workflow_status_metadata(value)
-
-
 def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
-    event = pending.event
-    return {
-        "event_id": event.event_id,
-        "channel_id": event.channel_id,
-        "message_ts": event.message_ts,
-        "thread_ts": event.thread_ts,
-        "author_id": event.author_id,
-        "text": event.text,
-        "mentions": [str(x) for x in event.mentions if str(x)],
-        "is_edit_or_delete": bool(event.is_edit_or_delete),
-        "is_bot_message": bool(event.is_bot_message),
-        "is_thread_reply": bool(event.is_thread_reply),
-        "metadata": _pending_metadata(event.metadata),
-        "chat_participation": pending.chat_participation,
-        "attempt_count": max(0, int(pending.attempt_count)),
-        "max_attempts": max(1, int(pending.max_attempts)),
-        "next_attempt_at": pending.next_attempt_at,
-        "run_id": pending.run_id,
-        "last_error_category": pending.last_error_category,
-        "wake_cursor": pending.wake_cursor,
-    }
+    return pending.to_record()
 
 
 def _dedupe_keep_order(items: list[str]) -> list[str]:
