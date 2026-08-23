@@ -15,7 +15,6 @@ from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationIn
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
-from guildbotics.runtime.live_state import LivePresentation
 
 
 class VerifyCheck(BaseModel):
@@ -128,7 +127,12 @@ class RejectedChangeModel(BaseModel):
 
 
 class WorkspaceDevice(BaseModel):
-    """A machine sharing this workspace, including relay-derived liveness."""
+    """A machine sharing this workspace, as the other machines see it.
+
+    Online state and what a device is currently running are deliberately
+    absent: nothing reports them yet, and an unqualified "offline" would be
+    read as a fault rather than as an absence of information.
+    """
 
     device_id: str
     display_name: str
@@ -139,49 +143,11 @@ class WorkspaceDevice(BaseModel):
     # Whether this record is the machine the Desktop is running on, which is
     # the only one whose name it can change.
     is_self: bool = False
-    live_status: Literal["unknown", "online", "delayed", "expired"] = "unknown"
-    last_seen_at: str | None = None
 
 
 class WorkspaceDevices(BaseModel):
     devices: list[WorkspaceDevice] = Field(default_factory=list)
     device_id: str = ""
-
-
-class WorkspaceLiveWork(BaseModel):
-    """One remote work item received from a Hub live relay."""
-
-    work_id: str
-    run_id: str | None = None
-    member_id: str
-    workflow_name: str
-    presentation: dict[str, Any] | None = None
-    retry_at: str | None = None
-
-
-class WorkspaceLiveState(BaseModel):
-    """A live relay snapshot suitable for the Desktop API."""
-
-    schema_version: int
-    workspace_id: str
-    device_id: str
-    publisher_id: str
-    observed_at: str
-    status: Literal["online", "delayed", "expired"]
-    works: list[WorkspaceLiveWork] = Field(default_factory=list)
-
-
-class WorkspaceServiceOwner(BaseModel):
-    """The persistent service owner and the local device's relation to it."""
-
-    workspace_id: str
-    owner_device_id: str | None = None
-    updated_at: str | None = None
-    is_self: bool = False
-
-
-class WorkspaceServiceOwnerTransferRequest(BaseModel):
-    device_id: str
 
 
 class DeviceRenameRequest(BaseModel):
@@ -206,7 +172,6 @@ class WorkspaceSyncStatus(BaseModel):
     rejected_changes: list[RejectedChangeModel] = Field(default_factory=list)
     last_success_at: str | None = None
     last_error_code: str | None = None
-    live_error_code: str | None = None
 
 
 class WorkspaceSyncEnableRequest(BaseModel):
@@ -589,7 +554,18 @@ class TraceSummary(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
-TracePresentation = LivePresentation
+class TracePresentation(BaseModel):
+    """Provider-neutral display contract for one diagnostics record."""
+
+    label_key: str = ""
+    label_fallback: str = ""
+    message_key: str = ""
+    message: str = ""
+    message_params: dict[str, Any] = Field(default_factory=dict)
+    tone: str = "neutral"
+    #: Effort level this record ran at, when it stated one. Diagnostics only:
+    #: activity history is about domain outcomes, not how hard a model thought.
+    effort: str = ""
 
 
 class TraceRecord(BaseModel):

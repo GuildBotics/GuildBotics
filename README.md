@@ -448,22 +448,6 @@ Use `--person` or `<command>@<person_id>` to choose the member that runs it.
 
 The CLI and the desktop app share a lock file (`~/.guildbotics/data/run/service.lock`), so the service can never start twice on the same machine.
 
-When a workspace is synchronized, the service also has one persistent owner on
-the Hub. `guildbotics start` and the desktop service screen must reach the Hub
-and confirm this machine as the owner before accepting service work. A different
-owner blocks new service work; an owner change is detected by the common
-execution boundary and stops the old service. A Hub outage does not cancel work
-already in progress, but it does prevent new service work until ownership can be
-checked again.
-
-Ownership is not a lease and is never changed automatically. After confirming
-that the old machine's service has stopped, use **Take over on this machine** in
-the desktop Sync settings. The live work indicator is transient relay state,
-not Git history, and disappears after its publisher stops heartbeats and the
-snapshot expires. Completed
-work is kept in shared TaskRun records so a service restart does not accept the
-same input again after the result has been pushed.
-
 ### Account-Related Environment Variables
 
 **LLM API keys**:
@@ -518,14 +502,6 @@ hotkeys stay on the machine they were made on.
 Sharing runs through a **hub**: one machine you choose, holding a Git repository the others
 push to and fetch from over SSH. It is not a service and it is not hosted by anyone else —
 it is a directory under `~/.guildbotics/hub` on a machine you already own.
-
-The Hub also holds the current service owner and transient live snapshots. The
-owner is persistent and changes only through an explicit takeover after you have
-confirmed that the previous service stopped. If the Hub is unavailable, an
-already-running service keeps its current work but cannot start new service work
-until the owner can be checked. Live snapshots are not committed to Git; when a
-publisher exits its heartbeat stops, and the Hub removes that snapshot after it
-expires.
 
 Everything below is done in the desktop app's **Settings**. Hosting the hub and this
 device's SSH key are under **Device and hub** (they belong to the machine, not to a

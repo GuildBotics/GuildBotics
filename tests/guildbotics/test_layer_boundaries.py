@@ -133,16 +133,10 @@ def test_sync_depends_only_on_storage_and_recording() -> None:
     assert offenders == []
 
 
-#: The only modules that may import ``guildbotics.sync``. The Desktop backend,
-#: ``guildbotics start``, and member CLI are the three process entry points that
-#: install a queue or run a one-shot repository operation.
-SYNC_COMPOSITION_ROOTS = frozenset(
-    {
-        Path("app_api/workspace_sync.py"),
-        Path("cli/__init__.py"),
-        Path("cli/member.py"),
-    }
-)
+#: The only modules that may import ``guildbotics.sync``. Nothing stops two
+#: processes on one machine from each running a queue against the same
+#: repository, so this stays at one entry until something does.
+SYNC_COMPOSITION_ROOTS = frozenset({Path("app_api/workspace_sync.py")})
 
 
 def test_nothing_reaches_around_the_workspace_sync_port() -> None:

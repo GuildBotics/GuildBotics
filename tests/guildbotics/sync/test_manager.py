@@ -15,10 +15,7 @@ from git import GitCommandError, Repo
 
 from guildbotics.sync.local_repository import REJECTED_REF_PREFIX, LocalSyncRepository
 import guildbotics.sync.manager as manager_module
-import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
-from guildbotics.utils.advisory_lock import held_lock
-from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_lock_path
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
     dump_shared_json,
@@ -822,43 +819,6 @@ def test_a_busy_workspace_is_not_reported_as_an_unreachable_hub(
     assert not holder.is_alive()
     assert status.last_error_code == "local_write_busy"
     assert status.state != "unreachable"
-
-
-def test_synchronize_reports_sync_busy_when_another_process_holds_the_lock(
-    first: Device, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
-
-    with held_lock(sync_lock_path(first.root), timeout=0.0):
-        status = first.manager.synchronize()
-
-    assert status.last_error_code == "sync_busy"
-
-
-def test_one_shot_raises_when_another_process_holds_the_sync_lock(
-    first: Device,
-) -> None:
-    with held_lock(sync_lock_path(first.root), timeout=0.0):
-        with pytest.raises(SyncRepositoryBusyError):
-            first.manager.commit_and_push_once(timeout=0.01)
-
-
-def test_one_shot_commits_even_when_push_fails(
-    first: Device, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    first.write(CONFIG, "language: ja\n")
-
-    def fail_push() -> None:
-        raise OSError("Hub unavailable")
-
-    monkeypatch.setattr(first.repository, "push", fail_push)
-
-    status = first.manager.commit_and_push_once(timeout=0.1)
-
-    assert status.state == "unreachable"
-    assert status.last_error_code == "OSError"
-    assert status.local_head is not None
-    assert Repo(first.shared).head.commit.message.startswith("Sync shared state")
 
 
 def test_synchronize_is_serialized_between_threads(first: Device) -> None:

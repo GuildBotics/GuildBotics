@@ -47,36 +47,6 @@ def test_task_run_complete_and_status(tmp_path):
     assert store.status("run-1").completed is True
 
 
-def test_task_run_completion_keeps_the_input_identity_fixed(tmp_path):
-    store = RunStore(tmp_path)
-    store.start_record(
-        "run-1",
-        work_kind="chat-event",
-        execution_mode="autonomous",
-        member_id="aiko",
-        work_identity={"kind": "chat-event", "event_id": "event-1"},
-    )
-    store.append_evidence("run-1", "chat_reply", {"text": "done"})
-
-    store.complete_run(
-        "run-1",
-        "done",
-        "Completed.",
-        subject_type="chat",
-        subject_id="slack:C1:100.1:E1",
-        person_id="aiko",
-    )
-
-    record = json.loads((tmp_path / "run-1" / "result.json").read_text())
-    assert record["work_identity"] == {"kind": "chat-event", "event_id": "event-1"}
-    assert record["result"] == {
-        "subject_type": "chat",
-        "subject_id": "slack:C1:100.1:E1",
-        "subject_url": "",
-        "status": "done",
-    }
-
-
 def test_task_run_accepts_pr_update_evidence(tmp_path):
     store = TaskRunStore(tmp_path)
     store.append_evidence(
@@ -187,9 +157,8 @@ def test_task_run_enforces_shared_boundary_guarantees(
         },
     )
 
-    text = (tmp_path / "run-1" / "result.json").read_text(encoding="utf-8")
-    record = json.loads(text)
-    payload = record["provider_evidence"][0]["payload"]
+    text = (tmp_path / "run-1.jsonl").read_text(encoding="utf-8")
+    payload = json.loads(text)["payload"]
     assert "ghp-live-secret-12345" not in text
     assert payload["detail"].startswith("push failed for ***")
     assert len(payload["detail"]) <= 500

@@ -57,7 +57,7 @@
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
 - `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
-- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py`、`cli/__init__.py`、`cli/member.py`）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やす場合は、同期 repositoryへ触れる必要性と `sync.lock` の境界を同時に設計する。activation の防御は process 内の queue 重複を止め、`sync.lock` は process をまたぐ cycle・one-shot・workspace pause を直列化する（`service.lock` は background service の二重起動用で、member CLIの書き込みは守らない）。
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py` の1つだけ）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。**composition root を増やさない。** activation の防御は module state なので process をまたいで効かず、2 process が同じ Workspace を activate すると同じ repository に queue が2本走る（`service.lock` は Desktop が scheduler 開始時にしか取らないので、この衝突を防がない）。マシン全体の所有者ができる（#418 の Device Agent）までは Desktop backend の1本だけとする
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 

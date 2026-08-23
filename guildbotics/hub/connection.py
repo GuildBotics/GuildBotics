@@ -27,7 +27,6 @@ from guildbotics.utils.openssh import keygen_executable, ssh_executable
 #: use it as a remote path, so it stays in the ``host:path`` form Git accepts
 #: without a scheme, which resolves against the remote home directory.
 HUB_WORKSPACES_RELATIVE = ".guildbotics/hub/workspaces"
-_HUB_REMOTE_PATH_PARTS = 2
 #: How long a host key probe waits before reporting the hub unreachable.
 PROBE_TIMEOUT_SECONDS = 10.0
 #: How long a hub command may take. Creating a repository is quick; the bound
@@ -174,46 +173,11 @@ def hub_remote_url(location: HubLocation, workspace_id: str) -> str:
     )
 
 
-def location_from_remote_url(
-    remote_url: str, workspace_id: str | None = None
-) -> HubLocation:
-    """Recover the Hub location from a validated synchronization remote."""
-    value = remote_url.strip()
-    if not value:
-        raise InvalidHubEndpointError("The synchronization remote is empty.")
-    if value.startswith("/") or value.startswith("./") or value.startswith("../"):
-        return HubLocation()
-    target, separator, path = value.partition(":")
-    if not separator or not path.startswith(f"{HUB_WORKSPACES_RELATIVE}/"):
-        raise InvalidHubEndpointError(
-            f"{remote_url!r} is not a GuildBotics Hub remote."
-        )
-    relative = path.removeprefix(f"{HUB_WORKSPACES_RELATIVE}/")
-    parts = relative.split("/")
-    if len(parts) != _HUB_REMOTE_PATH_PARTS or parts[1] != "repository.git":
-        raise InvalidHubEndpointError(
-            f"{remote_url!r} is not a GuildBotics Hub remote."
-        )
-    try:
-        remote_workspace_id = host.require_workspace_id(parts[0])
-    except host.InvalidWorkspaceIdError as exc:
-        raise InvalidHubEndpointError(
-            f"{remote_url!r} contains an invalid workspace identifier."
-        ) from exc
-    if workspace_id is not None and remote_workspace_id != host.require_workspace_id(
-        workspace_id
-    ):
-        raise InvalidHubEndpointError(
-            f"{remote_url!r} names a different workspace than {workspace_id}."
-        )
-    return HubLocation(endpoint=parse_hub_endpoint(target))
-
-
 def list_hub_workspaces(location: HubLocation) -> list[str]:
     """Return the workspaces a hub hosts, so the user can pick one to join."""
     if location.endpoint is None:
         return host.list_workspace_ids()
-    output = run_hub_command(
+    output = _run_hub_command(
         location.endpoint, ["workspace", "list", "--format", "json"]
     )
     try:
@@ -233,7 +197,7 @@ def create_hub_workspace(location: HubLocation, workspace_id: str) -> None:
     if location.endpoint is None:
         host.create_workspace_repository(workspace_id)
         return
-    run_hub_command(location.endpoint, ["workspace", "create", workspace_id])
+    _run_hub_command(location.endpoint, ["workspace", "create", workspace_id])
 
 
 def probe_host_key(endpoint: HubEndpoint) -> HubHostKey:
@@ -356,33 +320,22 @@ def ensure_ssh_key() -> HubSshKey:
     return _ssh_key(private.with_suffix(".pub"))
 
 
-def run_hub_command(endpoint: HubEndpoint, arguments: list[str]) -> str:
+def _run_hub_command(endpoint: HubEndpoint, arguments: list[str]) -> str:
     """Run ``guildbotics hub ...`` on the hub machine over SSH.
 
     The hub machine runs GuildBotics itself, so the hub's own command is what
     creates its repositories -- this side never reaches in with raw Git.
     """
-    return _run(
-        hub_ssh_command(endpoint, arguments),
-        f"run a hub command on {endpoint.target}",
-    )
-
-
-def hub_ssh_command(endpoint: HubEndpoint, arguments: list[str]) -> list[str]:
-    """Build the OpenSSH argv used for a remote Hub CLI command."""
-    return [
+    command = [
         ssh_executable(),
         "-o",
         "BatchMode=yes",
-        "-o",
-        "ServerAliveInterval=5",
-        "-o",
-        "ServerAliveCountMax=2",
         endpoint.target,
         "guildbotics",
         "hub",
         *arguments,
     ]
+    return _run(command, f"run a hub command on {endpoint.target}")
 
 
 def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:

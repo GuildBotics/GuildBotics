@@ -97,7 +97,7 @@ def test_removing_conversation_state_announces_a_delete(port: RecordingPort) -> 
 def test_task_run_records_are_announced(port: RecordingPort) -> None:
     RunStore().append("run-1", {"kind": "evidence", "evidence_type": "pr_create"})
 
-    assert announced_paths(port) == ["state/task-runs/run-1/result.json"]
+    assert announced_paths(port) == ["state/task-runs/run-1.jsonl"]
 
 
 def test_the_memory_audit_journal_is_announced(port: RecordingPort) -> None:

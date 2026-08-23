@@ -61,13 +61,8 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.member_context import resolve_member_context
-from guildbotics.sync.activation import (
-    ONE_SHOT_LOCK_TIMEOUT_SECONDS,
-    commit_and_push_once,
-)
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
@@ -2252,28 +2247,11 @@ def _run(coro, *, output_format: str) -> Any:
                 result = _run_interactive(coro, interactive_session, command)
     except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
-    except SyncRepositoryBusyError as exc:
-        raise click.ClickException(str(exc)) from exc
     except BaseException:
         if not started and asyncio.iscoroutine(coro):
             coro.close()
         raise
-    if _member_command_needs_lease():
-        result = _sync_member_result(result)
     _emit(result, output_format)
-    return result
-
-
-def _sync_member_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Make one best-effort sync and expose a local lock timeout in output."""
-    try:
-        status = commit_and_push_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
-    except SyncRepositoryBusyError:
-        return {**result, "sync": "pending"}
-    if status is not None and (
-        status.state != "idle" or status.last_error_code is not None
-    ):
-        return {**result, "sync": "pending"}
     return result
 
 

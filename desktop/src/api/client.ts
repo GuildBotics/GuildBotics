@@ -995,33 +995,6 @@ export type WorkspaceSyncStatus = {
   rejected_changes: RejectedChange[];
   last_success_at: string | null;
   last_error_code: string | null;
-  live_error_code: string | null;
-};
-
-export type WorkspaceLiveWork = {
-  work_id: string;
-  run_id: string | null;
-  member_id: string;
-  workflow_name: string;
-  presentation: Record<string, unknown> | null;
-  retry_at: string | null;
-};
-
-export type WorkspaceLiveState = {
-  schema_version: number;
-  workspace_id: string;
-  device_id: string;
-  publisher_id: string;
-  observed_at: string;
-  status: "online" | "delayed" | "expired";
-  works: WorkspaceLiveWork[];
-};
-
-export type WorkspaceServiceOwner = {
-  workspace_id: string;
-  owner_device_id: string | null;
-  updated_at: string | null;
-  is_self: boolean;
 };
 
 /** Empty `endpoint` means this machine, which needs no network and no host key. */
@@ -1091,8 +1064,6 @@ export type WorkspaceDevice = {
   status: string;
   ssh_public_key_fingerprint: string;
   is_self: boolean;
-  live_status?: "unknown" | "online" | "delayed" | "expired";
-  last_seen_at?: string | null;
 };
 
 export type WorkspaceDevices = {
@@ -1176,23 +1147,6 @@ export async function renameThisDevice(displayName: string): Promise<WorkspaceDe
   return request("/workspace/devices/self", {
     method: "POST",
     body: { display_name: displayName },
-  });
-}
-
-export async function getWorkspaceLive(): Promise<WorkspaceLiveState[]> {
-  return request("/workspace/live");
-}
-
-export async function getWorkspaceServiceOwner(): Promise<WorkspaceServiceOwner> {
-  return request("/workspace/service-owner");
-}
-
-export async function transferWorkspaceServiceOwner(
-  deviceId: string,
-): Promise<WorkspaceServiceOwner> {
-  return request("/workspace/service-owner/transfer", {
-    method: "POST",
-    body: { device_id: deviceId },
   });
 }
 

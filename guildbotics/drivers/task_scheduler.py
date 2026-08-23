@@ -8,8 +8,6 @@ from typing import Any
 
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
-    TaskRunCoordinator,
-    TaskRunSyncUnavailableError,
     WorkRejectedError,
     WorkSource,
 )
@@ -22,7 +20,6 @@ from guildbotics.runtime import Context
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
-OWNER_RETRY_INTERVAL_SECONDS = 5.0
 
 
 class TaskScheduler:
@@ -61,7 +58,7 @@ class TaskScheduler:
         self.scheduled_tasks_list = {
             p: p.get_scheduled_commands() for p in context.team.members
         }
-        self._execution = execution_coordinator or TaskRunCoordinator()
+        self._execution = execution_coordinator or ExecutionCoordinator()
         # Per-member patrol heartbeat: when each member's routine slot last ran
         # and when it is next due. Read by GUI status displays, so guard the
         # dict against concurrent worker-thread updates.
@@ -176,20 +173,6 @@ class TaskScheduler:
         consecutive_errors = 0
         try:
             while not self._stop_event.is_set():
-                if isinstance(self._execution, TaskRunCoordinator):
-                    authority = self._execution.service_owner_state()
-                    if authority is False:
-                        self.context.logger.info(
-                            "Stopping scheduler because this device is no longer the service owner."
-                        )
-                        self._stop_event.set()
-                        break
-                    if authority is None:
-                        self.context.logger.info(
-                            "The Hub owner could not be checked; waiting before accepting service work."
-                        )
-                        self._sleep_interruptible(OWNER_RETRY_INTERVAL_SECONDS)
-                        continue
                 start_time = datetime.datetime.now()
                 context.logger.debug(
                     f"Checking tasks at {start_time:%Y-%m-%d %H:%M:%S}."
@@ -277,14 +260,6 @@ class TaskScheduler:
                         scheduled_task.command,
                         run_command(context, scheduled_task.command, "scheduled"),
                         work_id=trace.trace_id,
-                        work_identity={
-                            "kind": "scheduled",
-                            "person_id": person.person_id,
-                            "command": scheduled_task.command,
-                            "slot": start_time.replace(
-                                second=0, microsecond=0
-                            ).isoformat(),
-                        },
                     )
                 consecutive_errors, should_stop = self._update_consecutive_errors(
                     ok,
@@ -338,12 +313,6 @@ class TaskScheduler:
                         context, person, routine_command, work_id
                     ),
                     work_id=work_id,
-                    work_identity={
-                        "kind": "routine",
-                        "person_id": person.person_id,
-                        "command": routine_command,
-                        "slot": start_time.replace(second=0, microsecond=0).isoformat(),
-                    },
                 )
             else:
                 with trace_scope(
@@ -359,14 +328,6 @@ class TaskScheduler:
                         routine_command,
                         run_command(context, routine_command, "routine"),
                         work_id=trace.trace_id,
-                        work_identity={
-                            "kind": "routine",
-                            "person_id": person.person_id,
-                            "command": routine_command,
-                            "slot": start_time.replace(
-                                second=0, microsecond=0
-                            ).isoformat(),
-                        },
                     )
             now = datetime.datetime.now()
             next_routine_time = now + datetime.timedelta(
@@ -487,7 +448,6 @@ class TaskScheduler:
         coro: Coroutine,
         *,
         work_id: str | None = None,
-        work_identity: dict[str, str] | None = None,
     ) -> Any:
         try:
             with self._execution.track_work(
@@ -496,14 +456,8 @@ class TaskScheduler:
                 command=command,
                 work_id=work_id,
                 cancel=self._cancel_event.set,
-                work_identity=work_identity,
             ):
                 return self._run(loop, coro)
-        except TaskRunSyncUnavailableError as exc:
-            self.context.logger.warning(
-                "Service work result is not shared yet: %s", exc
-            )
-            return True
         except WorkRejectedError as exc:
             coro.close()
             if exc.reason == "draining":
@@ -511,21 +465,6 @@ class TaskScheduler:
                 # locally so worker loops exit without counting a command error.
                 self._stop_event.set()
                 return False
-            if exc.reason in {"owner_unreachable", "sync_unavailable"}:
-                # A Hub outage or an unconfirmed start barrier blocks only this
-                # new work item. Keep the service alive so a later polling
-                # cycle can retry; an already running workflow is never
-                # cancelled for a connectivity failure.
-                return True
-            if exc.reason == "not_owner":
-                # A confirmed transfer is different from an outage: this
-                # device must stop accepting service work immediately.
-                self._stop_event.set()
-                return True
-            if exc.reason == "duplicate":
-                # The same stable input already has a running or terminal run
-                # on another device. It was deliberately not executed twice.
-                return True
             # Another frontend is temporarily using this person. Skipping is a
             # successful scheduler cycle: the next tick can try again and other
             # members must continue running.

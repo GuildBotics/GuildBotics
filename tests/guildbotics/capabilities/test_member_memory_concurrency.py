@@ -162,14 +162,16 @@ def test_nothing_can_replace_the_journal_between_the_check_and_the_completion(
     store = RunStore()
     store.append("run-1", {"kind": "evidence", "evidence_type": "chat_reply"})
     got_in: list[bool] = []
-    original = RunStore._read_record_if_exists
+    original = RunStore._read_records_if_exists
 
-    def note_whether_anyone_else_can_write(self: RunStore, run_id: str) -> object:
+    def note_whether_anyone_else_can_write(
+        self: RunStore, run_id: str
+    ) -> list[dict[str, object]]:
         got_in.append(_another_thread_can_take_the_lock(workspace))
         return original(self, run_id)
 
     monkeypatch.setattr(
-        RunStore, "_read_record_if_exists", note_whether_anyone_else_can_write
+        RunStore, "_read_records_if_exists", note_whether_anyone_else_can_write
     )
 
     store.complete_run(

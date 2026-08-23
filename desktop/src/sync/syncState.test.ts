@@ -18,7 +18,6 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     rejected_changes: [],
     last_success_at: "2026-07-01T00:00:00+00:00",
     last_error_code: null,
-    live_error_code: null,
     ...overrides,
   };
 }

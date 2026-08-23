@@ -128,7 +128,6 @@ vi.mock("../api/client", async (importOriginal) => {
       unsendable_changes: [],
       last_success_at: null,
       last_error_code: null,
-      live_error_code: null,
     })),
     getWorkspaceDevices: vi.fn(async () => ({
       device_id: "1f0a0000-0000-7000-8000-0000000000d1",

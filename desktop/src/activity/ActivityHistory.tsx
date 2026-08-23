@@ -45,13 +45,9 @@ import {
   type CliAgentUsage,
   type RuntimeActiveWork,
   type RuntimeMemberRoutine,
-  type TracePresentation,
-  type WorkspaceLiveState,
-  type WorkspaceLiveWork,
   getActivityHistory,
   getSchedulerStatus,
   getTraceDetail,
-  getWorkspaceLive,
   memberAvatarUrl,
 } from "../api/client";
 import { useMemberCliAgentLabel, useMemberCliAgentUsage } from "../cliAgent";
@@ -266,12 +262,6 @@ function ActivityChart({
     queryFn: getSchedulerStatus,
     refetchInterval: 5000,
   });
-  const live = useQuery({
-    queryKey: ["workspace-live"],
-    queryFn: getWorkspaceLive,
-    refetchInterval: ACTIVE_WORK_POLL_MS,
-    retry: false,
-  });
   const activeWorkByMember = new Map<string, RuntimeActiveWork>();
   for (const work of runtime.data?.active_works ?? []) {
     const current = activeWorkByMember.get(work.person_id);
@@ -287,23 +277,15 @@ function ActivityChart({
       routineByMember.set(routine.person_id, routine);
     }
   }
-  const currentLiveStates = latestLiveStates(live.data ?? []);
-  const liveWorkByMember = liveWorkMap(currentLiveStates);
-  const delayedDevices = currentLiveStates.filter((state) => state.status !== "online");
   const sessionsByMember = groupBy(data.sessions, (session) => session.person_id);
   const eventsByMember = groupBy(
     data.events.filter((event) => event.person_id),
     (event) => event.person_id,
   );
   const sharedEvents = data.events.filter((event) => !event.person_id);
-  const hasRows =
-    data.sessions.length > 0 ||
-    data.events.length > 0 ||
-    liveWorkByMember.size > 0 ||
-    delayedDevices.length > 0;
+  const hasRows = data.sessions.length > 0 || data.events.length > 0;
   return (
     <div className="activity-chart">
-      {delayedDevices.length > 0 ? <LiveDeviceAlert states={delayedDevices} /> : null}
       <div className="activity-row activity-row-head">
         <div className="activity-member-cell">{t("activity.memberColumn")}</div>
         <div
@@ -356,64 +338,11 @@ function ActivityChart({
           now={now}
           matches={matches}
           member={member}
-          liveWork={liveWorkByMember.get(member.person_id) ?? null}
         />
       ))}
       {!loading && !hasRows ? <div className="activity-empty">{t("activity.empty")}</div> : null}
       {loading ? <div className="activity-empty">{t("activity.loading")}</div> : null}
     </div>
-  );
-}
-
-type LiveMemberWork = {
-  state: WorkspaceLiveState;
-  work: WorkspaceLiveWork;
-};
-
-const LIVE_STATUS_PRIORITY: Record<WorkspaceLiveState["status"], number> = {
-  online: 2,
-  delayed: 1,
-  expired: 0,
-};
-
-function liveWorkMap(states: WorkspaceLiveState[]): Map<string, LiveMemberWork> {
-  const result = new Map<string, LiveMemberWork>();
-  for (const state of states) {
-    for (const work of state.works) {
-      const existing = result.get(work.member_id);
-      if (
-        !existing ||
-        LIVE_STATUS_PRIORITY[state.status] > LIVE_STATUS_PRIORITY[existing.state.status] ||
-        (state.status === existing.state.status && state.observed_at > existing.state.observed_at)
-      ) {
-        result.set(work.member_id, { state, work });
-      }
-    }
-  }
-  return result;
-}
-
-function latestLiveStates(states: WorkspaceLiveState[]): WorkspaceLiveState[] {
-  const latest = new Map<string, WorkspaceLiveState>();
-  for (const state of states) {
-    const existing = latest.get(state.device_id);
-    if (!existing || state.observed_at > existing.observed_at) {
-      latest.set(state.device_id, state);
-    }
-  }
-  return [...latest.values()];
-}
-
-function LiveDeviceAlert({ states }: { states: WorkspaceLiveState[] }) {
-  const { t } = useTranslation();
-  return (
-    <Alert color="yellow" title={t("activity.live.title")}>
-      {states.map((state) => (
-        <div key={`${state.device_id}-${state.publisher_id}`}>
-          {t(`activity.live.device.${state.status}`, { deviceId: state.device_id })}
-        </div>
-      ))}
-    </Alert>
   );
 }
 
@@ -428,7 +357,6 @@ function ActivityTimelineRow({
   matches,
   member,
   activeWork = null,
-  liveWork = null,
   routine = null,
   team = false,
 }: {
@@ -442,7 +370,6 @@ function ActivityTimelineRow({
   matches: ActivityHistoryMatchState;
   member?: ActivityHistoryMember;
   activeWork?: RuntimeActiveWork | null;
-  liveWork?: LiveMemberWork | null;
   routine?: RuntimeMemberRoutine | null;
   team?: boolean;
 }) {
@@ -501,8 +428,6 @@ function ActivityTimelineRow({
           {usage ? <MemberUsageMeters usage={usage} /> : null}
           {activeWork ? (
             <MemberActiveWorkStatus work={activeWork} />
-          ) : liveWork ? (
-            <MemberLiveWorkStatus liveWork={liveWork} />
           ) : routine ? (
             <MemberRoutineStatus routine={routine} />
           ) : null}
@@ -602,29 +527,6 @@ function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
       <span className="activity-member-current-dot" aria-hidden="true" />
       <span className="activity-member-current-message">{message}</span>
     </Link>
-  );
-}
-
-function MemberLiveWorkStatus({ liveWork }: { liveWork: LiveMemberWork }) {
-  const { t } = useTranslation();
-  const presentation = liveWork.work.presentation as TracePresentation | null;
-  const message = presentation
-    ? tracePresentationMessage(t, presentation) || tracePresentationLabel(t, presentation)
-    : "";
-  const detail = message || liveWork.work.workflow_name;
-  const status = t(`activity.live.status.${liveWork.state.status}`);
-  const tone = liveWork.state.status === "online" ? "neutral" : "warning";
-  return (
-    <span
-      className={`activity-member-current activity-member-current-${tone}`}
-      aria-label={t("activity.nowRunning")}
-      title={`${status}: ${detail}`}
-    >
-      <span className="activity-member-current-dot" aria-hidden="true" />
-      <span className="activity-member-current-message">
-        {status}: {detail}
-      </span>
-    </span>
   );
 }
 

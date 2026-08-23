@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
-    PendingEventRecordError,
     ScheduledPostState,
     ThreadConversationState,
     ThreadHandoffState,
@@ -18,8 +14,6 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 
 EXPECTED_BACKFILL_ERROR_COUNT = 2
-EXPECTED_ATTEMPT_COUNT = 2
-EXPECTED_MAX_ATTEMPTS = 5
 
 
 def test_channel_cursor_roundtrip(tmp_path):
@@ -382,30 +376,10 @@ def test_pending_event_metadata_and_retry_state_roundtrip(tmp_path):
 
     assert loaded.event.metadata["event_type"] == "guildbotics.workflow_status"
     assert loaded.chat_participation == "social"
-    assert loaded.attempt_count == EXPECTED_ATTEMPT_COUNT
-    assert loaded.max_attempts == EXPECTED_MAX_ATTEMPTS
+    assert loaded.attempt_count == 2
+    assert loaded.max_attempts == 5
     assert loaded.next_attempt_at == "2026-07-04T02:30:00+00:00"
     assert loaded.run_id == "run-1"
-
-
-@pytest.mark.parametrize("missing", ["event_id", "message_ts", "thread_ts"])
-def test_pending_event_reader_does_not_drop_missing_identity_fields(
-    tmp_path, missing: str
-) -> None:
-    store = FileConversationStateStore(base_dir=tmp_path)
-    item = {
-        "event_id": "C1:100.1",
-        "message_ts": "100.1",
-        "thread_ts": "100.1",
-        "text": "hello",
-    }
-    item.pop(missing)
-    path = store._pending_events_file("slack", "alice", "C1")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"events": [item]}), encoding="utf-8")
-
-    with pytest.raises(PendingEventRecordError, match=missing):
-        store.load_pending_events("slack", "alice", "C1")
 
 
 def test_list_pending_channels(tmp_path):

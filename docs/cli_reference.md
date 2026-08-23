@@ -24,13 +24,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
-| [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
-| [`guildbotics hub live publish`](#guildbotics-hub-live-publish) | Replace one live snapshot for each non-empty stdin line. |
-| [`guildbotics hub live watch`](#guildbotics-hub-live-watch) | Poll live snapshots and head updates until the SSH connection closes. |
-| [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
-| [`guildbotics hub owner claim`](#guildbotics-hub-owner-claim) | Claim ownership only when the workspace has no owner. |
-| [`guildbotics hub owner get`](#guildbotics-hub-owner-get) | Show the current service owner, if one has been claimed. |
-| [`guildbotics hub owner transfer`](#guildbotics-hub-owner-transfer) | Move ownership explicitly to another device. |
 | [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 | [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
@@ -211,8 +204,6 @@ guildbotics hub [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
-| [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
-| [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
 | [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 
@@ -222,104 +213,6 @@ Make this machine a hub, or show the hub it already hosts.
 
 ```text
 guildbotics hub create [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub live`
-
-Publish and watch transient workspace live state.
-
-```text
-guildbotics hub live [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub live publish`](#guildbotics-hub-live-publish) | Replace one live snapshot for each non-empty stdin line. |
-| [`guildbotics hub live watch`](#guildbotics-hub-live-watch) | Poll live snapshots and head updates until the SSH connection closes. |
-
-## `guildbotics hub live publish`
-
-Replace one live snapshot for each non-empty stdin line.
-
-```text
-guildbotics hub live publish [OPTIONS] WORKSPACE_ID DEVICE_ID PUBLISHER_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub live watch`
-
-Poll live snapshots and head updates until the SSH connection closes.
-
-```text
-guildbotics hub live watch [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner`
-
-Inspect or explicitly change a workspace's service owner.
-
-```text
-guildbotics hub owner [OPTIONS] COMMAND [ARGS]...
-```
-
-| Option | Description |
-| --- | --- |
-| `--help` | Show this message and exit. |
-
-| Subcommand | Summary |
-| --- | --- |
-| [`guildbotics hub owner claim`](#guildbotics-hub-owner-claim) | Claim ownership only when the workspace has no owner. |
-| [`guildbotics hub owner get`](#guildbotics-hub-owner-get) | Show the current service owner, if one has been claimed. |
-| [`guildbotics hub owner transfer`](#guildbotics-hub-owner-transfer) | Move ownership explicitly to another device. |
-
-## `guildbotics hub owner claim`
-
-Claim ownership only when the workspace has no owner.
-
-```text
-guildbotics hub owner claim [OPTIONS] WORKSPACE_ID DEVICE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner get`
-
-Show the current service owner, if one has been claimed.
-
-```text
-guildbotics hub owner get [OPTIONS] WORKSPACE_ID
-```
-
-| Option | Description |
-| --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics hub owner transfer`
-
-Move ownership explicitly to another device.
-
-```text
-guildbotics hub owner transfer [OPTIONS] WORKSPACE_ID DEVICE_ID
 ```
 
 | Option | Description |

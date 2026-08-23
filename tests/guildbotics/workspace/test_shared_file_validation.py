@@ -138,11 +138,11 @@ def test_a_record_from_a_newer_build_stops_the_boundary(relative_path: str) -> N
     assert error.value.version == 2
 
 
-def test_a_newer_task_run_record_stops_the_boundary() -> None:
+def test_a_newer_record_inside_a_journal_stops_the_boundary() -> None:
     with pytest.raises(SharedSchemaAheadError):
         validate_shared_file(
-            "state/task-runs/run-1/result.json",
-            b'{"schema_version": 2}\n',
+            "state/task-runs/run-1.jsonl",
+            b'{"kind": "evidence"}\n{"schema_version": 2}\n',
         )
 
 

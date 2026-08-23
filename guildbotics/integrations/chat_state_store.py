@@ -2,12 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
 
 from guildbotics.integrations.chat_service import ChatEvent
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
 
 
 @dataclass(slots=True)
@@ -92,112 +88,10 @@ class PendingChatEvent:
     last_error_category: str = ""
     wake_cursor: str = ""
 
-    @classmethod
-    def from_record(
-        cls,
-        item: object,
-        *,
-        index: int,
-        default_channel_id: str,
-        location: str = "",
-    ) -> PendingChatEvent:
-        """Decode the shared pending-event record used by every reader.
-
-        Keeping identity validation and field defaults beside the dataclass
-        prevents a writer and a reader from silently disagreeing about what a
-        pending event means. ``location`` is only diagnostic context; it is not
-        part of the shared record.
-        """
-        suffix = f" for {location}" if location else ""
-        if not isinstance(item, dict):
-            raise PendingEventRecordError(
-                f"Pending event {index}{suffix} is not an object."
-            )
-        required = {
-            name: _optional_text(item.get(name))
-            for name in ("event_id", "message_ts", "thread_ts")
-        }
-        missing = [name for name, value in required.items() if not value]
-        if missing:
-            raise PendingEventRecordError(
-                f"Pending event {index}{suffix} is missing {', '.join(missing)}."
-            )
-        mentions = item.get("mentions") or []
-        if not isinstance(mentions, list):
-            mentions = []
-        return cls(
-            event=ChatEvent(
-                event_id=required["event_id"] or "",
-                channel_id=str(item.get("channel_id", default_channel_id)),
-                message_ts=required["message_ts"] or "",
-                thread_ts=required["thread_ts"] or "",
-                author_id=_optional_text(item.get("author_id")),
-                text=str(item.get("text", "") or ""),
-                mentions=[str(value) for value in mentions if str(value)],
-                is_edit_or_delete=bool(item.get("is_edit_or_delete", False)),
-                is_bot_message=bool(item.get("is_bot_message", False)),
-                is_thread_reply=bool(item.get("is_thread_reply", False)),
-                metadata=normalize_workflow_status_metadata(item.get("metadata")),
-            ),
-            chat_participation=str(
-                item.get("chat_participation", "strict") or "strict"
-            ),
-            attempt_count=_non_negative_int(item.get("attempt_count")),
-            max_attempts=max(1, _non_negative_int(item.get("max_attempts")) or 5),
-            next_attempt_at=_optional_text(item.get("next_attempt_at")),
-            run_id=str(item.get("run_id", "") or ""),
-            last_error_category=str(item.get("last_error_category", "") or ""),
-            wake_cursor=str(item.get("wake_cursor", "") or ""),
-        )
-
-    def to_record(self) -> dict[str, Any]:
-        """Encode the shared pending-event record used by every writer."""
-        event = self.event
-        return {
-            "event_id": event.event_id,
-            "channel_id": event.channel_id,
-            "message_ts": event.message_ts,
-            "thread_ts": event.thread_ts,
-            "author_id": event.author_id,
-            "text": event.text,
-            "mentions": [str(value) for value in event.mentions if str(value)],
-            "is_edit_or_delete": bool(event.is_edit_or_delete),
-            "is_bot_message": bool(event.is_bot_message),
-            "is_thread_reply": bool(event.is_thread_reply),
-            "metadata": normalize_workflow_status_metadata(event.metadata),
-            "chat_participation": self.chat_participation,
-            "attempt_count": max(0, int(self.attempt_count)),
-            "max_attempts": max(1, int(self.max_attempts)),
-            "next_attempt_at": self.next_attempt_at,
-            "run_id": self.run_id,
-            "last_error_category": self.last_error_category,
-            "wake_cursor": self.wake_cursor,
-        }
-
 
 class ThreadContextUnavailableError(RuntimeError):
     """Raised when the provider cannot serve the thread context a chat event
     needs; the event must stay pending instead of being retried into failure."""
-
-
-class PendingEventRecordError(ValueError):
-    """Raised when a persisted pending event cannot identify its message."""
-
-
-def _optional_text(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value)
-    return text if text else None
-
-
-def _non_negative_int(value: object) -> int:
-    if not isinstance(value, (int, str, bytes, bytearray)):
-        return 0
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return 0
 
 
 class ConversationStateStore(ABC):

@@ -9,7 +9,6 @@ from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
-from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
 from guildbotics.utils.timestamps import parse_iso_datetime
@@ -139,7 +138,6 @@ class MemoryAuditStore:
         rewrite the whole journal -- megabytes of it -- for every event, where
         all but the trimming one need only the file's size and an append.
         """
-        notify_diagnostics_record(item)
         path = self.path
         line = self._bounded_line(item)
         if not line:
