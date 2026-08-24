@@ -376,6 +376,14 @@ describe("ActivityHistoryPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows remote current work without a status prefix while the device is online", async () => {
+    vi.mocked(getWorkspaceLive).mockResolvedValue([{ ...REMOTE_LIVE, status: "online" }]);
+    renderActivity();
+
+    expect(await screen.findByText("remote step")).toBeInTheDocument();
+    expect(screen.queryByText("Live: remote step")).toBe(null);
+  });
+
   it("shows no running-work status for idle members", async () => {
     renderActivity();
 

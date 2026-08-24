@@ -612,18 +612,21 @@ function MemberLiveWorkStatus({ liveWork }: { liveWork: LiveMemberWork }) {
     ? tracePresentationMessage(t, presentation) || tracePresentationLabel(t, presentation)
     : "";
   const detail = message || liveWork.work.workflow_name;
-  const status = t(`activity.live.status.${liveWork.state.status}`);
-  const tone = liveWork.state.status === "online" ? "neutral" : "warning";
+  const online = liveWork.state.status === "online";
+  // While the feed is fresh the line must read exactly like the executing
+  // device's local status line; the freshness label only marks anomalies.
+  const text = online
+    ? detail
+    : `${t(`activity.live.status.${liveWork.state.status}`)}: ${detail}`;
+  const tone = online ? "neutral" : "warning";
   return (
     <span
       className={`activity-member-current activity-member-current-${tone}`}
       aria-label={t("activity.nowRunning")}
-      title={`${status}: ${detail}`}
+      title={text}
     >
       <span className="activity-member-current-dot" aria-hidden="true" />
-      <span className="activity-member-current-message">
-        {status}: {detail}
-      </span>
+      <span className="activity-member-current-message">{text}</span>
     </span>
   );
 }
