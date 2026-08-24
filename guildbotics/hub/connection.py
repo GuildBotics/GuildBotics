@@ -21,7 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from guildbotics.hub import host
-from guildbotics.utils.openssh import keygen_executable, ssh_executable
+from guildbotics.utils.openssh import (
+    REMOTE_COMMAND_TIMEOUT_SECONDS,
+    keygen_executable,
+    ssh_executable,
+)
 
 #: Where a hub keeps its repositories, relative to the hub user's home. Devices
 #: use it as a remote path, so it stays in the ``host:path`` form Git accepts
@@ -32,7 +36,7 @@ _HUB_REMOTE_PATH_PARTS = 2
 PROBE_TIMEOUT_SECONDS = 10.0
 #: How long a hub command may take. Creating a repository is quick; the bound
 #: exists so a hub that accepts the connection and then hangs still answers.
-COMMAND_TIMEOUT_SECONDS = 30.0
+COMMAND_TIMEOUT_SECONDS = REMOTE_COMMAND_TIMEOUT_SECONDS
 #: The key type generated for a device that has none.
 SSH_KEY_TYPE = "ed25519"
 #: ``host keytype key`` is the shortest line either OpenSSH tool prints.

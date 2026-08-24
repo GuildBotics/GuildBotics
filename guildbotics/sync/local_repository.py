@@ -17,18 +17,25 @@ settle a concurrent update belong to
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
+import subprocess
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from git import GitCommandError, Repo
+from git import Git, GitCommandError, Repo
 from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
 from guildbotics.utils.fileio import ATOMIC_WRITE_SUFFIX, get_workspace_root
-from guildbotics.utils.openssh import OpenSshNotFoundError, git_ssh_command
+from guildbotics.utils.openssh import (
+    REMOTE_COMMAND_TIMEOUT_SECONDS,
+    OpenSshNotFoundError,
+    git_ssh_command,
+)
 from guildbotics.utils.workspace_sync_port import SHARED_ROOTS
 
 #: The only branch normal operation shares. Users are given no branch controls.
@@ -55,6 +62,70 @@ _STATUS_PREFIX = 3
 
 class SyncRepositoryError(RuntimeError):
     """Raised when the local synchronization repository cannot be operated."""
+
+
+class HubTimeoutError(SyncRepositoryError):
+    """Raised when a Git command that reaches the hub does not answer in time."""
+
+
+def _kill_command_tree(process: subprocess.Popen[str]) -> None:
+    """Kill a remote Git command together with the ssh child it spawned.
+
+    Killing only ``git`` would orphan an ssh still blocked in name
+    resolution, and that orphan keeps the hang alive invisibly.
+    """
+    if os.name == "posix":
+        with suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
+    else:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+        )
+    with suppress(OSError):
+        process.kill()
+    process.wait()
+
+
+def _run_remote_git(
+    repository: Repo,
+    *arguments: str,
+    timeout: float = REMOTE_COMMAND_TIMEOUT_SECONDS,
+) -> str:
+    """Run one Git command that reaches the hub, bounded by a wall clock.
+
+    GitPython runs Git without a timeout (its ``kill_after_timeout`` is
+    POSIX-only), and ssh options cannot bound the hang either -- see
+    ``REMOTE_COMMAND_TIMEOUT_SECONDS``. Local Git commands stay on GitPython;
+    only the ones that reach the hub go through this boundary.
+
+    Raises:
+        HubTimeoutError: When the hub does not answer within the bound.
+        GitCommandError: When Git itself reports the command failed.
+    """
+    argv: list[str] = [Git.GIT_PYTHON_GIT_EXECUTABLE or "git", *arguments]
+    process = subprocess.Popen(
+        argv,
+        cwd=repository.working_dir,
+        env={**os.environ, **repository.git.environment()},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _kill_command_tree(process)
+        raise HubTimeoutError(
+            f"The hub did not answer 'git {arguments[0]}' within "
+            f"{int(timeout)} seconds."
+        ) from exc
+    if process.returncode != 0:
+        raise GitCommandError(argv, process.returncode, stderr, stdout)
+    return stdout
 
 
 @dataclass(frozen=True)
@@ -194,7 +265,7 @@ class LocalSyncRepository:
         try:
             repository = self._repo()
             repository.create_remote(SYNC_REMOTE, url)
-            repository.git.fetch(SYNC_REMOTE, SYNC_BRANCH)
+            _run_remote_git(repository, "fetch", SYNC_REMOTE, SYNC_BRANCH)
             repository.git.checkout("-B", SYNC_BRANCH, f"{SYNC_REMOTE}/{SYNC_BRANCH}")
         except Exception:
             # A copy that could not be taken leaves nothing behind. What it
@@ -383,7 +454,7 @@ class LocalSyncRepository:
         keeps describing content the new one has never seen -- so this device
         concludes it is in sync and sends the rebuilt hub nothing.
         """
-        self._repo().git.fetch(SYNC_REMOTE, "--prune")
+        _run_remote_git(self._repo(), "fetch", SYNC_REMOTE, "--prune")
 
     def fetch_preview(self, url: str) -> str | None:
         """Read a hub's content without connecting this workspace to it.
@@ -403,10 +474,12 @@ class LocalSyncRepository:
         Raises:
             GitCommandError: When the hub cannot be reached.
         """
-        listing = str(self._repo().git.ls_remote(url, f"refs/heads/{SYNC_BRANCH}"))
+        listing = _run_remote_git(
+            self._repo(), "ls-remote", url, f"refs/heads/{SYNC_BRANCH}"
+        )
         if not listing.strip():
             return None
-        self._repo().git.fetch(url, f"+{SYNC_BRANCH}:{PREVIEW_REF}")
+        _run_remote_git(self._repo(), "fetch", url, f"+{SYNC_BRANCH}:{PREVIEW_REF}")
         return self._repo().git.rev_parse(PREVIEW_REF)
 
     def forget_preview(self) -> None:
@@ -420,7 +493,9 @@ class LocalSyncRepository:
 
     def push(self) -> None:
         """Send the sync branch to the hub, which accepts fast-forwards only."""
-        self._repo().git.push(SYNC_REMOTE, f"{SYNC_BRANCH}:{SYNC_BRANCH}")
+        _run_remote_git(
+            self._repo(), "push", SYNC_REMOTE, f"{SYNC_BRANCH}:{SYNC_BRANCH}"
+        )
 
     def move_to(self, commit: str) -> None:
         """Point the branch and index at ``commit``, leaving the working tree.

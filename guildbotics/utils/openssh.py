@@ -16,6 +16,13 @@ from pathlib import Path
 #: Where Windows keeps the OpenSSH client that owns the user's ``known_hosts``.
 _WINDOWS_OPENSSH = Path("C:/Windows/System32/OpenSSH/ssh.exe")
 
+#: How long any one-shot command that reaches a hub may take. The subprocess
+#: is the boundary because ssh options cannot be: ``ServerAlive*`` only
+#: watches established connections, and ``ConnectTimeout`` starts after name
+#: resolution -- yet a hub that vanished from the network can leave mDNS
+#: resolution itself pending indefinitely.
+REMOTE_COMMAND_TIMEOUT_SECONDS = 30.0
+
 
 class OpenSshNotFoundError(RuntimeError):
     """Raised when this machine has no OpenSSH client to reach a hub with."""
