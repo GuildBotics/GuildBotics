@@ -160,6 +160,7 @@ const resources = {
           id: "Device ID",
           live: "Live",
           fingerprint: "Device key fingerprint",
+          fingerprintMissing: "Not registered",
           liveStatus: {
             unknown: "Unknown",
             online: "Online",
@@ -1942,6 +1943,7 @@ const resources = {
           id: "device ID",
           live: "現在状態",
           fingerprint: "device 鍵の fingerprint",
+          fingerprintMissing: "未登録",
           liveStatus: {
             unknown: "不明",
             online: "稼働中",

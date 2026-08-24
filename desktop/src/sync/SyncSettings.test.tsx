@@ -12,6 +12,7 @@ import {
   enableWorkspaceSync,
   getHubStatus,
   getWorkspaceDevices,
+  getWorkspaceLive,
   getWorkspaceServiceOwner,
   getWorkspaceSyncStatus,
   inspectHub,
@@ -37,6 +38,7 @@ vi.mock("../api/client", async () => {
     enableWorkspaceSync: vi.fn(),
     getHubStatus: vi.fn(),
     getWorkspaceDevices: vi.fn(),
+    getWorkspaceLive: vi.fn(),
     getWorkspaceServiceOwner: vi.fn(),
     getWorkspaceSyncStatus: vi.fn(),
     inspectHub: vi.fn(),
@@ -114,6 +116,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
   vi.mocked(getWorkspaceDevices).mockResolvedValue({ devices: [], device_id: "d1" });
+  vi.mocked(getWorkspaceLive).mockResolvedValue([]);
   vi.mocked(getWorkspaceServiceOwner).mockResolvedValue({
     workspace_id: "workspace-1",
     owner_device_id: null,
@@ -413,7 +416,7 @@ describe("once connected", () => {
 });
 
 describe("devices", () => {
-  it("marks which row is this machine and offers to rename only that one", async () => {
+  it("shows each device's state, fingerprint, ID action, and self marker", async () => {
     const user = userEvent.setup();
     vi.mocked(getWorkspaceDevices).mockResolvedValue({
       device_id: "d1",
@@ -424,8 +427,9 @@ describe("devices", () => {
           os: "macos",
           joined_at: "2026-07-01T00:00:00+00:00",
           status: "active",
-          ssh_public_key_fingerprint: "",
+          ssh_public_key_fingerprint: "SHA256:mac-key",
           is_self: true,
+          live_status: "online",
         },
         {
           device_id: "d2",
@@ -435,6 +439,7 @@ describe("devices", () => {
           status: "active",
           ssh_public_key_fingerprint: "",
           is_self: false,
+          live_status: "expired",
         },
       ],
     });
@@ -443,6 +448,11 @@ describe("devices", () => {
 
     expect(await screen.findByText("win-desktop")).toBeInTheDocument();
     expect(screen.getByText(t("sync.devices.self"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.liveStatus.online"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.liveStatus.expired"))).toBeInTheDocument();
+    expect(screen.getByText("SHA256:mac-key")).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.fingerprintMissing"))).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: t("sync.devices.copy") })).toHaveLength(2);
 
     const nameField = screen.getByLabelText(t("sync.devices.rename"));
     expect(nameField).toHaveValue("mac-studio");

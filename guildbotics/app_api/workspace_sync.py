@@ -436,8 +436,14 @@ class WorkspaceSyncService:
 
     def activate(self) -> WorkspaceSyncStatus:
         """Start the queue for the selected workspace, if it has a hub."""
-        manager = activate_workspace_sync(_workspace_root())
-        self._restart_relay(manager, _workspace_root())
+        root = _workspace_root()
+        manager = activate_workspace_sync(root)
+        if manager is not None:
+            # Activation is also the repair point for a key created or replaced
+            # outside the current Desktop process. Publishing through the normal
+            # device-record writer keeps every machine's fingerprint current.
+            publish_device_record(root, ssh_public_key_fingerprint=_key_fingerprint())
+        self._restart_relay(manager, root)
         return self.get_status()
 
     def prepare_service_owner(self) -> Callable[[], bool | None] | None:

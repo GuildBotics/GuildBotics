@@ -600,6 +600,28 @@ def test_this_machine_appears_once_it_has_a_record(
     assert payload["devices"][0]["joined_at"]
 
 
+def test_activation_republishes_the_current_device_key_fingerprint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workspace_sync, "_key_fingerprint", lambda: None)
+    _json(client.post("/hub", headers=AUTH_HEADERS))
+    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    assert (
+        _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"][0][
+            "ssh_public_key_fingerprint"
+        ]
+        == ""
+    )
+
+    monkeypatch.setattr(
+        workspace_sync, "_key_fingerprint", lambda: "SHA256:current-device"
+    )
+    workspace_sync.WorkspaceSyncService().activate()
+
+    devices = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"]
+    assert devices[0]["ssh_public_key_fingerprint"] == "SHA256:current-device"
+
+
 def test_renaming_this_machine_publishes_the_new_name(
     client: TestClient, workspace: Path
 ) -> None:
