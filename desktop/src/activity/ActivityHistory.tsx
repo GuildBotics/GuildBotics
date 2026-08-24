@@ -287,9 +287,13 @@ function ActivityChart({
       routineByMember.set(routine.person_id, routine);
     }
   }
-  const currentLiveStates = latestLiveStates(live.data ?? []);
-  const liveWorkByMember = liveWorkMap(currentLiveStates);
-  const delayedDevices = currentLiveStates.filter((state) => state.status !== "online");
+  // A device carries one live state per publishing process (Desktop backend
+  // and `guildbotics start` publish side by side), so member work must be
+  // gathered from every state; the per-device collapse is only for the alert.
+  const liveWorkByMember = liveWorkMap(live.data ?? []);
+  const delayedDevices = latestLiveStates(live.data ?? []).filter(
+    (state) => state.status !== "online",
+  );
   const sessionsByMember = groupBy(data.sessions, (session) => session.person_id);
   const eventsByMember = groupBy(
     data.events.filter((event) => event.person_id),
@@ -615,9 +619,7 @@ function MemberLiveWorkStatus({ liveWork }: { liveWork: LiveMemberWork }) {
   const online = liveWork.state.status === "online";
   // While the feed is fresh the line must read exactly like the executing
   // device's local status line; the freshness label only marks anomalies.
-  const text = online
-    ? detail
-    : `${t(`activity.live.status.${liveWork.state.status}`)}: ${detail}`;
+  const text = online ? detail : `${t(`activity.live.status.${liveWork.state.status}`)}: ${detail}`;
   const tone = online ? "neutral" : "warning";
   return (
     <span

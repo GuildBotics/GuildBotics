@@ -384,6 +384,41 @@ describe("ActivityHistoryPage", () => {
     expect(screen.queryByText("Live: remote step")).toBe(null);
   });
 
+  it("shows the works of every publisher on the same device at once", async () => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", roles: ["developer"] },
+        { person_id: "bob", name: "Bob", person_type: "agent", roles: ["developer"] },
+      ],
+    });
+    vi.mocked(getWorkspaceLive).mockResolvedValue([
+      { ...REMOTE_LIVE, status: "online", observed_at: "2026-07-01T11:59:00Z" },
+      {
+        ...REMOTE_LIVE,
+        status: "online",
+        publisher_id: "publisher-3",
+        observed_at: "2026-07-01T11:59:30Z",
+        works: [
+          {
+            ...REMOTE_LIVE.works[0],
+            work_id: "remote-work-2",
+            run_id: "remote-run-2",
+            member_id: "bob",
+            presentation: {
+              ...REMOTE_LIVE.works[0].presentation,
+              message: "second publisher step",
+            },
+          },
+        ],
+      },
+    ]);
+    renderActivity();
+
+    expect(await screen.findByText("remote step")).toBeInTheDocument();
+    expect(await screen.findByText("second publisher step")).toBeInTheDocument();
+  });
+
   it("shows no running-work status for idle members", async () => {
     renderActivity();
 
