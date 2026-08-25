@@ -10,7 +10,11 @@ from git import Repo
 
 from guildbotics.sync import activation, enrollment
 from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils import sync_lock as sync_lock_module
+from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.shared_write_lock import shared_write_lock
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_lock_path
 from guildbotics.utils.workspace_sync_port import (
     NoOpWorkspaceSyncPort,
     get_workspace_sync_port,
@@ -25,11 +29,18 @@ CONFIG = "config/team/project.yml"
 def _stop_after_each_test() -> None:
     """No test may leave a queue running against its temporary directory."""
     yield
-    activation.deactivate_workspace_sync()
-    # A test that made a manager refuse to stop still has to release the slot.
-    activation._manager = None
-    activation._workspace = None
-    set_workspace_sync_port(None)
+    if not activation.deactivate_workspace_sync():
+        # The test patched stop() to refuse; the real worker must still stop,
+        # or it keeps cycling on its own timer and walks into a later test's
+        # class-wide spies. The slot is then released by hand.
+        manager = activation.current_sync_manager()
+        if manager is not None:
+            assert GitSyncManager.stop(manager, timeout=10), (
+                "a synchronization worker outlived its test"
+            )
+        activation._manager = None
+        activation._workspace = None
+        set_workspace_sync_port(None)
 
 
 def _workspace(root: Path) -> Path:
@@ -221,3 +232,50 @@ def test_a_pause_restores_the_queue_after_the_body_fails(
         raise RuntimeError("enrollment failed")
 
     assert activation.current_sync_manager() is not None
+
+
+def test_a_pause_that_cannot_take_the_lock_restores_the_queue(
+    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A busy repository lock stops the pause, not the synchronization.
+
+    The queue is stopped before the lock is tried, so answering busy without
+    restarting it would leave a workspace that has a hub quietly not
+    synchronizing.
+    """
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    activation.activate_workspace_sync(root)
+    monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
+
+    with held_lock(sync_lock_path(root), timeout=0.0):
+        with pytest.raises(SyncRepositoryBusyError):
+            with activation.paused_workspace_sync(root):
+                raise AssertionError("the pause must not begin")
+
+    assert activation.current_sync_manager() is not None
+
+
+def test_reactivating_revives_a_worker_that_died_after_a_timed_out_stop(
+    tmp_path: Path, hub: Path
+) -> None:
+    """stop() withdraws a timed-out request, but a worker that observed it
+    before the withdrawal exits anyway, leaving the registered manager without
+    a worker. Activation is the pass every caller repairs that on."""
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    manager = activation.activate_workspace_sync(root)
+    assert manager is not None
+    # The race, made deterministic: the worker sees the stop request and exits
+    # while the manager stays registered for this workspace.
+    manager._stopping.set()  # noqa: SLF001
+    manager._wake.set()  # noqa: SLF001
+    worker = manager._worker  # noqa: SLF001
+    assert worker is not None
+    worker.join(10)
+    assert not worker.is_alive()
+
+    assert activation.activate_workspace_sync(root) is manager
+
+    revived = manager._worker  # noqa: SLF001
+    assert revived is not None and revived.is_alive()

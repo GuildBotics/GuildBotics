@@ -12,7 +12,12 @@ from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.runtime.live_state import LiveState
-from guildbotics.sync import current_sync_manager, deactivate_workspace_sync
+from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
+from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils import sync_lock as sync_lock_module
+from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.sync_lock import sync_lock_path
+from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 from guildbotics.workspace.identity import read_workspace_identity
 
 HTTP_OK = 200
@@ -46,7 +51,18 @@ def client(workspace: Path) -> TestClient:
         create_app(session_token="secret", runtime=AppRuntime(EventBus()))
     )
     yield client
-    deactivate_workspace_sync()
+    if not deactivate_workspace_sync():
+        # The test patched stop() to refuse, or the worker is mid-cycle; the
+        # real worker must still stop, or it keeps cycling against later
+        # tests. The slot is then released by hand.
+        manager = current_sync_manager()
+        if manager is not None:
+            assert GitSyncManager.stop(manager, timeout=10), (
+                "a synchronization worker outlived its test"
+            )
+        activation._manager = None
+        activation._workspace = None
+        set_workspace_sync_port(None)
 
 
 def _json(response) -> dict:
@@ -221,6 +237,33 @@ def test_a_preview_before_a_first_connection_leaves_no_repository(
 
     assert not (workspace / ".guildbotics" / ".git").exists()
     assert not (workspace / ".guildbotics" / "state" / "workspace.json").exists()
+
+
+def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
+    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preview that outwaits sync.lock is a retryable answer, not a crash.
+
+    Another process may hold the repository for longer than the wait limit;
+    the user should read "try again", and the queue the pause stopped must be
+    running again afterwards.
+    """
+    client.post("/hub", headers=AUTH_HEADERS)
+    enabled = _json(
+        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    )
+    monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
+
+    with held_lock(sync_lock_path(workspace), timeout=0.0):
+        response = client.post(
+            "/workspace/sync/preview",
+            headers=AUTH_HEADERS,
+            json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+        )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json()["code"] == "workspace_sync_busy"
+    assert current_sync_manager() is not None
 
 
 def test_retrying_an_unsynchronized_workspace_changes_nothing(

@@ -259,6 +259,13 @@ class GitSyncManager:
             self._wake.set()
             worker.join(timeout)
             if worker.is_alive():
+                # Every caller of a failed stop abandons its operation and
+                # keeps the queue, so the request is withdrawn. Left standing,
+                # the worker would exit at the end of its blocked cycle and
+                # leave a device that looks synchronized while nothing runs.
+                # A worker that saw the request before this withdrawal exits
+                # anyway; activation revives it on its next pass.
+                self._stopping.clear()
                 return False
             self._worker = None
             return True

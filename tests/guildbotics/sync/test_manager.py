@@ -657,6 +657,39 @@ def test_a_worker_that_outlives_its_stop_blocks_a_second_one(
     assert first.manager.stop(timeout=10) is True
 
 
+def test_a_stop_that_timed_out_is_withdrawn_and_the_worker_keeps_serving(
+    first: Device, hub: Path
+) -> None:
+    """A failed stop means its caller aborted and kept the queue. Left
+    standing, the request would end the worker at the close of its blocked
+    cycle, and the device would look synchronized while nothing runs."""
+    release = threading.Event()
+    blocked = threading.Event()
+
+    def fetch() -> None:
+        blocked.set()
+        release.wait(10)
+
+    first.repository.fetch = fetch  # type: ignore[method-assign]
+    first.manager.start()
+    try:
+        assert blocked.wait(10)
+        assert first.manager.stop(timeout=0.1) is False
+        first.write(CONFIG, "language: ja\n")
+        release.set()
+        first.manager.wake()
+        deadline = time.monotonic() + 10
+        while (
+            time.monotonic() < deadline and _hub_bytes(hub, CONFIG) != b"language: ja\n"
+        ):
+            time.sleep(0.05)
+    finally:
+        release.set()
+        assert first.manager.stop(timeout=10) is True
+
+    assert _hub_bytes(hub, CONFIG) == b"language: ja\n"
+
+
 def test_a_worker_stopped_before_a_restart_never_wakes_up_again(
     first: Device,
 ) -> None:

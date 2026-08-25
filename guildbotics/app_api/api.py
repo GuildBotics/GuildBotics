@@ -150,6 +150,7 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
 )
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 # Origins the packaged desktop webview serves the app from. Windows uses the
@@ -287,6 +288,21 @@ def create_app(
             "config_busy",
             "Synchronization is still writing to this workspace, so nothing "
             "was saved. Try again in a moment.",
+            {},
+        )
+
+    @app.exception_handler(SyncRepositoryBusyError)
+    async def sync_repository_busy_handler(
+        _, exc: SyncRepositoryBusyError
+    ) -> JSONResponse:
+        # Same shape as SharedWriteBusyError: any endpoint that pauses or
+        # joins synchronization can outwait the repository lock, and none of
+        # them should have to name it.
+        return _error_response(
+            409,
+            "workspace_sync_busy",
+            "Another synchronization operation is using this workspace. "
+            "Try again in a moment.",
             {},
         )
 

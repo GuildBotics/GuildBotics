@@ -33,7 +33,7 @@ from guildbotics.sync.manager import (
     build_git_sync_manager,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError
-from guildbotics.utils.sync_lock import sync_repository_lock
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 
 LOGGER = logging.getLogger(__name__)
@@ -125,16 +125,23 @@ def paused_workspace_sync(workspace_root: Path | None = None) -> Iterator[None]:
                 "The synchronization queue has not finished stopping. "
                 "Try again in a moment."
             )
-        with sync_repository_lock(lock_root):
-            try:
-                yield
-            finally:
-                # Restored whether or not the work succeeded: a failed attempt
-                # must not leave a workspace that has a hub quietly not
-                # synchronizing. Activation happens before the lock is
-                # released, so another process cannot enter the repository
-                # between the operation and the queue's restart.
-                _activate_locked(workspace_root)
+        try:
+            with sync_repository_lock(lock_root):
+                try:
+                    yield
+                finally:
+                    # Restored whether or not the work succeeded: a failed
+                    # attempt must not leave a workspace that has a hub quietly
+                    # not synchronizing. Activation happens before the lock is
+                    # released, so another process cannot enter the repository
+                    # between the operation and the queue's restart.
+                    _activate_locked(workspace_root)
+        except SyncRepositoryBusyError:
+            # The lock never arrived, so the repository was not touched -- but
+            # the queue was already stopped above. Restart it, or a busy
+            # answer would leave the workspace quietly not synchronizing.
+            _activate_locked(workspace_root)
+            raise
 
 
 def deactivate_workspace_sync() -> bool:
@@ -159,6 +166,10 @@ def _activate_locked(workspace_root: Path | None) -> GitSyncManager | None:
         _stop_locked()
         return None
     if _manager is not None and _workspace == repository.workspace_root:
+        # Start, not just return: a worker that observed a stop request before
+        # the timed-out stop withdrew it has exited, while the manager stayed
+        # registered. start() is a no-op while a worker is running.
+        _manager.start()
         return _manager
     if not _stop_locked():
         raise SyncStillStoppingError(
