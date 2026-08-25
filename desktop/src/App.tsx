@@ -70,6 +70,8 @@ import {
   getTraceDetail,
   getTraces,
   getTranscriptSettings,
+  getWorkspaceDevices,
+  getWorkspaceServiceOwner,
   dismissSystemAlert,
   memberAvatarUrl,
   resetChatReceiveState,
@@ -650,6 +652,32 @@ function ServicePage() {
     refetchInterval: 5000,
   });
   const hasProjectConfig = Boolean(config.data?.project_file_exists);
+  // One read when the screen opens; the sync settings transfer mutation updates
+  // the same query key, so taking over ownership re-enables the button without
+  // another Hub round-trip. The click-time Hub arbitration stays authoritative,
+  // so this state only has to be a best-effort hint: when the owner cannot be
+  // read (Hub unreachable) or nobody owns the service yet (the first start
+  // claims it), the button stays enabled.
+  const serviceOwner = useQuery({
+    queryKey: ["workspace-service-owner"],
+    queryFn: getWorkspaceServiceOwner,
+    retry: false,
+  });
+  const ownedElsewhere = Boolean(
+    serviceOwner.data && serviceOwner.data.owner_device_id !== null && !serviceOwner.data.is_self,
+  );
+  const devices = useQuery({
+    queryKey: ["workspace-devices"],
+    queryFn: getWorkspaceDevices,
+    enabled: ownedElsewhere,
+    retry: false,
+  });
+  const ownerDeviceName =
+    devices.data?.devices.find(
+      (device) => device.device_id === serviceOwner.data?.owner_device_id,
+    )?.display_name ??
+    serviceOwner.data?.owner_device_id ??
+    "";
 
   const startMutation = useMutation({
     mutationFn: () => {
@@ -731,14 +759,30 @@ function ServicePage() {
             ) : null}
           </Group>
         ) : (
-          <Button
-            leftSection={<Play size={16} />}
-            loading={runtimeStarting}
-            disabled={startDisabled}
-            onClick={() => startMutation.mutate()}
+          <Tooltip
+            disabled={!ownedElsewhere}
+            label={t("service.ownerElsewhere", { name: ownerDeviceName })}
+            maw={340}
+            multiline
           >
-            {t("overview.start")}
-          </Button>
+            {/* data-disabled keeps hover events alive so the tooltip can say
+                why, unlike the disabled prop. */}
+            <Button
+              data-disabled={ownedElsewhere || undefined}
+              leftSection={<Play size={16} />}
+              loading={runtimeStarting}
+              disabled={startDisabled}
+              onClick={(event) => {
+                if (ownedElsewhere) {
+                  event.preventDefault();
+                  return;
+                }
+                startMutation.mutate();
+              }}
+            >
+              {t("overview.start")}
+            </Button>
+          </Tooltip>
         )}
       </Group>
 
