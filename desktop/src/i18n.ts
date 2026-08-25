@@ -158,12 +158,45 @@ const resources = {
           os: "OS",
           joinedAt: "Joined",
           id: "Device ID",
+          live: "Live",
+          fingerprint: "Device key fingerprint",
+          fingerprintMissing: "Not registered",
+          liveStatus: {
+            unknown: "Unknown",
+            online: "Online",
+            delayed: "Delayed",
+            expired: "Offline",
+          },
+          currentWork_one: "{{count}} work running",
+          currentWork_other: "{{count}} works running",
           self: "This machine",
           copy: "Copy",
           copied: "Copied",
           rename: "Name of this machine",
           renameHint: "Each machine is named on itself.",
           renameAction: "Rename",
+        },
+        owner: {
+          title: "Service owner",
+          current: "Current owner: {{name}} ({{deviceId}})",
+          none: "No service owner has been claimed.",
+          self: "This machine owns the service",
+          hint: "Ownership never moves automatically. Transfer it only after confirming the service on the owner machine has stopped.",
+          takeOver: "Take over on this machine",
+          connection: {
+            unknown: "Connection unknown",
+            online: "Online",
+            delayed: "Updates delayed",
+            expired: "Offline",
+          },
+          confirmTitle: "Confirm service takeover",
+          confirmBody: "The current owner is {{current}} ({{status}}).",
+          confirmWarning: "This can run the service twice",
+          confirmHint:
+            "Confirm directly that the service on the current owner machine has stopped before continuing.",
+          cancel: "Cancel",
+          confirmAction: "I confirmed; take over",
+          failed: "Could not read the service owner",
         },
         sshKey: {
           title: "This device's SSH key",
@@ -224,6 +257,10 @@ const resources = {
             "Synchronization stopped because the shared content could not be reconciled.",
           update_required: "Update GuildBotics on this machine to keep sharing this workspace.",
         },
+        live: {
+          updateRequiredTitle: "Live state client update required",
+          updateRequired: "Update GuildBotics on this machine to read the current live state.",
+        },
         counts: {
           ahead_one: "1 change waiting to be sent",
           ahead_other: "{{count}} changes waiting to be sent",
@@ -277,6 +314,19 @@ const resources = {
         memberHuman: "Human",
         nowRunning: "Current work",
         patrol: "Last patrol {{last}}",
+        live: {
+          title: "Remote live status",
+          status: {
+            online: "Live",
+            delayed: "Updates delayed",
+            expired: "Device offline",
+          },
+          device: {
+            online: "Device {{deviceId}} is online.",
+            delayed: "Updates from device {{deviceId}} are delayed.",
+            expired: "Device {{deviceId}} is offline.",
+          },
+        },
         events: "Events",
         loading: "Loading activity...",
         empty: "No activity recorded for this period.",
@@ -322,6 +372,8 @@ const resources = {
         noTargetTitle: "No service selected",
         noTargetBody:
           "Select patrol commands, scheduled commands, or event triggers before starting.",
+        ownerElsewhere:
+          "The service owner is another machine ({{name}}). To run the service on this machine, take over ownership in Setup → Sync.",
       },
       diagnostics: {
         title: "Diagnostics",
@@ -1892,12 +1944,45 @@ const resources = {
           os: "OS",
           joinedAt: "参加日時",
           id: "device ID",
+          live: "現在状態",
+          fingerprint: "device 鍵の fingerprint",
+          fingerprintMissing: "未登録",
+          liveStatus: {
+            unknown: "不明",
+            online: "稼働中",
+            delayed: "更新遅延",
+            expired: "オフライン",
+          },
+          currentWork_one: "実行中 {{count}} 件",
+          currentWork_other: "実行中 {{count}} 件",
           self: "このマシン",
           copy: "コピー",
           copied: "コピーしました",
           rename: "このマシンの名前",
           renameHint: "各マシンの名前は、そのマシン自身で変更します。",
           renameAction: "変更する",
+        },
+        owner: {
+          title: "サービスオーナー",
+          current: "現在のオーナー: {{name}}（{{deviceId}}）",
+          none: "サービスオーナーはまだ決まっていません。",
+          self: "このマシンがサービスオーナーです",
+          hint: "オーナーは自動では切り替わりません。オーナーのマシンでサービスが停止していることを確認してから引き継いでください。",
+          takeOver: "このマシンへ引き継ぐ",
+          connection: {
+            unknown: "接続状態不明",
+            online: "オンライン",
+            delayed: "更新が遅延しています",
+            expired: "オフライン",
+          },
+          confirmTitle: "サービス引き継ぎの確認",
+          confirmBody: "現在のオーナーは {{current}}（{{status}}）です。",
+          confirmWarning: "サービスが二重に動く危険があります",
+          confirmHint:
+            "続行する前に、現在のオーナーのマシンでサービスが停止したことを直接確認してください。",
+          cancel: "キャンセル",
+          confirmAction: "確認済み。引き継ぐ",
+          failed: "サービスオーナーを読み取れませんでした",
         },
         sshKey: {
           title: "この device の SSH 鍵",
@@ -1957,6 +2042,10 @@ const resources = {
           update_required:
             "このワークスペースの共有を続けるには、このマシンの GuildBotics を更新してください。",
         },
+        live: {
+          updateRequiredTitle: "現在状態のクライアント更新が必要です",
+          updateRequired: "現在状態を読むには、このマシンのGuildBoticsを更新してください。",
+        },
         counts: {
           ahead_one: "送信待ちの変更 1 件",
           ahead_other: "送信待ちの変更 {{count}} 件",
@@ -2010,6 +2099,19 @@ const resources = {
         memberHuman: "人間",
         nowRunning: "現在の作業",
         patrol: "前回巡回 {{last}}",
+        live: {
+          title: "他の device の現在状態",
+          status: {
+            online: "稼働中",
+            delayed: "更新遅延",
+            expired: "device オフライン",
+          },
+          device: {
+            online: "device {{deviceId}} は稼働中です。",
+            delayed: "device {{deviceId}} の更新が遅れています。",
+            expired: "device {{deviceId}} はオフラインです。",
+          },
+        },
         events: "イベント",
         loading: "アクティビティを読み込んでいます...",
         empty: "この期間のアクティビティはまだありません。",
@@ -2670,6 +2772,8 @@ const resources = {
         sourceTarget: "サービス実行に含める",
         noTargetTitle: "開始対象が選択されていません",
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
+        ownerElsewhere:
+          "サービスオーナーは別のマシン（{{name}}）です。このマシンでサービスを実行するには、設定 → 同期 から引き継いでください。",
       },
       diagnostics: {
         title: "診断",

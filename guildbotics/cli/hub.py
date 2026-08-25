@@ -14,7 +14,7 @@ from typing import Any
 import click
 
 from guildbotics.cli._options import format_option
-from guildbotics.hub import host
+from guildbotics.hub import host, relay
 
 _format_option = format_option("markdown")
 
@@ -66,6 +66,96 @@ def list_hub_workspaces(output_format: str) -> None:
     _print({"workspaces": host.list_workspace_ids()}, output_format)
 
 
+@hub.group(name="owner")
+def hub_owner() -> None:
+    """Inspect or explicitly change a workspace's service owner."""
+
+
+@hub_owner.command(name="get")
+@click.argument("workspace_id")
+@_format_option
+def get_service_owner(workspace_id: str, output_format: str) -> None:
+    """Show the current service owner, if one has been claimed."""
+    try:
+        owner = relay.read_service_owner(workspace_id)
+    except (ValueError, host.HubError, relay.HubRelayError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print(
+        {"workspace_id": workspace_id, "owner": _owner_payload(owner)},
+        output_format,
+    )
+
+
+@hub_owner.command(name="claim")
+@click.argument("workspace_id")
+@click.argument("device_id")
+@_format_option
+def claim_service_owner(workspace_id: str, device_id: str, output_format: str) -> None:
+    """Claim ownership only when the workspace has no owner."""
+    try:
+        owner, claimed = relay.claim_service_owner(workspace_id, device_id)
+    except (ValueError, host.HubError, relay.HubRelayError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print(
+        {
+            "workspace_id": workspace_id,
+            "claimed": claimed,
+            "owner": _owner_payload(owner),
+        },
+        output_format,
+    )
+
+
+@hub_owner.command(name="transfer")
+@click.argument("workspace_id")
+@click.argument("device_id")
+@_format_option
+def transfer_service_owner(
+    workspace_id: str, device_id: str, output_format: str
+) -> None:
+    """Move ownership explicitly to another device."""
+    try:
+        owner = relay.transfer_service_owner(workspace_id, device_id)
+    except (ValueError, host.HubError, relay.HubRelayError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print(
+        {"workspace_id": workspace_id, "owner": _owner_payload(owner)},
+        output_format,
+    )
+
+
+@hub.group(name="live")
+def hub_live() -> None:
+    """Publish and watch transient workspace live state."""
+
+
+@hub_live.command(name="publish")
+@click.argument("workspace_id")
+@click.argument("device_id")
+@click.argument("publisher_id")
+def publish_live(workspace_id: str, device_id: str, publisher_id: str) -> None:
+    """Replace one live snapshot for each non-empty stdin line."""
+    try:
+        relay.publish_live_lines(
+            workspace_id,
+            device_id,
+            publisher_id,
+            click.get_text_stream("stdin"),
+        )
+    except (ValueError, host.HubError, relay.HubRelayError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@hub_live.command(name="watch")
+@click.argument("workspace_id")
+def watch_live(workspace_id: str) -> None:
+    """Poll live snapshots and head updates until the SSH connection closes."""
+    try:
+        relay.watch_live(workspace_id, output=click.get_text_stream("stdout"))
+    except (ValueError, host.HubError, relay.HubRelayError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _hub_payload(settings: host.HubSettings) -> dict[str, Any]:
     return {
         "hosted": True,
@@ -75,6 +165,10 @@ def _hub_payload(settings: host.HubSettings) -> dict[str, Any]:
         "ssh_endpoint": settings.ssh_endpoint,
         "workspaces": host.list_workspace_ids(),
     }
+
+
+def _owner_payload(owner: relay.ServiceOwner | None) -> dict[str, Any] | None:
+    return None if owner is None else owner.model_dump()
 
 
 def _print(payload: dict[str, Any], output_format: str) -> None:
@@ -114,4 +208,6 @@ _LABELS = {
     "workspaces": "Workspaces",
     "workspace_id": "Workspace ID",
     "repository": "Repository",
+    "owner": "Owner",
+    "claimed": "Claimed",
 }

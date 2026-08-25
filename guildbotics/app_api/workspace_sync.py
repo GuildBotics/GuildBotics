@@ -5,17 +5,20 @@ Git and that a hub is reached over OpenSSH. Everywhere else -- the runtime, the
 routes, the frontend -- names workspaces, hubs, and states, and this module
 converts between those names and the two packages that implement them.
 
-It is also the process entry point for the queue itself: the Desktop backend is
-what the user has open when they enable synchronization, so it is what installs
-the queue and takes it down again across a workspace switch.
+It is also one process entry point for the queue itself: the Desktop backend
+installs the queue and takes it down again across a workspace switch. The CLI
+has separate composition-root paths for ``guildbotics start`` and its one-shot
+member synchronization.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
+from uuid import uuid4
 
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.models import (
@@ -29,6 +32,9 @@ from guildbotics.app_api.models import (
     UnsendableChangeModel,
     WorkspaceDevice,
     WorkspaceDevices,
+    WorkspaceLiveState,
+    WorkspaceLiveWork,
+    WorkspaceServiceOwner,
     WorkspaceSyncCloneRequest,
     WorkspaceSyncEnableRequest,
     WorkspaceSyncPreview,
@@ -42,10 +48,22 @@ from guildbotics.hub import (
     connection,
     host,
 )
+from guildbotics.hub.relay import LIVE_EXPIRE_AFTER_SECONDS, ServiceOwner
+from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
+from guildbotics.runtime.live_state import LiveState, LiveStatePort
+from guildbotics.runtime.relay_runtime import RelayRuntime
+from guildbotics.runtime.service_owner import (
+    ServiceOwnerError,
+    create_relay_runtime,
+)
+from guildbotics.runtime.service_owner import (
+    prepare_service_owner as prepare_relay_service_owner,
+)
 from guildbotics.sync import (
     EnrollmentError,
+    GitSyncManager,
     GitSyncStatus,
     LocalSyncRepository,
     SyncRepositoryError,
@@ -83,11 +101,24 @@ _HUB_FAILURES = (
     host.HubError,
     EnrollmentError,
     SyncRepositoryError,
+    HubRelayClientError,
 )
 
 
 class WorkspaceSyncService:
     """Hub hosting, workspace enrollment, and the running sync queue."""
+
+    def __init__(
+        self,
+        *,
+        on_live_publisher: Callable[[LiveStatePort | None], None] | None = None,
+        on_owner_transfer: Callable[[str], object] | None = None,
+    ) -> None:
+        self._relay_runtime: RelayRuntime | None = None
+        self._live_states: dict[tuple[str, str], LiveState] = {}
+        self._live_error_code: str | None = None
+        self._on_live_publisher = on_live_publisher
+        self._on_owner_transfer = on_owner_transfer
 
     # -- Hub hosting --------------------------------------------------------
 
@@ -171,7 +202,14 @@ class WorkspaceSyncService:
         with _reporting(
             "ssh_key_failed", "An SSH key could not be created on this device."
         ):
-            return _ssh_key_model(connection.ensure_ssh_key())
+            key = connection.ensure_ssh_key()
+            root = _workspace_root()
+            if root is not None:
+                publish_device_record(
+                    root,
+                    ssh_public_key_fingerprint=key.fingerprint,
+                )
+            return _ssh_key_model(key)
 
     # -- Devices sharing the workspace --------------------------------------
 
@@ -181,20 +219,76 @@ class WorkspaceSyncService:
         return WorkspaceDevices(
             device_id=device_id,
             devices=[
-                WorkspaceDevice(
-                    device_id=record.device_id,
-                    display_name=record.display_name,
-                    os=record.os,
-                    joined_at=record.joined_at,
-                    status=record.status,
-                    ssh_public_key_fingerprint=(
-                        record.ssh_public_key_fingerprint or ""
-                    ),
-                    is_self=record.device_id == device_id,
+                _device_model(
+                    record, device_id, self._live_for_device(record.device_id)
                 )
                 for record in _device_records()
             ],
         )
+
+    def get_live_states(self) -> list[WorkspaceLiveState]:
+        """Return Hub-relayed current work without waiting for Git history."""
+        return [
+            _live_model(state)
+            for state in sorted(
+                self._live_states.values(),
+                key=lambda state: (state.device_id, state.publisher_id),
+            )
+        ]
+
+    def get_service_owner(self) -> WorkspaceServiceOwner:
+        """Read the persistent Hub owner, without changing it."""
+        workspace_id = _workspace_id()
+        if workspace_id is None:
+            raise AppApiError(
+                "workspace_not_configured",
+                "Select a workspace before reading its service owner.",
+                status_code=409,
+            )
+        repository = _repository()
+        remote_url = repository.remote_url() if repository is not None else None
+        if not remote_url:
+            return WorkspaceServiceOwner(workspace_id=workspace_id)
+        with _reporting("hub_unreachable", "The service owner could not be read."):
+            client = self._relay_client(workspace_id, remote_url)
+            try:
+                owner = client.owner_get()
+            finally:
+                client.close()
+        return _owner_model(owner, workspace_id, ensure_device_identity().device_id)
+
+    def transfer_service_owner(self, device_id: str) -> WorkspaceServiceOwner:
+        """Move ownership only through the explicit Desktop action."""
+        workspace_id = _workspace_id()
+        repository = _repository()
+        remote_url = repository.remote_url() if repository is not None else None
+        if workspace_id is None or not remote_url:
+            raise AppApiError(
+                "workspace_sync_disabled",
+                "Enable workspace synchronization before transferring service ownership.",
+                status_code=409,
+            )
+        current_device_id = ensure_device_identity().device_id
+        if device_id != current_device_id:
+            raise AppApiError(
+                "service_owner_target_invalid",
+                "The Desktop takeover can target only this device.",
+                status_code=400,
+            )
+        with _reporting("hub_unreachable", "The service owner could not be changed."):
+            client = self._relay_client(workspace_id, remote_url)
+            try:
+                previous = client.owner_get()
+                owner = client.owner_transfer(device_id)
+                if (
+                    previous is not None
+                    and previous.owner_device_id != owner.owner_device_id
+                    and self._on_owner_transfer is not None
+                ):
+                    self._on_owner_transfer(previous.owner_device_id)
+            finally:
+                client.close()
+        return _owner_model(owner, workspace_id, current_device_id)
 
     def rename_device(self, request: DeviceRenameRequest) -> WorkspaceDevices:
         """Rename this machine and publish the new name to the other devices.
@@ -208,7 +302,7 @@ class WorkspaceSyncService:
             raise AppApiError("device_name_invalid", str(exc), status_code=400) from exc
         root = _workspace_root()
         if root is not None:
-            publish_device_record(root)
+            publish_device_record(root, ssh_public_key_fingerprint=_key_fingerprint())
         return self.get_devices()
 
     # -- Enrolling a workspace ----------------------------------------------
@@ -251,7 +345,11 @@ class WorkspaceSyncService:
             _reporting("sync_enable_failed", "Synchronization could not be enabled."),
             self._paused(),
         ):
-            enroll(url, _workspace_root())
+            enroll(
+                url,
+                _workspace_root(),
+                ssh_public_key_fingerprint=_key_fingerprint(),
+            )
         return self.activate()
 
     def clone(self, request: WorkspaceSyncCloneRequest) -> Path:
@@ -277,7 +375,11 @@ class WorkspaceSyncService:
             )
         with _reporting("sync_clone_failed", "The workspace could not be taken."):
             url = connection.hub_remote_url(location, request.workspace_id)
-            clone_workspace(url, destination)
+            clone_workspace(
+                url,
+                destination,
+                ssh_public_key_fingerprint=_key_fingerprint(),
+            )
         return destination
 
     # -- The running queue --------------------------------------------------
@@ -291,6 +393,7 @@ class WorkspaceSyncService:
                 enabled=False,
                 workspace_id=_workspace_id(),
                 device_id=ensure_device_identity().device_id,
+                live_error_code=self._live_error_code,
             )
         if manager is None:
             # Enabled but not running yet, which is what a process that has not
@@ -302,9 +405,13 @@ class WorkspaceSyncService:
                 hub_url=repository.remote_url(),
                 state="idle",
                 rejected_changes=_rejected(repository),
+                live_error_code=self._live_error_code,
             )
         return _status_model(
-            manager.status(), repository.remote_url(), _rejected(repository)
+            manager.status(),
+            repository.remote_url(),
+            _rejected(repository),
+            live_error_code=self._live_error_code,
         )
 
     def discard_rejection(self, rejection_id: str) -> WorkspaceSyncStatus:
@@ -329,8 +436,61 @@ class WorkspaceSyncService:
 
     def activate(self) -> WorkspaceSyncStatus:
         """Start the queue for the selected workspace, if it has a hub."""
-        activate_workspace_sync(_workspace_root())
+        root = _workspace_root()
+        manager = activate_workspace_sync(root)
+        if manager is not None:
+            # Activation is also the repair point for a key created or replaced
+            # outside the current Desktop process. Publishing through the normal
+            # device-record writer keeps every machine's fingerprint current.
+            publish_device_record(root, ssh_public_key_fingerprint=_key_fingerprint())
+        self._restart_relay(manager, root)
         return self.get_status()
+
+    def prepare_service_owner(self) -> Callable[[], bool | None] | None:
+        """Settle sync and require this device to own the service.
+
+        The relay runtime is already the process-wide live-state connection, so
+        the owner command reuses its client. A missing Hub answer is a start
+        failure; later owner probes return ``None`` and only block new work.
+        """
+        manager = current_sync_manager()
+        if manager is None:
+            return None
+        status = manager.synchronize()
+        if status.state != "idle" or status.last_error_code is not None:
+            detail = status.last_error_code or status.state
+            raise AppApiError(
+                "service_start_sync_failed",
+                "The service cannot start because workspace synchronization failed.",
+                context={"detail": detail},
+                status_code=409,
+            )
+        runtime = self._relay_runtime
+        if runtime is None:
+            self._restart_relay(manager, _workspace_root())
+            runtime = self._relay_runtime
+        if runtime is None:
+            raise AppApiError(
+                "hub_unreachable",
+                "The service cannot start because the Hub is unavailable.",
+                status_code=409,
+            )
+        device_id = ensure_device_identity().device_id
+        try:
+            prepare_relay_service_owner(runtime, device_id, start_runtime=False)
+        except ServiceOwnerError as exc:
+            context = (
+                {"owner_device_id": exc.owner_device_id}
+                if exc.owner_device_id is not None
+                else None
+            )
+            raise AppApiError(
+                exc.code,
+                str(exc),
+                context=context,
+                status_code=409,
+            ) from exc
+        return runtime.check_owner
 
     def deactivate(self) -> bool:
         """Stop the queue, which a workspace switch does before it switches.
@@ -340,7 +500,10 @@ class WorkspaceSyncService:
                 workspace must not proceed on False -- the old queue still
                 holds its repository.
         """
-        return deactivate_workspace_sync()
+        stopped = deactivate_workspace_sync()
+        if stopped:
+            self._stop_relay()
+        return stopped
 
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after an unreachable hub or repaired shared data."""
@@ -364,7 +527,11 @@ class WorkspaceSyncService:
             _reporting("sync_enable_failed", "The hub could not be changed."),
             self._paused(),
         ):
-            enroll(url, _workspace_root())
+            enroll(
+                url,
+                _workspace_root(),
+                ssh_public_key_fingerprint=_key_fingerprint(),
+            )
         return self.activate()
 
     # -- Internals ----------------------------------------------------------
@@ -382,6 +549,7 @@ class WorkspaceSyncService:
                 stopped. Proceeding would put a second worker on the same
                 repository.
         """
+        self._stop_relay()
         try:
             with paused_workspace_sync(_workspace_root()):
                 yield
@@ -393,6 +561,87 @@ class WorkspaceSyncService:
                 context={"detail": str(exc)},
                 status_code=409,
             ) from exc
+        finally:
+            manager = current_sync_manager()
+            self._restart_relay(manager, _workspace_root())
+
+    def _restart_relay(
+        self,
+        manager: GitSyncManager | None,
+        workspace_root: Path | None,
+    ) -> None:
+        self._stop_relay()
+        if manager is None or workspace_root is None:
+            return
+        repository = LocalSyncRepository(workspace_root)
+        remote_url = repository.remote_url()
+        if not remote_url:
+            return
+        runtime: RelayRuntime | None = None
+        try:
+            status = manager.status()
+            runtime = create_relay_runtime(
+                remote_url,
+                status.workspace_id,
+                ensure_device_identity().device_id,
+                on_live_state=self._receive_live_state,
+                on_live_expired=self._receive_live_expired,
+                on_head_updated=manager.wake,
+                on_relay_error=self._receive_relay_error,
+            )
+            runtime.start()
+        except (ServiceOwnerError, OSError, ValueError):
+            if runtime is not None:
+                runtime.stop()
+            return
+        self._relay_runtime = runtime
+        if self._on_live_publisher is not None:
+            self._on_live_publisher(runtime.publisher)
+
+    def _stop_relay(self) -> None:
+        runtime = self._relay_runtime
+        self._relay_runtime = None
+        self._live_states.clear()
+        self._live_error_code = None
+        if runtime is not None:
+            runtime.stop()
+        if self._on_live_publisher is not None:
+            self._on_live_publisher(None)
+
+    def _receive_live_state(self, state: LiveState) -> None:
+        self._live_error_code = None
+        self._live_states[(state.device_id, state.publisher_id)] = state
+
+    def _receive_live_expired(
+        self, device_id: str, publisher_id: str, observed_at: str
+    ) -> None:
+        # Expiry is a deletion event, not a new durable snapshot. Retaining an
+        # empty expired state here would keep a stale offline warning in the
+        # Activity/device views until the backend restarted, even though the
+        # Hub has already removed the relay file.
+        del observed_at
+        self._live_states.pop((device_id, publisher_id), None)
+
+    def _receive_relay_error(self, code: str) -> None:
+        self._live_error_code = code
+
+    def _live_for_device(self, device_id: str) -> LiveState | None:
+        states = [
+            state
+            for state in self._live_states.values()
+            if state.device_id == device_id
+        ]
+        if not states:
+            return None
+        return max(states, key=lambda state: state.observed_at)
+
+    def _relay_client(self, workspace_id: str, remote_url: str) -> HubRelayClient:
+        return HubRelayClient(
+            connection.location_from_remote_url(remote_url, workspace_id),
+            workspace_id,
+            ensure_device_identity().device_id,
+            str(uuid4()),
+        )
 
     def _remote_url(
         self, location: HubLocation, workspace_id: str, *, create: bool
@@ -446,6 +695,11 @@ def _location(target: HubTarget) -> HubLocation:
             context={"endpoint": endpoint},
             status_code=400,
         ) from exc
+
+
+def _key_fingerprint() -> str | None:
+    key = connection.read_ssh_key()
+    return None if key is None else key.fingerprint
 
 
 def _repository() -> LocalSyncRepository | None:
@@ -567,10 +821,87 @@ def _ssh_key_model(key: connection.HubSshKey | None) -> DeviceSshKey:
     )
 
 
+LIVE_DELAY_SECONDS = 15.0
+
+
+def _device_model(
+    record: DeviceRecord, self_device_id: str, live: LiveState | None
+) -> WorkspaceDevice:
+    status = _live_status(live.observed_at) if live is not None else "unknown"
+    return WorkspaceDevice(
+        device_id=record.device_id,
+        display_name=record.display_name,
+        os=record.os,
+        joined_at=record.joined_at,
+        status=record.status,
+        ssh_public_key_fingerprint=record.ssh_public_key_fingerprint or "",
+        is_self=record.device_id == self_device_id,
+        live_status=status,
+        last_seen_at=live.observed_at if live is not None else None,
+    )
+
+
+def _live_model(state: LiveState) -> WorkspaceLiveState:
+    status = _live_status(state.observed_at)
+    return WorkspaceLiveState(
+        schema_version=state.schema_version,
+        workspace_id=state.workspace_id,
+        device_id=state.device_id,
+        publisher_id=state.publisher_id,
+        observed_at=state.observed_at,
+        status=status,
+        works=[
+            WorkspaceLiveWork(
+                work_id=work.work_id,
+                run_id=work.run_id,
+                member_id=work.member_id,
+                workflow_name=work.workflow_name,
+                presentation=(
+                    work.presentation.model_dump(mode="json")
+                    if work.presentation is not None
+                    else None
+                ),
+                retry_at=work.retry_at,
+            )
+            for work in state.works
+        ]
+        if status != "expired"
+        else [],
+    )
+
+
+def _live_status(observed_at: str) -> Literal["online", "delayed", "expired"]:
+    try:
+        timestamp = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+    except ValueError:
+        return "expired"
+    age = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
+    if age > LIVE_EXPIRE_AFTER_SECONDS:
+        return "expired"
+    if age > LIVE_DELAY_SECONDS:
+        return "delayed"
+    return "online"
+
+
+def _owner_model(
+    owner: ServiceOwner | None, workspace_id: str, self_device_id: str
+) -> WorkspaceServiceOwner:
+    return WorkspaceServiceOwner(
+        workspace_id=workspace_id,
+        owner_device_id=owner.owner_device_id if owner is not None else None,
+        updated_at=owner.updated_at if owner is not None else None,
+        is_self=owner is not None and owner.owner_device_id == self_device_id,
+    )
+
+
 def _status_model(
     status: GitSyncStatus,
     hub_url: str | None,
     rejected: list[RejectedChangeModel],
+    *,
+    live_error_code: str | None = None,
 ) -> WorkspaceSyncStatus:
     return WorkspaceSyncStatus(
         enabled=True,
@@ -586,6 +917,7 @@ def _status_model(
         rejected_changes=rejected,
         last_success_at=status.last_success_at,
         last_error_code=status.last_error_code,
+        live_error_code=live_error_code,
     )
 
 

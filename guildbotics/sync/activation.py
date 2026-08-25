@@ -13,14 +13,9 @@ it is working in, and again after that changes -- a workspace switch, or a
 workspace that has just been connected to a hub. Activation is therefore
 idempotent and safe to call when nothing is enabled.
 
-**One process per machine may do so.** The guards here are module state, so
-they hold within a process and not between two: a second process activating the
-same workspace would put another thread on the same repository, interleaving its
-resets, checkouts, and commits with the first. Nothing detects that, and the
-machine-wide service lock does not cover it -- the desktop backend takes that
-lock only when its scheduler starts, while the queue runs for as long as the
-backend is up. Until a machine-wide owner exists (the device agent of §14.4),
-the desktop backend is that one process.
+The process-wide repository lock below also covers the member one-shot and
+``guildbotics start``. The queue remains one per process, but no second
+process can operate the same repository at the same time.
 """
 
 from __future__ import annotations
@@ -32,8 +27,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
-from guildbotics.sync.manager import GitSyncManager, build_git_sync_manager
+from guildbotics.sync.manager import (
+    GitSyncManager,
+    GitSyncStatus,
+    build_git_sync_manager,
+)
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 
 LOGGER = logging.getLogger(__name__)
@@ -46,6 +46,36 @@ _workspace: Path | None = None
 def current_sync_manager() -> GitSyncManager | None:
     """Return the queue running in this process, or None when none is."""
     return _manager
+
+
+ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
+
+
+def commit_and_push_once(
+    workspace_root: Path | None = None,
+    *,
+    timeout: float | None = None,
+) -> GitSyncStatus | None:
+    """Commit and push one member-CLI write when synchronization is enabled.
+
+    A running queue is reused so its pending barriers and diagnostics remain
+    attached to the same manager. When the workspace is connected but this
+    process has no queue (the normal member-CLI case), a short-lived manager
+    performs exactly one locked commit/push and is then discarded.
+    """
+    root = LocalSyncRepository(workspace_root).workspace_root
+    with _lock:
+        manager = _manager if _workspace == root else None
+        if manager is None:
+            repository = LocalSyncRepository(root)
+            if not repository.initialized or not repository.has_remote():
+                return None
+            manager = build_git_sync_manager(root)
+        # Keep the lifecycle lock through the manager call. Otherwise a
+        # concurrent workspace switch can stop or replace the manager after
+        # it was selected, leaving this one-shot operation with a stale queue
+        # object and an uncoordinated repository access.
+        return manager.commit_and_push_once(timeout=timeout)
 
 
 class SyncStillStoppingError(RuntimeError):
@@ -89,17 +119,29 @@ def paused_workspace_sync(workspace_root: Path | None = None) -> Iterator[None]:
             was going to be done here would have been done beside it.
     """
     with _lock:
+        lock_root = workspace_root or _workspace
         if not _stop_locked():
             raise SyncStillStoppingError(
                 "The synchronization queue has not finished stopping. "
                 "Try again in a moment."
             )
         try:
-            yield
-        finally:
-            # Restored whether or not the work succeeded: a failed attempt must
-            # not leave a workspace that has a hub quietly not synchronizing.
+            with sync_repository_lock(lock_root):
+                try:
+                    yield
+                finally:
+                    # Restored whether or not the work succeeded: a failed
+                    # attempt must not leave a workspace that has a hub quietly
+                    # not synchronizing. Activation happens before the lock is
+                    # released, so another process cannot enter the repository
+                    # between the operation and the queue's restart.
+                    _activate_locked(workspace_root)
+        except SyncRepositoryBusyError:
+            # The lock never arrived, so the repository was not touched -- but
+            # the queue was already stopped above. Restart it, or a busy
+            # answer would leave the workspace quietly not synchronizing.
             _activate_locked(workspace_root)
+            raise
 
 
 def deactivate_workspace_sync() -> bool:
@@ -124,6 +166,10 @@ def _activate_locked(workspace_root: Path | None) -> GitSyncManager | None:
         _stop_locked()
         return None
     if _manager is not None and _workspace == repository.workspace_root:
+        # Start, not just return: a worker that observed a stop request before
+        # the timed-out stop withdrew it has exited, while the manager stayed
+        # registered. start() is a no-op while a worker is running.
+        _manager.start()
         return _manager
     if not _stop_locked():
         raise SyncStillStoppingError(

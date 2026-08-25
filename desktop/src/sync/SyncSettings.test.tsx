@@ -12,10 +12,13 @@ import {
   enableWorkspaceSync,
   getHubStatus,
   getWorkspaceDevices,
+  getWorkspaceLive,
+  getWorkspaceServiceOwner,
   getWorkspaceSyncStatus,
   inspectHub,
   previewWorkspaceSync,
   renameThisDevice,
+  transferWorkspaceServiceOwner,
   trustHub,
   type HubConnection,
   type WorkspaceSyncPreview,
@@ -35,10 +38,13 @@ vi.mock("../api/client", async () => {
     enableWorkspaceSync: vi.fn(),
     getHubStatus: vi.fn(),
     getWorkspaceDevices: vi.fn(),
+    getWorkspaceLive: vi.fn(),
+    getWorkspaceServiceOwner: vi.fn(),
     getWorkspaceSyncStatus: vi.fn(),
     inspectHub: vi.fn(),
     previewWorkspaceSync: vi.fn(),
     renameThisDevice: vi.fn(),
+    transferWorkspaceServiceOwner: vi.fn(),
     trustHub: vi.fn(),
   };
 });
@@ -58,6 +64,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
+    live_error_code: null,
     ...overrides,
   };
 }
@@ -109,6 +116,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
   vi.mocked(getWorkspaceDevices).mockResolvedValue({ devices: [], device_id: "d1" });
+  vi.mocked(getWorkspaceLive).mockResolvedValue([]);
+  vi.mocked(getWorkspaceServiceOwner).mockResolvedValue({
+    workspace_id: "workspace-1",
+    owner_device_id: null,
+    updated_at: null,
+    is_self: false,
+  });
   vi.mocked(getHubStatus).mockResolvedValue({
     hosted: false,
     hub_root: "/home/u/.guildbotics/hub",
@@ -402,7 +416,56 @@ describe("once connected", () => {
 });
 
 describe("devices", () => {
-  it("marks which row is this machine and offers to rename only that one", async () => {
+  it("shows each device's state, fingerprint, ID action, and self marker", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceDevices).mockResolvedValue({
+      device_id: "d1",
+      devices: [
+        {
+          device_id: "d1",
+          display_name: "mac-studio",
+          os: "macos",
+          joined_at: "2026-07-01T00:00:00+00:00",
+          status: "active",
+          ssh_public_key_fingerprint: "SHA256:mac-key",
+          is_self: true,
+          live_status: "online",
+        },
+        {
+          device_id: "d2",
+          display_name: "win-desktop",
+          os: "windows",
+          joined_at: "2026-07-02T00:00:00+00:00",
+          status: "active",
+          ssh_public_key_fingerprint: "",
+          is_self: false,
+          live_status: "expired",
+        },
+      ],
+    });
+    vi.mocked(renameThisDevice).mockResolvedValue({ device_id: "d1", devices: [] });
+    renderSettings();
+
+    expect(await screen.findByText("win-desktop")).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.self"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.liveStatus.online"))).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.liveStatus.expired"))).toBeInTheDocument();
+    expect(screen.getByText("SHA256:mac-key")).toBeInTheDocument();
+    expect(screen.getByText(t("sync.devices.fingerprintMissing"))).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: t("sync.devices.copy") })).toHaveLength(2);
+
+    const nameField = screen.getByLabelText(t("sync.devices.rename"));
+    expect(nameField).toHaveValue("mac-studio");
+    await user.clear(nameField);
+    await user.type(nameField, "Work laptop");
+    await user.click(screen.getByRole("button", { name: t("sync.devices.renameAction") }));
+
+    expect(renameThisDevice).toHaveBeenCalledWith("Work laptop");
+  });
+});
+
+describe("service ownership", () => {
+  it("requires direct confirmation before taking ownership on this machine", async () => {
     const user = userEvent.setup();
     vi.mocked(getWorkspaceDevices).mockResolvedValue({
       device_id: "d1",
@@ -415,6 +478,7 @@ describe("devices", () => {
           status: "active",
           ssh_public_key_fingerprint: "",
           is_self: true,
+          live_status: "online",
         },
         {
           device_id: "d2",
@@ -424,22 +488,31 @@ describe("devices", () => {
           status: "active",
           ssh_public_key_fingerprint: "",
           is_self: false,
+          live_status: "expired",
         },
       ],
     });
-    vi.mocked(renameThisDevice).mockResolvedValue({ device_id: "d1", devices: [] });
+    vi.mocked(getWorkspaceServiceOwner).mockResolvedValue({
+      workspace_id: "workspace-1",
+      owner_device_id: "d2",
+      updated_at: "2026-08-23T00:00:00+00:00",
+      is_self: false,
+    });
+    vi.mocked(transferWorkspaceServiceOwner).mockResolvedValue({
+      workspace_id: "workspace-1",
+      owner_device_id: "d1",
+      updated_at: "2026-08-23T00:01:00+00:00",
+      is_self: true,
+    });
     renderSettings();
 
-    expect(await screen.findByText("win-desktop")).toBeInTheDocument();
-    expect(screen.getByText(t("sync.devices.self"))).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: t("sync.owner.takeOver") }));
+    expect(await screen.findByText(t("sync.owner.confirmWarning"))).toBeInTheDocument();
+    expect(transferWorkspaceServiceOwner).not.toHaveBeenCalled();
 
-    const nameField = screen.getByLabelText(t("sync.devices.rename"));
-    expect(nameField).toHaveValue("mac-studio");
-    await user.clear(nameField);
-    await user.type(nameField, "Work laptop");
-    await user.click(screen.getByRole("button", { name: t("sync.devices.renameAction") }));
+    await user.click(screen.getByRole("button", { name: t("sync.owner.confirmAction") }));
 
-    expect(renameThisDevice).toHaveBeenCalledWith("Work laptop");
+    expect(transferWorkspaceServiceOwner).toHaveBeenCalledWith("d1");
   });
 });
 

@@ -37,6 +37,7 @@ export function SyncAlerts() {
   const state = syncIndicatorState(status.data);
   const rejected = status.data?.rejected_changes.length ?? 0;
   const count = status.data?.unsendable_changes.length ?? 0;
+  const liveClientUpdateRequired = status.data?.live_error_code === "live_client_update_required";
   // Both at once is an ordinary combination -- a hub that cannot be reached
   // says nothing about what it already refused -- so neither hides the other.
   return (
@@ -68,6 +69,15 @@ export function SyncAlerts() {
         </Alert>
       ) : null}
       {rejected > 0 ? <RejectedAlert count={rejected} /> : null}
+      {liveClientUpdateRequired ? (
+        <Alert
+          color="warning"
+          icon={<TriangleAlert size={18} />}
+          title={t("sync.live.updateRequiredTitle")}
+        >
+          <Text size="sm">{t("sync.live.updateRequired")}</Text>
+        </Alert>
+      ) : null}
     </>
   );
 }

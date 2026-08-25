@@ -15,7 +15,10 @@ from git import GitCommandError, Repo
 
 from guildbotics.sync.local_repository import REJECTED_REF_PREFIX, LocalSyncRepository
 import guildbotics.sync.manager as manager_module
+import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
+from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_lock_path
 from guildbotics.utils.workspace_sync_port import (
     ChangeSet,
     dump_shared_json,
@@ -654,6 +657,39 @@ def test_a_worker_that_outlives_its_stop_blocks_a_second_one(
     assert first.manager.stop(timeout=10) is True
 
 
+def test_a_stop_that_timed_out_is_withdrawn_and_the_worker_keeps_serving(
+    first: Device, hub: Path
+) -> None:
+    """A failed stop means its caller aborted and kept the queue. Left
+    standing, the request would end the worker at the close of its blocked
+    cycle, and the device would look synchronized while nothing runs."""
+    release = threading.Event()
+    blocked = threading.Event()
+
+    def fetch() -> None:
+        blocked.set()
+        release.wait(10)
+
+    first.repository.fetch = fetch  # type: ignore[method-assign]
+    first.manager.start()
+    try:
+        assert blocked.wait(10)
+        assert first.manager.stop(timeout=0.1) is False
+        first.write(CONFIG, "language: ja\n")
+        release.set()
+        first.manager.wake()
+        deadline = time.monotonic() + 10
+        while (
+            time.monotonic() < deadline and _hub_bytes(hub, CONFIG) != b"language: ja\n"
+        ):
+            time.sleep(0.05)
+    finally:
+        release.set()
+        assert first.manager.stop(timeout=10) is True
+
+    assert _hub_bytes(hub, CONFIG) == b"language: ja\n"
+
+
 def test_a_worker_stopped_before_a_restart_never_wakes_up_again(
     first: Device,
 ) -> None:
@@ -819,6 +855,43 @@ def test_a_busy_workspace_is_not_reported_as_an_unreachable_hub(
     assert not holder.is_alive()
     assert status.last_error_code == "local_write_busy"
     assert status.state != "unreachable"
+
+
+def test_synchronize_reports_sync_busy_when_another_process_holds_the_lock(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
+
+    with held_lock(sync_lock_path(first.root), timeout=0.0):
+        status = first.manager.synchronize()
+
+    assert status.last_error_code == "sync_busy"
+
+
+def test_one_shot_raises_when_another_process_holds_the_sync_lock(
+    first: Device,
+) -> None:
+    with held_lock(sync_lock_path(first.root), timeout=0.0):
+        with pytest.raises(SyncRepositoryBusyError):
+            first.manager.commit_and_push_once(timeout=0.01)
+
+
+def test_one_shot_commits_even_when_push_fails(
+    first: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first.write(CONFIG, "language: ja\n")
+
+    def fail_push() -> None:
+        raise OSError("Hub unavailable")
+
+    monkeypatch.setattr(first.repository, "push", fail_push)
+
+    status = first.manager.commit_and_push_once(timeout=0.1)
+
+    assert status.state == "unreachable"
+    assert status.last_error_code == "OSError"
+    assert status.local_head is not None
+    assert Repo(first.shared).head.commit.message.startswith("Sync shared state")
 
 
 def test_synchronize_is_serialized_between_threads(first: Device) -> None:

@@ -1,20 +1,36 @@
+"""Durable task-run records and completion evidence.
+
+Each run is one shared JSON object at
+``state/task-runs/<run_id>/result.json``. A task run has one lifecycle record,
+so another device can observe running and terminal states without reconstructing
+an event log.
+"""
+
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
+from guildbotics.entities.task_run import (
+    TASK_RUN_TERMINAL_STATES,
+    TaskRunExecutionMode,
+    TaskRunRecord,
+    TaskRunResult,
+)
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock
+from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
-    append_shared_text,
+    ChangeSet,
+    update_shared_json_with_change,
 )
+from guildbotics.workspace.identity import ensure_device_identity
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
@@ -87,28 +103,59 @@ class RunStore:
         "chat_reaction",
         "chat_noop",
     }
-    CHAT_ASKING_EVIDENCE_TYPES: ClassVar[set[str]] = {
-        "chat_reply",
-        "chat_post",
-    }
+    CHAT_ASKING_EVIDENCE_TYPES: ClassVar[set[str]] = {"chat_reply", "chat_post"}
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | None = None,
+        *,
+        work_kind: str = "member-work",
+        execution_mode: TaskRunExecutionMode = "user_initiated",
+        member_id: str = "unknown",
+        device_id: str | None = None,
+    ) -> None:
         self.root = root or get_workspace_state_path("task-runs")
+        self.work_kind = work_kind
+        self.execution_mode = execution_mode
+        self.member_id = member_id
+        self.device_id: str = device_id or _device_id()
         self._completions_cache: list[_RunCompletion] | None = None
 
     def append(self, run_id: str, record: dict[str, Any]) -> None:
-        """Add one line to a run's shared journal."""
-        # Run journals are shared state, so one uniform pass masks secret
-        # values and bounds every string, whatever shape the record has.
-        payload = redact_for_sharing(
-            {
-                "recorded_at": datetime.now(UTC).isoformat(),
-                **record,
-                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
-            }
-        )
-        line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
-        append_shared_text(self._path(run_id), line)
+        """Merge one evidence or note into the run's lifecycle record."""
+        kind = str(record.get("kind") or "note")
+        evidence_type = str(record.get("evidence_type") or "")
+        safe_payload = redact_for_sharing(record.get("payload", {}))
+
+        def _update(current: TaskRunRecord) -> TaskRunRecord:
+            values: dict[str, Any] = {}
+            if record.get("work_kind"):
+                values["work_kind"] = str(record["work_kind"])
+            if record.get("member_id"):
+                values["member_id"] = str(record["member_id"])
+            if record.get("device_id"):
+                values["device_id"] = str(record["device_id"])
+            if record.get("execution_mode") in {
+                "autonomous",
+                "user_initiated",
+                "remote",
+            }:
+                values["execution_mode"] = record["execution_mode"]
+            if kind == "evidence" and evidence_type:
+                evidence = list(current.provider_evidence)
+                evidence.append(
+                    {
+                        "recorded_at": datetime.now(UTC).isoformat(),
+                        "type": evidence_type,
+                        "payload": safe_payload,
+                    }
+                )
+                values["provider_evidence"] = evidence
+            elif kind != "evidence" and record.get("message"):
+                values["safe_summary"] = redact_for_sharing(str(record["message"]))
+            return current.model_copy(update=values)
+
+        self._mutate(run_id, _update)
 
     def append_evidence(
         self, run_id: str | None, evidence_type: str, payload: dict[str, Any]
@@ -119,6 +166,114 @@ class RunStore:
             run_id,
             {"kind": "evidence", "evidence_type": evidence_type, "payload": payload},
         )
+
+    def start_record(
+        self,
+        run_id: str,
+        *,
+        work_kind: str,
+        execution_mode: TaskRunExecutionMode,
+        member_id: str,
+        work_identity: dict[str, str] | None = None,
+    ) -> TaskRunRecord:
+        """Create the running record used by the common execution boundary."""
+
+        record, _ = self.start_record_with_change(
+            run_id,
+            work_kind=work_kind,
+            execution_mode=execution_mode,
+            member_id=member_id,
+            work_identity=work_identity,
+        )
+        return record
+
+    def start_record_with_change(
+        self,
+        run_id: str,
+        *,
+        work_kind: str,
+        execution_mode: TaskRunExecutionMode,
+        member_id: str,
+        work_identity: dict[str, str] | None = None,
+    ) -> tuple[TaskRunRecord, ChangeSet | None]:
+        """Create a running record and expose its sync notification."""
+
+        def _start(current: TaskRunRecord) -> TaskRunRecord:
+            if current.finished_at:
+                return current
+            return current.model_copy(
+                update={
+                    "work_kind": work_kind,
+                    "execution_mode": execution_mode,
+                    "member_id": member_id,
+                    "work_identity": work_identity,
+                    "status": "running",
+                }
+            )
+
+        return self._mutate_with_change(run_id, _start)
+
+    def finish_record(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        safe_summary: str = "",
+    ) -> TaskRunRecord:
+        """Record a generic execution outcome without bypassing evidence rules."""
+        record, _ = self.finish_record_with_change(
+            run_id, status=status, safe_summary=safe_summary
+        )
+        return record
+
+    def finish_record_with_change(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        safe_summary: str = "",
+    ) -> tuple[TaskRunRecord, ChangeSet | None]:
+        """Finish a run and expose the sync notification for a barrier."""
+        if status not in TASK_RUN_TERMINAL_STATES:
+            raise TaskRunError(f"Task run has invalid terminal status '{status}'.")
+
+        def _finish(current: TaskRunRecord) -> TaskRunRecord:
+            if current.finished_at:
+                return current
+            return current.model_copy(
+                update={
+                    "finished_at": utc_now_iso(),
+                    "status": status,
+                    "safe_summary": str(redact_for_sharing(safe_summary)),
+                }
+            )
+
+        return self._mutate_with_change(run_id, _finish)
+
+    @property
+    def workspace_root(self) -> Path | None:
+        """Return the workspace root when this store is backed by a workspace."""
+        return self._workspace_root()
+
+    def records(self) -> Iterator[TaskRunRecord]:
+        """Read all task records in deterministic order."""
+        if not self.root.is_dir():
+            return
+        for path in sorted(self.root.glob("*/result.json")):
+            try:
+                yield TaskRunRecord.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                raise TaskRunError(f"Task run record is invalid: {path}") from exc
+
+    def find_by_work_identity(
+        self, work_identity: dict[str, str]
+    ) -> list[TaskRunRecord]:
+        """Find runs for one stable input identity, oldest first."""
+        return [
+            record for record in self.records() if record.work_identity == work_identity
+        ]
 
     def complete(
         self, run_id: str, status: str, summary: str, ticket_url: str, person_id: str
@@ -144,55 +299,67 @@ class RunStore:
         subject_url: str = "",
         person_id: str,
     ) -> RunStatus:
-        # The evidence check decides whether the completion may be written, so
-        # it is part of the write, and the span is declared here rather than
-        # left to the append below. Read outside it, the check can pass against
-        # a journal the queue replaces a moment later with a remote version
-        # that has no evidence in it -- and the completion is then appended
-        # anyway, leaving a run recorded as complete with nothing behind it.
-        with shared_write_lock():
-            records = self._read_records_if_exists(run_id)
-            evidence_types = _evidence_types(records)
+        # Evidence validation and the result update share one span. A queue
+        # checkout cannot replace the evidence between the check and the
+        # terminal record, and another writer cannot overwrite the subject
+        # metadata after it has been checked.
+        with shared_write_lock(self._workspace_root()):
+            current = self._read_record_if_exists(run_id)
+            evidence = _evidence_records(current)
+            evidence_types = _evidence_types(evidence)
             if not self._has_required_evidence(
-                status, subject_type, summary, evidence_types, records
+                status, subject_type, summary, evidence_types, evidence
             ):
                 raise TaskRunError(
                     f"Run '{run_id}' cannot be completed without required write evidence."
                 )
+
+            result_status = _result_status(status)
             completed_at = datetime.now(UTC).isoformat()
-            self.append(
-                run_id,
-                {
-                    "kind": "complete",
-                    "status": status,
-                    "summary": summary,
-                    "subject_type": subject_type,
-                    "subject_id": subject_id,
-                    "subject_url": subject_url,
-                    "person_id": person_id,
-                    "completed_at": completed_at,
-                },
-            )
+
+            def _complete(record: TaskRunRecord) -> TaskRunRecord:
+                return record.model_copy(
+                    update={
+                        "work_kind": (
+                            record.work_kind
+                            if record.work_kind != "member-work"
+                            else subject_type
+                        ),
+                        "member_id": person_id,
+                        "finished_at": completed_at,
+                        "status": _record_status(status),
+                        "safe_summary": str(redact_for_sharing(summary)),
+                        "result": TaskRunResult(
+                            subject_type=subject_type,
+                            subject_id=subject_id,
+                            subject_url=subject_url,
+                            status=result_status,
+                        ),
+                    }
+                )
+
+            self._mutate(run_id, _complete)
         return self.status(run_id)
 
     def evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """Return evidence in the shape consumed by existing workflow code."""
+        records = self._read_record(run_id).provider_evidence
         return [
-            record
-            for record in self._read_records(run_id)
-            if record.get("kind") == "evidence"
+            {
+                "kind": "evidence",
+                "evidence_type": str(item.get("type") or ""),
+                "payload": item.get("payload")
+                if isinstance(item.get("payload"), dict)
+                else {},
+                "recorded_at": str(item.get("recorded_at") or ""),
+                "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+            }
+            for item in records
+            if isinstance(item, dict) and item.get("type")
         ]
 
     def summaries_by_subject(self) -> dict[tuple[str, str], str]:
-        """Map each ``(subject_id, person_id)`` to its latest completion summary.
-
-        Runs are stored per opaque ``run_id`` but correlate to a domain
-        subject (a chat thread event id or a ticket url) via ``subject_id``.
-        The person is part of the key because several members can run against
-        the same subject (e.g. the same Slack event), so subject alone would
-        cross members. Activity history titles a session from the summary the
-        matching member wrote. Read-only and tolerant: unreadable or incomplete
-        run files are skipped.
-        """
+        """Map each ``(subject_id, person_id)`` to its latest completion summary."""
         latest: dict[tuple[str, str], tuple[str, str]] = {}
         for completion in self._completions():
             if not completion.subject_id or not completion.summary:
@@ -204,12 +371,7 @@ class RunStore:
         return {key: summary for key, (_, summary) in latest.items()}
 
     def subjects_by_run(self) -> dict[str, str]:
-        """Map each ``run_id`` to the domain ``subject_id`` it completed.
-
-        Lets activity history attach run-scoped records that carry only a
-        ``run_id`` (e.g. memory writes made by a workflow subprocess, which
-        have no trace id) back to the session that owns the same subject.
-        """
+        """Map each completed run to its domain subject identity."""
         return {
             completion.run_id: completion.subject_id
             for completion in self._completions()
@@ -217,13 +379,6 @@ class RunStore:
         }
 
     def _completions(self) -> list[_RunCompletion]:
-        """Return all completion records, read from disk once per instance.
-
-        ``summaries_by_subject()`` and ``subjects_by_run()`` are always called
-        together (see ``AppRuntime.get_activity_history``); caching here lets
-        both share a single filesystem scan instead of re-parsing every
-        ``*.jsonl`` file twice.
-        """
         if self._completions_cache is None:
             self._completions_cache = list(self._read_completions())
         return self._completions_cache
@@ -231,83 +386,125 @@ class RunStore:
     def _read_completions(self) -> Iterator[_RunCompletion]:
         if not self.root.is_dir():
             return
-        for path in sorted(self.root.glob("*.jsonl")):
+        for path in sorted(self.root.glob("*/result.json")):
             try:
-                records = self._read_records_if_exists(path.stem)
-            except TaskRunError:
-                continue
-            for record in records:
-                if record.get("kind") != "complete":
-                    continue
-                yield _RunCompletion(
-                    run_id=path.stem,
-                    subject_id=str(record.get("subject_id") or ""),
-                    person_id=str(record.get("person_id") or ""),
-                    summary=str(record.get("summary") or "").strip(),
-                    completed_at=str(record.get("completed_at") or ""),
+                record = TaskRunRecord.model_validate_json(
+                    path.read_text(encoding="utf-8")
                 )
+            except (OSError, ValueError):
+                continue
+            if not record.finished_at:
+                continue
+            result = _result_subject(record)
+            yield _RunCompletion(
+                run_id=record.run_id,
+                subject_id=result.subject_id if result is not None else "",
+                person_id=record.member_id,
+                summary=record.safe_summary.strip(),
+                completed_at=record.finished_at,
+            )
 
     def status(self, run_id: str) -> RunStatus:
-        records = self._read_records(run_id)
-        evidence_types = _evidence_types(records)
-        completions = [record for record in records if record.get("kind") == "complete"]
-        if not completions:
+        record = self._read_record(run_id)
+        if not record.finished_at or record.status == "running":
             raise TaskRunError(f"Task run '{run_id}' is not completed.")
-        latest = completions[-1]
-        status = str(latest.get("status", ""))
+        result = _result_subject(record)
+        status = result.status if result is not None else _public_status(record.status)
         if status not in {"done", "asking", "blocked"}:
             raise TaskRunError(f"Task run '{run_id}' has invalid status '{status}'.")
-        subject_type = str(latest.get("subject_type") or "ticket")
-        summary = str(latest.get("summary", ""))
+        subject_type = result.subject_type if result is not None else "ticket"
+        evidence = self.evidence(run_id)
+        evidence_types = _evidence_types(evidence)
         if not self._has_required_evidence(
-            status, subject_type, summary, evidence_types, records
+            status, subject_type, record.safe_summary, evidence_types, evidence
         ):
             raise TaskRunError(f"Task run '{run_id}' is missing required evidence.")
         return RunStatus(
             run_id=run_id,
             completed=True,
             status=status,
-            summary=summary,
+            summary=record.safe_summary,
             subject_type=subject_type,
-            subject_id=str(latest.get("subject_id") or latest.get("ticket_url") or ""),
-            subject_url=str(
-                latest.get("subject_url") or latest.get("ticket_url") or ""
-            ),
-            person_id=str(latest.get("person_id", "")),
+            subject_id=result.subject_id if result is not None else "",
+            subject_url=result.subject_url if result is not None else "",
+            person_id=record.member_id,
             evidence_count=len(evidence_types),
             evidence_types=evidence_types,
-            completed_at=str(latest.get("completed_at", "")),
+            completed_at=record.finished_at,
         )
 
-    def _read_records(self, run_id: str) -> list[dict[str, Any]]:
+    def _read_record(self, run_id: str) -> TaskRunRecord:
         path = self._path(run_id)
         if not path.is_file():
             raise TaskRunError(f"Task run '{run_id}' was not found.")
-        records: list[dict[str, Any]] = []
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise TaskRunError(
-                        f"Task run '{run_id}' contains invalid JSON."
-                    ) from exc
-                if not isinstance(record, dict):
-                    raise TaskRunError(f"Task run '{run_id}' contains invalid records.")
-                records.append(record)
-        return records
+        try:
+            return TaskRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise TaskRunError(f"Task run '{run_id}' contains invalid JSON.") from exc
 
-    def _read_records_if_exists(self, run_id: str) -> list[dict[str, Any]]:
+    def _read_record_if_exists(self, run_id: str) -> TaskRunRecord:
         path = self._path(run_id)
         if not path.is_file():
-            return []
-        return self._read_records(run_id)
+            return _new_record(
+                run_id,
+                work_kind=self.work_kind,
+                execution_mode=self.execution_mode,
+                member_id=self.member_id,
+                device_id=self.device_id,
+            )
+        return self._read_record(run_id)
+
+    def _mutate(self, run_id: str, mutate: Any) -> TaskRunRecord:
+        record, _ = self._mutate_with_change(run_id, mutate)
+        return record
+
+    def _mutate_with_change(
+        self, run_id: str, mutate: Any
+    ) -> tuple[TaskRunRecord, ChangeSet | None]:
+        path = self._path(run_id)
+        workspace_root = self._workspace_root()
+        with shared_write_lock(workspace_root):
+
+            def _apply(data: Any | None) -> dict[str, Any]:
+                if data is not None:
+                    try:
+                        current = TaskRunRecord.model_validate(data)
+                    except ValueError as exc:
+                        raise TaskRunError(
+                            f"Task run '{run_id}' contains an invalid record."
+                        ) from exc
+                else:
+                    current = _new_record(
+                        run_id,
+                        work_kind=self.work_kind,
+                        execution_mode=self.execution_mode,
+                        member_id=self.member_id,
+                        device_id=self.device_id,
+                    )
+                updated = mutate(current)
+                return updated.model_dump()
+
+            payload, change = update_shared_json_with_change(
+                path, _apply, workspace_root=workspace_root
+            )
+        self._completions_cache = None
+        try:
+            return TaskRunRecord.model_validate(payload), change
+        except ValueError as exc:  # pragma: no cover - callback returns the model
+            raise TaskRunError(
+                f"Task run '{run_id}' produced an invalid record."
+            ) from exc
 
     def _path(self, run_id: str) -> Path:
         safe_run_id = run_id.strip()
         if not safe_run_id or "/" in safe_run_id or "\\" in safe_run_id:
             raise TaskRunError("Invalid task run id.")
-        return self.root / f"{safe_run_id}.jsonl"
+        return self.root / safe_run_id / "result.json"
+
+    def _workspace_root(self) -> Path | None:
+        if self.root.parts[-3:] != (".guildbotics", "state", "task-runs"):
+            return None
+        return self.root.parents[2]
 
     def _has_required_evidence(
         self,
@@ -341,6 +538,71 @@ def current_run_id(explicit: str | None = None) -> str | None:
     return explicit or os.getenv(RUN_ENV) or os.getenv(TASK_RUN_ENV) or None
 
 
+def _new_record(
+    run_id: str,
+    *,
+    work_kind: str,
+    execution_mode: TaskRunExecutionMode,
+    member_id: str,
+    device_id: str,
+) -> TaskRunRecord:
+    return TaskRunRecord(
+        run_id=run_id,
+        work_kind=work_kind,
+        execution_mode=execution_mode,
+        member_id=member_id,
+        device_id=device_id,
+        started_at=utc_now_iso(),
+    )
+
+
+def _device_id() -> str:
+    try:
+        return ensure_device_identity().device_id
+    except Exception:
+        return "unknown"
+
+
+def _record_status(status: str) -> str:
+    if status == "done":
+        return "succeeded"
+    if status in {"asking", "blocked"}:
+        return "failed"
+    raise TaskRunError(f"Task run has invalid status '{status}'.")
+
+
+def _result_status(status: str) -> Literal["done", "asking", "blocked"]:
+    if status == "done":
+        return "done"
+    if status == "asking":
+        return "asking"
+    if status == "blocked":
+        return "blocked"
+    raise TaskRunError(f"Task run has invalid status '{status}'.")
+
+
+def _result_subject(record: TaskRunRecord) -> TaskRunResult | None:
+    return record.result
+
+
+def _public_status(status: str) -> str:
+    return {"succeeded": "done", "failed": "blocked"}.get(status, status)
+
+
+def _evidence_records(record: TaskRunRecord) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": "evidence",
+            "evidence_type": str(item.get("type") or ""),
+            "payload": item.get("payload")
+            if isinstance(item.get("payload"), dict)
+            else {},
+        }
+        for item in record.provider_evidence
+        if isinstance(item, dict) and item.get("type")
+    ]
+
+
 def _evidence_types(records: list[dict[str, Any]]) -> list[str]:
     evidence = {
         str(record.get("evidence_type"))
@@ -351,15 +613,13 @@ def _evidence_types(records: list[dict[str, Any]]) -> list[str]:
 
 
 def _has_code_publish(records: list[dict[str, Any]]) -> bool:
-    for record in records:
-        if record.get("kind") != "evidence":
-            continue
-        if record.get("evidence_type") != "git_publish":
-            continue
-        payload = record.get("payload")
-        if isinstance(payload, dict) and payload.get("commit_sha"):
-            return True
-    return False
+    return any(
+        record.get("kind") == "evidence"
+        and record.get("evidence_type") == "git_publish"
+        and isinstance(record.get("payload"), dict)
+        and record["payload"].get("commit_sha")
+        for record in records
+    )
 
 
 TaskRunError = RunError

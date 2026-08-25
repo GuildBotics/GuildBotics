@@ -8,6 +8,7 @@ as a real one does, because that refusal is what serializes shared state.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,26 @@ from guildbotics.utils.workspace_sync_port import ChangeSet, dump_shared_json
 from guildbotics.workspace.identity import WorkspaceIdentity, new_uuid7
 
 WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
+
+#: Every manager a test built, so no worker can outlive its test.
+_LIVE_MANAGERS: list[GitSyncManager] = []
+
+
+@pytest.fixture(autouse=True)
+def _no_worker_outlives_its_test() -> Iterator[None]:
+    """Stop every queue this test built, however the test left it.
+
+    A surviving worker keeps cycling on its own timer and walks into a later
+    test's class-wide spies as a flaky extra observation rather than a clear
+    failure. The class's own stop runs even when the test patched ``stop`` on
+    the instance to simulate one that refuses.
+    """
+    yield
+    while _LIVE_MANAGERS:
+        manager = _LIVE_MANAGERS.pop()
+        assert GitSyncManager.stop(manager, timeout=10), (
+            "a synchronization worker outlived its test"
+        )
 
 
 @dataclass
@@ -101,6 +122,7 @@ def make_device(
         push_barrier_timeout=manager_options.pop("push_barrier_timeout", 2.0),
         **manager_options,
     )
+    _LIVE_MANAGERS.append(manager)
     return Device(
         root=root, repository=repository, manager=manager, rejections=rejections
     )

@@ -9,6 +9,7 @@ import {
   Group,
   List,
   Modal,
+  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -16,7 +17,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -24,11 +25,15 @@ import {
   discardWorkspaceSyncRejection,
   enableWorkspaceSync,
   getWorkspaceDevices,
+  getWorkspaceLive,
+  getWorkspaceServiceOwner,
   getWorkspaceSyncStatus,
   previewWorkspaceSync,
   renameThisDevice,
+  transferWorkspaceServiceOwner,
   type HubConnection,
   type RejectedChange,
+  type WorkspaceLiveState,
   type WorkspaceSyncPreview,
 } from "../api/client";
 import { HubConnector } from "./HubConnector";
@@ -472,11 +477,29 @@ function DevicesCard() {
   const queryClient = useQueryClient();
   const [name, setName] = useState<string | null>(null);
   const devices = useQuery({ queryKey: ["workspace-devices"], queryFn: getWorkspaceDevices });
+  const live = useQuery({
+    queryKey: ["workspace-live"],
+    queryFn: getWorkspaceLive,
+    enabled: devices.data !== undefined && devices.data.devices.length > 0,
+    refetchInterval: 1000,
+  });
+  const owner = useQuery({
+    queryKey: ["workspace-service-owner"],
+    queryFn: getWorkspaceServiceOwner,
+    enabled: devices.data !== undefined && devices.data.devices.length > 0,
+    refetchInterval: 5000,
+  });
   const rename = useMutation({
     mutationFn: (displayName: string) => renameThisDevice(displayName),
     onSuccess: (next) => {
       queryClient.setQueryData(["workspace-devices"], next);
       setName(null);
+    },
+  });
+  const transfer = useMutation({
+    mutationFn: (deviceId: string) => transferWorkspaceServiceOwner(deviceId),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["workspace-service-owner"], next);
     },
   });
   const rows = devices.data?.devices ?? [];
@@ -490,42 +513,55 @@ function DevicesCard() {
             {t("sync.devices.empty")}
           </Text>
         ) : (
-          <Table striped>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("sync.devices.name")}</Table.Th>
-                <Table.Th>{t("sync.devices.os")}</Table.Th>
-                <Table.Th>{t("sync.devices.joinedAt")}</Table.Th>
-                <Table.Th>{t("sync.devices.id")}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {rows.map((device) => (
-                <Table.Tr key={device.device_id}>
-                  <Table.Td>
+          <Stack gap="xs">
+            {rows.map((device) => (
+              <Card key={device.device_id} p="sm" radius="sm" withBorder>
+                <Stack gap="sm">
+                  <Group align="flex-start" justify="space-between" wrap="wrap">
                     <Group gap="xs">
-                      {device.display_name}
+                      <Text fw={600}>{device.display_name}</Text>
                       {device.is_self ? <Badge size="xs">{t("sync.devices.self")}</Badge> : null}
                     </Group>
-                  </Table.Td>
-                  <Table.Td>{device.os}</Table.Td>
-                  <Table.Td>{new Date(device.joined_at).toLocaleString()}</Table.Td>
-                  <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <Code style={{ overflowWrap: "anywhere" }}>{device.device_id}</Code>
-                      <CopyButton value={device.device_id}>
-                        {({ copied, copy }) => (
-                          <Button onClick={copy} size="compact-xs" variant="subtle">
-                            {t(copied ? "sync.devices.copied" : "sync.devices.copy")}
-                          </Button>
-                        )}
-                      </CopyButton>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+                    <LiveDeviceStatus
+                      deviceId={device.device_id}
+                      live={live.data ?? []}
+                      status={device.live_status ?? "unknown"}
+                    />
+                  </Group>
+                  <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+                    <DeviceDetail label={t("sync.devices.os")}>{device.os}</DeviceDetail>
+                    <DeviceDetail label={t("sync.devices.joinedAt")}>
+                      {new Date(device.joined_at).toLocaleString()}
+                    </DeviceDetail>
+                    <DeviceDetail label={t("sync.devices.fingerprint")}>
+                      <Code style={{ overflowWrap: "anywhere" }}>
+                        {device.ssh_public_key_fingerprint || t("sync.devices.fingerprintMissing")}
+                      </Code>
+                    </DeviceDetail>
+                    <DeviceDetail label={t("sync.devices.id")}>
+                      <Group gap="xs" style={{ minWidth: 0 }} wrap="nowrap">
+                        <Code style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+                          {device.device_id}
+                        </Code>
+                        <CopyButton value={device.device_id}>
+                          {({ copied, copy }) => (
+                            <Button
+                              onClick={copy}
+                              size="compact-xs"
+                              style={{ flexShrink: 0 }}
+                              variant="subtle"
+                            >
+                              {t(copied ? "sync.devices.copied" : "sync.devices.copy")}
+                            </Button>
+                          )}
+                        </CopyButton>
+                      </Group>
+                    </DeviceDetail>
+                  </SimpleGrid>
+                </Stack>
+              </Card>
+            ))}
+          </Stack>
         )}
         {self ? (
           <Group align="flex-end" gap="sm">
@@ -545,7 +581,165 @@ function DevicesCard() {
             </Button>
           </Group>
         ) : null}
+        <ServiceOwnerCard
+          devices={rows}
+          error={owner.error}
+          owner={owner.data}
+          onTransfer={(deviceId) => transfer.mutate(deviceId)}
+          pending={transfer.isPending}
+        />
       </Stack>
+    </Card>
+  );
+}
+
+function DeviceDetail({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <Stack gap={4} style={{ minWidth: 0 }}>
+      <Text c="dimmed" fw={500} size="xs">
+        {label}
+      </Text>
+      <Text component="div" size="sm">
+        {children}
+      </Text>
+    </Stack>
+  );
+}
+
+function LiveDeviceStatus({
+  deviceId,
+  live,
+  status,
+}: {
+  deviceId: string;
+  live: WorkspaceLiveState[];
+  status: string;
+}) {
+  const { t } = useTranslation();
+  const current = live
+    .filter((state) => state.device_id === deviceId)
+    .sort((left, right) => right.observed_at.localeCompare(left.observed_at))[0];
+  const works = current?.works.slice(0, 2) ?? [];
+  const workCount = current?.works.length ?? 0;
+  const key = ["unknown", "online", "delayed", "expired"].includes(status) ? status : "unknown";
+  return (
+    <Stack gap={2}>
+      <Badge color={key === "online" ? "green" : key === "delayed" ? "yellow" : "gray"}>
+        {t(`sync.devices.liveStatus.${key}`)}
+      </Badge>
+      {workCount > 0 ? (
+        <Stack gap={2}>
+          <Text c="dimmed" size="xs">
+            {t("sync.devices.currentWork", { count: workCount })}
+          </Text>
+          {works.map((work) => (
+            <Text key={work.work_id} size="xs" style={{ overflowWrap: "anywhere" }}>
+              {work.workflow_name}
+            </Text>
+          ))}
+        </Stack>
+      ) : null}
+    </Stack>
+  );
+}
+
+function ServiceOwnerCard({
+  devices,
+  error,
+  owner,
+  onTransfer,
+  pending,
+}: {
+  devices: Array<{
+    device_id: string;
+    display_name: string;
+    is_self: boolean;
+    live_status?: string;
+  }>;
+  error: unknown;
+  owner: { owner_device_id?: string | null; is_self: boolean } | undefined;
+  onTransfer: (deviceId: string) => void;
+  pending: boolean;
+}) {
+  const { t } = useTranslation();
+  const [confirming, setConfirming] = useState(false);
+  const self = devices.find((device) => device.is_self);
+  const current = devices.find((device) => device.device_id === owner?.owner_device_id);
+  const canTakeOver = Boolean(self && owner && !owner.is_self);
+  const currentName = current?.display_name ?? owner?.owner_device_id ?? "—";
+  const currentStatus = current?.live_status ?? "unknown";
+  return (
+    <Card withBorder radius="sm" p="sm">
+      <Stack gap="xs">
+        <Title order={5}>{t("sync.owner.title")}</Title>
+        {error ? <RequestErrorAlert cause={error} title={t("sync.owner.failed")} /> : null}
+        <Text size="sm">
+          {owner?.owner_device_id
+            ? t("sync.owner.current", {
+                deviceId: owner.owner_device_id,
+                name: currentName,
+              })
+            : t("sync.owner.none")}
+        </Text>
+        {owner?.owner_device_id ? (
+          <Text c="dimmed" size="xs">
+            {t(`sync.owner.connection.${currentStatus}`, { defaultValue: currentStatus })}
+          </Text>
+        ) : null}
+        {owner?.is_self ? <Badge>{t("sync.owner.self")}</Badge> : null}
+        <Text c="dimmed" size="xs">
+          {t("sync.owner.hint")}
+        </Text>
+        {canTakeOver ? (
+          <Button
+            color="red"
+            disabled={pending}
+            loading={pending}
+            onClick={() => setConfirming(true)}
+            size="xs"
+            variant="light"
+          >
+            {t("sync.owner.takeOver", { name: self?.display_name })}
+          </Button>
+        ) : null}
+      </Stack>
+      <Modal
+        centered
+        onClose={() => setConfirming(false)}
+        opened={confirming}
+        title={t("sync.owner.confirmTitle")}
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            {t("sync.owner.confirmBody", {
+              current: currentName,
+              status: t(`sync.owner.connection.${currentStatus}`, {
+                defaultValue: currentStatus,
+              }),
+            })}
+          </Text>
+          <Alert color="red" title={t("sync.owner.confirmWarning")}>
+            {t("sync.owner.confirmHint")}
+          </Alert>
+          <Group justify="flex-end">
+            <Button onClick={() => setConfirming(false)} variant="default">
+              {t("sync.owner.cancel")}
+            </Button>
+            <Button
+              color="red"
+              loading={pending}
+              onClick={() => {
+                if (self) {
+                  onTransfer(self.device_id);
+                  setConfirming(false);
+                }
+              }}
+            >
+              {t("sync.owner.confirmAction")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Card>
   );
 }
