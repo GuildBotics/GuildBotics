@@ -1978,7 +1978,8 @@ const resources = {
           confirmTitle: "サービス引き継ぎの確認",
           confirmBody: "現在のオーナーは {{current}}（{{status}}）です。",
           confirmWarning: "サービスが二重に動く危険があります",
-          confirmHint: "続行する前に、現在のオーナーのマシンでサービスが停止したことを直接確認してください。",
+          confirmHint:
+            "続行する前に、現在のオーナーのマシンでサービスが停止したことを直接確認してください。",
           cancel: "キャンセル",
           confirmAction: "確認済み。引き継ぐ",
           failed: "サービスオーナーを読み取れませんでした",

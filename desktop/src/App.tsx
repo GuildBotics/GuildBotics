@@ -673,9 +673,8 @@ function ServicePage() {
     retry: false,
   });
   const ownerDeviceName =
-    devices.data?.devices.find(
-      (device) => device.device_id === serviceOwner.data?.owner_device_id,
-    )?.display_name ??
+    devices.data?.devices.find((device) => device.device_id === serviceOwner.data?.owner_device_id)
+      ?.display_name ??
     serviceOwner.data?.owner_device_id ??
     "";
 
