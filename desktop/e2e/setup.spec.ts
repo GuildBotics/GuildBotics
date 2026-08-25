@@ -35,7 +35,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // Project section: start without GitHub so the first member can be completed
   // before GitHub-specific patrol defaults are enabled.
   await page.getByLabel("Project description").fill("E2E automation workspace");
-  await page.getByRole("combobox", { name: "GitHub integration" }).click();
+  await page.getByRole("combobox", { name: "GitHub integration", exact: true }).click();
   await page.getByRole("option", { name: "Do not use GitHub", exact: true }).click();
 
   // LLM / AI CLI tools section: provide an API key for the default OpenAI provider.
@@ -52,7 +52,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Members", exact: true }).click();
   await page.getByLabel("Member ID").fill("local-agent");
   await page.getByLabel("Display name").fill("Local Agent");
-  await page.getByRole("combobox", { name: "Roles" }).click();
+  await page.getByRole("combobox", { name: "Roles", exact: true }).click();
   await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
 
@@ -61,7 +61,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // fields from the URL typed here, and shows only a "not set" notice until it
   // parses.
   await page.getByRole("button", { name: "Project", exact: true }).click();
-  await page.getByRole("combobox", { name: "GitHub integration" }).click();
+  await page.getByRole("combobox", { name: "GitHub integration", exact: true }).click();
   await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
   await page
     .getByRole("textbox", { name: "GitHub Project URL" })
@@ -110,8 +110,10 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Advanced settings", exact: true }).click();
 
   // Switch the slot to a provider whose effort setting is an integer, so the
-  // typed control has a number to carry all the way to YAML.
-  await page.getByRole("combobox", { name: "Provider" }).click();
+  // typed control has a number to carry all the way to YAML. The name is the
+  // slot's own label in full: a substring would also accept the next control
+  // whose label happens to contain it.
+  await page.getByRole("combobox", { name: "LLM provider", exact: true }).click();
   const providerOption = page.getByRole("option", { name: "Google Gemini", exact: true });
   // The page is still settling while the provider and CLI-tool cards land, and
   // Mantine hides an open dropdown for good the moment floating-ui calls the
