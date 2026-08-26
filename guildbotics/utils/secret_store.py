@@ -374,12 +374,23 @@ class KeyringSecretStore(SecretStore):
         self._record_keys(index, written_keys)
 
     @shared_write_operation
-    def confirm_shared(self, generations: dict[str, int]) -> None:
+    def confirm_shared(
+        self, generations: dict[str, int], *, sent: dict[str, str]
+    ) -> None:
         """Publish these generations as the ones every device is to hold.
 
         Called once the hub holds this device's values: the shared index is
         what tells the other machines there is something newer to fetch, so it
         is written after the values are safely on the hub and never before.
+
+        ``sent`` names the value that actually reached the hub for each key.
+        The exchange with the hub is not inside this store's lock -- nothing
+        is, across a network -- so a value can be entered here while the send
+        is in flight. The hub-side fact still holds either way: the generation
+        is published. What is *not* written is the local claim that this
+        machine holds it, unless the value here is still the one that was
+        sent; a value typed in between stays recorded as one that has not
+        been shared, because it has not.
 
         A whole transfer's keys are published in one span. The span is a local
         read-modify-write with nothing remote inside it -- the exchange with
@@ -389,9 +400,15 @@ class KeyringSecretStore(SecretStore):
         if not generations:
             return
         index = self._read_index()
+        service = self._service(index)
         now = utc_now_iso()
         local = self._read_local()
         for key, generation in generations.items():
+            if key not in sent:
+                # A generation for a key this device never offered can only be
+                # a corrupted answer; publishing it would name a value nobody
+                # here vouched for.
+                continue
             current = _as_generation((index["keys"].get(key) or {}).get("generation"))
             # A shared generation only ever moves forward. Two devices can each
             # reach the hub and publish, and the one whose answer comes back
@@ -401,9 +418,22 @@ class KeyringSecretStore(SecretStore):
             if current is not None and current >= generation:
                 continue
             index["keys"][key] = {"generation": generation, "updated_at": now}
-            local["keys"][key] = {"generation": generation, "pending_send": False}
+            if self._holds_value(service, key, sent[key]):
+                local["keys"][key] = {"generation": generation, "pending_send": False}
         self._write_index(index)
         self._write_local(local)
+
+    def _holds_value(self, service: str, key: str, sent_value: str) -> bool:
+        """Whether this machine's value for ``key`` is still ``sent_value``.
+
+        A keychain that cannot answer counts as "no": the safe wrong answer
+        leaves the key marked as still to be sent, and the next send settles
+        it either way.
+        """
+        try:
+            return self._keychain.get_password(service, key) == sent_value
+        except Exception:
+            return False
 
     @shared_write_operation
     def adopt_received(self, key: str, value: str, generation: int) -> None:

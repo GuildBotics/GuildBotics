@@ -22,6 +22,11 @@ being lost; the comparison survives both.
 Which transfer applies to which key is decided by the functions at the top of
 this module and nowhere else. The CLI, the API, and the screen all read the
 same answer, so a button cannot offer a transfer the transfer itself refuses.
+And the transfer itself asks twice: once before reaching the hub, so a named
+key is held to the same rule the buttons are, and once more inside the store's
+own lock just before a fetched value lands, because the stretch in between
+crosses the network and a value can be typed here while it is in flight. The
+second look is the same function as the first -- not a second rule.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from guildbotics.utils.secret_store import (
     SecretKeyStatus,
     is_locked_error,
 )
+from guildbotics.utils.shared_write_lock import shared_write_lock
 
 #: What a key's standing is called when the hub holds a generation the shared
 #: history does not name. It is not one of the device's own states: only the
@@ -239,7 +245,13 @@ class SecretTransfer:
             # own check and stored nothing. Nothing local was written either
             # way, so a refused send leaves the key exactly as it was.
             outcomes.append(SecretTransferOutcome(result.key, result.status))
-        self._store.confirm_shared(confirmed)
+        # The store checks each value is still the one that was offered: one
+        # typed while the exchange was in flight stays recorded as unsent,
+        # and the two records then show the key as needing a decision instead
+        # of both machines reporting agreement over two different values.
+        self._store.confirm_shared(
+            confirmed, sent={offer.key: offer.value for offer in offers}
+        )
         return _ordered(outcomes, keys)
 
     def fetch(self, keys: list[str]) -> list[SecretTransferOutcome]:
@@ -250,31 +262,13 @@ class SecretTransfer:
         recorded, and storing that value here would clear the very marker that
         says so -- leaving every machine reporting agreement over two different
         values.
+
+        Every key is held to :func:`can_fetch`, named or not: a value entered
+        here that has not been sent is never overwritten by the hub's copy,
+        however the fetch was asked for. The check runs before the hub is
+        asked, so a value that would be refused never travels at all.
         """
-        known = self._known()
-        outcomes: list[SecretTransferOutcome] = []
-        for result in self._client.fetch(list(keys)) if keys else []:
-            if result.status != "sent" or result.value is None:
-                outcomes.append(SecretTransferOutcome(result.key, result.status))
-                continue
-            state = known.get(result.key)
-            shared = (
-                state.shared_generation if state is not None else UNSHARED_GENERATION
-            )
-            if result.generation != shared:
-                outcomes.append(
-                    SecretTransferOutcome(
-                        result.key, GENERATION_MISMATCH, result.generation
-                    )
-                )
-                continue
-            try:
-                self._store.adopt_received(result.key, result.value, shared)
-            except SecretStoreError as exc:
-                outcomes.append(SecretTransferOutcome(result.key, _local_status(exc)))
-                continue
-            outcomes.append(SecretTransferOutcome(result.key, FETCHED, shared))
-        return _ordered(outcomes, keys)
+        return self._fetch(list(keys), self.hub_index() if keys else HubSecretIndex())
 
     def fetch_missing(self) -> list[SecretTransferOutcome]:
         """Fetch every key this device has no value for or an older value for.
@@ -284,7 +278,54 @@ class SecretTransfer:
         value straight into the OS secret store, so nothing is retyped -- and it
         asks for nothing this machine already holds.
         """
-        return self.fetch(bulk_fetch_keys(self._store.key_states(), self.hub_index()))
+        hub = self.hub_index()
+        return self._fetch(bulk_fetch_keys(self._store.key_states(), hub), hub)
+
+    def _fetch(
+        self, keys: list[str], hub: HubSecretIndex
+    ) -> list[SecretTransferOutcome]:
+        known = self._known()
+        held = hub.generations
+        outcomes: list[SecretTransferOutcome] = []
+        wanted: list[str] = []
+        for key in keys:
+            refusal = _fetch_refusal(key, known.get(key), held.get(key))
+            if refusal is not None:
+                outcomes.append(refusal)
+                continue
+            wanted.append(key)
+        for result in self._client.fetch(wanted) if wanted else []:
+            if (
+                result.status != "sent"
+                or result.value is None
+                or result.generation is None
+            ):
+                outcomes.append(SecretTransferOutcome(result.key, result.status))
+                continue
+            outcomes.append(self._adopt(result.key, result.value, result.generation))
+        return _ordered(outcomes, keys)
+
+    def _adopt(self, key: str, value: str, generation: int) -> SecretTransferOutcome:
+        """Land one fetched value, unless this machine moved while it travelled.
+
+        The span from the check in :meth:`_fetch` to this write crosses the
+        network, so it holds no lock -- and a value can be typed here in
+        between, which a fetch must not overwrite. So the same
+        :func:`can_fetch` is asked again, this time inside the shared-write
+        lock the store's own write re-enters, where the answer and the write
+        cannot be interleaved with another writer. Any edit in between changes
+        the answer: entering a value marks the key as pending, and deleting it
+        takes the shared entry with it.
+        """
+        with shared_write_lock():
+            refusal = _fetch_refusal(key, self._store.key_state(key), generation)
+            if refusal is not None:
+                return refusal
+            try:
+                self._store.adopt_received(key, value, generation)
+            except SecretStoreError as exc:
+                return SecretTransferOutcome(key, _local_status(exc))
+        return SecretTransferOutcome(key, FETCHED, generation)
 
     def send_pending(self) -> list[SecretTransferOutcome]:
         """Send every value the hub would gain from this device."""
@@ -332,6 +373,28 @@ class SecretTransfer:
 
     def _known(self) -> dict[str, SecretKeyState]:
         return {state.key: state for state in self._store.key_states()}
+
+
+def _fetch_refusal(
+    key: str, state: SecretKeyState | None, hub_generation: int | None
+) -> SecretTransferOutcome | None:
+    """Why this key cannot be fetched right now, or None when it can.
+
+    The one place a fetch is allowed or refused, asked twice per key: before
+    the hub is reached, and again at the moment of writing. The refusals name
+    the key's own standing, so "a value entered here has not been sent" reads
+    the same on the screen, in the CLI, and in the answer to a fetch that
+    raced an edit.
+    """
+    if state is None:
+        return SecretTransferOutcome(key, UNKNOWN)
+    if hub_generation is None:
+        return SecretTransferOutcome(key, MISSING)
+    if hub_generation != state.shared_generation:
+        return SecretTransferOutcome(key, GENERATION_MISMATCH, hub_generation)
+    if not can_fetch(state, hub_generation):
+        return SecretTransferOutcome(key, str(state.status))
+    return None
 
 
 def _ordered(

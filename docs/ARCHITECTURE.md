@@ -650,7 +650,12 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 - **Which transfer applies** to which key is decided in `secrets/transfer.py`
   (`can_send` / `can_fetch` / `bulk_send_keys` / `bulk_fetch_keys`) and travels to
   the Desktop on the API model, so the CLI, the API, and the screen cannot come to
-  different answers about what a button offers.
+  different answers about what a button offers. The transfer enforces the same
+  answer itself: a fetch asks `can_fetch` before the hub is reached and once more
+  inside the shared-write lock just before the value lands, and a send confirms the
+  local value is still the one that was sent before claiming this machine holds the
+  published generation — so a value typed while an exchange was in flight is never
+  silently overwritten or silently reported as shared.
 - **Tests**: an autouse `fake_keyring` fixture installs an in-memory keychain so
   tests never touch the developer's real OS store.
 

@@ -301,7 +301,7 @@ class TestHubTransfers:
         workspace = self._connected(tmp_path, monkeypatch, hub)
         store = KeyringSecretStore(_config_dir(workspace))
         store.set("MY_TOKEN", "ghp-000111")
-        store.confirm_shared({"MY_TOKEN": 1})
+        store.confirm_shared({"MY_TOKEN": 1}, sent={"MY_TOKEN": "ghp-000111"})
 
         result = CliRunner().invoke(secrets, ["--workspace", str(workspace), "push"])
 

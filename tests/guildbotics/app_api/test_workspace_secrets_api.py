@@ -208,6 +208,33 @@ def test_a_hub_generation_the_workspace_has_not_recorded_is_not_adopted(
     assert _state(refused["secrets"], "A_TOKEN")["status"] == "unconfirmed"
 
 
+def test_a_named_fetch_never_discards_a_value_waiting_to_be_sent(
+    connected: TestClient,
+) -> None:
+    """``can_fetch`` is not only what disables the button: a named fetch of a
+    key whose value here has not been sent is refused by the transfer itself,
+    and the unsent value survives."""
+    store = _store()
+    store.set("A_TOKEN", TOKEN)
+    connected.post("/workspace/secrets/send", headers=AUTH_HEADERS, json={})
+    store.set("A_TOKEN", "ghp-not-sent-yet")
+    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    assert _state(payload, "A_TOKEN")["status"] == "pending_send"
+    assert _state(payload, "A_TOKEN")["can_fetch"] is False
+
+    refused = _json(
+        connected.post(
+            "/workspace/secrets/fetch", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
+        )
+    )
+
+    assert refused["results"] == [
+        {"key": "A_TOKEN", "status": "pending_send", "generation": None}
+    ]
+    assert _state(refused["secrets"], "A_TOKEN")["status"] == "pending_send"
+    assert _store().get("A_TOKEN") == "ghp-not-sent-yet"
+
+
 def test_a_send_settles_a_generation_no_one_recorded(
     connected: TestClient, workspace: Path
 ) -> None:

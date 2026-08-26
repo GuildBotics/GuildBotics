@@ -174,8 +174,9 @@ class RemoteHubSecretClient(HubSecretClient):
             store = payload.get("secret_store") or {}
             return HubSecretIndex(
                 generations={
-                    str(key): int(generation)
+                    str(key): generation
                     for key, generation in (payload.get("keys") or {}).items()
+                    if _held_generation(generation) is not None
                 },
                 available=bool(store.get("available", True)),
                 locked=bool(store.get("locked", False)),
@@ -266,12 +267,25 @@ def _named_keys(keys: list[str]) -> tuple[list[str], list[str]]:
     return named, [key for key in keys if not is_secret_key(key)]
 
 
+def _held_generation(value: object) -> int | None:
+    """Read a generation a hub can actually hold: a positive int, or nothing.
+
+    Published generations start at 1; ``0`` means "never shared" and lives
+    only in a device's own records. Anything else arriving over the wire is a
+    corrupt or hand-made answer, and adopting it would put a number into the
+    workspace's state space that no legitimate send can produce.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 1 else None
+
+
 def _fetched(entry: secret_stream.SecretEntry) -> HubFetchResult:
     error = entry.header.get("error")
     if isinstance(error, str) and error:
         return HubFetchResult(key=entry.key, status=error)
-    generation = entry.header.get("generation")
-    if isinstance(generation, bool) or not isinstance(generation, int):
+    generation = _held_generation(entry.header.get("generation"))
+    if generation is None:
         return HubFetchResult(key=entry.key, status=HUB_INVALID)
     try:
         value = entry.value.decode("utf-8")

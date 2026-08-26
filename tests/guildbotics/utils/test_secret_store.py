@@ -90,12 +90,50 @@ def test_confirming_a_send_publishes_the_generation(
     store.set("ANTHROPIC_API_KEY", "first")
     assert store.key_state("ANTHROPIC_API_KEY").status is SecretKeyStatus.PENDING_SEND
 
-    store.confirm_shared({"ANTHROPIC_API_KEY": 1})
+    store.confirm_shared({"ANTHROPIC_API_KEY": 1}, sent={"ANTHROPIC_API_KEY": "first"})
 
     state = store.key_state("ANTHROPIC_API_KEY")
     assert state.status is SecretKeyStatus.READY
     assert (state.shared_generation, state.local_generation) == (1, 1)
     assert state.pending_send is False
+
+
+def test_confirming_a_send_after_the_value_changed_keeps_it_pending(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """The exchange with the hub is not inside this store's lock, so a value
+    can be entered while a send is in flight. The generation the hub took is
+    still published -- that much is true -- but this machine must not claim to
+    hold it: the newer value has not been shared, and clearing the flag would
+    lose the only record saying so."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ANTHROPIC_API_KEY", "sent-to-hub")
+    store.set("ANTHROPIC_API_KEY", "typed-in-between")
+
+    store.confirm_shared(
+        {"ANTHROPIC_API_KEY": 1}, sent={"ANTHROPIC_API_KEY": "sent-to-hub"}
+    )
+
+    state = store.key_state("ANTHROPIC_API_KEY")
+    assert state.shared_generation == 1
+    assert state.pending_send is True
+    assert state.status is SecretKeyStatus.CONFLICT
+    assert store.get("ANTHROPIC_API_KEY") == "typed-in-between"
+
+
+def test_a_generation_for_a_key_never_offered_is_not_published(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """A hub answer naming a key this device did not send can only be corrupt;
+    publishing it would tell every machine to fetch a value nobody here
+    vouched for."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+
+    store.confirm_shared({"OPENAI_API_KEY": 1}, sent={})
+
+    assert store.shared_generation("OPENAI_API_KEY") is None
 
 
 def test_a_local_update_against_a_newer_shared_generation_conflicts(
@@ -241,9 +279,9 @@ def test_a_shared_generation_never_moves_backwards(fake_keyring, tmp_path, monke
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("OPENAI_API_KEY", "sk-test")
-    store.confirm_shared({"OPENAI_API_KEY": 3})
+    store.confirm_shared({"OPENAI_API_KEY": 3}, sent={"OPENAI_API_KEY": "sk-test"})
 
-    store.confirm_shared({"OPENAI_API_KEY": 2})
+    store.confirm_shared({"OPENAI_API_KEY": 2}, sent={"OPENAI_API_KEY": "sk-test"})
 
     assert store.shared_generation("OPENAI_API_KEY") == 3
 
@@ -254,7 +292,7 @@ def test_get_refuses_stale_generation(fake_keyring, tmp_path, monkeypatch):
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("OPENAI_API_KEY", "old-value")
-    store.confirm_shared({"OPENAI_API_KEY": 1})
+    store.confirm_shared({"OPENAI_API_KEY": 1}, sent={"OPENAI_API_KEY": "old-value"})
     assert store.get("OPENAI_API_KEY") == "old-value"
 
     _publish_shared_generation(store, "OPENAI_API_KEY", 2)
@@ -314,7 +352,10 @@ def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
-    store.confirm_shared({"ALICE_GITHUB_ACCESS_TOKEN": 1})
+    store.confirm_shared(
+        {"ALICE_GITHUB_ACCESS_TOKEN": 1},
+        sent={"ALICE_GITHUB_ACCESS_TOKEN": "ghp-secret"},
+    )
     # Another device bumped the shared generation; this device is stale now.
     _publish_shared_generation(store, "ALICE_GITHUB_ACCESS_TOKEN", 2)
     assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None

@@ -262,6 +262,9 @@ const resources = {
             no_value: "this machine has no value to send",
             unknown: "this workspace does not know that key",
             invalid: "that name cannot be used as a credential key",
+            pending_send:
+              "a value entered on this machine has not been sent; send it (or delete it) before fetching",
+            ready: "this machine already holds the shared value",
           },
           hint: {
             missing: "Not on this machine",
@@ -2115,6 +2118,9 @@ const resources = {
             no_value: "このマシンに送る値がありません",
             unknown: "このワークスペースが知らない key です",
             invalid: "認証情報の key 名として使えません",
+            pending_send:
+              "このマシンで入力された値が未送信のため取得しませんでした。先に送信（または削除）してください",
+            ready: "このマシンはすでに共有されている値を持っています",
           },
           hint: {
             missing: "このマシンに値がありません",

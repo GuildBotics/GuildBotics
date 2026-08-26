@@ -156,6 +156,8 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
 - device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
 - Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+- **Secret の世代とキーチェーンの値は、書き込みだけでなく読み出しも同じ `secrets.lock` の中で行う（`secret_host.py`）。** 読みを lock の外に置くと、並行する send との interleaving で「新しい値が古い世代の名で返る」——1 generation = 1 immutable value という世代の前提そのものが壊れる
+- **世代の検証は Hub boundary（`store_secret`）の1箇所。** base は 0 以上、candidate は base+1（よって 1 以上）。wire・local client・Hub CLI のどこから来ても通り道はここだけなので、各入口で再検証しない。読み側（`_read_generations` と client の受信）は正の整数以外の entry を「持っていない」として落とす
 
 禁止:
 
@@ -177,6 +179,8 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - **中断した送信の状態を device ローカルに記録しない。** 「Hub の世代 > 共有記録の世代」がその状態そのものであり、権威ある 2 つの記録の比較なので、どの device からも見え、値の再入力でも送信元マシンの喪失でも消えない。送信元だけが持つ marker に依存させると、それが消える経路を見つけるたびに出口を足すことになる
 - **取得は共有記録が名指しする世代だけを採用する。** それより新しい世代を取り込むと、確認が必要だと示している比較そのものを消してしまう（全 device が「揃っている」と表示しながら別の値を持つ）
 - **どの key にどちらの転送が可能かの判断は `transfer.py` に1つだけ置き、API model に載せて画面へ渡す。** frontend が世代比較で作り直すと、転送側が拒否する操作をボタンが提示する
+- **その判断の enforcement point は転送自身。** `can_fetch` は表示用の値であると同時に、fetch が Hub へ届く前（値を運ばせないため）と、値を書き込む直前（store と同じ shared-write lock の中）の2回、同じ関数として実行される。network 区間は lock を持てないので、その間のローカル編集は commit 時の再判定が検出する（入力は pending を立て、削除は共有 entry を消すので、どちらも判定が変わる）
+- **send の確定（`confirm_shared`）は「送った値が今もローカルの値か」を確認してから、この device が持っていると記録する。** 途中で入力された値は pending のまま残り、共有世代だけが進む（Hub が受け取ったという事実は記録してよい）。転送中の編集を検出するための revision / mutation token を local record に足さない——比較すべき権威ある記録（keychain の現在値と送った値）が既にあり、token は全 writer に増分義務を課す新しい state になる
 - Hub への到達方法の吸収（SSH 経由と同一マシンで同じ3つの問い＝何を持っているか・これを受け取れ・これを寄こせ、に答える client）
 
 禁止:

@@ -135,6 +135,15 @@ def store_secret(
     """
     require_secret_key(key)
     directory = workspace_directory(workspace_id)
+    # The generation space starts at 0 ("the hub holds nothing yet"), so this
+    # boundary is where a negative number is refused once for every caller:
+    # the wire, the local client, and the hub's own command all pass through
+    # here, and the step rule below then guarantees the candidate is >= 1.
+    if base_generation < 0:
+        raise HubSecretError(
+            f"{key} was sent from generation {base_generation}, which no hub "
+            "could hold."
+        )
     if candidate_generation != base_generation + 1:
         raise HubSecretError(
             f"{key} was sent as generation {candidate_generation} from "
@@ -173,16 +182,23 @@ def read_secret(
 ) -> tuple[str, int]:
     """Return one value and the generation the hub holds it as.
 
+    The two reads happen under the same lock :func:`store_secret` writes
+    under. A store in between them would otherwise hand back the new value
+    labelled with the old generation, and a device whose shared metadata still
+    names the old one would adopt it -- two values under one generation, which
+    is the exact state the generations exist to rule out.
+
     Raises:
         HubSecretMissingError: When the hub has no value for the key.
         SecretStoreError: When the hub's keychain is locked or unreachable.
     """
     require_secret_key(key)
     directory = workspace_directory(workspace_id)
-    held = _read_generations(directory).get(key)
-    if held is None:
-        raise HubSecretMissingError(f"This hub holds no value for {key}.")
-    value = _keychain(keychain).get_password(_service(workspace_id), key)
+    with held_lock(directory / "secrets.lock"):
+        held = _read_generations(directory).get(key)
+        if held is None:
+            raise HubSecretMissingError(f"This hub holds no value for {key}.")
+        value = _keychain(keychain).get_password(_service(workspace_id), key)
     if value is None:
         raise HubSecretMissingError(
             f"This hub records generation {held} of {key} but its keychain no "
@@ -219,10 +235,16 @@ def _read_generations(directory: Path) -> dict[str, int]:
     keys = payload.get("keys") if isinstance(payload, dict) else None
     if not isinstance(keys, dict):
         return {}
+    # A hub only ever holds published generations, which start at 1. An entry
+    # saying anything else is a corrupt record, and a corrupt record claims
+    # nothing -- the same answer a hub that lost the file gives, and the one
+    # state the workspace can always send its way out of.
     return {
         str(key): generation
         for key, generation in keys.items()
-        if isinstance(generation, int) and not isinstance(generation, bool)
+        if isinstance(generation, int)
+        and not isinstance(generation, bool)
+        and generation >= 1
     }
 
 

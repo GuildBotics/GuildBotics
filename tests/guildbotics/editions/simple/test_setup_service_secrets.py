@@ -308,7 +308,9 @@ class TestStaleKeyMetadata:
     def _make_stale(self, config_dir: Path, key: str) -> None:
         store = KeyringSecretStore(config_dir)
         # The value written here reached the hub as generation 1 ...
-        store.confirm_shared({key: 1})
+        value = store.get(key)
+        assert value is not None
+        store.confirm_shared({key: 1}, sent={key: value})
         # ... and another device then published generation 2. Synchronization
         # delivers the bumped index as a checkout, not through a writer, so it
         # is written directly.

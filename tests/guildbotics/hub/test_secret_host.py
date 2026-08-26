@@ -8,11 +8,13 @@ and anything else is refused rather than overwritten.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
 
 from guildbotics.hub import host, secret_host
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 
 
 @pytest.fixture
@@ -148,6 +150,77 @@ def test_a_generation_that_is_not_the_next_one_is_refused(
 ):
     with pytest.raises(secret_host.HubSecretError):
         _store(workspace_id, "A_TOKEN", 1, 5, "skipped")
+
+
+def test_a_negative_generation_is_refused_at_the_boundary(
+    fake_keyring, workspace_id: str
+):
+    """The generation space starts at 0. ``-2 -> -1`` satisfies the step rule,
+    so the boundary has to say so explicitly, once, for every way in: the
+    wire, the hub's own command, and a hub on the sending machine all pass
+    through ``store_secret``."""
+    with pytest.raises(secret_host.HubSecretError):
+        _store(workspace_id, "A_TOKEN", -2, -1, "smuggled")
+
+    assert secret_host.generations(workspace_id) == {}
+
+
+def test_a_corrupt_generation_entry_claims_nothing(fake_keyring, workspace_id: str):
+    """An entry no legitimate send can produce reads as "not held", which is
+    the one state the workspace can always send its way out of."""
+    _store(workspace_id, "A_TOKEN", 0, 1, "ghp-first")
+    path = (
+        host.workspace_repository_path(workspace_id).parent
+        / secret_host.GENERATIONS_FILENAME
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["keys"] = {"A_TOKEN": -3, "B_TOKEN": 0, "C_TOKEN": True}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert secret_host.generations(workspace_id) == {}
+
+
+def test_the_generation_and_the_value_are_read_under_one_lock(
+    fake_keyring, workspace_id: str
+):
+    """A store between the two reads would hand back the new value labelled
+    with the old generation, and a device whose shared metadata names the old
+    one would adopt it -- two values under one generation.
+
+    The critical section is asserted directly: while the read is inside the
+    keychain, the writer's lock cannot be taken from another file descriptor,
+    which is the same exclusion :func:`store_secret` relies on."""
+    _store(workspace_id, "A_TOKEN", 0, 1, "ghp-first")
+    directory = host.workspace_repository_path(workspace_id).parent
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _Pausing:
+        def get_password(self, service: str, username: str) -> str | None:
+            del service, username
+            entered.set()
+            assert release.wait(timeout=10)
+            return "ghp-first"
+
+    answer: dict[str, tuple[str, int]] = {}
+
+    def _read() -> None:
+        answer["result"] = secret_host.read_secret(
+            workspace_id, "A_TOKEN", keychain=_Pausing()
+        )
+
+    reader = threading.Thread(target=_read)
+    reader.start()
+    try:
+        assert entered.wait(timeout=10)
+        with pytest.raises(LockTimeoutError):
+            with held_lock(directory / "secrets.lock", timeout=0.2):
+                pass
+    finally:
+        release.set()
+        reader.join(timeout=10)
+    assert not reader.is_alive()
+    assert answer["result"] == ("ghp-first", 1)
 
 
 def test_an_unknown_key_is_reported_rather_than_answered(

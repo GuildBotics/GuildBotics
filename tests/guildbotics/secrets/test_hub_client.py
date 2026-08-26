@@ -8,13 +8,14 @@ what those write is what the client parses back.
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli.hub import hub
-from guildbotics.hub import host
+from guildbotics.hub import host, secret_stream
 from guildbotics.hub.connection import HubEndpoint
 from guildbotics.secrets.hub_client import (
     LocalHubSecretClient,
@@ -128,6 +129,65 @@ def test_one_unusable_name_does_not_cost_the_batch(
         "bad name": "invalid",
         "A_TOKEN": "stored",
     }
+
+
+def _answering(monkeypatch: pytest.MonkeyPatch, output: bytes) -> RemoteHubSecretClient:
+    """A client whose "hub" answers with exactly ``output``.
+
+    The real hub's boundary refuses these answers, so producing them takes a
+    corrupt or hand-made far side -- which is exactly what the client's own
+    check exists for.
+    """
+
+    def run(endpoint: HubEndpoint, arguments: list[str], payload: bytes = b"") -> bytes:
+        del endpoint, arguments, payload
+        return output
+
+    monkeypatch.setattr("guildbotics.secrets.hub_client.run_hub_stream", run)
+    return RemoteHubSecretClient(HubEndpoint(host="hub.local"), WORKSPACE_ID)
+
+
+def test_a_generation_no_hub_could_hold_is_not_adopted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Published generations start at 1. A fetched value labelled 0 or a
+    negative number would put a number into the workspace's records that no
+    legitimate send can produce, so it is refused as invalid instead."""
+    stream = io.BytesIO()
+    secret_stream.write_entries(
+        stream,
+        [
+            secret_stream.SecretEntry(
+                key="A_TOKEN", value=b"ghp", header={"generation": -1}
+            ),
+            secret_stream.SecretEntry(
+                key="B_TOKEN", value=b"xoxb", header={"generation": 0}
+            ),
+        ],
+    )
+    client = _answering(monkeypatch, stream.getvalue())
+
+    fetched = client.fetch(["A_TOKEN", "B_TOKEN"])
+
+    assert [(r.key, r.status, r.value) for r in fetched] == [
+        ("A_TOKEN", "invalid", None),
+        ("B_TOKEN", "invalid", None),
+    ]
+
+
+def test_the_index_drops_generations_no_hub_could_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = json.dumps(
+        {
+            "workspace_id": WORKSPACE_ID,
+            "keys": {"A_TOKEN": -1, "B_TOKEN": 0, "C_TOKEN": 2},
+            "secret_store": {"available": True, "locked": False},
+        }
+    ).encode("utf-8")
+    client = _answering(monkeypatch, payload)
+
+    assert client.index().generations == {"C_TOKEN": 2}
 
 
 def test_a_hub_on_this_machine_answers_the_same_way(hub_machine) -> None:

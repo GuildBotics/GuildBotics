@@ -347,7 +347,7 @@ def test_the_bulk_send_covers_everything_the_hub_would_gain(store):
     # A key held here at a recorded generation the hub knows nothing about, the
     # way a migrated or newly connected workspace's keys arrive.
     store.set("B_TOKEN", "xoxb-first")
-    store.confirm_shared({"B_TOKEN": 1})
+    store.confirm_shared({"B_TOKEN": 1}, sent={"B_TOKEN": "xoxb-first"})
     assert _status(store, "B_TOKEN") is SecretKeyStatus.READY
 
     assert bulk_send_keys(store.key_states(), hub.index()) == ["B_TOKEN"]
@@ -375,6 +375,108 @@ def test_a_key_the_hub_never_received_is_reported_as_missing(store):
     outcomes = SecretTransfer(other, FakeHub()).fetch(["A_TOKEN"])
 
     assert [(o.key, o.status) for o in outcomes] == [("A_TOKEN", "missing")]
+
+
+def test_a_named_fetch_never_overwrites_a_value_waiting_to_be_sent(store):
+    """The buttons read ``can_fetch``, and so does the fetch itself.
+
+    A value entered here after the last send would otherwise be replaced by
+    the hub's older copy with ``pending_send`` cleared -- the unsent edit gone
+    without a warning or a trace."""
+    store.set("A_TOKEN", "ghp-old")
+    hub = FakeHub()
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+    store.set("A_TOKEN", "ghp-new")
+    assert _status(store, "A_TOKEN") is SecretKeyStatus.PENDING_SEND
+
+    outcomes = SecretTransfer(store, hub).fetch(["A_TOKEN"])
+
+    assert [(o.key, o.status) for o in outcomes] == [("A_TOKEN", "pending_send")]
+    assert store.get("A_TOKEN") == "ghp-new"
+    assert _status(store, "A_TOKEN") is SecretKeyStatus.PENDING_SEND
+    # The refused value never travelled: the hub was not even asked for it.
+    assert hub.requested == []
+
+
+def test_a_named_fetch_of_a_key_already_in_step_moves_nothing(store):
+    """There is nothing to gain, so no value is made to travel."""
+    store.set("A_TOKEN", "ghp-first")
+    hub = FakeHub()
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+
+    outcomes = SecretTransfer(store, hub).fetch(["A_TOKEN"])
+
+    assert [(o.key, o.status) for o in outcomes] == [("A_TOKEN", "ready")]
+    assert hub.requested == []
+
+
+def test_a_named_fetch_of_a_conflicted_key_takes_the_hubs_value(store):
+    """One of the two ways out of a key changed on two machines: this row's
+    fetch adopts the other machine's value, on purpose."""
+    store.set("A_TOKEN", "from-mac")
+    hub = FakeHub()
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+    other = _second_device(store)
+    other.adopt_received("A_TOKEN", "from-mac", 1)
+    other.set("A_TOKEN", "from-windows")
+    store.set("A_TOKEN", "from-mac-again")
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+    assert _status(other, "A_TOKEN") is SecretKeyStatus.CONFLICT
+
+    outcomes = SecretTransfer(other, hub).fetch(["A_TOKEN"])
+
+    assert [(o.key, o.status, o.generation) for o in outcomes] == [
+        ("A_TOKEN", "fetched", 2)
+    ]
+    assert other.get("A_TOKEN") == "from-mac-again"
+    assert _status(other, "A_TOKEN") is SecretKeyStatus.READY
+
+
+def test_a_value_typed_while_a_send_was_in_flight_stays_pending(store):
+    """The exchange with the hub holds no lock, so a value can be entered here
+    while it is in flight. The hub-side fact is still recorded -- the
+    generation is published -- but this machine must not claim to hold it,
+    or both records would report agreement over two different values."""
+    store.set("A_TOKEN", "ghp-sent")
+    hub = _EditDuringExchangeHub()
+    hub.edit = (store, "A_TOKEN", "ghp-typed-in-between")
+
+    outcomes = SecretTransfer(store, hub).send(["A_TOKEN"])
+
+    assert [(o.key, o.status, o.generation) for o in outcomes] == [
+        ("A_TOKEN", "sent", 1)
+    ]
+    assert hub.values["A_TOKEN"] == "ghp-sent"
+    assert store.shared_generation("A_TOKEN") == 1
+    assert store.get("A_TOKEN") == "ghp-typed-in-between"
+    assert _status(store, "A_TOKEN") is SecretKeyStatus.CONFLICT
+
+    # The key asks for a decision, and sending again settles it.
+    outcomes = SecretTransfer(store, hub).send(["A_TOKEN"])
+
+    assert [(o.key, o.status, o.generation) for o in outcomes] == [
+        ("A_TOKEN", "sent", 2)
+    ]
+    assert hub.values["A_TOKEN"] == "ghp-typed-in-between"
+    assert _status(store, "A_TOKEN") is SecretKeyStatus.READY
+
+
+def test_a_value_typed_while_a_fetch_was_in_flight_is_kept(store):
+    """The second look at ``can_fetch``, inside the lock the write takes.
+
+    The fetch was legitimate when it left; the value typed while it travelled
+    must not be silently replaced by the hub's answer."""
+    store.set("A_TOKEN", "ghp-first")
+    hub = _EditDuringExchangeHub()
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+    other = _second_device(store)
+    hub.edit = (other, "A_TOKEN", "ghp-typed-in-between")
+
+    outcomes = SecretTransfer(other, hub).fetch(["A_TOKEN"])
+
+    assert [(o.key, o.status) for o in outcomes] == [("A_TOKEN", "pending_send")]
+    assert other.get("A_TOKEN") == "ghp-typed-in-between"
+    assert _status(other, "A_TOKEN") is SecretKeyStatus.PENDING_SEND
 
 
 class _LockedKeychain:
@@ -410,6 +512,33 @@ class InMemoryKeychain:
 
     def delete_password(self, service: str, username: str) -> None:
         self.values.pop((service, username), None)
+
+
+class _EditDuringExchangeHub(FakeHub):
+    """A hub whose answer arrives after a value was typed on this machine.
+
+    The edit happens inside the client call, which is exactly where the real
+    race lives: after the transfer's first look at the key, before the write
+    that would land the answer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.edit: tuple[KeyringSecretStore, str, str] | None = None
+
+    def _apply_edit(self) -> None:
+        if self.edit is not None:
+            target, key, value = self.edit
+            target.set(key, value)
+
+    def send(self, entries: list[SecretOffer]) -> list[HubSendResult]:
+        results = super().send(entries)
+        self._apply_edit()
+        return results
+
+    def fetch(self, keys: list[str]) -> list[HubFetchResult]:
+        results = super().fetch(keys)
+        self._apply_edit()
+        return results
 
 
 class _RacingHub(FakeHub):
