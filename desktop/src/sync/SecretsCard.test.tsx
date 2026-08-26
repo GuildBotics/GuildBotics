@@ -61,7 +61,7 @@ function secrets(overrides: Partial<WorkspaceSecrets> = {}): WorkspaceSecrets {
 
 function renderCard() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  render(
     <QueryClientProvider client={client}>
       <MantineProvider>
         <MemoryRouter>
@@ -70,6 +70,7 @@ function renderCard() {
       </MantineProvider>
     </QueryClientProvider>,
   );
+  return client;
 }
 
 beforeEach(() => {
@@ -202,6 +203,32 @@ describe("SecretsCard", () => {
     await user.click(await screen.findByRole("button", { name: t("sync.secrets.send") }));
 
     expect(sendWorkspaceSecrets).toHaveBeenCalledWith({ keys: ["A_TOKEN"] });
+  });
+
+  it("marks every other screen's snapshot stale once a transfer moved a value", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({ sendable_keys: ["A_TOKEN"], pending_count: 1, attention_count: 1 }),
+    );
+    const refreshed = secrets();
+    vi.mocked(sendWorkspaceSecrets).mockResolvedValue({
+      results: [{ key: "A_TOKEN", status: "sent", generation: 1 }],
+      secrets: refreshed,
+    });
+    const client = renderCard();
+    // A snapshot another section read before the transfer, e.g. "is this
+    // provider's API key stored?" on the intelligence section.
+    client.setQueryData(["project-config"], { provider_api_keys: { openai: false } });
+
+    await user.click(
+      await screen.findByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }),
+    );
+
+    await waitFor(() => expect(client.getQueryState(["project-config"])?.isInvalidated).toBe(true));
+    // The secret states themselves were just delivered by the transfer's own
+    // response, so they are the one thing not marked stale.
+    expect(client.getQueryState(["workspace-secrets"])?.isInvalidated).toBe(false);
+    expect(client.getQueryData(["workspace-secrets"])).toEqual(refreshed);
   });
 
   it("says which keys a transfer could not move, and why", async () => {

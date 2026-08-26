@@ -41,6 +41,15 @@ export function SecretsCard() {
   const applied = (response: { secrets: WorkspaceSecrets; results: SecretTransferResult[] }) => {
     queryClient.setQueryData(SECRETS_QUERY_KEY, response.secrets);
     setRefused(response.results.filter((result) => !MOVED.has(result.status)));
+    // A transfer changes what the OS secret store holds, and snapshots other
+    // sections have already read stay answered without it -- "is this
+    // provider's key stored?" would say no after the fetch that stored it.
+    // Which screens consult the store is not a list to maintain here, so
+    // everything but the secret states this response just delivered is
+    // invalidated, the same way joining a workspace invalidates everything.
+    void queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey[0] !== SECRETS_QUERY_KEY[0],
+    });
   };
   // A bulk action names no keys. The lists below are as old as the last poll,
   // and acting on them would let a key that has since been changed on another
