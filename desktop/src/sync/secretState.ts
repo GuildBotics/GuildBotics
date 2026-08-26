@@ -38,6 +38,7 @@ const TONES: Record<SecretStatus, SecretTone> = {
   pending_send: "warning",
   conflict: "danger",
   unconfirmed: "danger",
+  hub_behind: "warning",
 };
 
 export function secretTone(status: SecretStatus): SecretTone {

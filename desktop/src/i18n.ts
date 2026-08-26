@@ -230,6 +230,7 @@ const resources = {
             pending_send: "Not sent to the hub",
             conflict: "Changed on two machines",
             unconfirmed: "Needs checking",
+            hub_behind: "No copy on the hub",
           },
           alert: {
             local_locked: {
@@ -272,6 +273,7 @@ const resources = {
             pending_send: "Not sent to the hub",
             conflict: "Changed on two machines",
             unconfirmed: "Needs checking",
+            hub_behind: "No copy on the hub",
             link: "Open sync settings",
           },
         },
@@ -2086,6 +2088,7 @@ const resources = {
             pending_send: "Hub マシンへ未送信の更新があります",
             conflict: "2 台で同じ値を変更しました",
             unconfirmed: "確認が必要です",
+            hub_behind: "Hub マシンに写しがありません",
           },
           alert: {
             local_locked: {
@@ -2128,6 +2131,7 @@ const resources = {
             pending_send: "Hub マシンへ未送信",
             conflict: "2 台で変更されています",
             unconfirmed: "確認が必要です",
+            hub_behind: "Hub マシンに写しがありません",
             link: "同期設定を開く",
           },
         },

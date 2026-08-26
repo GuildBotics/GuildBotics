@@ -27,6 +27,7 @@ describe("secretTone", () => {
     expect(secretTone("missing")).toBe("warning");
     expect(secretTone("outdated")).toBe("warning");
     expect(secretTone("pending_send")).toBe("warning");
+    expect(secretTone("hub_behind")).toBe("warning");
     expect(secretTone("conflict")).toBe("danger");
     expect(secretTone("unconfirmed")).toBe("danger");
   });
@@ -34,6 +35,7 @@ describe("secretTone", () => {
   it("treats everything but being in step as worth showing", () => {
     expect(secretNeedsAttention("ready")).toBe(false);
     expect(secretNeedsAttention("pending_send")).toBe(true);
+    expect(secretNeedsAttention("hub_behind")).toBe(true);
   });
 });
 

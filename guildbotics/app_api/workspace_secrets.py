@@ -30,6 +30,8 @@ from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.hub import HubUnreachableError, host
 from guildbotics.hub.secret_host import HubSecretError
 from guildbotics.secrets import (
+    HUB_BEHIND,
+    UNCONFIRMED,
     HubSecretIndex,
     SecretTransfer,
     SecretTransferOutcome,
@@ -38,7 +40,6 @@ from guildbotics.secrets import (
     can_fetch,
     can_send,
     hub_secret_client,
-    is_unconfirmed,
     transfer_status,
 )
 from guildbotics.utils.fileio import (
@@ -170,10 +171,16 @@ def _secrets(
         states = store.key_states()
     except SecretStoreError:
         states = []
+    statuses = {
+        state.key: transfer_status(
+            state, held.get(state.key), hub_answered=index is not None
+        )
+        for state in states
+    }
     keys = [
         WorkspaceSecretState(
             key=state.key,
-            status=transfer_status(state, held.get(state.key)),
+            status=statuses[state.key],
             shared_generation=state.shared_generation,
             local_generation=state.local_generation,
             hub_generation=held.get(state.key),
@@ -187,13 +194,19 @@ def _secrets(
     for state in states:
         counts[state.status] += 1
     # What the user has to act on before the hub can hand this value to any
-    # other machine: a value entered here, a key changed on two machines, and a
-    # send that reached the hub without its generation being recorded.
+    # other machine: a value entered here, a key changed on two machines, a
+    # send that reached the hub without its generation being recorded, and a
+    # recorded generation the hub holds no copy of.
     pending = sum(
         1
-        for state in states
-        if state.status in {SecretKeyStatus.PENDING_SEND, SecretKeyStatus.CONFLICT}
-        or is_unconfirmed(state, held.get(state.key))
+        for status in statuses.values()
+        if status
+        in {
+            SecretKeyStatus.PENDING_SEND,
+            SecretKeyStatus.CONFLICT,
+            UNCONFIRMED,
+            HUB_BEHIND,
+        }
     )
     local = keyring_status()
     return WorkspaceSecrets(

@@ -15,6 +15,7 @@ from guildbotics.secrets import (
     SecretTransfer,
     bulk_fetch_keys,
     bulk_send_keys,
+    is_hub_behind,
     is_unconfirmed,
     transfer_status,
 )
@@ -309,9 +310,9 @@ def test_a_hub_generation_the_workspace_has_not_recorded_is_not_adopted(store):
     assert other.get("A_TOKEN") == "ghp-first"
     # Both machines can see the state, because the hub itself is the record.
     assert is_unconfirmed(other.key_state("A_TOKEN"), hub.held["A_TOKEN"])
-    assert transfer_status(other.key_state("A_TOKEN"), hub.held["A_TOKEN"]) == (
-        "unconfirmed"
-    )
+    assert transfer_status(
+        other.key_state("A_TOKEN"), hub.held["A_TOKEN"], hub_answered=True
+    ) == ("unconfirmed")
 
 
 def test_the_bulk_fetch_leaves_out_the_states_it_cannot_settle(store):
@@ -351,6 +352,44 @@ def test_the_bulk_send_covers_everything_the_hub_would_gain(store):
     assert _status(store, "B_TOKEN") is SecretKeyStatus.READY
 
     assert bulk_send_keys(store.key_states(), hub.index()) == ["B_TOKEN"]
+
+
+def test_a_recorded_generation_the_hub_holds_no_copy_of_is_named_as_such(store):
+    """An in-step key the hub cannot hand out is not simply "ready".
+
+    The other machines believe the value is there to fetch, so the standing
+    says what fixes it: a send. Only a hub that answered can say its copy is
+    absent -- an unreachable one says nothing about any key."""
+    store.set("A_TOKEN", "ghp-first")
+    store.set("B_TOKEN", "xoxb-first")
+    hub = FakeHub()
+    SecretTransfer(store, hub).send(["A_TOKEN"])
+    # B is recorded at a generation this hub knows nothing about, the way a
+    # rebuilt hub or a freshly connected workspace's keys arrive.
+    store.confirm_shared({"B_TOKEN": 1}, sent={"B_TOKEN": "xoxb-first"})
+
+    held = hub.index().generations
+    a_state, b_state = store.key_state("A_TOKEN"), store.key_state("B_TOKEN")
+
+    assert not is_hub_behind(a_state, held.get("A_TOKEN"))
+    assert is_hub_behind(b_state, held.get("B_TOKEN"))
+    assert transfer_status(a_state, held.get("A_TOKEN"), hub_answered=True) == "ready"
+    assert (
+        transfer_status(b_state, held.get("B_TOKEN"), hub_answered=True) == "hub_behind"
+    )
+    # A hub that could not be asked leaves the local reading alone.
+    assert transfer_status(b_state, None, hub_answered=False) == "ready"
+
+
+def test_a_value_waiting_to_be_sent_keeps_its_own_standing(store):
+    """The device's own claim is the more specific one: "not sent yet" already
+    says the hub has no copy, and says whose action is missing."""
+    store.set("A_TOKEN", "ghp-first")
+
+    state = store.key_state("A_TOKEN")
+
+    assert not is_hub_behind(state, None)
+    assert transfer_status(state, None, hub_answered=True) == "pending_send"
 
 
 def test_the_bulk_send_leaves_a_key_changed_on_two_machines_alone(store):

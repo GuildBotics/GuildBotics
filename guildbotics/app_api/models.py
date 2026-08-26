@@ -292,7 +292,10 @@ class WorkspaceSecrets(BaseModel):
         fetchable_keys (list[str]): What "fetch everything" would ask it for.
         missing_count (int): Keys this machine has no value for.
         outdated_count (int): Keys another device published a newer value for.
-        pending_count (int): Values entered here that the hub has not got.
+        pending_count (int): Keys the hub cannot hand to the other machines
+            yet: a value entered here, a key changed on two machines, an
+            unrecorded send, or a recorded generation the hub holds no copy
+            of.
         attention_count (int): The three above together, which is the number a
             summary band shows.
     """

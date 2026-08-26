@@ -55,6 +55,11 @@ from guildbotics.utils.shared_write_lock import shared_write_lock
 #: two records together say it.
 UNCONFIRMED = "unconfirmed"
 
+#: What a key's standing is called when the shared history names a generation
+#: the hub holds no copy of. The mirror of :data:`UNCONFIRMED`, and likewise
+#: not one of the device's own states.
+HUB_BEHIND = "hub_behind"
+
 #: The value reached the hub and the shared generation now names it.
 SENT = "sent"
 #: The value arrived and this device now holds the hub's generation.
@@ -86,14 +91,37 @@ def is_unconfirmed(state: SecretKeyState, hub_generation: int | None) -> bool:
     return hub_generation is not None and hub_generation > state.shared_generation
 
 
-def transfer_status(state: SecretKeyState, hub_generation: int | None) -> str:
+def is_hub_behind(state: SecretKeyState, hub_generation: int | None) -> bool:
+    """Whether the hub lacks a copy of the generation the workspace agreed on.
+
+    The mirror of :func:`is_unconfirmed`: this machine is in step with the
+    shared record, but the hub holds nothing for the key -- or something
+    older. Every other device believes the value is there to fetch, and the
+    hub cannot hand it out. A rebuilt hub, and a workspace that connected to
+    its hub after the key was recorded, start every key this way; a send is
+    what fills it, so these are exactly the in-step keys the bulk send names.
+    """
+    return (
+        state.status is SecretKeyStatus.READY
+        and (hub_generation or UNSHARED_GENERATION) < state.shared_generation
+    )
+
+
+def transfer_status(
+    state: SecretKeyState, hub_generation: int | None, *, hub_answered: bool
+) -> str:
     """What one key's standing is, given both records.
 
-    The device knows most of it on its own; the one thing it cannot know
-    without the hub is that an earlier send landed without being recorded.
+    The device knows most of it on its own; what it cannot know without the
+    hub is that an earlier send landed without being recorded, or that the hub
+    has no copy to hand out. The second reading is why ``hub_answered`` is
+    required: an absent generation from a hub that answered means the copy is
+    not there, while from a hub that could not be asked it means nothing.
     """
     if is_unconfirmed(state, hub_generation):
         return UNCONFIRMED
+    if hub_answered and is_hub_behind(state, hub_generation):
+        return HUB_BEHIND
     return str(state.status)
 
 

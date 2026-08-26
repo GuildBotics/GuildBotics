@@ -1128,7 +1128,7 @@ export type WorkspaceSecretState = {
 };
 
 export type SecretStatus =
-  "ready" | "missing" | "outdated" | "pending_send" | "conflict" | "unconfirmed";
+  "ready" | "missing" | "outdated" | "pending_send" | "conflict" | "unconfirmed" | "hub_behind";
 
 export type WorkspaceSecrets = {
   enabled: boolean;

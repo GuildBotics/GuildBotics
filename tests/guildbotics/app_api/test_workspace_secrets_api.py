@@ -116,6 +116,26 @@ def test_a_value_entered_here_is_waiting_to_be_sent(connected: TestClient) -> No
     assert payload["attention_count"] == 1
 
 
+def test_a_recorded_key_the_hub_holds_no_copy_of_is_not_shown_as_ready(
+    connected: TestClient,
+) -> None:
+    """A hub that answered and holds nothing for an in-step key cannot hand the
+    value to any other machine, and the screen says so instead of "set"."""
+    store = _store()
+    store.set("A_TOKEN", TOKEN)
+    # The key is recorded at a generation this hub knows nothing about, the way
+    # a rebuilt hub or a freshly connected workspace's keys arrive.
+    store.confirm_shared({"A_TOKEN": 1}, sent={"A_TOKEN": TOKEN})
+
+    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+
+    assert _state(payload, "A_TOKEN")["status"] == "hub_behind"
+    assert _state(payload, "A_TOKEN")["hub_generation"] is None
+    assert payload["sendable_keys"] == ["A_TOKEN"]
+    assert payload["pending_count"] == 1
+    assert payload["attention_count"] == 1
+
+
 def test_sending_publishes_the_generation_and_names_no_value(
     connected: TestClient,
 ) -> None:

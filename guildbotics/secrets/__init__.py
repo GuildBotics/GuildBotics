@@ -25,6 +25,7 @@ from guildbotics.secrets.transfer import (
     CONFLICT,
     FETCHED,
     GENERATION_MISMATCH,
+    HUB_BEHIND,
     LOCKED,
     MISSING,
     NO_VALUE,
@@ -38,6 +39,7 @@ from guildbotics.secrets.transfer import (
     bulk_send_keys,
     can_fetch,
     can_send,
+    is_hub_behind,
     is_unconfirmed,
     transfer_status,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "CONFLICT",
     "FETCHED",
     "GENERATION_MISMATCH",
+    "HUB_BEHIND",
     "LOCKED",
     "MISSING",
     "NO_VALUE",
@@ -65,6 +68,7 @@ __all__ = [
     "can_fetch",
     "can_send",
     "hub_secret_client",
+    "is_hub_behind",
     "is_unconfirmed",
     "transfer_status",
 ]
