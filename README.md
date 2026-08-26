@@ -401,9 +401,15 @@ Manage secrets with the `guildbotics secrets` CLI (see the [CLI Reference](docs/
 
 ```bash
 guildbotics secrets status                        # OS secret-store availability and key count
+guildbotics secrets pull                          # fetch missing or outdated values from the hub
+guildbotics secrets push                          # give the hub the values entered here
 guildbotics secrets export --file secrets.env     # export secrets for a move
 guildbotics secrets import secrets.env            # import them on the new machine
 ```
+
+When a workspace is shared between machines, values never enter the shared history: they
+move through the hub machine's OS secret store, and only when you send or fetch them. See
+[Share credentials with each machine](#share-credentials-with-each-machine).
 
 Secrets are stored per workspace (keychain entries are namespaced by the `store_id` in `secrets.yml`). Choose the target workspace with `--workspace` before the subcommand. Without it, the active workspace is required. `guildbotics secrets status` always shows where the target resolved on its `workspace:` line.
 
@@ -602,6 +608,98 @@ Joining is not an overwrite. This machine's content is committed first; for any 
 sides hold, the hub's version wins; files only this machine has are sent to the hub. What
 is shown before you confirm is exactly that division. A commit pushed aside this way is
 kept locally — see [Recover a change that was not applied](#recover-a-change-that-was-not-applied).
+
+#### Share credentials with each machine
+
+The **values** of API keys and tokens are not shared. What travels between machines is a
+key name and a generation; the value stays in each machine's own OS secret store. The hub
+machine's secret store is the distribution point, and a value moves only when you send or
+fetch it, over the standard input and output of one SSH command. It is never written to
+the Git repository, to a relay file on the hub, or to a temporary file.
+
+The list and the transfers are under **Settings → Sync → Credentials on this machine**.
+The provider and member forms where a value is typed show its state and link here; they
+carry no transfer buttons of their own.
+
+**On a machine you have just added**, choose **Fetch all credentials** once. Everything
+this machine lacks or holds an older value for arrives in a single exchange and goes
+straight into this machine's OS secret store. Nothing is retyped.
+
+**When you update a value**, choose **Send** on the machine where you typed it. The shared
+files are taken first, so a machine that has been offline never sends from a generation the
+others have moved past. Once the value reaches the hub the shared generation moves on, and
+the other machines show *Updated elsewhere*; choose **Fetch** on each to catch up.
+
+**Send all** covers every value the hub does not have yet, so connecting an existing
+workspace to a hub — or rebuilding one — hands it everything in a single action.
+
+If two machines change the same key, the one that receives the other's update shows *Changed
+on two machines*. Choose which to keep on that key's own row: **Send** makes this machine's
+value the new generation, **Fetch** takes the other machine's, and either way the other
+machine is told about it. Nothing has to be typed again. The bulk actions leave such a key
+alone, because which value to keep is a decision per key.
+
+If the record of the shared generation is interrupted after the hub has already stored the
+value, the key shows *Needs checking*. Choosing **Send** on any machine that holds a value
+settles it: a send is built on the generation the hub reports, so it moves past the
+interrupted one and the record is made. That works from a machine that knows nothing about
+the interrupted send, and after the value has been entered again on the machine that was
+sending.
+
+**Fetch** is not offered for that key meanwhile — taking a generation the workspace has no
+record of would remove the very thing saying it still needs settling.
+
+On a machine that runs no desktop app, use the CLI:
+
+```bash
+guildbotics secrets status   # this machine's state, and which keys need attention
+guildbotics secrets pull     # fetch everything missing or outdated, in one exchange
+guildbotics secrets push     # give the hub the values entered on this machine
+```
+
+While an OS secret store is locked, nothing can be sent or fetched. GuildBotics never falls
+back to a plaintext file, so unlock it and try again.
+
+**To use a headless Linux machine as a device**, its secret store (Secret Service) has to
+run without a desktop session.
+
+1. Install a Secret Service implementation (`gnome-keyring` or similar) and D-Bus.
+2. Run it as a user systemd service, and enable lingering so it keeps running while nobody
+   is logged in.
+
+   ```bash
+   sudo loginctl enable-linger "$USER" && systemctl --user enable --now gnome-keyring-daemon.service
+   ```
+
+3. After each restart, unlock the keyring once.
+
+   ```bash
+   ssh user@linux-host 'echo -n "<keyring password>" | gnome-keyring-daemon --unlock'
+   ```
+
+   Until that one unlock, workflows on that machine that need a secret fail at run time and
+   no transfer can start. If the hub runs on that machine, fetches from every other machine
+   stop for the same reason, and they show *The hub machine's secret store is locked*.
+
+#### Revoke a machine
+
+When a machine is lost, remove its public key from the hub.
+
+1. Find that machine's SSH public key fingerprint in the device list under
+   **Settings → Sync**.
+2. On the hub machine, delete the line with that fingerprint from
+   `~/.ssh/authorized_keys`.
+
+   ```bash
+   ssh-keygen -l -f ~/.ssh/authorized_keys
+   ```
+
+   GuildBotics does not edit `authorized_keys`. Deciding which line to remove, and removing
+   it, stay with you.
+
+3. Values already stored on the lost machine cannot be erased remotely. Revoke and reissue
+   the tokens and API keys at GitHub, Slack, and your LLM providers. Enter each reissued
+   value on a machine you still have, then use **Send** to give it to the others.
 
 #### Rebuild the hub
 

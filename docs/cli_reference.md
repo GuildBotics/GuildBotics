@@ -31,6 +31,10 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics hub owner claim`](#guildbotics-hub-owner-claim) | Claim ownership only when the workspace has no owner. |
 | [`guildbotics hub owner get`](#guildbotics-hub-owner-get) | Show the current service owner, if one has been claimed. |
 | [`guildbotics hub owner transfer`](#guildbotics-hub-owner-transfer) | Move ownership explicitly to another device. |
+| [`guildbotics hub secret`](#guildbotics-hub-secret) | Hold secret values for the devices that share a workspace. |
+| [`guildbotics hub secret list`](#guildbotics-hub-secret-list) | Report which generation this hub holds for each key, without values. |
+| [`guildbotics hub secret receive`](#guildbotics-hub-secret-receive) | Store the values a device sends, one framed entry each. |
+| [`guildbotics hub secret send`](#guildbotics-hub-secret-send) | Write the requested values back to the device, one framed entry each. |
 | [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 | [`guildbotics hub workspace create`](#guildbotics-hub-workspace-create) | Create the repository a workspace synchronizes through. |
@@ -90,6 +94,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
+| [`guildbotics secrets pull`](#guildbotics-secrets-pull) | Fetch values from the hub into this machine's OS secret store. |
+| [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
@@ -213,6 +219,7 @@ guildbotics hub [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
 | [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
 | [`guildbotics hub owner`](#guildbotics-hub-owner) | Inspect or explicitly change a workspace's service owner. |
+| [`guildbotics hub secret`](#guildbotics-hub-secret) | Hold secret values for the devices that share a workspace. |
 | [`guildbotics hub status`](#guildbotics-hub-status) | Show whether this machine hosts a hub, and which workspaces it holds. |
 | [`guildbotics hub workspace`](#guildbotics-hub-workspace) | Manage the repositories this hub holds, one per workspace. |
 
@@ -325,6 +332,65 @@ guildbotics hub owner transfer [OPTIONS] WORKSPACE_ID DEVICE_ID
 | Option | Description |
 | --- | --- |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub secret`
+
+Hold secret values for the devices that share a workspace.
+
+Values arrive and leave on this command's own standard input and output.
+They are never written to the workspace repository, to a relay file, or to
+a temporary file, and never appear in output, logs, or error messages.
+
+```text
+guildbotics hub secret [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics hub secret list`](#guildbotics-hub-secret-list) | Report which generation this hub holds for each key, without values. |
+| [`guildbotics hub secret receive`](#guildbotics-hub-secret-receive) | Store the values a device sends, one framed entry each. |
+| [`guildbotics hub secret send`](#guildbotics-hub-secret-send) | Write the requested values back to the device, one framed entry each. |
+
+## `guildbotics hub secret list`
+
+Report which generation this hub holds for each key, without values.
+
+```text
+guildbotics hub secret list [OPTIONS] WORKSPACE_ID
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub secret receive`
+
+Store the values a device sends, one framed entry each.
+
+```text
+guildbotics hub secret receive [OPTIONS] WORKSPACE_ID
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+## `guildbotics hub secret send`
+
+Write the requested values back to the device, one framed entry each.
+
+```text
+guildbotics hub secret send [OPTIONS] WORKSPACE_ID
+```
+
+| Option | Description |
+| --- | --- |
+| `--key TEXT` | A logical key to send back. |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics hub status`
@@ -1339,6 +1405,8 @@ guildbotics secrets [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
 | [`guildbotics secrets import`](#guildbotics-secrets-import) | Import secrets from a dotenv-format exchange file into the OS store. |
 | [`guildbotics secrets list`](#guildbotics-secrets-list) | List the names of the stored secrets. |
+| [`guildbotics secrets pull`](#guildbotics-secrets-pull) | Fetch values from the hub into this machine's OS secret store. |
+| [`guildbotics secrets push`](#guildbotics-secrets-push) | Send values entered on this machine to the hub (all it lacks by default). |
 | [`guildbotics secrets set`](#guildbotics-secrets-set) | Store a secret value (prompts when VALUE is omitted). |
 | [`guildbotics secrets status`](#guildbotics-secrets-status) | Show OS secret-store status for this workspace. |
 
@@ -1391,9 +1459,47 @@ guildbotics secrets list [OPTIONS]
 | --- | --- |
 | `--help` | Show this message and exit. |
 
+## `guildbotics secrets pull`
+
+Fetch values from the hub into this machine's OS secret store.
+
+With no KEYS this is the whole of setting up a new device: every key this
+machine has no value for, or holds an older value for, arrives in one
+exchange and is stored without anything being retyped.
+
+The shared files are taken first: only the generation they name is ever
+adopted, so an old copy of them would leave nothing to fetch.
+
+```text
+guildbotics secrets pull [OPTIONS] [KEYS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+## `guildbotics secrets push`
+
+Send values entered on this machine to the hub (all it lacks by default).
+
+The shared files are refreshed first. Which generation a value is sent from
+is read out of ``config/secrets.yml``, and a machine that has been offline
+would otherwise send from a generation the others have moved past.
+
+```text
+guildbotics secrets push [OPTIONS] [KEYS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
 ## `guildbotics secrets set`
 
 Store a secret value (prompts when VALUE is omitted).
+
+KEY comes first: naming the value first would store it under a name that
+is itself the secret.
 
 ```text
 guildbotics secrets set [OPTIONS] KEY [VALUE]

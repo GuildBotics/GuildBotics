@@ -33,6 +33,7 @@ from guildbotics.hub.connection import (
     probe_host_key,
     read_ssh_key,
     trust_host_key,
+    workspace_id_from_remote_url,
 )
 from guildbotics.hub.host import (
     HubSettings,
@@ -69,5 +70,6 @@ __all__ = [
     "read_hub",
     "read_ssh_key",
     "trust_host_key",
+    "workspace_id_from_remote_url",
     "workspace_repository_path",
 ]

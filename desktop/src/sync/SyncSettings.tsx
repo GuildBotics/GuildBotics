@@ -38,12 +38,17 @@ import {
 } from "../api/client";
 import { HubConnector } from "./HubConnector";
 import { RequestErrorAlert } from "./RequestErrorAlert";
+import { SecretsCard } from "./SecretsCard";
 
 /**
  * Everything about sharing this workspace with the user's other machines:
- * which hub it uses, which devices joined, and what cannot be sent. What
- * belongs to the machine instead -- its SSH key, hosting the hub -- lives in
- * `DeviceSettings`.
+ * which hub it uses, which devices joined, which credentials each machine
+ * holds, and what cannot be sent. What belongs to the machine instead -- its
+ * SSH key, hosting the hub -- lives in `DeviceSettings`.
+ *
+ * Credential transfers live here and nowhere else. The screens where a value
+ * is typed show what state it is in and link back to this one, so there is a
+ * single place where a value can be made to leave a machine.
  *
  * Connecting is deliberately a sequence rather than one button. The hub has to
  * be reachable before its workspaces can be listed, its host key has to be
@@ -68,6 +73,7 @@ export function SyncSettings() {
       ) : (
         <ConnectCard />
       )}
+      <SecretsCard />
       <UnsendableChangesCard />
       <RejectedChangesCard />
       <DevicesCard />
@@ -508,6 +514,9 @@ function DevicesCard() {
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
         <Title order={4}>{t("sync.devices.title")}</Title>
+        <Text c="dimmed" size="sm">
+          {t("sync.devices.revokeHint")}
+        </Text>
         {rows.length === 0 ? (
           <Text c="dimmed" size="sm">
             {t("sync.devices.empty")}

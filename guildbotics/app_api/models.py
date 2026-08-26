@@ -244,6 +244,94 @@ class WorkspaceSyncCloneRequest(BaseModel):
     workspace_dir: Path
 
 
+class SecretStoreState(BaseModel):
+    """Whether one machine's OS secret store can be used right now.
+
+    ``available`` and ``locked`` are separate answers: a locked store is
+    installed and reachable and still refuses every value, and the way out of
+    the two is different, so the screen says which one it is.
+    """
+
+    available: bool = False
+    locked: bool = False
+
+
+class WorkspaceSecretState(BaseModel):
+    """One key's standing on this device, and on the hub when it answered.
+
+    No field here can carry a secret value. What the screen shows is a name, a
+    state, and two counters, which is the whole of what the shared metadata
+    holds as well.
+    """
+
+    key: str
+    status: str
+    shared_generation: int = 0
+    local_generation: int | None = None
+    hub_generation: int | None = None
+    updated_at: str = ""
+    # Which transfer this key can take. Decided where the transfers are, so a
+    # button cannot offer one the transfer itself would refuse.
+    can_send: bool = False
+    can_fetch: bool = False
+
+
+class WorkspaceSecrets(BaseModel):
+    """The Secret half of the synchronization screen.
+
+    Attributes:
+        enabled (bool): Whether this workspace has a hub to transfer with.
+        hub_reachable (bool): Whether the hub answered. When it did not, the
+            key list is still the local view rather than nothing.
+        hub_error_code (str): Why the hub did not answer, for the message.
+        secret_store (SecretStoreState): This machine's own store.
+        hub_secret_store (SecretStoreState | None): The hub machine's store,
+            when it answered.
+        keys (list[WorkspaceSecretState]): Every key the workspace knows.
+        sendable_keys (list[str]): What "send everything" would hand the hub.
+        fetchable_keys (list[str]): What "fetch everything" would ask it for.
+        missing_count (int): Keys this machine has no value for.
+        outdated_count (int): Keys another device published a newer value for.
+        pending_count (int): Values entered here that the hub has not got.
+        attention_count (int): The three above together, which is the number a
+            summary band shows.
+    """
+
+    enabled: bool = False
+    hub_reachable: bool = False
+    hub_error_code: str = ""
+    secret_store: SecretStoreState = Field(default_factory=SecretStoreState)
+    hub_secret_store: SecretStoreState | None = None
+    keys: list[WorkspaceSecretState] = Field(default_factory=list)
+    sendable_keys: list[str] = Field(default_factory=list)
+    fetchable_keys: list[str] = Field(default_factory=list)
+    missing_count: int = 0
+    outdated_count: int = 0
+    pending_count: int = 0
+    attention_count: int = 0
+
+
+class SecretTransferRequest(BaseModel):
+    """Which keys to move. An empty list means "everything this device needs"."""
+
+    keys: list[str] = Field(default_factory=list)
+
+
+class SecretTransferResult(BaseModel):
+    """What happened to one key, named without its value."""
+
+    key: str
+    status: str
+    generation: int | None = None
+
+
+class SecretTransferResponse(BaseModel):
+    """The outcome of one transfer, with the states it left behind."""
+
+    results: list[SecretTransferResult] = Field(default_factory=list)
+    secrets: WorkspaceSecrets
+
+
 class ProjectSummary(BaseModel):
     name: str = ""
     language_code: str

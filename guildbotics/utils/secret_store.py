@@ -19,7 +19,9 @@ import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,7 @@ from guildbotics.utils.fileio import (
     save_yaml_file,
 )
 from guildbotics.utils.keychain import (
+    InvalidSecretKeyError,
     Keychain,
     SecretStoreError,
     system_keychain,
@@ -39,8 +42,23 @@ from guildbotics.utils.shared_write_lock import shared_write_operation
 
 SECRETS_INDEX_FILENAME = "secrets.yml"
 LOCAL_SECRETS_FILENAME = "secrets.json"
+#: The generation of a key that exists but whose value has never reached the
+#: hub. Shared generations count the values every device can obtain, so a value
+#: only this machine holds is not one of them yet -- and a workspace that never
+#: connects to a hub simply keeps every key here.
+UNSHARED_GENERATION = 0
 _KEYRING_SERVICE_PREFIX = "GuildBotics"
 _PLAIN_ENV_VALUE = re.compile(r"[^\s#'\"\\]*")
+#: What a logical key may be called. A key reaches another machine as one
+#: argument of the hub's own command, and OpenSSH hands that command line to a
+#: shell there, so a name is held to what cannot be read as anything but a
+#: single word. Refusing the rest where a key is created is what keeps a key
+#: from existing that could never be transferred.
+#:
+#: A leading digit is allowed. Member keys are named after the member, and a
+#: ``person_id`` may start with one; the property wanted here is that a shell
+#: finds nothing to do with the name, not that it would pass as an identifier.
+_SECRET_KEY = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_]{0,127}$")
 
 # Secrets that must never be published to process environment variables:
 # child processes (AI CLI tools in particular) inherit the full environment,
@@ -98,6 +116,28 @@ def is_secret_env_key(key: str) -> bool:
     return any(part in upper for part in _SECRET_ENV_NAME_PARTS)
 
 
+def require_secret_key(key: str) -> str:
+    """Return ``key`` once it is certainly a logical secret key name.
+
+    Raises:
+        InvalidSecretKeyError: When it is not one.
+    """
+    if not _SECRET_KEY.match(key or ""):
+        # The text is deliberately left out. A key name is not secret, but a
+        # caller that has its arguments the wrong way round is holding a value
+        # where a name should be, and this message is the one place that would
+        # then print it.
+        raise InvalidSecretKeyError(
+            "A secret key name may hold only letters, digits, and underscores."
+        )
+    return key
+
+
+def is_secret_key(key: str) -> bool:
+    """True when ``key`` is a logical secret key name."""
+    return bool(_SECRET_KEY.match(key or ""))
+
+
 def utc_now_iso() -> str:
     """Return a UTC timestamp suitable for secret metadata."""
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -144,6 +184,55 @@ def write_env_values(env_file: Path, values: dict[str, str]) -> None:
         env_file,
         "\n".join(format_env_line(key, value) for key, value in values.items()),
     )
+
+
+class SecretKeyStatus(StrEnum):
+    """What one device can say about one key without contacting the hub.
+
+    Each is decided by comparing two numbers that are already recorded -- the
+    generation every device agreed on and the generation this machine holds --
+    and one flag saying whether the value here has been given to the hub.
+
+    Nothing here records a transfer in progress. A send that was cut off part
+    way leaves its evidence on the hub, where every device can see it, rather
+    than in a note on the one machine that was sending: such a note does not
+    survive the value being entered again, and does not survive that machine.
+    """
+
+    #: This machine holds the generation the other devices agreed on.
+    READY = "ready"
+    #: The key is known, but this machine has no value for it.
+    MISSING = "missing"
+    #: Another device published a newer generation than this machine holds.
+    OUTDATED = "outdated"
+    #: A value entered here has not reached the hub yet.
+    PENDING_SEND = "pending_send"
+    #: A value entered here, and the shared generation moved past the one it
+    #: was derived from -- two machines changed the same key.
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True)
+class SecretKeyState:
+    """One key as this device sees it.
+
+    Attributes:
+        key (str): The logical key name.
+        status (SecretKeyStatus): What the user has to do about it, if anything.
+        shared_generation (int): The generation every device agreed on, or
+            :data:`UNSHARED_GENERATION` when no value has reached the hub.
+        local_generation (int | None): The generation this machine's value
+            belongs to, or None when it holds no value.
+        pending_send (bool): Whether a value entered here still has to be sent.
+        updated_at (str): When the shared generation was published.
+    """
+
+    key: str
+    status: SecretKeyStatus
+    shared_generation: int
+    local_generation: int | None
+    pending_send: bool
+    updated_at: str
 
 
 class SecretStore(ABC):
@@ -213,17 +302,15 @@ class KeyringSecretStore(SecretStore):
         self._keychain = keychain or system_keychain()
 
     def get(self, key: str) -> str | None:
-        index = self._read_index()
-        meta = index["keys"].get(key)
-        if meta is None:
-            return None
-        if self._is_stale(key, meta):
-            # Another device updated the shared generation; the value this
-            # keychain holds is outdated. Never serve it — the key needs a
-            # `secrets set` / `secrets import` here (`secrets status` lists it).
+        state = self.key_state(key)
+        if state is None or state.status in _WITHHELD_STATUSES:
+            # Either this device holds nothing, or another device published a
+            # newer generation and what this keychain holds is outdated. Never
+            # serve the second -- the key needs a fetch, or a `secrets set`
+            # here (`secrets status` lists it).
             return None
         try:
-            return self._keychain.get_password(self._service(index), key)
+            return self._keychain.get_password(self._service(self._read_index()), key)
         except SecretStoreError:
             raise
         except Exception as exc:
@@ -231,14 +318,37 @@ class KeyringSecretStore(SecretStore):
 
     def stale_keys(self) -> list[str]:
         """Keys whose shared generation this device does not hold."""
-        index = self._read_index()
         return sorted(
-            key for key, meta in index["keys"].items() if self._is_stale(key, meta)
+            state.key
+            for state in self.key_states()
+            if state.status is SecretKeyStatus.OUTDATED
         )
 
-    def _is_stale(self, key: str, meta: dict[str, Any]) -> bool:
-        shared = _as_generation(meta.get("generation"))
-        return shared is not None and self.local_generation(key) != shared
+    def key_states(self) -> list[SecretKeyState]:
+        """Return every key this device knows of, from either record.
+
+        A key named by only one of the two files is still a key. The shared
+        index can lose an entry -- a first-committer-wins race can set aside the
+        very commit that created it -- and the value would then be held here
+        under a name nothing lists, which is the one way a key becomes
+        impossible to act on. Reading both records keeps it visible, and
+        sending it puts the shared entry back.
+        """
+        index = self._read_index()
+        local = self._read_local()["keys"]
+        return [
+            _key_state(key, index["keys"].get(key), local.get(key))
+            for key in sorted(set(index["keys"]) | set(local))
+        ]
+
+    def key_state(self, key: str) -> SecretKeyState | None:
+        """Return one key's state, or None when neither record names it."""
+        index = self._read_index()
+        local = self._read_local()["keys"].get(key)
+        meta = index["keys"].get(key)
+        if meta is None and local is None:
+            return None
+        return _key_state(key, meta, local)
 
     def set(self, key: str, value: str) -> None:
         self.set_many({key: value})
@@ -250,6 +360,7 @@ class KeyringSecretStore(SecretStore):
         written_keys: list[str] = []
         try:
             for key, value in values.items():
+                require_secret_key(key)
                 self._keychain.validate_password(key, value)
             for key, value in values.items():
                 self._keychain.set_password(service, key, value)
@@ -261,6 +372,60 @@ class KeyringSecretStore(SecretStore):
                 raise
             raise SecretStoreError(str(exc)) from exc
         self._record_keys(index, written_keys)
+
+    @shared_write_operation
+    def confirm_shared(self, generations: dict[str, int]) -> None:
+        """Publish these generations as the ones every device is to hold.
+
+        Called once the hub holds this device's values: the shared index is
+        what tells the other machines there is something newer to fetch, so it
+        is written after the values are safely on the hub and never before.
+
+        A whole transfer's keys are published in one span. The span is a local
+        read-modify-write with nothing remote inside it -- the exchange with
+        the hub is already over -- so it never makes another writer wait on a
+        network round trip.
+        """
+        if not generations:
+            return
+        index = self._read_index()
+        now = utc_now_iso()
+        local = self._read_local()
+        for key, generation in generations.items():
+            current = _as_generation((index["keys"].get(key) or {}).get("generation"))
+            # A shared generation only ever moves forward. Two devices can each
+            # reach the hub and publish, and the one whose answer comes back
+            # later would otherwise write the earlier number over the later
+            # one -- putting a completed, recorded send back into the state
+            # that says it never finished.
+            if current is not None and current >= generation:
+                continue
+            index["keys"][key] = {"generation": generation, "updated_at": now}
+            local["keys"][key] = {"generation": generation, "pending_send": False}
+        self._write_index(index)
+        self._write_local(local)
+
+    @shared_write_operation
+    def adopt_received(self, key: str, value: str, generation: int) -> None:
+        """Store a value taken from the hub as the generation the hub holds.
+
+        The shared index is left alone: the generation being adopted is already
+        published -- fetching is how this machine catches up with it -- and
+        writing it again here would make every fetch look like a change to the
+        other devices.
+        """
+        index = self._read_index()
+        try:
+            require_secret_key(key)
+            self._keychain.validate_password(key, value)
+            self._keychain.set_password(self._service(index), key, value)
+        except SecretStoreError:
+            raise
+        except Exception as exc:
+            raise SecretStoreError(str(exc)) from exc
+        local = self._read_local()
+        local["keys"][key] = {"generation": generation, "pending_send": False}
+        self._write_local(local)
 
     @shared_write_operation
     def delete(self, key: str) -> None:
@@ -287,6 +452,7 @@ class KeyringSecretStore(SecretStore):
         """
         if old_key == new_key:
             return
+        require_secret_key(new_key)
         index = self._read_index()
         meta = index["keys"].pop(old_key, None)
         if meta is None:
@@ -310,7 +476,7 @@ class KeyringSecretStore(SecretStore):
             self._write_local(local)
 
     def keys(self) -> list[str]:
-        return list(self._read_index()["keys"])
+        return [state.key for state in self.key_states()]
 
     @shared_write_operation
     def ensure_initialized(self) -> None:
@@ -345,16 +511,34 @@ class KeyringSecretStore(SecretStore):
         return f"{_KEYRING_SERVICE_PREFIX}/{index['store_id']}"
 
     def _record_keys(self, index: dict[str, Any], keys: list[str]) -> None:
+        """Record locally entered values as this device's own, unsent update.
+
+        Entering a value does not advance the shared generation. That number
+        names a value every device can obtain, and until the hub holds this one
+        no other machine can: raising it here would tell them to fetch
+        something that is not there, and -- when two machines were edited at
+        once -- give two different values the same number, which nothing
+        downstream could tell apart.
+
+        """
         now = utc_now_iso()
+        changed = False
+        local = self._read_local()
         for key in keys:
-            current = index["keys"].get(key) or {}
-            generation = _as_generation(current.get("generation")) or 0
-            index["keys"][key] = {
-                "generation": generation + 1,
-                "updated_at": now,
+            if key not in index["keys"]:
+                index["keys"][key] = {
+                    "generation": UNSHARED_GENERATION,
+                    "updated_at": now,
+                }
+                changed = True
+            shared = _as_generation(index["keys"][key].get("generation"))
+            local["keys"][key] = {
+                "generation": UNSHARED_GENERATION if shared is None else shared,
+                "pending_send": True,
             }
-        self._write_index(index)
-        self._align_local_generations(index, keys)
+        if changed:
+            self._write_index(index)
+        self._write_local(local)
 
     def _read_index(self) -> dict[str, Any]:
         data = load_yaml_dict(self.location)
@@ -450,17 +634,23 @@ def keyring_status() -> dict[str, Any]:
     except Exception as exc:
         return {
             "available": False,
-            "locked": _is_locked_error(exc),
+            "locked": is_locked_error(exc),
             "backend": "os-keychain",
         }
     return {"available": True, "locked": False, "backend": "os-keychain"}
 
 
-def _is_locked_error(exc: BaseException) -> bool:
+def is_locked_error(exc: BaseException) -> bool:
+    """True when a secret store refused because it is locked.
+
+    The one answer to that question. Every place that has to tell "locked" from
+    "unavailable" -- this device, the hub's own command, the transfer that
+    reports it -- asks here, so the three cannot start disagreeing.
+    """
     try:
         from keyring.errors import KeyringLocked
     except ImportError:
-        return False
+        return "lock" in str(exc).lower()
     return isinstance(exc, KeyringLocked) or "lock" in str(exc).lower()
 
 
@@ -505,8 +695,57 @@ def _parse_key_index(raw: object) -> dict[str, dict[str, Any]]:
 
 
 def _as_generation(value: object) -> int | None:
+    """Read a generation counter, or None when the field is not one.
+
+    ``0`` is a generation like any other: it is the one a key has before any
+    device has managed to share its value.
+    """
     if isinstance(value, bool) or not isinstance(value, int):
         return None
-    if value < 1:
+    if value < UNSHARED_GENERATION:
         return None
     return value
+
+
+#: Statuses where the value this machine holds is not the one to use: either
+#: there is none, or another device published a newer one that has to be
+#: fetched before anything reads this key again.
+_WITHHELD_STATUSES = frozenset({SecretKeyStatus.MISSING, SecretKeyStatus.OUTDATED})
+
+
+def _key_state(
+    key: str, meta: dict[str, Any] | None, local: dict[str, Any] | None
+) -> SecretKeyState:
+    """Decide one key's state from the shared index and the local record."""
+    meta = meta or {}
+    shared = _as_generation(meta.get("generation")) or UNSHARED_GENERATION
+    updated_at = str(meta.get("updated_at") or "")
+    if local is None:
+        return SecretKeyState(
+            key=key,
+            status=SecretKeyStatus.MISSING,
+            shared_generation=shared,
+            local_generation=None,
+            pending_send=False,
+            updated_at=updated_at,
+        )
+    held = _as_generation(local.get("generation"))
+    pending = bool(local.get("pending_send", False))
+    if pending:
+        status = (
+            SecretKeyStatus.CONFLICT
+            if held is not None and held < shared
+            else SecretKeyStatus.PENDING_SEND
+        )
+    elif held is None or held < shared:
+        status = SecretKeyStatus.OUTDATED
+    else:
+        status = SecretKeyStatus.READY
+    return SecretKeyState(
+        key=key,
+        status=status,
+        shared_generation=shared,
+        local_generation=held,
+        pending_send=pending,
+        updated_at=updated_at,
+    )

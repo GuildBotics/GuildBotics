@@ -344,6 +344,21 @@ class GitSyncManager:
             self._resolve_shared()
             return self.status()
 
+    def synchronize_once(self, *, timeout: float | None = None) -> GitSyncStatus:
+        """Run one full cycle now, so a caller acts on current shared state.
+
+        Unlike :meth:`commit_and_push_once`, this fetches: a caller that is
+        about to decide something from a shared file needs that file to be the
+        one the other devices have, not the one this device last saw. A
+        workspace whose shared data is halted is left halted -- repairing that
+        is the user's, through :meth:`resume`.
+        """
+        with (
+            sync_repository_lock(self._repository.workspace_root, timeout=timeout),
+            self._sync_lock,
+        ):
+            return self._synchronize_status()
+
     def resume(self) -> GitSyncStatus:
         """Clear a stop caused by damaged shared data and try again.
 

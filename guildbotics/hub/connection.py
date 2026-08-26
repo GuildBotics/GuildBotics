@@ -18,7 +18,7 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from guildbotics.hub import host
 from guildbotics.utils.openssh import (
@@ -182,11 +182,27 @@ def location_from_remote_url(
     remote_url: str, workspace_id: str | None = None
 ) -> HubLocation:
     """Recover the Hub location from a validated synchronization remote."""
+    return _parse_remote_url(remote_url, workspace_id)[0]
+
+
+def workspace_id_from_remote_url(remote_url: str) -> str:
+    """Return the workspace a synchronization remote names.
+
+    The remote is the one record of which workspace on which machine this one
+    belongs to, and both halves are read from it here rather than by whoever
+    happens to need one of them.
+    """
+    return _parse_remote_url(remote_url, None)[1]
+
+
+def _parse_remote_url(
+    remote_url: str, workspace_id: str | None
+) -> tuple[HubLocation, str]:
     value = remote_url.strip()
     if not value:
         raise InvalidHubEndpointError("The synchronization remote is empty.")
     if value.startswith("/") or value.startswith("./") or value.startswith("../"):
-        return HubLocation()
+        return HubLocation(), _local_workspace_id(value)
     target, separator, path = value.partition(":")
     if not separator or not path.startswith(f"{HUB_WORKSPACES_RELATIVE}/"):
         raise InvalidHubEndpointError(
@@ -210,7 +226,20 @@ def location_from_remote_url(
         raise InvalidHubEndpointError(
             f"{remote_url!r} names a different workspace than {workspace_id}."
         )
-    return HubLocation(endpoint=parse_hub_endpoint(target))
+    return HubLocation(endpoint=parse_hub_endpoint(target)), remote_workspace_id
+
+
+def _local_workspace_id(path: str) -> str:
+    """Read the workspace out of a hub repository path on this machine."""
+    parts = PurePosixPath(path.replace("\\", "/")).parts
+    if len(parts) < _HUB_REMOTE_PATH_PARTS or parts[-1] != "repository.git":
+        raise InvalidHubEndpointError(f"{path!r} is not a GuildBotics Hub remote.")
+    try:
+        return host.require_workspace_id(parts[-2])
+    except host.InvalidWorkspaceIdError as exc:
+        raise InvalidHubEndpointError(
+            f"{path!r} contains an invalid workspace identifier."
+        ) from exc
 
 
 def list_hub_workspaces(location: HubLocation) -> list[str]:
@@ -370,6 +399,37 @@ def run_hub_command(endpoint: HubEndpoint, arguments: list[str]) -> str:
         hub_ssh_command(endpoint, arguments),
         f"run a hub command on {endpoint.target}",
     )
+
+
+def run_hub_stream(
+    endpoint: HubEndpoint, arguments: list[str], payload: bytes = b""
+) -> bytes:
+    """Run a hub command over SSH, exchanging raw bytes with it.
+
+    Used where the exchange is a secret value rather than text: the bytes are
+    handed over exactly as they are, with no newline translation and no
+    decoding, and the command's own output never reaches an error message --
+    only the standard error stream does, which carries diagnostics and never a
+    value.
+    """
+    command = hub_ssh_command(endpoint, arguments)
+    try:
+        result = subprocess.run(
+            command,
+            input=payload,
+            capture_output=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HubUnreachableError(f"Could not reach {endpoint.target}: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise HubUnreachableError(
+            f"{endpoint.target} refused a hub command: "
+            f"{detail[-1] if detail else 'no output'}"
+        )
+    return result.stdout
 
 
 def hub_ssh_command(endpoint: HubEndpoint, arguments: list[str]) -> list[str]:

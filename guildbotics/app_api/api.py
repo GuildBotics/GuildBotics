@@ -92,6 +92,8 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
+    SecretTransferRequest,
+    SecretTransferResponse,
     SlackAppRegistrationStartRequest,
     SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
@@ -107,6 +109,7 @@ from guildbotics.app_api.models import (
     WorkspaceChangeRequest,
     WorkspaceDevices,
     WorkspaceLiveState,
+    WorkspaceSecrets,
     WorkspaceServiceOwner,
     WorkspaceServiceOwnerTransferRequest,
     WorkspaceSyncCloneRequest,
@@ -115,6 +118,7 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
 from guildbotics.editions.simple.github_app_setup import (
@@ -214,6 +218,10 @@ def create_app(
         sync_service = app_runtime.workspace_sync_service
     else:
         sync_service = WorkspaceSyncService()
+    # Secrets travel between OS secret stores rather than through Git, but the
+    # machine they travel to is the workspace's hub, so the two services share
+    # one answer to "where is the hub" instead of resolving it twice.
+    secret_service = WorkspaceSecretService(sync_service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -488,6 +496,39 @@ def create_app(
     ) -> WorkspaceSyncStatus:
         """Drop one displaced commit the user has finished with."""
         return sync_service.discard_rejection(rejection_id)
+
+    @app.get(
+        "/workspace/secrets",
+        response_model=WorkspaceSecrets,
+        responses=error_responses,
+    )
+    def workspace_secrets(_: None = Depends(require_token)) -> WorkspaceSecrets:
+        """Report which keys this device holds, and which the hub holds."""
+        return secret_service.get_secrets()
+
+    @app.post(
+        "/workspace/secrets/send",
+        response_model=SecretTransferResponse,
+        responses=error_responses,
+    )
+    def workspace_secrets_send(
+        request: SecretTransferRequest,
+        _: None = Depends(require_token),
+    ) -> SecretTransferResponse:
+        """Hand this device's values to the hub, because the user asked."""
+        return secret_service.send(request)
+
+    @app.post(
+        "/workspace/secrets/fetch",
+        response_model=SecretTransferResponse,
+        responses=error_responses,
+    )
+    def workspace_secrets_fetch(
+        request: SecretTransferRequest,
+        _: None = Depends(require_token),
+    ) -> SecretTransferResponse:
+        """Take values from the hub into this device's own secret store."""
+        return secret_service.fetch(request)
 
     @app.post(
         "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses

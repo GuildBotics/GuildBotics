@@ -307,10 +307,13 @@ class TestStaleKeyMetadata:
 
     def _make_stale(self, config_dir: Path, key: str) -> None:
         store = KeyringSecretStore(config_dir)
+        # The value written here reached the hub as generation 1 ...
+        store.confirm_shared({key: 1})
+        # ... and another device then published generation 2. Synchronization
+        # delivers the bumped index as a checkout, not through a writer, so it
+        # is written directly.
         index = load_yaml_file(store.location)
-        index["keys"][key]["generation"] = index["keys"][key]["generation"] + 1
-        # Synchronization delivers the bumped index as a checkout, not through
-        # a writer, so write it directly.
+        index["keys"][key]["generation"] = 2
         store.location.write_text(dump_yaml(index), encoding="utf-8")
         assert store.get(key) is None
 

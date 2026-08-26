@@ -79,6 +79,14 @@ NOT_SHARED = {
     "guildbotics/app_api/command_input_files.py:MAX_COMMAND_INPUT_FILE_BYTES": (
         "a temporary upload outside the workspace"
     ),
+    "guildbotics/hub/secret_stream.py:MAX_HEADER_BYTES": (
+        "one header line of the SSH stream secret values travel on, which is "
+        "never written to a file"
+    ),
+    "guildbotics/hub/secret_stream.py:MAX_VALUE_BYTES": (
+        "one secret value on that same stream; it lands in an OS secret store "
+        "and never in the shared history"
+    ),
     "guildbotics/intelligences/agent_runtime/antigravity.py:_LOG_TAIL_BYTES": (
         "how much of an agent's log is read back after a failure"
     ),

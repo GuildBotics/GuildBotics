@@ -20,7 +20,9 @@ from guildbotics.sync.activation import (
     activate_workspace_sync,
     current_sync_manager,
     deactivate_workspace_sync,
+    hub_remote_url,
     paused_workspace_sync,
+    synchronize_once,
 )
 from guildbotics.sync.commits import UnsendableChange
 from guildbotics.sync.enrollment import (
@@ -70,7 +72,9 @@ __all__ = [
     "current_sync_manager",
     "deactivate_workspace_sync",
     "enroll",
+    "hub_remote_url",
     "paused_workspace_sync",
     "preview_enrollment",
     "record_update_rejected",
+    "synchronize_once",
 ]

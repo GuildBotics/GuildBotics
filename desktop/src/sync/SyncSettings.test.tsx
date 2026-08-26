@@ -13,6 +13,7 @@ import {
   getHubStatus,
   getWorkspaceDevices,
   getWorkspaceLive,
+  getWorkspaceSecrets,
   getWorkspaceServiceOwner,
   getWorkspaceSyncStatus,
   inspectHub,
@@ -40,6 +41,7 @@ vi.mock("../api/client", async () => {
     getWorkspaceDevices: vi.fn(),
     getWorkspaceLive: vi.fn(),
     getWorkspaceServiceOwner: vi.fn(),
+    getWorkspaceSecrets: vi.fn(),
     getWorkspaceSyncStatus: vi.fn(),
     inspectHub: vi.fn(),
     previewWorkspaceSync: vi.fn(),
@@ -114,6 +116,20 @@ async function lookUpHub(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getWorkspaceSecrets).mockResolvedValue({
+    enabled: false,
+    hub_reachable: false,
+    hub_error_code: "",
+    secret_store: { available: true, locked: false },
+    hub_secret_store: null,
+    keys: [],
+    sendable_keys: [],
+    fetchable_keys: [],
+    missing_count: 0,
+    outdated_count: 0,
+    pending_count: 0,
+    attention_count: 0,
+  });
   vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status());
   vi.mocked(getWorkspaceDevices).mockResolvedValue({ devices: [], device_id: "d1" });
   vi.mocked(getWorkspaceLive).mockResolvedValue([]);

@@ -14,7 +14,7 @@ member synchronization.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -76,9 +76,11 @@ from guildbotics.sync import (
     enroll,
     paused_workspace_sync,
     preview_enrollment,
+    synchronize_once,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
 from guildbotics.utils.openssh import OpenSshNotFoundError
+from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 from guildbotics.workspace.identity import (
     DeviceRecord,
     ensure_device_identity,
@@ -88,6 +90,11 @@ from guildbotics.workspace.identity import (
     read_workspace_identity,
     set_device_display_name,
 )
+
+#: How long a refresh waits for the repository. It is a courtesy before an
+#: operation, not the operation itself, so it gives up quickly rather than
+#: making the user wait on whatever else is using the repository.
+REFRESH_LOCK_TIMEOUT_SECONDS = 2.0
 
 #: The failures a hub operation reports back to the user rather than crashing
 #: on. They are all the boundary's own exception types: Git and OpenSSH
@@ -634,6 +641,34 @@ class WorkspaceSyncService:
         if not states:
             return None
         return max(states, key=lambda state: state.observed_at)
+
+    def refresh(self) -> None:
+        """Bring the shared files up to date, best effort.
+
+        Used before an operation that decides something from a shared file. A
+        hub that cannot be reached, or a repository another process is holding,
+        leaves the decision on what this device already has -- which is the
+        state it would have been made from anyway.
+        """
+        with suppress(*_HUB_FAILURES, SyncRepositoryBusyError):
+            synchronize_once(_workspace_root(), timeout=REFRESH_LOCK_TIMEOUT_SECONDS)
+
+    def hub_target(self) -> tuple[HubLocation, str] | None:
+        """Return where this workspace's hub is, or None when it has none.
+
+        The synchronization remote is the one record of which machine holds
+        this workspace, so everything that has to reach that machine -- Git
+        aside -- asks here rather than resolving a hub of its own.
+        """
+        workspace_id = _workspace_id()
+        repository = _repository()
+        remote_url = repository.remote_url() if repository is not None else None
+        if workspace_id is None or not remote_url:
+            return None
+        with _reporting("hub_unreachable", "The hub of this workspace is unknown."):
+            return connection.location_from_remote_url(remote_url, workspace_id), (
+                workspace_id
+            )
 
     def _relay_client(self, workspace_id: str, remote_url: str) -> HubRelayClient:
         return HubRelayClient(

@@ -108,8 +108,17 @@ def _convert_secrets_index(dest_guild: Path) -> None:
     under the preserved ``store_id``; only the index format changed. The
     device-local generation record is created as well, so this device counts
     as holding every migrated generation.
+
+    Migrated keys start unshared. A shared generation names a value every
+    device can obtain from the hub, and a workspace that has just been migrated
+    has given the hub nothing: claiming a generation here would tell the next
+    device to fetch something no hub holds.
     """
-    from guildbotics.utils.secret_store import KeyringSecretStore, utc_now_iso
+    from guildbotics.utils.secret_store import (
+        UNSHARED_GENERATION,
+        KeyringSecretStore,
+        utc_now_iso,
+    )
 
     index_file = dest_guild / "config" / "secrets.yml"
     if not index_file.is_file():
@@ -126,7 +135,7 @@ def _convert_secrets_index(dest_guild: Path) -> None:
         {
             "store_id": str(data.get("store_id", "")),
             "keys": {
-                str(key): {"generation": 1, "updated_at": now}
+                str(key): {"generation": UNSHARED_GENERATION, "updated_at": now}
                 for key in keys
                 if str(key)
             },
