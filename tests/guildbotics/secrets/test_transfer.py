@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from guildbotics.secrets import (
+    SecretPublishError,
     SecretTransfer,
     bulk_fetch_keys,
     bulk_send_keys,
@@ -31,6 +32,7 @@ from guildbotics.secrets.hub_client import (
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.keychain import SecretStoreError
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.secret_store import KeyringSecretStore, SecretKeyStatus
 
 
@@ -379,6 +381,45 @@ def test_a_recorded_generation_the_hub_holds_no_copy_of_is_named_as_such(store):
     )
     # A hub that could not be asked leaves the local reading alone.
     assert transfer_status(b_state, None, hub_answered=False) == "ready"
+
+
+def test_a_send_whose_record_write_fails_names_the_partial_success(
+    store, monkeypatch: pytest.MonkeyPatch
+):
+    """The hub has the value and the shared record does not name it.
+
+    A bare storage error cannot convey that state, and it is the one state a
+    resend settles -- so the failure names it, and what it left behind is the
+    unconfirmed standing every device can read."""
+    store.set("A_TOKEN", "ghp-first")
+    hub = FakeHub()
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise PermissionError("config directory is read-only")
+
+    monkeypatch.setattr(store, "confirm_shared", refuse)
+
+    with pytest.raises(SecretPublishError):
+        SecretTransfer(store, hub).send(["A_TOKEN"])
+
+    assert hub.held["A_TOKEN"] == 1
+    assert is_unconfirmed(store.key_state("A_TOKEN"), hub.held["A_TOKEN"])
+
+
+def test_a_busy_lock_during_the_record_write_keeps_its_own_answer(
+    store, monkeypatch: pytest.MonkeyPatch
+):
+    """A busy lock already tells the user to try again in a moment, and trying
+    again is also exactly what settles the state it leaves behind."""
+    store.set("A_TOKEN", "ghp-first")
+
+    def busy(*args: object, **kwargs: object) -> None:
+        raise SharedWriteBusyError("another writer held the lock")
+
+    monkeypatch.setattr(store, "confirm_shared", busy)
+
+    with pytest.raises(SharedWriteBusyError):
+        SecretTransfer(store, FakeHub()).send(["A_TOKEN"])
 
 
 def test_a_value_waiting_to_be_sent_keeps_its_own_standing(store):

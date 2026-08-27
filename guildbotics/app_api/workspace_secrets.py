@@ -33,6 +33,7 @@ from guildbotics.secrets import (
     HUB_BEHIND,
     UNCONFIRMED,
     HubSecretIndex,
+    SecretPublishError,
     SecretTransfer,
     SecretTransferOutcome,
     bulk_fetch_keys,
@@ -95,9 +96,27 @@ class WorkspaceSecretService:
         self._sync.refresh()
         transfer, store = self._require_transfer()
         with _reporting("The credentials could not be sent to the hub."):
-            outcomes = (
-                transfer.send(request.keys) if request.keys else transfer.send_pending()
-            )
+            try:
+                outcomes = (
+                    transfer.send(request.keys)
+                    if request.keys
+                    else transfer.send_pending()
+                )
+            except SecretPublishError as exc:
+                # The partial-success state: the hub holds the values, the
+                # shared record does not name them yet, and the keys show as
+                # needing a check on every machine. The message says the one
+                # thing that settles it, because a bare storage error would
+                # leave the user staring at that state with no way to read it.
+                raise AppApiError(
+                    "secret_publish_failed",
+                    "The hub received the values, but recording them in this "
+                    "workspace failed, so the keys show as needing a check. "
+                    "Fix the cause below and send again: the next send builds "
+                    "on what the hub holds and settles the difference.",
+                    context={"detail": str(exc)},
+                    status_code=500,
+                ) from exc
         return self._respond(outcomes, store)
 
     def fetch(self, request: SecretTransferRequest) -> SecretTransferResponse:

@@ -48,7 +48,7 @@ from guildbotics.utils.secret_store import (
     SecretKeyStatus,
     is_locked_error,
 )
-from guildbotics.utils.shared_write_lock import shared_write_lock
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
 #: What a key's standing is called when the hub holds a generation the shared
 #: history does not name. It is not one of the device's own states: only the
@@ -211,6 +211,17 @@ def bulk_fetch_keys(
     ]
 
 
+class SecretPublishError(RuntimeError):
+    """The hub took the values, but publishing their generations here failed.
+
+    This is the partial-success state: the hub is ahead of the shared record,
+    which every device reads as "needs a check". It is named rather than left
+    to escape as a bare storage error because the way out is specific -- send
+    again, and the next send builds on what the hub holds -- and the screen
+    can only say so if the failure says which one it is.
+    """
+
+
 @dataclass(frozen=True)
 class SecretTransferOutcome:
     """What happened to one key in one transfer.
@@ -277,9 +288,18 @@ class SecretTransfer:
         # typed while the exchange was in flight stays recorded as unsent,
         # and the two records then show the key as needing a decision instead
         # of both machines reporting agreement over two different values.
-        self._store.confirm_shared(
-            confirmed, sent={offer.key: offer.value for offer in offers}
-        )
+        try:
+            self._store.confirm_shared(
+                confirmed, sent={offer.key: offer.value for offer in offers}
+            )
+        except SharedWriteBusyError:
+            # A busy lock has its own answer ("try again in a moment"), and
+            # trying again is also exactly what settles the state this leaves.
+            raise
+        except Exception as exc:
+            if confirmed:
+                raise SecretPublishError(str(exc)) from exc
+            raise
         return _ordered(outcomes, keys)
 
     def fetch(self, keys: list[str]) -> list[SecretTransferOutcome]:

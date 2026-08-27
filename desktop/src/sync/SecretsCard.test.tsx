@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ApiRequestError,
   fetchWorkspaceSecrets,
   getWorkspaceSecrets,
   sendWorkspaceSecrets,
@@ -229,6 +230,49 @@ describe("SecretsCard", () => {
     // response, so they are the one thing not marked stale.
     expect(client.getQueryState(["workspace-secrets"])?.isInvalidated).toBe(false);
     expect(client.getQueryData(["workspace-secrets"])).toEqual(refreshed);
+  });
+
+  it("says why a transfer failed and asks for the states again", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({ sendable_keys: ["A_TOKEN"], pending_count: 1, attention_count: 1 }),
+    );
+    vi.mocked(sendWorkspaceSecrets).mockRejectedValue(
+      new ApiRequestError({
+        code: "secret_publish_failed",
+        message: "The hub received the values, but recording them failed.",
+        context: { detail: "config directory is read-only" },
+      }),
+    );
+    renderCard();
+    await screen.findByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) });
+    const asked = vi.mocked(getWorkspaceSecrets).mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }));
+
+    expect(await screen.findByText(t("sync.secrets.transferFailed"))).toBeInTheDocument();
+    expect(screen.getByText(t("apiErrors.secret_publish_failed"))).toBeInTheDocument();
+    expect(screen.getByText("config directory is read-only")).toBeInTheDocument();
+    // A failed transfer may still have moved the hub's side, so the states
+    // are asked for right away rather than left to the next poll.
+    await waitFor(() =>
+      expect(vi.mocked(getWorkspaceSecrets).mock.calls.length).toBeGreaterThan(asked),
+    );
+  });
+
+  it("explains what happened and what settles it when a badge is hovered", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({
+        keys: [state({ status: "unconfirmed", hub_generation: 2 })],
+        attention_count: 1,
+      }),
+    );
+    renderCard();
+
+    await user.hover(await screen.findByText(t("sync.secrets.state.unconfirmed")));
+
+    expect(await screen.findByText(t("sync.secrets.stateDetail.unconfirmed"))).toBeInTheDocument();
   });
 
   it("says which keys a transfer could not move, and why", async () => {

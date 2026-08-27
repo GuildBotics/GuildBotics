@@ -1,4 +1,16 @@
-import { Alert, Badge, Button, Card, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Code,
+  Group,
+  Stack,
+  Table,
+  Text,
+  Title,
+  Tooltip,
+} from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -12,6 +24,7 @@ import {
   type WorkspaceSecretState,
   type WorkspaceSecrets,
 } from "../api/client";
+import { RequestErrorAlert } from "./RequestErrorAlert";
 import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert, secretTone } from "./secretState";
 
 /** The statuses that mean the value really moved; everything else is shown. */
@@ -57,13 +70,20 @@ export function SecretsCard() {
   // make on their own. Sending nothing asks the backend to work out what to
   // move from the state it reads now. A row names its key, because that is a
   // decision the user made about that key.
+  // A failed transfer may still have moved the hub's side -- a send whose
+  // record could not be written leaves the hub ahead -- so the states are
+  // asked for right away rather than left to the next poll, and the screen
+  // shows what the failure left behind next to the message saying why.
+  const refreshStates = () => void queryClient.invalidateQueries({ queryKey: SECRETS_QUERY_KEY });
   const fetching = useMutation({
     mutationFn: (keys: string[]) => fetchWorkspaceSecrets({ keys }),
     onSuccess: applied,
+    onError: refreshStates,
   });
   const sending = useMutation({
     mutationFn: (keys: string[]) => sendWorkspaceSecrets({ keys }),
     onSuccess: applied,
+    onError: refreshStates,
   });
   const data = secrets.data;
   if (!data?.enabled) {
@@ -90,6 +110,10 @@ export function SecretsCard() {
             {t(`sync.secrets.alert.${alert}.body`)}
           </Alert>
         ) : null}
+        <RequestErrorAlert
+          cause={sending.error ?? fetching.error}
+          title={t("sync.secrets.transferFailed")}
+        />
         {refused.length > 0 ? (
           <Alert
             color="warning"
@@ -174,15 +198,28 @@ function SecretRow({
 }) {
   const { t } = useTranslation();
   const tone = secretTone(state.status);
+  const badge = (
+    <Badge color={tone === "ok" ? "success" : tone === "danger" ? "danger" : "warning"}>
+      {t(`sync.secrets.state.${state.status}`)}
+    </Badge>
+  );
   return (
     <Table.Tr>
       <Table.Td>
         <Code style={{ overflowWrap: "anywhere" }}>{state.key}</Code>
       </Table.Td>
       <Table.Td>
-        <Badge color={tone === "ok" ? "success" : tone === "danger" ? "danger" : "warning"}>
-          {t(`sync.secrets.state.${state.status}`)}
-        </Badge>
+        {state.status === "ready" ? (
+          badge
+        ) : (
+          // The label alone says that something is off, not what happened or
+          // which action settles it -- "needs checking" reads as nothing at
+          // all. The detail says both, and only the in-step state goes
+          // without one.
+          <Tooltip label={t(`sync.secrets.stateDetail.${state.status}`)} maw={340} multiline>
+            {badge}
+          </Tooltip>
+        )}
       </Table.Td>
       <Table.Td>
         <Text c="dimmed" size="xs">

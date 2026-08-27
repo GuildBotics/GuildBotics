@@ -1,5 +1,6 @@
 import { Alert, Stack, Text } from "@mantine/core";
 import { CircleAlert } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { ApiRequestError } from "../api/client";
 
@@ -12,8 +13,15 @@ import { ApiRequestError } from "../api/client";
  * name that does not resolve, and a hub whose command is missing -- three
  * situations with three different fixes, none of which the screen would name.
  * So the detail is shown with it, quieter but present.
+ *
+ * The sentence is localized by the error's `code` when `apiErrors` has an
+ * entry for it, and is otherwise the backend's own English text -- so each
+ * code gains a translation by adding a key, and an unknown one still says
+ * something true. The detail stays as the boundary produced it: it is OS or
+ * Git diagnostics, not copy.
  */
 export function RequestErrorAlert({ cause, title }: { cause: unknown; title: string }) {
+  const { t } = useTranslation();
   if (cause === null || cause === undefined) {
     return null;
   }
@@ -22,7 +30,11 @@ export function RequestErrorAlert({ cause, title }: { cause: unknown; title: str
   return (
     <Alert color="danger" icon={<CircleAlert size={18} />} title={title}>
       <Stack gap={4}>
-        <Text size="sm">{failure ? failure.message : String(cause)}</Text>
+        <Text size="sm">
+          {failure
+            ? t(`apiErrors.${failure.code}`, { defaultValue: failure.message })
+            : String(cause)}
+        </Text>
         {detail === "" ? null : (
           <Text c="dimmed" size="xs" style={{ overflowWrap: "anywhere" }}>
             {detail}

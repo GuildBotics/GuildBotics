@@ -8,6 +8,13 @@ const STORAGE_KEY = "guildbotics.appLanguage";
 const resources = {
   en: {
     translation: {
+      // Localized messages for backend API errors, keyed by their `code`.
+      // A code without an entry falls back to the backend's own sentence,
+      // so keys are added per code as they gain a translation.
+      apiErrors: {
+        secret_publish_failed:
+          "The hub received the values, but recording them in this workspace failed, so the keys show as needing a check. Fix the cause below and send again: the next send builds on what the hub holds and settles the difference.",
+      },
       app: {
         nav: {
           activity: "Activity",
@@ -232,6 +239,20 @@ const resources = {
             unconfirmed: "Needs checking",
             hub_behind: "No copy on the hub",
           },
+          stateDetail: {
+            missing:
+              "The workspace names this key, but this machine's secret store holds no value for it. Fetching settles it.",
+            outdated: "Another machine published a newer value. Fetching settles it.",
+            pending_send:
+              "A value entered on this machine has not reached the hub yet. Sending it lets the other machines fetch it.",
+            conflict:
+              "Two machines changed this key. Settle it from this row: send keeps this machine's value, fetch takes the other machine's.",
+            unconfirmed:
+              "A send was cut off partway: the hub holds a value the workspace has not recorded. Sending again from any machine that has the value settles it.",
+            hub_behind:
+              "The hub holds no copy of the shared value, so other machines cannot fetch it. Sending gives it one.",
+          },
+          transferFailed: "The transfer failed",
           alert: {
             local_locked: {
               title: "This machine's secret store is locked",
@@ -1867,6 +1888,10 @@ const resources = {
   },
   ja: {
     translation: {
+      apiErrors: {
+        secret_publish_failed:
+          "Hub マシンは値を受け取りましたが、このワークスペースへの記録に失敗したため、該当の key は「確認が必要です」と表示されます。下記の原因を解消してから、もう一度送信してください。次の送信は Hub が持つ世代を引き継いで差分を解消します。",
+      },
       app: {
         nav: {
           activity: "アクティビティ",
@@ -2090,6 +2115,20 @@ const resources = {
             unconfirmed: "確認が必要です",
             hub_behind: "Hub マシンに写しがありません",
           },
+          stateDetail: {
+            missing:
+              "ワークスペースはこの key を共有していますが、このマシンの秘密ストアに値がありません。取得すると揃います。",
+            outdated: "別のマシンが新しい値を公開しています。取得すると揃います。",
+            pending_send:
+              "このマシンで入力した値がまだ Hub マシンへ届いていません。送信すると他のマシンが取得できるようになります。",
+            conflict:
+              "2 台のマシンが同じ key を変更しました。この行の「送る」（このマシンの値を採用）か「取得」（相手の値を採用）で解消します。",
+            unconfirmed:
+              "送信が途中で中断され、ワークスペースが記録していない値を Hub マシンが持っています。値を持っているマシンからもう一度送信すると解消します。",
+            hub_behind:
+              "共有済みの値の写しが Hub マシンに無く、他のマシンが取得できません。送信すると写しが渡ります。",
+          },
+          transferFailed: "転送に失敗しました",
           alert: {
             local_locked: {
               title: "このマシンの SecretStore がロックされています",

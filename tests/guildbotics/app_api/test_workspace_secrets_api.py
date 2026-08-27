@@ -152,6 +152,30 @@ def test_sending_publishes_the_generation_and_names_no_value(
     assert TOKEN not in response.text
 
 
+def test_a_send_that_could_not_be_recorded_says_what_settles_it(
+    connected: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hub took the value, the record write failed: the answer names the
+    partial-success state and the resend that settles it, and carries no
+    value."""
+    _store().set("A_TOKEN", TOKEN)
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise PermissionError("config directory is read-only")
+
+    monkeypatch.setattr(KeyringSecretStore, "confirm_shared", refuse)
+
+    response = connected.post(
+        "/workspace/secrets/send", headers=AUTH_HEADERS, json={"keys": ["A_TOKEN"]}
+    )
+
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["code"] == "secret_publish_failed"
+    assert "send again" in payload["message"].lower()
+    assert TOKEN not in response.text
+
+
 def test_sending_with_no_keys_sends_everything_waiting(connected: TestClient) -> None:
     store = _store()
     store.set("A_TOKEN", TOKEN)
