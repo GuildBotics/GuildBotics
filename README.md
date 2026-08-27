@@ -664,20 +664,39 @@ back to a plaintext file, so unlock it and try again.
 run without a desktop session.
 
 1. Install a Secret Service implementation (`gnome-keyring` or similar) and D-Bus.
-2. Run it as a user systemd service, and enable lingering so it keeps running while nobody
-   is logged in.
+2. Enable lingering, so the user's systemd and session bus keep running while nobody is
+   logged in.
 
    ```bash
-   sudo loginctl enable-linger "$USER" && systemctl --user enable --now gnome-keyring-daemon.service
+   sudo loginctl enable-linger "$USER"
    ```
 
-3. After each restart, unlock the keyring once.
+   There is no need to keep `gnome-keyring-daemon` running yourself: recent distributions
+   start it on demand through socket activation (`gnome-keyring-daemon.socket`). A daemon
+   started that way holds the control socket and the D-Bus name **while still locked**,
+   though, so the next step stops it before starting an unlocked one in its place.
+
+3. After each restart, restart the daemon with an unlock. The keyring password is normally
+   the account's login password (the one it was created with).
 
    ```bash
-   ssh user@linux-host 'echo -n "<keyring password>" | gnome-keyring-daemon --unlock'
+   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
    ```
 
-   Until that one unlock, workflows on that machine that need a secret fail at run time and
+   Run `pkill` with `-x` (exact process-name match) and nothing else: with `-f`, the
+   pattern matches this command line itself and kills the shell running it.
+
+4. The command's output does not say whether the unlock worked, so always check.
+
+   ```bash
+   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
+   ```
+
+   `b false` means unlocked. If it stays `b true`, the password did not match: the keyring
+   does not follow login password changes, so an account whose password was changed later
+   still uses the old one.
+
+   Until that unlock, workflows on that machine that need a secret fail at run time and
    no transfer can start. If the hub runs on that machine, fetches from every other machine
    stop for the same reason, and they show *The hub machine's secret store is locked*.
 

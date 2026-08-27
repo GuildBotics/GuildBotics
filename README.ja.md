@@ -649,20 +649,39 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 デスクトップセッション無しでも動くようにします。
 
 1. Secret Service の実装（`gnome-keyring` など）と D-Bus をインストールします。
-2. ユーザーの systemd サービスとして常駐させ、ログインしていない間も動くように lingering を
+2. ログインしていない間もユーザーの systemd とセッションバスが動くように lingering を
    有効にします。
 
    ```bash
-   sudo loginctl enable-linger "$USER" && systemctl --user enable --now gnome-keyring-daemon.service
+   sudo loginctl enable-linger "$USER"
    ```
 
-3. 再起動のたびに、キーリングのロックを一度だけ解除します。
+   `gnome-keyring-daemon` を自分で常駐させる必要はありません。最近のディストリビューションは
+   socket activation（`gnome-keyring-daemon.socket`）で必要時に自動起動します。ただし、
+   そうして起動した daemon は**ロックされたまま**制御ソケットと D-Bus 名を握るため、
+   次の手順はそれをいったん止めてから解錠済みの daemon に置き換えます。
+
+3. 再起動のたびに、解錠付きで daemon を起動し直します。キーリングのパスワードは、
+   通常はそのアカウントの（作成時の）ログインパスワードです。
 
    ```bash
-   ssh user@linux-host 'echo -n "<keyring password>" | gnome-keyring-daemon --unlock'
+   ssh user@linux-host 'systemctl --user stop gnome-keyring-daemon.socket gnome-keyring-daemon.service 2>/dev/null; pkill -u "$USER" -x gnome-keyring-daemon; sleep 1; printf "%s" "<keyring password>" | gnome-keyring-daemon --daemonize --unlock'
    ```
 
-   この 1 回の解除が済むまで、そのマシンでは Secret を使うワークフローが実行時エラーになり、
+   `pkill` は必ず `-x`（プロセス名の完全一致）で実行します。`-f` にすると、このコマンド列
+   自身がパターンにマッチしてシェルごと終了します。
+
+4. 解錠できたかどうかはコマンドの出力からは分からないため、必ず確認します。
+
+   ```bash
+   ssh user@linux-host 'busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'
+   ```
+
+   `b false` なら解錠済みです。`b true` のままの場合はパスワードが一致していません。
+   キーリングはログインパスワードの変更に追随しないため、後から変更した場合は
+   変更前のパスワードを使います。
+
+   この解除が済むまで、そのマシンでは Secret を使うワークフローが実行時エラーになり、
    Secret の送信・取得も開始できません。Hub をこのマシンで動かしている場合、他のマシンからの
    取得も同じ理由で止まり、画面には「Hub マシンの SecretStore がロックされています」と表示されます。
 
