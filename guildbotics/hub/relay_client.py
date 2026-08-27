@@ -5,12 +5,23 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import IO, Any
 
 from guildbotics.hub import connection, host, relay
+
+#: How long a watch connection must live to count as having reached the hub.
+#: A connection that dies sooner is treated as one more failed attempt, so a
+#: hub that answers the TCP handshake but drops the session does not defeat
+#: the backoff below.
+HEALTHY_WATCH_SECONDS = 30.0
+
+#: The longest pause between watch reconnection attempts while the hub stays
+#: away.
+MAX_WATCH_RECONNECT_DELAY_SECONDS = 60.0
 
 
 class HubRelayClientError(RuntimeError):
@@ -99,8 +110,17 @@ class HubRelayClient:
         stop_event: threading.Event,
         *,
         reconnect_delay: float = 1.0,
+        max_reconnect_delay: float = MAX_WATCH_RECONNECT_DELAY_SECONDS,
     ) -> None:
-        """Forward watch lines and reconnect while the owning process lives."""
+        """Forward watch lines and reconnect while the owning process lives.
+
+        The pause between attempts doubles while connections keep dying young,
+        and resets once one lives. Every attempt spawns an SSH client, and
+        that begins with resolving the hub's name: against a hub that is down
+        for minutes, a retry every second is a steady flood of mDNS queries,
+        observed on Windows to break ``.local`` resolution for the whole
+        machine -- taking every other path to the hub down with it.
+        """
         if self.location.is_local:
             relay.watch_live(
                 self.workspace_id,
@@ -108,11 +128,14 @@ class HubRelayClient:
                 stop_event=stop_event,
             )
             return
+        delay = reconnect_delay
         while not stop_event.is_set():
+            opened_at = time.monotonic()
             try:
                 process = self._open_watch_process()
             except OSError:
-                stop_event.wait(reconnect_delay)
+                stop_event.wait(delay)
+                delay = min(delay * 2, max_reconnect_delay)
                 continue
             with self._watch_lock:
                 self._watch_process = process
@@ -134,7 +157,12 @@ class HubRelayClient:
                     if self._watch_process is process:
                         self._watch_process = None
                 _terminate(process)
-            stop_event.wait(reconnect_delay)
+            healthy = time.monotonic() - opened_at >= HEALTHY_WATCH_SECONDS
+            if healthy:
+                delay = reconnect_delay
+            stop_event.wait(delay)
+            if not healthy:
+                delay = min(delay * 2, max_reconnect_delay)
 
     def _owner_command(self, arguments: list[str]) -> dict[str, Any]:
         if self.location.is_local:
