@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     dump_yaml,
     load_yaml_dict,
 )
+from guildbotics.utils.keychain import InvalidSecretKeyError
 from guildbotics.utils.secret_store import (
     KeyringSecretStore,
+    SecretKeyStatus,
     format_env_line,
     is_secret_env_key,
     keyring_available,
@@ -35,7 +39,13 @@ def test_is_secret_env_key_matches_by_name_or_provenance():
     assert known_secret_env_keys() >= {"DATABASE_URL", "DOCKER_AUTH_CONFIG"}
 
 
-def test_keyring_store_writes_generation_index(fake_keyring, tmp_path, monkeypatch):
+def test_keyring_store_writes_key_index_without_sharing_a_generation(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """A value typed in here is usable at once and waiting to be sent.
+
+    The shared generation stays where it was: it names a value every device can
+    fetch from the hub, and the hub has not been given this one."""
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     config_dir = tmp_path / ".guildbotics" / "config"
     store = KeyringSecretStore(config_dir)
@@ -44,13 +54,16 @@ def test_keyring_store_writes_generation_index(fake_keyring, tmp_path, monkeypat
     index = store.location.read_text(encoding="utf-8")
     assert "backend:" not in index
     assert "OPENAI_API_KEY:" in index
-    assert "generation: 1" in index
+    assert "generation: 0" in index
     assert store.get("OPENAI_API_KEY") == "sk-test"
-    assert store.shared_generation("OPENAI_API_KEY") == 1
-    assert store.local_generation("OPENAI_API_KEY") == 1
+    assert store.shared_generation("OPENAI_API_KEY") == 0
+    assert store.local_generation("OPENAI_API_KEY") == 0
+    state = store.key_state("OPENAI_API_KEY")
+    assert state is not None
+    assert state.status is SecretKeyStatus.PENDING_SEND
 
 
-def test_keyring_store_increments_generation_on_update(
+def test_repeated_local_updates_stay_one_unsent_update(
     fake_keyring, tmp_path, monkeypatch
 ):
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
@@ -58,15 +71,95 @@ def test_keyring_store_increments_generation_on_update(
     store.set("ANTHROPIC_API_KEY", "first")
     store.set("ANTHROPIC_API_KEY", "second")
 
-    assert store.shared_generation("ANTHROPIC_API_KEY") == 2
+    assert store.shared_generation("ANTHROPIC_API_KEY") == 0
     assert store.get("ANTHROPIC_API_KEY") == "second"
     local = json.loads(
         (tmp_path / ".guildbotics" / "local" / "secrets.json").read_text(
             encoding="utf-8"
         )
     )
-    assert local["keys"]["ANTHROPIC_API_KEY"]["generation"] == 2
-    assert local["keys"]["ANTHROPIC_API_KEY"]["pending_send"] is False
+    assert local["keys"]["ANTHROPIC_API_KEY"]["generation"] == 0
+    assert local["keys"]["ANTHROPIC_API_KEY"]["pending_send"] is True
+
+
+def test_confirming_a_send_publishes_the_generation(
+    fake_keyring, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ANTHROPIC_API_KEY", "first")
+    assert store.key_state("ANTHROPIC_API_KEY").status is SecretKeyStatus.PENDING_SEND
+
+    store.confirm_shared({"ANTHROPIC_API_KEY": 1}, sent={"ANTHROPIC_API_KEY": "first"})
+
+    state = store.key_state("ANTHROPIC_API_KEY")
+    assert state.status is SecretKeyStatus.READY
+    assert (state.shared_generation, state.local_generation) == (1, 1)
+    assert state.pending_send is False
+
+
+def test_confirming_a_send_after_the_value_changed_keeps_it_pending(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """The exchange with the hub is not inside this store's lock, so a value
+    can be entered while a send is in flight. The generation the hub took is
+    still published -- that much is true -- but this machine must not claim to
+    hold it: the newer value has not been shared, and clearing the flag would
+    lose the only record saying so."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("ANTHROPIC_API_KEY", "sent-to-hub")
+    store.set("ANTHROPIC_API_KEY", "typed-in-between")
+
+    store.confirm_shared(
+        {"ANTHROPIC_API_KEY": 1}, sent={"ANTHROPIC_API_KEY": "sent-to-hub"}
+    )
+
+    state = store.key_state("ANTHROPIC_API_KEY")
+    assert state.shared_generation == 1
+    assert state.pending_send is True
+    assert state.status is SecretKeyStatus.CONFLICT
+    assert store.get("ANTHROPIC_API_KEY") == "typed-in-between"
+
+
+def test_a_generation_for_a_key_never_offered_is_not_published(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """A hub answer naming a key this device did not send can only be corrupt;
+    publishing it would tell every machine to fetch a value nobody here
+    vouched for."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+
+    store.confirm_shared({"OPENAI_API_KEY": 1}, sent={})
+
+    assert store.shared_generation("OPENAI_API_KEY") is None
+
+
+def test_a_local_update_against_a_newer_shared_generation_conflicts(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """Two machines changed one key: this one still serves its own value, and
+    says so, rather than silently overwriting or discarding either side."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "typed-here")
+    _publish_shared_generation(store, "OPENAI_API_KEY", 1)
+
+    state = store.key_state("OPENAI_API_KEY")
+    assert state.status is SecretKeyStatus.CONFLICT
+    assert store.get("OPENAI_API_KEY") == "typed-here"
+    assert store.stale_keys() == []
+
+
+def _publish_shared_generation(store, key: str, generation: int) -> None:
+    """Raise the shared generation the way synchronization does.
+
+    Another device's update arrives as a checkout of the index file, not
+    through a writer, so the file is written directly here too."""
+    index = load_yaml_dict(store.location)
+    index["keys"][key]["generation"] = generation
+    store.location.write_text(dump_yaml(index), encoding="utf-8")
 
 
 def test_resolve_secret_store_uses_os_keychain(fake_keyring, tmp_path, monkeypatch):
@@ -131,26 +224,84 @@ def test_keyring_status_detects_unreachable_store(fake_keyring, monkeypatch):
     assert status["locked"] is False
 
 
+def test_a_key_name_that_could_not_be_transferred_is_refused(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """A key becomes an environment variable on every device and an argument to
+    the hub's own command on another machine, so one that could be neither is
+    refused where it would be created rather than where it would be used."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+
+    for name in ("", "with space", "../escape", "a-dash", "semi;colon", 'quo"te'):
+        with pytest.raises(InvalidSecretKeyError):
+            store.set(name, "value")
+    assert store.keys() == []
+
+
+def test_a_member_named_with_a_leading_digit_still_has_keys(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """Member keys are named after the member, and a person_id may start with a
+    digit. What a name has to survive is a shell, not an identifier parser."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+
+    store.set("2B_GITHUB_ACCESS_TOKEN", "ghp-secret")
+
+    assert store.get("2B_GITHUB_ACCESS_TOKEN") == "ghp-secret"
+
+
+def test_a_key_only_the_local_record_names_is_still_a_key(
+    fake_keyring, tmp_path, monkeypatch
+):
+    """The shared index can lose an entry -- a first-committer-wins race can set
+    aside the very commit that created it -- and the value would then be held
+    here under a name nothing lists."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "sk-test")
+    # Synchronization delivers the hub's index as a checkout, and the entry
+    # this device created is not in it. The workspace's keychain namespace is
+    # part of that file and is unchanged.
+    index = load_yaml_dict(store.location)
+    index["keys"] = {}
+    store.location.write_text(dump_yaml(index), encoding="utf-8")
+
+    assert store.keys() == ["OPENAI_API_KEY"]
+    assert store.key_state("OPENAI_API_KEY").status is SecretKeyStatus.PENDING_SEND
+    assert store.get("OPENAI_API_KEY") == "sk-test"
+
+
+def test_a_shared_generation_never_moves_backwards(fake_keyring, tmp_path, monkeypatch):
+    """Two devices can each reach the hub and publish; the answer that comes
+    back later must not put the earlier number over the later one."""
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
+    store.set("OPENAI_API_KEY", "sk-test")
+    store.confirm_shared({"OPENAI_API_KEY": 3}, sent={"OPENAI_API_KEY": "sk-test"})
+
+    store.confirm_shared({"OPENAI_API_KEY": 2}, sent={"OPENAI_API_KEY": "sk-test"})
+
+    assert store.shared_generation("OPENAI_API_KEY") == 3
+
+
 def test_get_refuses_stale_generation(fake_keyring, tmp_path, monkeypatch):
     """When another device advanced the shared generation, the local keychain
     value is outdated and must not be served."""
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("OPENAI_API_KEY", "old-value")
+    store.confirm_shared({"OPENAI_API_KEY": 1}, sent={"OPENAI_API_KEY": "old-value"})
     assert store.get("OPENAI_API_KEY") == "old-value"
 
-    # Simulate a sync that raised the shared generation to 2. Synchronization
-    # delivers the file as a checkout, not through a writer, so write directly.
-    index_file = tmp_path / ".guildbotics" / "config" / "secrets.yml"
-    data = load_yaml_dict(index_file)
-    data["keys"]["OPENAI_API_KEY"]["generation"] = 2
-    index_file.write_text(dump_yaml(data), encoding="utf-8")
+    _publish_shared_generation(store, "OPENAI_API_KEY", 2)
 
     assert store.get("OPENAI_API_KEY") is None
     assert store.stale_keys() == ["OPENAI_API_KEY"]
 
-    # A fresh local set realigns the device and serves the new value again.
-    store.set("OPENAI_API_KEY", "new-value")
+    # Fetching the newer value from the hub realigns the device.
+    store.adopt_received("OPENAI_API_KEY", "new-value", 2)
     assert store.get("OPENAI_API_KEY") == "new-value"
     assert store.stale_keys() == []
 
@@ -190,8 +341,8 @@ def test_keyring_store_rename_moves_value_and_generations(
 
     assert store.keys() == ["ALICE_2_GITHUB_ACCESS_TOKEN"]
     assert store.get("ALICE_2_GITHUB_ACCESS_TOKEN") == "ghp-secret"
-    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
-    assert store.local_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 1
+    assert store.shared_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 0
+    assert store.local_generation("ALICE_2_GITHUB_ACCESS_TOKEN") == 0
     assert store.local_generation("ALICE_GITHUB_ACCESS_TOKEN") is None
 
 
@@ -201,11 +352,12 @@ def test_keyring_store_rename_moves_stale_metadata_and_keeps_it_stale(
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     store = KeyringSecretStore(tmp_path / ".guildbotics" / "config")
     store.set("ALICE_GITHUB_ACCESS_TOKEN", "ghp-secret")
+    store.confirm_shared(
+        {"ALICE_GITHUB_ACCESS_TOKEN": 1},
+        sent={"ALICE_GITHUB_ACCESS_TOKEN": "ghp-secret"},
+    )
     # Another device bumped the shared generation; this device is stale now.
-    # Synchronization delivers the file as a checkout, so write it directly.
-    index = load_yaml_dict(store.location)
-    index["keys"]["ALICE_GITHUB_ACCESS_TOKEN"]["generation"] = 2
-    store.location.write_text(dump_yaml(index), encoding="utf-8")
+    _publish_shared_generation(store, "ALICE_GITHUB_ACCESS_TOKEN", 2)
     assert store.get("ALICE_GITHUB_ACCESS_TOKEN") is None
 
     store.rename("ALICE_GITHUB_ACCESS_TOKEN", "ALICE_2_GITHUB_ACCESS_TOKEN")

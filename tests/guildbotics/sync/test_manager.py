@@ -421,6 +421,46 @@ def test_a_stopped_queue_refuses_new_work_until_it_is_resumed(
     assert second.manager.resume().state == "idle"
 
 
+class TestSynchronizeOnce:
+    """One cycle run on demand, before something decides from a shared file.
+
+    Secret transfers read which generation they are sending from out of
+    ``config/secrets.yml``, so a machine that has been offline has to take the
+    current one first. Unlike the member CLI's one-shot, this fetches.
+    """
+
+    def test_it_takes_what_another_device_shared(
+        self, first: Device, second: Device
+    ) -> None:
+        first.write(CONFIG, "language: ja\n")
+        first.manager.synchronize()
+
+        assert second.manager.synchronize_once().state == "idle"
+
+        assert (second.shared / CONFIG).read_text(encoding="utf-8") == "language: ja\n"
+
+    def test_a_stopped_queue_stays_stopped(self, first: Device, second: Device) -> None:
+        """Repairing damaged shared data is the user's, through ``resume``. A
+        refresh that quietly restarted it would hide the state it stops in."""
+        first.write(CONFIG, "language: ja\n")
+        second.write("state/events/2026/08/c.json", _activity_event("c", "windows"))
+        first.write("state/events/2026/08/c.json", _activity_event("c", "mac"))
+        first.manager.synchronize()
+        second.manager.synchronize()
+        assert second.manager.synchronize().state == "invalid_shared_state"
+
+        assert second.manager.synchronize_once().state == "invalid_shared_state"
+
+    def test_a_repository_something_else_holds_is_reported_not_waited_on(
+        self, first: Device
+    ) -> None:
+        """A refresh is a courtesy before an operation, so it gives up rather
+        than making the user wait on whatever else has the repository."""
+        with held_lock(sync_lock_path(first.shared.parent)):
+            with pytest.raises(SyncRepositoryBusyError):
+                first.manager.synchronize_once(timeout=0.05)
+
+
 def test_unrelated_histories_are_damage_not_a_concurrent_update(
     tmp_path: Path, first: Device
 ) -> None:

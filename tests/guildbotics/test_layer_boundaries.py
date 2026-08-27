@@ -17,6 +17,11 @@ layers, so it may depend only on ``guildbotics.utils`` and ``guildbotics.entitie
 how a device reaches one over OpenSSH. It knows nothing about what those
 repositories contain, so it may depend only on ``guildbotics.utils``.
 
+``guildbotics.secrets`` distributes secret values between devices. It sits on
+top of ``guildbotics.hub`` (how a device reaches the machine holding them) and
+``guildbotics.utils`` (this machine's own store), and below the CLI and the API
+layer, so it may depend only on those two.
+
 ``guildbotics.sync`` turns announced shared writes into Git work. It sits above
 workspace storage and observability and below everything else: capabilities,
 drivers, integrations, and the API layer must reach it only through the
@@ -116,6 +121,28 @@ def test_hub_depends_only_on_utils() -> None:
     assert offenders == []
 
 
+def test_secret_distribution_depends_only_on_the_hub_and_utils() -> None:
+    allowed = ("guildbotics.secrets", "guildbotics.hub", "guildbotics.utils")
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("secrets", inside=True).items()
+        for module in sorted(modules)
+        if not _matches(module, allowed)
+    ]
+    assert offenders == []
+
+
+def test_the_hub_does_not_depend_on_secret_distribution() -> None:
+    """The hub holds values; deciding which to move is the layer above it."""
+    offenders = [
+        f"{relative}: {module}"
+        for relative, modules in _imports_by_module("hub", inside=True).items()
+        for module in sorted(modules)
+        if _matches(module, ("guildbotics.secrets",))
+    ]
+    assert offenders == []
+
+
 def test_sync_depends_only_on_storage_and_recording() -> None:
     allowed = (
         "guildbotics.sync",
@@ -134,13 +161,18 @@ def test_sync_depends_only_on_storage_and_recording() -> None:
 
 
 #: The only modules that may import ``guildbotics.sync``. The Desktop backend,
-#: ``guildbotics start``, and member CLI are the three process entry points that
-#: install a queue or run a one-shot repository operation.
+#: ``guildbotics start``, member CLI, and the secret transfers are the process
+#: entry points that install a queue or run a one-shot repository operation.
+#: ``cli/secrets.py`` is one of them for both halves: it reads which hub this
+#: workspace belongs to, since secret values travel to the same machine the
+#: repository does, and it pushes the generations it publishes on a device that
+#: is running no service to push them for it.
 SYNC_COMPOSITION_ROOTS = frozenset(
     {
         Path("app_api/workspace_sync.py"),
         Path("cli/__init__.py"),
         Path("cli/member.py"),
+        Path("cli/secrets.py"),
     }
 )
 

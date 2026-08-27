@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 import { TriangleAlert } from "lucide-react";
 
-import { getWorkspaceSyncStatus, retryWorkspaceSync } from "../api/client";
+import { getWorkspaceSecrets, getWorkspaceSyncStatus, retryWorkspaceSync } from "../api/client";
+import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert } from "./secretState";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "./syncState";
 
@@ -33,6 +34,11 @@ export function SyncAlerts() {
   const retry = useMutation({
     mutationFn: retryWorkspaceSync,
     onSuccess: (next) => queryClient.setQueryData(["workspace-sync"], next),
+  });
+  const secrets = useQuery({
+    queryKey: SECRETS_QUERY_KEY,
+    queryFn: getWorkspaceSecrets,
+    refetchInterval: SECRETS_REFETCH_MS,
   });
   const state = syncIndicatorState(status.data);
   const rejected = status.data?.rejected_changes.length ?? 0;
@@ -69,6 +75,9 @@ export function SyncAlerts() {
         </Alert>
       ) : null}
       {rejected > 0 ? <RejectedAlert count={rejected} /> : null}
+      {secretAlert(secrets.data) === "attention" ? (
+        <SecretsAlert count={secrets.data?.attention_count ?? 0} />
+      ) : null}
       {liveClientUpdateRequired ? (
         <Alert
           color="warning"
@@ -79,6 +88,27 @@ export function SyncAlerts() {
         </Alert>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Credentials this machine is short of, or has not given the hub.
+ *
+ * The band carries the count and the way in. Which keys, and what to do about
+ * each, are on the settings screen -- and so is every transfer, because a value
+ * leaving or arriving on a machine is a decision rather than a notification.
+ */
+function SecretsAlert({ count }: { count: number }) {
+  const { t } = useTranslation();
+  return (
+    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("sync.secrets.title")}>
+      <Group align="center" gap="md" wrap="wrap">
+        <Text size="sm">{t("sync.secrets.alert.attention", { count })}</Text>
+        <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
+          {t("sync.secrets.hint.link")}
+        </Anchor>
+      </Group>
+    </Alert>
   );
 }
 

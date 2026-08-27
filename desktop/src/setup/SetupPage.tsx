@@ -134,6 +134,7 @@ import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
 import { ShortcutsSection } from "./ShortcutsSection";
 import { CloneFromHubButton } from "../sync/CloneFromHub";
 import { DeviceSettings } from "../sync/DeviceSettings";
+import { SecretStatusHint } from "../sync/SecretStatusHint";
 import { SyncSettings } from "../sync/SyncSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
@@ -1249,6 +1250,7 @@ function IntelligenceSection({
                         })
                       }
                     />
+                    <SecretStatusHint envKey={option.api_key_env} />
                   </Popover.Dropdown>
                 </Popover>
               )}
@@ -2759,6 +2761,10 @@ function MembersSection({
     slackBotToken: false,
     slackAppToken: false,
   });
+  // Which environment key each of this member's credentials is stored under.
+  // Only a saved member has them: the naming is the backend's, and a member
+  // being created has nothing stored to have a state yet.
+  const [memberSecretEnvKeys, setMemberSecretEnvKeys] = useState<Record<string, string>>({});
   const [identityResolveError, setIdentityResolveError] = useState("");
   const [savingMember, setSavingMember] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -3050,6 +3056,7 @@ function MembersSection({
       slackBotToken: false,
       slackAppToken: false,
     });
+    setMemberSecretEnvKeys({});
     setSlackAppsSetupMode("create");
     setIdentityResolveError("");
     setActiveTab(initialTab ?? "basic");
@@ -3117,6 +3124,7 @@ function MembersSection({
       slackBotToken: member.has_slack_bot_token,
       slackAppToken: member.has_slack_app_token,
     });
+    setMemberSecretEnvKeys(member.secret_env_keys ?? {});
     // A member that already carries Slack credentials is being edited, not
     // set up, so default to the mode that does not push them into Slack.
     setSlackAppsSetupMode(
@@ -4415,6 +4423,9 @@ function MembersSection({
                       value={githubAccessToken}
                       onChange={(event) => setGithubAccessToken(event.currentTarget.value)}
                       error={memberErrors.githubAccessToken}
+                      description={
+                        <SecretStatusHint envKey={memberSecretEnvKeys.github_access_token} />
+                      }
                     />
                   ) : null}
                   {githubAccountType === "human" ? (
@@ -4563,6 +4574,9 @@ function MembersSection({
                         value={slackBotToken}
                         onChange={(event) => setSlackBotToken(event.currentTarget.value)}
                         error={memberErrors.slackBotToken}
+                        description={
+                          <SecretStatusHint envKey={memberSecretEnvKeys.slack_bot_token} />
+                        }
                       />
                       <PasswordInput
                         label={
@@ -4584,6 +4598,9 @@ function MembersSection({
                         value={slackAppToken}
                         onChange={(event) => setSlackAppToken(event.currentTarget.value)}
                         error={memberErrors.slackAppToken}
+                        description={
+                          <SecretStatusHint envKey={memberSecretEnvKeys.slack_app_token} />
+                        }
                       />
                       <SlackTokenVerificationPanel
                         botToken={slackBotToken}

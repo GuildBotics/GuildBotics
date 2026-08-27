@@ -333,6 +333,10 @@ class PersonConfigSnapshot(BaseModel):
     slack_user_id: str = ""
     has_slack_bot_token: bool = False
     has_slack_app_token: bool = False
+    # Form field -> the environment key that member's value is stored under.
+    # The naming belongs to the backend, so the screen that shows a value's
+    # synchronization state asks for the name rather than rebuilding it.
+    secret_env_keys: dict[str, str] = Field(default_factory=dict)
     slack_channels: list[str] = Field(default_factory=list)
     slack_channel_participation: dict[str, str] = Field(default_factory=dict)
     routine_commands: list[str] = Field(default_factory=list)
@@ -916,6 +920,12 @@ class SimplePersonSetupService:
             slack_user_id=str(account_info.get("slack_user_id", "")),
             has_slack_bot_token=bool(secret_value(f"{env_prefix}_SLACK_BOT_TOKEN")),
             has_slack_app_token=bool(secret_value(f"{env_prefix}_SLACK_APP_TOKEN")),
+            secret_env_keys={
+                "github_private_key": f"{env_prefix}_GITHUB_PRIVATE_KEY",
+                "github_access_token": f"{env_prefix}_GITHUB_ACCESS_TOKEN",
+                "slack_bot_token": f"{env_prefix}_SLACK_BOT_TOKEN",
+                "slack_app_token": f"{env_prefix}_SLACK_APP_TOKEN",
+            },
             slack_channels=channels,
             slack_channel_participation=channel_participation,
             routine_commands=[

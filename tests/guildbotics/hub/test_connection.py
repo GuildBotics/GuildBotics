@@ -402,3 +402,35 @@ def test_a_generated_key_names_the_machine_in_its_comment(
     generated = commands[0]
     assert generated[generated.index("-C") + 1] == "guildbotics alice@mac-studio"
     assert key.fingerprint == "SHA256:device"
+
+
+class TestRemoteUrls:
+    """The synchronization remote names both the machine and the workspace.
+
+    Secret values travel to the same machine the repository does, so both halves
+    are read from the one record rather than rebuilt by whoever needs them.
+    """
+
+    def test_a_remote_hub_url_names_its_machine_and_workspace(self) -> None:
+        url = connection.hub_remote_url(
+            connection.HubLocation(endpoint=connection.HubEndpoint(host="hub.local")),
+            WORKSPACE_ID,
+        )
+
+        assert connection.location_from_remote_url(url).endpoint == (
+            connection.HubEndpoint(host="hub.local")
+        )
+        assert connection.workspace_id_from_remote_url(url) == WORKSPACE_ID
+
+    def test_a_hub_on_this_machine_names_its_workspace_too(
+        self, machine_root: Path
+    ) -> None:
+        del machine_root
+        url = connection.hub_remote_url(connection.HubLocation(), WORKSPACE_ID)
+
+        assert connection.location_from_remote_url(url).is_local
+        assert connection.workspace_id_from_remote_url(url) == WORKSPACE_ID
+
+    def test_something_that_is_not_a_hub_remote_is_refused(self) -> None:
+        with pytest.raises(connection.InvalidHubEndpointError):
+            connection.workspace_id_from_remote_url("/somewhere/else.git")

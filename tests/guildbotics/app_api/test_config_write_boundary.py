@@ -43,6 +43,15 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 #: exhaustive rather than a list of the routes someone happened to think of.
 #: Nothing here is unprotected: shared writes still go through the port, which
 #: serializes them. They simply have nobody to compare revisions with.
+#:
+#: The secret transfers are the one entry that does touch a config file. They
+#: publish generations into ``config/secrets.yml`` through the secret store,
+#: which re-reads that file inside the port's lock immediately before writing
+#: it. There is no snapshot to compare against: no screen composes that file,
+#: and the two other writers of it -- the setup service and the ``secrets``
+#: CLI -- have never gone through the comparing writer either. What the guard
+#: is for is a route that saves over a revision a screen was holding, and this
+#: is not one.
 ELSEWHERE = {
     ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
@@ -67,6 +76,14 @@ ELSEWHERE = {
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",
     ("POST", "/workspace/devices/self"): "state/, settled by first-committer-wins",
+    (
+        "POST",
+        "/workspace/secrets/fetch",
+    ): "OS secret stores; writes no config",
+    (
+        "POST",
+        "/workspace/secrets/send",
+    ): "one key generation, read-modify-written inside the port's lock",
     ("POST", "/workspace/sync/clone"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/enable"): "a whole workspace, not one config file",
     ("POST", "/workspace/sync/hub"): "a whole workspace, not one config file",

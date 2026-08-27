@@ -78,6 +78,44 @@ def commit_and_push_once(
         return manager.commit_and_push_once(timeout=timeout)
 
 
+def synchronize_once(
+    workspace_root: Path | None = None,
+    *,
+    timeout: float | None = None,
+) -> GitSyncStatus | None:
+    """Bring this workspace's shared files up to date before acting on them.
+
+    Secret transfers decide from ``config/secrets.yml`` which generation they
+    are sending from, and a device that has been offline is deciding from an
+    old one. Running a cycle first is what keeps that decision current; it is
+    best-effort, and a hub that cannot be reached simply leaves the decision
+    where it was.
+    """
+    root = LocalSyncRepository(workspace_root).workspace_root
+    with _lock:
+        manager = _manager if _workspace == root else None
+        if manager is None:
+            repository = LocalSyncRepository(root)
+            if not repository.initialized or not repository.has_remote():
+                return None
+            manager = build_git_sync_manager(root)
+        return manager.synchronize_once(timeout=timeout)
+
+
+def hub_remote_url(workspace_root: Path | None = None) -> str | None:
+    """Return the hub repository this workspace synchronizes with, if any.
+
+    The synchronization remote is the one record of which machine holds this
+    workspace. Transfers that are not Git -- secret values, which travel
+    between OS secret stores -- still have to reach that same machine, so they
+    read it from here instead of resolving a hub of their own.
+    """
+    repository = LocalSyncRepository(workspace_root)
+    if not repository.initialized or not repository.has_remote():
+        return None
+    return repository.remote_url()
+
+
 class SyncStillStoppingError(RuntimeError):
     """Raised when the previous workspace's queue has not finished stopping."""
 

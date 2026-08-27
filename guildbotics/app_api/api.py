@@ -15,6 +15,7 @@ from fastapi import (
     File,
     Header,
     Query,
+    Request,
     Response,
     UploadFile,
     WebSocket,
@@ -33,7 +34,7 @@ from guildbotics.app_api.config_revisions import (
     apply_config_write,
     config_repository,
 )
-from guildbotics.app_api.errors import AppApiError
+from guildbotics.app_api.errors import AppApiError, api_error_message
 from guildbotics.app_api.events import EventBus, EventBusLogHandler
 from guildbotics.app_api.hotkeys import load_hotkeys, save_hotkeys
 from guildbotics.app_api.intelligences import (
@@ -92,6 +93,8 @@ from guildbotics.app_api.models import (
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
+    SecretTransferRequest,
+    SecretTransferResponse,
     SlackAppRegistrationStartRequest,
     SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
@@ -107,6 +110,7 @@ from guildbotics.app_api.models import (
     WorkspaceChangeRequest,
     WorkspaceDevices,
     WorkspaceLiveState,
+    WorkspaceSecrets,
     WorkspaceServiceOwner,
     WorkspaceServiceOwnerTransferRequest,
     WorkspaceSyncCloneRequest,
@@ -115,6 +119,7 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
 from guildbotics.editions.simple.github_app_setup import (
@@ -153,6 +158,17 @@ from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
+#: The header the Desktop sends naming its display language, so error
+#: sentences come back in the language the screen is in.
+LANGUAGE_HEADER = "X-GuildBotics-Language"
+
+
+def _request_language(request: Request) -> str:
+    """Return the display language the request asked for, defaulting to en."""
+    value = (request.headers.get(LANGUAGE_HEADER) or "").strip().lower()
+    return "ja" if value.startswith("ja") else "en"
+
+
 # Origins the packaged desktop webview serves the app from. Windows uses the
 # HTTP workaround origin while the other desktop platforms use the Tauri
 # scheme. Browser-preview origins are not fixed, so the launcher injects them
@@ -214,6 +230,10 @@ def create_app(
         sync_service = app_runtime.workspace_sync_service
     else:
         sync_service = WorkspaceSyncService()
+    # Secrets travel between OS secret stores rather than through Git, but the
+    # machine they travel to is the workspace's hub, so the two services share
+    # one answer to "where is the hub" instead of resolving it twice.
+    secret_service = WorkspaceSecretService(sync_service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -263,7 +283,7 @@ def create_app(
         allow_origins=[*TAURI_ORIGINS, *(allowed_origins or [])],
         allow_credentials=False,
         allow_methods=["*"],
-        allow_headers=[TOKEN_HEADER, "Content-Type"],
+        allow_headers=[TOKEN_HEADER, LANGUAGE_HEADER, "Content-Type"],
     )
 
     error_responses: dict[int | str, dict[str, Any]] = {
@@ -275,25 +295,33 @@ def create_app(
     }
 
     @app.exception_handler(AppApiError)
-    async def app_api_error_handler(_, exc: AppApiError) -> JSONResponse:
-        return _error_response(exc.status_code, exc.code, exc.message, exc.context)
+    async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
+        # The one place a message becomes text: rendered from the error's
+        # message key in the language the request asked for.
+        return _error_response(
+            exc.status_code,
+            exc.code,
+            exc.localized(_request_language(request)),
+            exc.context,
+        )
 
     @app.exception_handler(SharedWriteBusyError)
-    async def shared_write_busy_handler(_, exc: SharedWriteBusyError) -> JSONResponse:
+    async def shared_write_busy_handler(
+        request: Request, exc: SharedWriteBusyError
+    ) -> JSONResponse:
         # One handler rather than one translation per route: every config
         # change and every enrollment step can meet a busy lock, and none of
         # them should have to name it.
         return _error_response(
             503,
             "config_busy",
-            "Synchronization is still writing to this workspace, so nothing "
-            "was saved. Try again in a moment.",
+            api_error_message("config_busy", _request_language(request), {}),
             {},
         )
 
     @app.exception_handler(SyncRepositoryBusyError)
     async def sync_repository_busy_handler(
-        _, exc: SyncRepositoryBusyError
+        request: Request, exc: SyncRepositoryBusyError
     ) -> JSONResponse:
         # Same shape as SharedWriteBusyError: any endpoint that pauses or
         # joins synchronization can outwait the repository lock, and none of
@@ -301,8 +329,9 @@ def create_app(
         return _error_response(
             409,
             "workspace_sync_busy",
-            "Another synchronization operation is using this workspace. "
-            "Try again in a moment.",
+            api_error_message(
+                "workspace_sync_busy.repository", _request_language(request), {}
+            ),
             {},
         )
 
@@ -310,16 +339,17 @@ def create_app(
     async def workspace_not_configured_handler(
         _, exc: WorkspaceNotConfiguredError
     ) -> JSONResponse:
+        # The exception's own sentence is the reason, passed through verbatim.
         return _error_response(409, "workspace_not_configured", str(exc), {})
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
-        _, exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         return _error_response(
             422,
             "validation_error",
-            "Request validation failed.",
+            api_error_message("validation_error", _request_language(request), {}),
             {"errors": jsonable_encoder(exc.errors())},
         )
 
@@ -329,7 +359,6 @@ def create_app(
         if provided != token:
             raise AppApiError(
                 "invalid_session_token",
-                "Invalid session token.",
                 status_code=401,
             )
 
@@ -489,6 +518,39 @@ def create_app(
         """Drop one displaced commit the user has finished with."""
         return sync_service.discard_rejection(rejection_id)
 
+    @app.get(
+        "/workspace/secrets",
+        response_model=WorkspaceSecrets,
+        responses=error_responses,
+    )
+    def workspace_secrets(_: None = Depends(require_token)) -> WorkspaceSecrets:
+        """Report which keys this device holds, and which the hub holds."""
+        return secret_service.get_secrets()
+
+    @app.post(
+        "/workspace/secrets/send",
+        response_model=SecretTransferResponse,
+        responses=error_responses,
+    )
+    def workspace_secrets_send(
+        request: SecretTransferRequest,
+        _: None = Depends(require_token),
+    ) -> SecretTransferResponse:
+        """Hand this device's values to the hub, because the user asked."""
+        return secret_service.send(request)
+
+    @app.post(
+        "/workspace/secrets/fetch",
+        response_model=SecretTransferResponse,
+        responses=error_responses,
+    )
+    def workspace_secrets_fetch(
+        request: SecretTransferRequest,
+        _: None = Depends(require_token),
+    ) -> SecretTransferResponse:
+        """Take values from the hub into this device's own secret store."""
+        return secret_service.fetch(request)
+
     @app.post(
         "/workspace/sync/clone", response_model=ConfigStatus, responses=error_responses
     )
@@ -551,14 +613,13 @@ def create_app(
         except ValueError as exc:
             raise AppApiError(
                 "command_input_file_invalid",
-                str(exc),
+                reason=str(exc),
                 status_code=400,
             ) from exc
         except OSError as exc:
             logger.exception("Failed to save a command input file")
             raise AppApiError(
                 "command_input_file_save_failed",
-                "Failed to save the pasted image.",
                 status_code=500,
             ) from exc
         return CommandInputFileResponse(path=path)
@@ -967,7 +1028,7 @@ def create_app(
                 person_id=person_id,
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return response.model_copy(update={"revisions": revisions})
 
     @app.put(
@@ -990,7 +1051,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(
             intelligence={
                 "files": [file.model_dump() for file in receipt.result.files]
@@ -1019,7 +1080,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.get(
@@ -1033,7 +1094,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
@@ -1048,7 +1108,7 @@ def create_app(
                 )
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ProjectConfigResponse.model_validate(
             snapshot.model_dump() | {"revisions": revisions}
         )
@@ -1107,7 +1167,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.put(
@@ -1132,7 +1192,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(project=receipt.result, revisions=receipt.revisions)
 
     @app.post(
@@ -1159,7 +1219,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.get(
@@ -1176,7 +1236,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 context={"project": str(status.project_file)},
                 status_code=400,
             )
@@ -1191,7 +1250,7 @@ def create_app(
                 )
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return snapshot.model_copy(update={"revisions": revisions})
 
     @app.put(
@@ -1209,7 +1268,6 @@ def create_app(
             if payload.get("original_person_id") != person_id:
                 raise AppApiError(
                     "person_id_mismatch",
-                    "original_person_id must match the path parameter.",
                     status_code=400,
                 )
             config_dir = _resolve_existing_config_dir(app_runtime)
@@ -1229,7 +1287,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.delete(
@@ -1255,7 +1313,7 @@ def create_app(
                 ),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return ConfigWriteResponse(member=receipt.result, revisions=receipt.revisions)
 
     @app.post(
@@ -1275,7 +1333,7 @@ def create_app(
             else:
                 reference = service.resolve_github_user(request.identity)
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return MemberResolveResponse.model_validate(reference.model_dump())
 
     github_app_registrations = GitHubAppRegistrationService()
@@ -1298,7 +1356,7 @@ def create_app(
                 key_dir=github_app_key_dir(),
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
         return _github_app_registration_status(
             registration,
             start_url=f"{base}/github-app/registrations/{registration.state}/start",
@@ -1316,7 +1374,7 @@ def create_app(
         try:
             registration = await github_app_registrations.check_installation(state)
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message, status_code=404) from exc
+            raise AppApiError(exc.code, reason=exc.message, status_code=404) from exc
         return _github_app_registration_status(registration)
 
     # The two routes below are opened as top-level browser navigations by
@@ -1373,7 +1431,7 @@ def create_app(
         try:
             return slack_app_setup.start_registration(request.app_name)
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
 
     @app.post(
         "/config/members/slack-app/verify",
@@ -1416,7 +1474,6 @@ def create_app(
         if token not in (provided, token_query):
             raise AppApiError(
                 "invalid_session_token",
-                "Invalid session token.",
                 status_code=401,
             )
         status = app_runtime.get_config_status()
@@ -1424,7 +1481,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 status_code=400,
             )
         from guildbotics.app_api.avatar import find_avatar_file
@@ -1434,7 +1490,7 @@ def create_app(
             resp = FileResponse(avatar_path)
             resp.headers["Cache-Control"] = "no-cache"
             return resp
-        raise AppApiError("avatar_not_found", "Avatar file not found.", status_code=404)
+        raise AppApiError("avatar_not_found", status_code=404)
 
     @app.post(
         "/config/members/{person_id}/avatar",
@@ -1451,7 +1507,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 status_code=400,
             )
         from guildbotics.app_api.avatar import read_upload, store_avatar
@@ -1464,7 +1519,9 @@ def create_app(
             ).result
         except ValueError as exc:
             # Validation failures (e.g. too large) carry a safe, stable message.
-            raise AppApiError("avatar_invalid", str(exc), status_code=400) from exc
+            raise AppApiError(
+                "avatar_invalid", reason=str(exc), status_code=400
+            ) from exc
         except (AppApiError, SharedWriteBusyError):
             # Both already say what happened, and the catch-all below would
             # bury them under a generic 500.
@@ -1473,7 +1530,6 @@ def create_app(
             logger.exception("Failed to save avatar for %s", person_id)
             raise AppApiError(
                 "avatar_save_failed",
-                "Failed to save avatar.",
                 status_code=500,
             ) from exc
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
@@ -1492,7 +1548,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 status_code=400,
             )
         try:
@@ -1501,13 +1556,12 @@ def create_app(
                 person_id=person_id,
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
 
         github_username = member_config.github_username
         if not github_username:
             raise AppApiError(
                 "github_username_missing",
-                "GitHub username is not configured for this member.",
                 status_code=400,
             )
 
@@ -1524,7 +1578,7 @@ def create_app(
             logger.exception("Failed to import avatar from GitHub for %s", person_id)
             raise AppApiError(
                 "avatar_import_failed",
-                "Failed to import avatar from GitHub.",
+                "avatar_import_failed.github",
                 status_code=500,
             ) from exc
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
@@ -1543,7 +1597,6 @@ def create_app(
         if config_dir is None:
             raise AppApiError(
                 "project_not_found",
-                "Project config was not found.",
                 status_code=400,
             )
         try:
@@ -1552,14 +1605,13 @@ def create_app(
                 person_id=person_id,
             )
         except SetupServiceError as exc:
-            raise AppApiError(exc.code, exc.message) from exc
+            raise AppApiError(exc.code, reason=exc.message) from exc
 
         slack_user_id = member_config.slack_user_id
         is_human = member_config.person_type == "human"
         if is_human and not slack_user_id:
             raise AppApiError(
                 "slack_user_id_missing",
-                "Slack user ID is not configured for this member.",
                 status_code=400,
             )
 
@@ -1584,7 +1636,6 @@ def create_app(
         if not slack_bot_token:
             raise AppApiError(
                 "slack_token_missing",
-                "Slack Bot Token is not configured in this workspace.",
                 status_code=400,
             )
 
@@ -1601,14 +1652,12 @@ def create_app(
             if "missing_scope" in str(exc):
                 raise AppApiError(
                     "slack_missing_scope",
-                    "Slack Bot Token is missing the 'users:read' scope. "
-                    "Add it under OAuth & Permissions and reinstall the app.",
                     status_code=400,
                 ) from exc
             logger.exception("Failed to import avatar from Slack for %s", person_id)
             raise AppApiError(
                 "avatar_import_failed",
-                "Failed to import avatar from Slack.",
+                "avatar_import_failed.slack",
                 status_code=500,
             ) from exc
         return AvatarMutationResponse(avatar_timestamp=int(dest_path.stat().st_mtime))
@@ -1650,7 +1699,6 @@ def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
         return config_dir
     raise AppApiError(
         "project_not_found",
-        "Project config was not found.",
         context={"project": str(status.project_file)},
         status_code=400,
     )

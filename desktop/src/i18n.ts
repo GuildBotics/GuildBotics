@@ -1,6 +1,8 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import { setApiLanguage } from "./api/client";
+
 export type AppLanguage = "en" | "ja";
 
 const STORAGE_KEY = "guildbotics.appLanguage";
@@ -160,6 +162,8 @@ const resources = {
           id: "Device ID",
           live: "Live",
           fingerprint: "Device key fingerprint",
+          revokeHint:
+            "To cut off a lost machine, delete the line with its key fingerprint from the hub machine's ~/.ssh/authorized_keys, then reissue the tokens and API keys it held. GuildBotics does not edit that file, and values already on that machine cannot be erased remotely.",
           fingerprintMissing: "Not registered",
           liveStatus: {
             unknown: "Unknown",
@@ -204,6 +208,90 @@ const resources = {
           create: "Create a key",
           copy: "Copy",
           copied: "Copied",
+        },
+        secrets: {
+          title: "Credentials on this machine",
+          body: "API keys and tokens are kept in each machine's own OS secret store, never in the shared history. What travels between machines is a key name and a generation; the value itself moves only when you send or fetch it.",
+          empty: "This workspace has no credentials stored yet.",
+          key: "Key",
+          status: "State",
+          generations: "Generation",
+          generationDetail: "shared {{shared}} / here {{here}} / hub {{hub}}",
+          fetch: "Fetch",
+          send: "Send",
+          fetchAll_zero: "Nothing to fetch",
+          fetchAll_one: "Fetch 1 credential",
+          fetchAll_other: "Fetch all {{count}} credentials",
+          sendAll_zero: "Nothing to send",
+          sendAll_one: "Send 1 credential",
+          sendAll_other: "Send {{count}} credentials",
+          state: {
+            ready: "Set",
+            missing: "Not on this machine",
+            outdated: "Updated elsewhere",
+            pending_send: "Not sent to the hub",
+            conflict: "Changed on two machines",
+            unconfirmed: "Needs checking",
+            hub_behind: "No copy on the hub",
+          },
+          stateDetail: {
+            missing:
+              "The workspace names this key, but this machine's secret store holds no value for it. Fetching settles it.",
+            outdated: "Another machine published a newer value. Fetching settles it.",
+            pending_send:
+              "A value entered on this machine has not reached the hub yet. Sending it lets the other machines fetch it.",
+            conflict:
+              "Two machines changed this key. Settle it from this row: send keeps this machine's value, fetch takes the other machine's.",
+            unconfirmed:
+              "A send was cut off partway: the hub holds a value the workspace has not recorded. Sending again from any machine that has the value settles it.",
+            hub_behind:
+              "The hub holds no copy of the shared value, so other machines cannot fetch it. Sending gives it one.",
+          },
+          transferFailed: "The transfer failed",
+          alert: {
+            local_locked: {
+              title: "This machine's secret store is locked",
+              body: "Unlock the OS secret store on this machine, then try again. GuildBotics never falls back to storing a value in plain text.",
+            },
+            hub_locked: {
+              title: "The hub machine's secret store is locked",
+              body: "Unlock the OS secret store on the hub machine, then try again. On a headless Linux hub, unlock the Secret Service once after each restart.",
+            },
+            hub_unreachable: {
+              title: "The hub could not be reached",
+              body: "The states below are what this machine knows on its own. Credentials can be sent and fetched again once the hub answers.",
+            },
+            attention_one: "1 credential needs attention on this machine.",
+            attention_other: "{{count}} credentials need attention on this machine.",
+          },
+          refused: {
+            title_one: "1 credential was not transferred",
+            title_other: "{{count}} credentials were not transferred",
+            entry: "{{key}}: {{reason}}",
+          },
+          result: {
+            conflict: "changed on another machine since this value was entered",
+            missing: "the hub holds no value for it",
+            generation_mismatch:
+              "the hub holds a generation this workspace has not recorded; send from any machine that has the value to settle it",
+            locked: "a secret store is locked",
+            store_unavailable: "a secret store could not be used",
+            no_value: "this machine has no value to send",
+            unknown: "this workspace does not know that key",
+            invalid: "that name cannot be used as a credential key",
+            pending_send:
+              "a value entered on this machine has not been sent; send it (or delete it) before fetching",
+            ready: "this machine already holds the shared value",
+          },
+          hint: {
+            missing: "Not on this machine",
+            outdated: "Updated elsewhere",
+            pending_send: "Not sent to the hub",
+            conflict: "Changed on two machines",
+            unconfirmed: "Needs checking",
+            hub_behind: "No copy on the hub",
+            link: "Open sync settings",
+          },
         },
         host: {
           title: "Host the hub on this machine",
@@ -1946,6 +2034,8 @@ const resources = {
           id: "device ID",
           live: "現在状態",
           fingerprint: "device 鍵の fingerprint",
+          revokeHint:
+            "紛失したマシンを切り離すには、その鍵の fingerprint に対応する行を Hub マシンの ~/.ssh/authorized_keys から削除し、そのマシンが持っていたトークンと API キーを再発行してください。GuildBotics はこのファイルを編集しません。また、そのマシンに保存済みの値を遠隔から消すことはできません。",
           fingerprintMissing: "未登録",
           liveStatus: {
             unknown: "不明",
@@ -1990,6 +2080,90 @@ const resources = {
           create: "鍵を作成する",
           copy: "コピー",
           copied: "コピーしました",
+        },
+        secrets: {
+          title: "このマシンの認証情報",
+          body: "API キーやトークンは各マシンの OS 秘密ストアに保存され、共有履歴には入りません。マシン間を移動するのは key 名と世代だけで、値そのものは送信・取得を実行したときにだけ移動します。",
+          empty: "このワークスペースにはまだ認証情報がありません。",
+          key: "キー",
+          status: "状態",
+          generations: "世代",
+          generationDetail: "共有 {{shared}} / 手元 {{here}} / Hub {{hub}}",
+          fetch: "取得",
+          send: "送る",
+          fetchAll_zero: "取得するものはありません",
+          fetchAll_one: "1 件をまとめて取得",
+          fetchAll_other: "{{count}} 件をまとめて取得",
+          sendAll_zero: "送るものはありません",
+          sendAll_one: "1 件を Hub マシンへ送る",
+          sendAll_other: "{{count}} 件を Hub マシンへ送る",
+          state: {
+            ready: "設定済み",
+            missing: "このマシンに値がありません",
+            outdated: "値が更新されています",
+            pending_send: "Hub マシンへ未送信の更新があります",
+            conflict: "2 台で同じ値を変更しました",
+            unconfirmed: "確認が必要です",
+            hub_behind: "Hub マシンに写しがありません",
+          },
+          stateDetail: {
+            missing:
+              "ワークスペースはこの key を共有していますが、このマシンの秘密ストアに値がありません。取得すると揃います。",
+            outdated: "別のマシンが新しい値を公開しています。取得すると揃います。",
+            pending_send:
+              "このマシンで入力した値がまだ Hub マシンへ届いていません。送信すると他のマシンが取得できるようになります。",
+            conflict:
+              "2 台のマシンが同じ key を変更しました。この行の「送る」（このマシンの値を採用）か「取得」（相手の値を採用）で解消します。",
+            unconfirmed:
+              "送信が途中で中断され、ワークスペースが記録していない値を Hub マシンが持っています。値を持っているマシンからもう一度送信すると解消します。",
+            hub_behind:
+              "共有済みの値の写しが Hub マシンに無く、他のマシンが取得できません。送信すると写しが渡ります。",
+          },
+          transferFailed: "転送に失敗しました",
+          alert: {
+            local_locked: {
+              title: "このマシンの SecretStore がロックされています",
+              body: "このマシンの OS 秘密ストアのロックを解除してから、もう一度実行してください。GuildBotics が平文で保存することはありません。",
+            },
+            hub_locked: {
+              title: "Hub マシンの SecretStore がロックされています",
+              body: "Hub マシン上で OS 秘密ストアのロックを解除してから、もう一度実行してください。ヘッドレス Linux の Hub では、再起動のたびに一度 Secret Service のロックを解除します。",
+            },
+            hub_unreachable: {
+              title: "Hub に接続できませんでした",
+              body: "以下の状態は、このマシンだけで分かる内容です。Hub に接続できるようになれば、送信・取得をやり直せます。",
+            },
+            attention_one: "このマシンで対応が必要な認証情報が 1 件あります。",
+            attention_other: "このマシンで対応が必要な認証情報が {{count}} 件あります。",
+          },
+          refused: {
+            title_one: "転送できなかった認証情報が 1 件あります",
+            title_other: "転送できなかった認証情報が {{count}} 件あります",
+            entry: "{{key}}: {{reason}}",
+          },
+          result: {
+            conflict: "入力後に別のマシンで変更されています",
+            missing: "Hub マシンに値がありません",
+            generation_mismatch:
+              "このワークスペースが記録していない世代を Hub が持っています。値を持っているどのマシンからでも送信すれば解消します",
+            locked: "SecretStore がロックされています",
+            store_unavailable: "SecretStore を利用できませんでした",
+            no_value: "このマシンに送る値がありません",
+            unknown: "このワークスペースが知らない key です",
+            invalid: "認証情報の key 名として使えません",
+            pending_send:
+              "このマシンで入力された値が未送信のため取得しませんでした。先に送信（または削除）してください",
+            ready: "このマシンはすでに共有されている値を持っています",
+          },
+          hint: {
+            missing: "このマシンに値がありません",
+            outdated: "値が更新されています",
+            pending_send: "Hub マシンへ未送信",
+            conflict: "2 台で変更されています",
+            unconfirmed: "確認が必要です",
+            hub_behind: "Hub マシンに写しがありません",
+            link: "同期設定を開く",
+          },
         },
         host: {
           title: "このマシンで Hub を動かす",
@@ -3678,5 +3852,11 @@ i18n.use(initReactI18next).init({
     escapeValue: false,
   },
 });
+
+// The backend renders API error sentences in the language named on each
+// request, so the client's header follows this instance's language -- through
+// init, the settings screen, and changes relayed from other windows alike.
+i18n.on("languageChanged", (language) => setApiLanguage(language));
+setApiLanguage(i18n.language);
 
 export default i18n;

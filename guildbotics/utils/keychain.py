@@ -11,6 +11,10 @@ class SecretStoreError(Exception):
     """Base error raised when an OS keychain operation fails."""
 
 
+class InvalidSecretKeyError(SecretStoreError, ValueError):
+    """Raised when text that should name a secret does not."""
+
+
 class SecretValueTooLargeError(SecretStoreError):
     """A secret cannot fit in the selected OS keychain."""
 

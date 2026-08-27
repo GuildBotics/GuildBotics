@@ -1,5 +1,14 @@
 let apiBase = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
 let sessionToken = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
+let apiLanguage = "en";
+
+/**
+ * Name the display language on every request, so error sentences come back
+ * in the language the screen is in. Kept in step by i18n's language events.
+ */
+export function setApiLanguage(language: string) {
+  apiLanguage = language;
+}
 
 export function configureApi(token: string, baseUrl?: string) {
   sessionToken = token;
@@ -776,6 +785,10 @@ export type MemberConfig = {
   slack_user_id?: string;
   has_slack_bot_token: boolean;
   has_slack_app_token: boolean;
+  // Form field -> the environment key that value is stored under, so the
+  // synchronization state of a credential can be looked up without this side
+  // reconstructing the backend's naming.
+  secret_env_keys?: Record<string, string>;
   slack_channels: string[];
   slack_channel_participation: Record<string, ChatParticipationPolicy>;
   routine_commands: string[];
@@ -1100,6 +1113,61 @@ export type WorkspaceDevices = {
   device_id: string;
 };
 
+/** Whether one machine's OS secret store can be used right now. */
+export type SecretStoreState = {
+  available: boolean;
+  locked: boolean;
+};
+
+/**
+ * What one key's standing is. Every field here is a name or a counter: the
+ * value itself never leaves the two OS secret stores it travels between.
+ */
+export type WorkspaceSecretState = {
+  key: string;
+  status: SecretStatus;
+  shared_generation: number;
+  local_generation: number | null;
+  hub_generation: number | null;
+  updated_at: string;
+  // Which transfer this key can take. Decided by the backend, where the
+  // transfers are, so a button cannot offer one the transfer would refuse.
+  can_send: boolean;
+  can_fetch: boolean;
+};
+
+export type SecretStatus =
+  "ready" | "missing" | "outdated" | "pending_send" | "conflict" | "unconfirmed" | "hub_behind";
+
+export type WorkspaceSecrets = {
+  enabled: boolean;
+  hub_reachable: boolean;
+  hub_error_code: string;
+  secret_store: SecretStoreState;
+  hub_secret_store: SecretStoreState | null;
+  keys: WorkspaceSecretState[];
+  sendable_keys: string[];
+  fetchable_keys: string[];
+  missing_count: number;
+  outdated_count: number;
+  pending_count: number;
+  attention_count: number;
+};
+
+/** An empty `keys` means "everything this device is short of". */
+export type SecretTransferRequest = { keys?: string[] };
+
+export type SecretTransferResult = {
+  key: string;
+  status: string;
+  generation: number | null;
+};
+
+export type SecretTransferResponse = {
+  results: SecretTransferResult[];
+  secrets: WorkspaceSecrets;
+};
+
 export class ApiRequestError extends Error {
   code: string;
   context: Record<string, unknown>;
@@ -1142,6 +1210,22 @@ export async function cloneWorkspaceFromHub(
   body: WorkspaceSyncCloneRequest,
 ): Promise<ConfigStatus> {
   return request("/workspace/sync/clone", { method: "POST", body });
+}
+
+export async function getWorkspaceSecrets(): Promise<WorkspaceSecrets> {
+  return request("/workspace/secrets");
+}
+
+export async function sendWorkspaceSecrets(
+  body: SecretTransferRequest = {},
+): Promise<SecretTransferResponse> {
+  return request("/workspace/secrets/send", { method: "POST", body });
+}
+
+export async function fetchWorkspaceSecrets(
+  body: SecretTransferRequest = {},
+): Promise<SecretTransferResponse> {
+  return request("/workspace/secrets/fetch", { method: "POST", body });
 }
 
 export async function getHubStatus(): Promise<HubStatus> {
@@ -1629,6 +1713,7 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
     method: "POST",
     headers: {
       "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Language": apiLanguage,
     },
     body: formData,
   });
@@ -1691,6 +1776,7 @@ async function request<T>(
     headers: {
       "Content-Type": "application/json",
       "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Language": apiLanguage,
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });

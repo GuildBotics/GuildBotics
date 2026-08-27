@@ -171,7 +171,6 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
     load_yaml_file,
 )
-from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_state import write_active_workspace
 
 WORKSPACE_DOTENV_PROTECTED_KEYS = {
@@ -327,14 +326,12 @@ class AppRuntime:
         if not workspace.exists():
             raise AppApiError(
                 "workspace_not_found",
-                "Workspace directory was not found.",
                 context={"workspace_dir": str(workspace)},
                 status_code=400,
             )
         if not workspace.is_dir():
             raise AppApiError(
                 "workspace_not_directory",
-                "Workspace path must be a directory.",
                 context={"workspace_dir": str(workspace)},
                 status_code=400,
             )
@@ -358,8 +355,6 @@ class AppRuntime:
         if not self._workspace_sync.deactivate():
             raise AppApiError(
                 "workspace_switch_blocked",
-                "Synchronization for the current workspace is still stopping. "
-                "Try again in a moment.",
                 status_code=409,
             )
         os.chdir(workspace)
@@ -527,7 +522,9 @@ class AppRuntime:
         except AppApiError:
             raise
         except WorkRejectedError as exc:
-            raise AppApiError("work_rejected", str(exc), status_code=409) from exc
+            raise AppApiError(
+                "work_rejected", reason=str(exc), status_code=409
+            ) from exc
         except (CommandError, CliAgentExecutionError) as exc:
             # The turn drives a foreign agent: an AI CLI tool that exits
             # non-zero, a provider that rejects the credential, a response the
@@ -535,7 +532,7 @@ class AppRuntime:
             # the panel must be able to explain with the tool's own reason.
             # Anything else is a defect, not an agent failure: it stays a
             # generic 500 so internal wording never reaches the client.
-            raise AppApiError(failure_code, str(exc), status_code=502) from exc
+            raise AppApiError(failure_code, reason=str(exc), status_code=502) from exc
         finally:
             await context.aclose()
 
@@ -772,7 +769,8 @@ class AppRuntime:
         if member is None:
             raise AppApiError(
                 "person_not_found",
-                f"Person '{person}' not found.",
+                "person_not_found.plain",
+                params={"person": person},
                 context={
                     "identifier": person,
                     "available": [
@@ -825,7 +823,7 @@ class AppRuntime:
         if code is not None:
             raise AppApiError(
                 code,
-                "The selected command file is not the runtime execution target.",
+                "command_not_runtime_target",
                 status_code=409,
                 context=blocking_context,
             )
@@ -871,7 +869,7 @@ class AppRuntime:
             except WorkRejectedError as exc:
                 raise AppApiError(
                     "work_rejected",
-                    str(exc),
+                    reason=str(exc),
                     status_code=409,
                 ) from exc
         finally:
@@ -910,8 +908,7 @@ class AppRuntime:
             )
             raise AppApiError(
                 "person_selection_required",
-                "Specify a person using person or '<command>@person'."
-                f" Available: {', '.join(available) if available else 'none'}",
+                params={"available": ", ".join(available) if available else "none"},
                 context={"available": available},
             ) from exc
         except PersonNotFoundError as exc:
@@ -927,8 +924,11 @@ class AppRuntime:
             )
             raise AppApiError(
                 "person_not_found",
-                f"Person '{exc.identifier}' not found."
-                f" Available: {', '.join(available) if available else 'none'}",
+                "person_not_found.with_available",
+                params={
+                    "person": exc.identifier,
+                    "available": ", ".join(available) if available else "none",
+                },
                 context={"identifier": exc.identifier, "available": available},
             ) from exc
 
@@ -969,7 +969,7 @@ class AppRuntime:
                     "message": str(exc),
                 },
             )
-            raise AppApiError("command_error", str(exc)) from exc
+            raise AppApiError("command_error", reason=str(exc)) from exc
         except Exception as exc:
             self._event_bus.publish_event(
                 "command.failed",
@@ -989,7 +989,6 @@ class AppRuntime:
             metadata = exc.metadata
             raise AppApiError(
                 "service_already_running",
-                t("runtime.service_lock.already_running"),
                 status_code=409,
                 context=(
                     {
@@ -1040,7 +1039,6 @@ class AppRuntime:
         if status.scheduler.running or status.events.running:
             raise AppApiError(
                 "runtime_running",
-                "Stop the service before resetting chat receive state.",
                 status_code=409,
             )
         context = self._get_context()
@@ -1342,14 +1340,13 @@ class AppRuntime:
         if start_time > end_time:
             raise AppApiError(
                 "invalid_activity_history_range",
-                "Activity history start must be before end.",
                 context={"start": start or "", "end": end or ""},
                 status_code=400,
             )
         if (sync_start is None) != (sync_end is None):
             raise AppApiError(
                 "invalid_activity_sync_range",
-                "Activity sync start and end must be provided together.",
+                "invalid_activity_sync_range.together",
                 context={"sync_start": sync_start or "", "sync_end": sync_end or ""},
                 status_code=400,
             )
@@ -1362,7 +1359,7 @@ class AppRuntime:
             if parsed_sync_start is None or parsed_sync_end is None:
                 raise AppApiError(
                     "invalid_activity_sync_range",
-                    "Activity sync start and end must be valid timestamps.",
+                    "invalid_activity_sync_range.timestamps",
                     context={
                         "sync_start": sync_start or "",
                         "sync_end": sync_end or "",
@@ -1374,7 +1371,7 @@ class AppRuntime:
             if sync_start_time > sync_end_time:
                 raise AppApiError(
                     "invalid_activity_sync_range",
-                    "Activity sync start must be before end.",
+                    "invalid_activity_sync_range.order",
                     context={
                         "sync_start": sync_start or "",
                         "sync_end": sync_end or "",
@@ -1690,7 +1687,6 @@ class AppRuntime:
         except FileNotFoundError as exc:
             raise AppApiError(
                 "config_not_found",
-                "GuildBotics configuration is not available. Run config init first.",
                 context={"path": str(exc.filename or "")},
             ) from exc
 
@@ -1728,7 +1724,6 @@ class AppRuntime:
             if self._running_command_id is not None:
                 raise AppApiError(
                     "command_already_running",
-                    "Another command is already running.",
                     status_code=409,
                     context={"trace_id": self._running_command_id},
                 )
@@ -2248,7 +2243,6 @@ def _runtime_has_active_work(status: RuntimeStatus) -> bool:
 def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
     return AppApiError(
         "workspace_switch_blocked_by_active_work",
-        "Service or command work is still running. Stop it before switching workspaces.",
         context={
             "active_work_count": len(status.active_works),
             "scheduler_state": status.scheduler.state,

@@ -202,7 +202,7 @@ class RuntimeStub:
         if request.command == "missing":
             raise AppApiError(
                 "command_error",
-                "Unable to locate command 'missing'.",
+                reason="Unable to locate command 'missing'.",
                 context={"command": request.command},
             )
         return {"trace_id": "stub-request", "output": f"ran {request.command}"}
@@ -3056,7 +3056,7 @@ def test_command_options_reports_person_not_found(tmp_path: Path) -> None:
         ) -> CommandOptionsResponse:
             raise AppApiError(
                 "person_not_found",
-                "Member not found.",
+                reason="Member not found.",
                 context={"person": person},
             )
 
@@ -3079,7 +3079,7 @@ def test_command_run_conflict_returns_409(tmp_path: Path) -> None:
         async def run_command(self, request: Any) -> Any:
             raise AppApiError(
                 "command_already_running",
-                "A command is already running.",
+                reason="A command is already running.",
                 status_code=HTTP_CONFLICT,
             )
 

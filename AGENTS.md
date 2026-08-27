@@ -48,7 +48,8 @@
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
 - `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）。共有書き込みを直列化する lock は `utils/shared_write_lock.py`（`observability` からも取れる必要があるため `utils` にある）
 - `guildbotics/sync/*` … Workspace Sync Port の唯一の購読者。ローカル同期 repository（`local_repository.py`）、commit 境界（`commits.py`）、同期 queue / 自動収束 / rejected ref（`manager.py`）、更新不採用の Activity 記録（`rejections.py`）、Hub への接続と参加（`enrollment.py`）、queue の install（`activation.py`）
-- `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）。中身の意味は知らない
+- `guildbotics/hub/*` … Hub。bare repository の作成と fast-forward only 設定（`host.py`）、device から Hub への到達（`connection.py`）、Hub マシンが持つ Secret 値と世代（`secret_host.py`）、値が通る SSH stream の framing（`secret_stream.py`）。中身の意味は知らない
+- `guildbotics/secrets/*` … Secret 値のマシン間配布。Hub への client（`hub_client.py`。SSH 経由と同一マシンの2実装）と、送信・取得の順序（`transfer.py`）
 - `guildbotics/entities` / `guildbotics/loader` / `guildbotics/utils` … ドメインモデル、YAML ローダ、設定解決ほか共通基盤
 
 依存方向のハードルール（`tests/guildbotics/test_layer_boundaries.py` で担保）:
@@ -57,7 +58,8 @@
 - `guildbotics/observability/*` は `utils` 以外に依存しない記録基盤であり、app_api や capability の都合を知らない
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
 - `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
-- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py`、`cli/__init__.py`、`cli/member.py`）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やす場合は、同期 repositoryへ触れる必要性と `sync.lock` の境界を同時に設計する。activation の防御は process 内の queue 重複を止め、`sync.lock` は process をまたぐ cycle・one-shot・workspace pause を直列化する（`service.lock` は background service の二重起動用で、member CLIの書き込みは守らない）。
+- `guildbotics/secrets/*` は `utils` と `hub` にだけ依存する。逆に `hub` から `secrets` を import しない（Hub は値を持つだけで、どれを動かすかは上の層が決める）
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py`、`cli/__init__.py`、`cli/member.py`、`cli/secrets.py`）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やす場合は、同期 repositoryへ触れる必要性と `sync.lock` の境界を同時に設計する。activation の防御は process 内の queue 重複を止め、`sync.lock` は process をまたぐ cycle・one-shot・workspace pause を直列化する（`service.lock` は background service の二重起動用で、member CLIの書き込みは守らない）。
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -154,6 +156,8 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
 - device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
 - Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+- **Secret の世代とキーチェーンの値は、書き込みだけでなく読み出しも同じ `secrets.lock` の中で行う（`secret_host.py`）。** 読みを lock の外に置くと、並行する send との interleaving で「新しい値が古い世代の名で返る」——1 generation = 1 immutable value という世代の前提そのものが壊れる
+- **世代の検証は Hub boundary（`store_secret`）の1箇所。** base は 0 以上、candidate は base+1（よって 1 以上）。wire・local client・Hub CLI のどこから来ても通り道はここだけなので、各入口で再検証しない。読み側（`_read_generations` と client の受信）は正の整数以外の entry を「持っていない」として落とす
 
 禁止:
 
@@ -164,6 +168,26 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - **OpenSSH の判定を自前で再現すること。** `probe_host_key` の `trusted` は「無印の `known_hosts` entry が、提示された鍵のどれかを持っている」だけを主張する。`@revoked` / `@cert-authority` などの marker 付き行は一律で候補から外す（fail-closed）。marker の意味を parser で解こうとすると、OpenSSH が拒否する鍵を trusted と言ってしまう。**権威は接続そのもの**であり、この probe は「trusted と言うなら ssh も通る」側へだけ保守的であればよい
 - **ホスト鍵の取得に `ssh-keyscan` を使うこと。** Windows 版は実装していない鍵交換アルゴリズムを提案するため、OpenSSH 9 以降のサーバーとは必ず negotiation で落ちる（`-o` が無いので絞れない）。取得は実接続と同じ `ssh` で行い、空の `known_hosts` へ `accept-new` で書かせて読む。**probe と実接続で別の client を使わない**——設定の見え方（`~/.ssh/config`）まで含めて非対称になり、「手動 ssh は通るのにアプリだけ繋がらない」という切り分け不能な症状になる
 - 接続先や Workspace ID を検証せずに path / コマンド引数へ渡すこと。Workspace ID は**正規形の UUID だけ**を受け付ける（`urn:uuid:` や大文字は同じ UUID の別表記で、1つの Workspace が複数 directory へ割れる）。接続先は先頭 `-` を拒否する（`ssh` の option として解釈される）
+
+#### Secret の配布 (`guildbotics/secrets/*`)
+
+責務:
+
+- Secret 値をどのマシンへ動かすかの判断（不足・古い・未送信の判定は `utils/secret_store.py` の状態計算に委ね、それを読む）
+- 送信と取得の順序。**Hub が値を受け取ってから、共有世代を publish する**。逆順にすると、他の device へ「無いものを取りに行け」と言うことになる
+- **送信が乗る世代は「Hub が持っている世代」の次であり、「この device が持っている世代」の次ではない。** この 1 つの規則だけで、中断した送信・2台での同時変更・Hub 再構築のすべてから抜けられる
+- **中断した送信の状態を device ローカルに記録しない。** 「Hub の世代 > 共有記録の世代」がその状態そのものであり、権威ある 2 つの記録の比較なので、どの device からも見え、値の再入力でも送信元マシンの喪失でも消えない。送信元だけが持つ marker に依存させると、それが消える経路を見つけるたびに出口を足すことになる
+- **取得は共有記録が名指しする世代だけを採用する。** それより新しい世代を取り込むと、確認が必要だと示している比較そのものを消してしまう（全 device が「揃っている」と表示しながら別の値を持つ）
+- **どの key にどちらの転送が可能かの判断は `transfer.py` に1つだけ置き、API model に載せて画面へ渡す。** frontend が世代比較で作り直すと、転送側が拒否する操作をボタンが提示する
+- **その判断の enforcement point は転送自身。** `can_fetch` は表示用の値であると同時に、fetch が Hub へ届く前（値を運ばせないため）と、値を書き込む直前（store と同じ shared-write lock の中）の2回、同じ関数として実行される。network 区間は lock を持てないので、その間のローカル編集は commit 時の再判定が検出する（入力は pending を立て、削除は共有 entry を消すので、どちらも判定が変わる）
+- **send の確定（`confirm_shared`）は「送った値が今もローカルの値か」を確認してから、この device が持っていると記録する。** 途中で入力された値は pending のまま残り、共有世代だけが進む（Hub が受け取ったという事実は記録してよい）。転送中の編集を検出するための revision / mutation token を local record に足さない——比較すべき権威ある記録（keychain の現在値と送った値）が既にあり、token は全 writer に増分義務を課す新しい state になる
+- Hub への到達方法の吸収（SSH 経由と同一マシンで同じ3つの問い＝何を持っているか・これを受け取れ・これを寄こせ、に答える client）
+
+禁止:
+
+- 利用者の操作なしに値を移動すること（自動配布は非目標）
+- 値を relay file / Git object / temporary file / log / exception message / API response へ載せること
+- `hub` から import されること（依存方向は上記のハードルール）
 
 #### App API (`guildbotics/app_api/*`)
 
@@ -280,6 +304,7 @@ help / docstring が正であり、member コマンドの一行説明は
 - 共有 JSON は `dump_shared_json`（sort_keys + 末尾改行）で統一する。device ごとにバイト列がぶれると不要な並行更新になる
 - device 固有 field を共有 record へ入れない境界は、field 名のブロックリストではなく pydantic の `extra="forbid"`（`SharedRecord`）とサイズ上限で構造的に守る
 - 楽観ロック（blob ID の compare-and-set）は Config だけ。memory / Conversation / Activity / TaskRun の保存 API へ revision 引数を足さない
+- **`config/secrets.yml` の共有世代は、Hub が値を受け取った後にだけ上げる。** この番号は「どの device も Hub から取得できる値」を指すので、手元で値を入力しただけで上げると、他 device が存在しない世代を取りに行く。2台で同時に入力した場合に同じ番号が別の値を指してしまい、下流のどこからも区別できなくなる（値を入力した時点では `local/secrets.json` に `pending_send` として持つ）
 - **directory 全体を reconcile する画面（intelligences）は、読んだファイルの revision だけでなく path 集合そのものも申告する**（`tree_revisions()` が返す `<dir>/` の entry）。読んだ時点で存在しなかったファイルには名前が無く、file 単位の比較では表せないため、他 device が足したファイルを黙って prune できてしまう。空 mapping を返すと `guarded_config_write()` が検査自体を省略する点にも注意する（team defaults を継承中の member がこれに当たる）
 - **書き込み API は「書き込み後の revision」を応答に載せる**（`ConfigWriteResponse.revisions`）。画面は保存後も開いたままで次の保存をしうるので、refetch を待たせず応答で cache を更新する。refetch 頼みだと保存が refetch を追い越したときに偽 409 になる
 - **共有ファイルへの書き込みは port が `guildbotics/utils/shared_write_lock.py` の `shared_write_lock()` を取る。** 同期は「Hub の内容の checkout〜commit」の全体を保持する。片方だけが慎重でも意味が無く、比較を通った保存が、その最中に採用された他 device の内容の上に着地しうる。これは Git から見れば普通のローカル書き込みなので、次の cycle で commit / push され、失われたことがどこにも残らない。network 区間では保持しない（保存が Hub を待つことになる）
@@ -485,6 +510,27 @@ desktop TypeScript 開発時の品質確認:
 - 下書きはそのまま登録できる体裁で書く。タイトル、再現条件、環境ごとの見え方、影響、やること、完了条件、関連を含める。この下書きが報告そのものなので、別途要約した短い報告で代替しない
 - 今回の変更に含めるか、別 issue にするか、見送るかはユーザーが決める。判断材料として、その失敗が今回の変更と性質・完了条件を共有するかどうかを示す
 - ユーザーの応答を待てない実行（workflow など）では、同じ下書きを完了報告や ticket / thread のコメントへそのまま載せ、登録はせずに判断を委ねる。「無関係なので無視した」で終わらせない
+
+## レビュー指摘への対応
+
+指摘を直しはじめる前に、次の 2 つを見る。どちらも「どこを直すか」ではなく「何を直すか」を決めるための問いで、
+これを飛ばして同じ PR に何ラウンドも指摘を招いた実例が 2 件ある（#432、#419）。
+
+- **同じ機構・同じ state に 2 回目の指摘が来たら、その機構を直す前に「その機構は要るのか」を問う。**
+  1 回目は個別の欠陥だが、2 回目は**その形が欠陥を生んでいる**疑いである。#419 では「送信が中断した状態からの
+  回復」を送信元 device だけが持つ marker に依存させ、marker が消える経路（値の再入力、マシンの喪失）を
+  指摘されるたびに出口を足していた。marker を廃して権威ある 2 つの記録の比較から導出したら、機構ごと
+  不要になりコード量が減った
+- **修正の形が「この経路のための出口・例外・フォールバックを足す」なら、足す前に
+  「その状態が存在しなくて済む形はあるか」を問う。** 出口を足す修正は、次の経路でまた足すことになる。
+  1 件目の修正でこの形になったら、その時点で疑う（2 件目の指摘を待たない）
+
+指摘された 1 件は標本であって母集団ではない。同じ種類の箇所が他にもないかを数え、**個別の修正にテストを
+足すのではなく母集団の列挙にテストを足す**手順は、`tests/guildbotics/app_api/test_config_write_boundary.py`
+が実例（#432）。母集団は「書く対象」で定義し、URL prefix のような入口の形で定義しない。
+
+指摘を受け入れるかどうかの判定基準（単一利用者前提でどこまで守るか）は別の問題で、team memory の
+「レビュー対応の判断基準（単一利用者前提のバランス）」を参照する。
 
 ## 変更時の実務ルール
 

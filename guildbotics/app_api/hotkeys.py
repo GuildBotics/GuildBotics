@@ -63,7 +63,7 @@ def validate_accelerator(accelerator: str, *, label: str) -> None:
     if not _BASE_KEY.match(base):
         raise AppApiError(
             "hotkey_invalid",
-            f"'{accelerator}' is not a usable key combination.",
+            params={"accelerator": accelerator},
             context={"assignment": label, "accelerator": accelerator},
         )
     if len(set(modifiers)) != len(modifiers) or any(
@@ -71,13 +71,13 @@ def validate_accelerator(accelerator: str, *, label: str) -> None:
     ):
         raise AppApiError(
             "hotkey_invalid",
-            f"'{accelerator}' is not a usable key combination.",
+            params={"accelerator": accelerator},
             context={"assignment": label, "accelerator": accelerator},
         )
     if not modifiers and not _FUNCTION_KEY.match(base):
         raise AppApiError(
             "hotkey_needs_modifier",
-            f"'{accelerator}' needs a modifier key.",
+            params={"accelerator": accelerator},
             context={"assignment": label, "accelerator": accelerator},
         )
 
@@ -95,7 +95,7 @@ def validate_settings(settings: HotkeySettings) -> None:
         if accelerator in seen:
             raise AppApiError(
                 "hotkey_conflict",
-                f"'{accelerator}' is already assigned to '{seen[accelerator]}'.",
+                params={"accelerator": accelerator, "command": seen[accelerator]},
                 context={
                     "assignment": label,
                     "accelerator": accelerator,

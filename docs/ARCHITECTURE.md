@@ -625,6 +625,37 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   into the environment. Consumers read it on demand through the secret store.
   Generated registration PEMs are written under the OS temporary directory and
   deleted after the keychain absorbs them.
+- **Distribution between machines** (`guildbotics/secrets/`, `hub/secret_host.py`,
+  `hub/secret_stream.py`): the shared history carries key names and generations only.
+  Values live in each machine's OS keychain, and the hub machine's keychain is the
+  distribution point they are taken from. A transfer happens only when the user asks
+  for one, over the standard input and output of one `guildbotics hub secret`
+  command run through OpenSSH: no relay file, no Git object, no temporary file.
+  Entries are framed as a JSON header line plus the exact bytes it declares, so a
+  value crosses a Windows machine unaltered and nothing that reads, logs, or reports
+  a header can carry one.
+- **Generations**: entering a value locally does not advance the shared generation —
+  that number names a value every device can obtain, so it is published only after
+  the hub holds the value. A send is built on the generation the *hub* reports, and
+  the hub refuses one whose base is not what it holds; that single check is what
+  stops two machines that read it at the same moment from both succeeding.
+- **A send that was cut off** between the two writes leaves the hub holding a
+  generation the shared history does not name. Nothing on the sending machine
+  records that: the comparison of the two authoritative records *is* the record, so
+  every device can see it, it survives the value being entered again there, and it
+  survives that machine being lost. A fetch adopts only the generation the shared
+  history names, so such a value is reported rather than spread; a send from any
+  device holding a value builds past it and settles the key. Both transfers refresh
+  the shared files first, since both read the current generation out of them.
+- **Which transfer applies** to which key is decided in `secrets/transfer.py`
+  (`can_send` / `can_fetch` / `bulk_send_keys` / `bulk_fetch_keys`) and travels to
+  the Desktop on the API model, so the CLI, the API, and the screen cannot come to
+  different answers about what a button offers. The transfer enforces the same
+  answer itself: a fetch asks `can_fetch` before the hub is reached and once more
+  inside the shared-write lock just before the value lands, and a send confirms the
+  local value is still the one that was sent before claiming this machine holds the
+  published generation — so a value typed while an exchange was in flight is never
+  silently overwritten or silently reported as shared.
 - **Tests**: an autouse `fake_keyring` fixture installs an in-memory keychain so
   tests never touch the developer's real OS store.
 

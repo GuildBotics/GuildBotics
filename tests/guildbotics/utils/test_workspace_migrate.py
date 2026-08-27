@@ -110,11 +110,12 @@ def test_migrate_converts_old_secrets_index_to_generation_schema(tmp_path, monke
 
     store = KeyringSecretStore(dest / ".guildbotics" / "config")
     assert sorted(store.keys()) == ["AIKO_GITHUB_ACCESS_TOKEN", "OPENAI_API_KEY"]
-    assert store.shared_generation("OPENAI_API_KEY") == 1
+    # Migrated keys start unshared: no hub has been given these values yet.
+    assert store.shared_generation("OPENAI_API_KEY") == 0
     # This device already holds the keychain values, so its device-local
     # generation record must exist after migration.
-    assert store.local_generation("OPENAI_API_KEY") == 1
-    assert store.local_generation("AIKO_GITHUB_ACCESS_TOKEN") == 1
+    assert store.local_generation("OPENAI_API_KEY") == 0
+    assert store.local_generation("AIKO_GITHUB_ACCESS_TOKEN") == 0
     assert (dest / ".guildbotics" / "local" / "secrets.json").is_file()
     index = load_yaml_dict(dest / ".guildbotics" / "config" / "secrets.yml")
     # The keychain namespace must survive so existing values stay readable.
@@ -303,5 +304,5 @@ def test_migrate_upgrades_dedicated_root_in_place(tmp_path, monkeypatch):
     # The old secrets index is converted and this device keeps its holdings.
     store = KeyringSecretStore(guild / "config")
     assert store.keys() == ["OPENAI_API_KEY"]
-    assert store.local_generation("OPENAI_API_KEY") == 1
+    assert store.local_generation("OPENAI_API_KEY") == 0
     assert result.destination == workspace.resolve()
