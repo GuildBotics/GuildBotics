@@ -113,6 +113,13 @@ def _collect_t_call_keys() -> set[str]:
         relative = path.relative_to(source_root)
         if relative.parts and relative.parts[0] == "cli":
             continue
+        if relative == Path("app_api/errors.py"):
+            # api_error_message() builds its key from AppApiError.message_key,
+            # which no literal scan here can follow. That family has its own
+            # population test: test_api_error_messages.py collects every
+            # message key from the raise sites and holds it to both locale
+            # files, placeholders included.
+            continue
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         aliases = _resolve_t_aliases(tree)

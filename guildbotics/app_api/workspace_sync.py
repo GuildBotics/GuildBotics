@@ -145,7 +145,7 @@ class WorkspaceSyncService:
 
     def create_hub(self) -> HubStatus:
         """Make this machine a hub, or report the one it already hosts."""
-        with _reporting("hub_create_failed", "This machine could not be made a hub."):
+        with _reporting("hub_create_failed"):
             host.create_hub()
         return self.get_hub()
 
@@ -162,7 +162,11 @@ class WorkspaceSyncService:
             return HubConnection(
                 is_local=True, workspace_ids=self._workspace_ids(location)
             )
-        with _reporting("hub_unreachable", f"{location.label} could not be reached."):
+        with _reporting(
+            "hub_unreachable",
+            "hub_target_unreachable",
+            params={"label": location.label},
+        ):
             host_key = connection.probe_host_key(location.endpoint)
         return HubConnection(
             endpoint=location.endpoint.target,
@@ -182,19 +186,19 @@ class WorkspaceSyncService:
         if not request.fingerprint:
             raise AppApiError(
                 "host_key_not_confirmed",
-                "Name the fingerprint that was confirmed before trusting a hub.",
                 status_code=400,
             )
         try:
             with _reporting(
-                "hub_unreachable", f"{location.label} could not be reached."
+                "hub_unreachable",
+                "hub_target_unreachable",
+                params={"label": location.label},
             ):
                 connection.trust_host_key(location.endpoint, request.fingerprint)
         except HostKeyChangedError as exc:
             raise AppApiError(
                 "host_key_changed",
-                f"{location.label} offered a different host key than the one "
-                "confirmed. Check the fingerprint again before trusting it.",
+                params={"label": location.label},
                 context={"detail": str(exc)},
                 status_code=409,
             ) from exc
@@ -206,9 +210,7 @@ class WorkspaceSyncService:
 
     def create_ssh_key(self) -> DeviceSshKey:
         """Return this device's public key, creating a key pair on first use."""
-        with _reporting(
-            "ssh_key_failed", "An SSH key could not be created on this device."
-        ):
+        with _reporting("ssh_key_failed"):
             key = connection.ensure_ssh_key()
             root = _workspace_root()
             if root is not None:
@@ -249,14 +251,14 @@ class WorkspaceSyncService:
         if workspace_id is None:
             raise AppApiError(
                 "workspace_not_configured",
-                "Select a workspace before reading its service owner.",
+                "workspace_not_configured.service_owner",
                 status_code=409,
             )
         repository = _repository()
         remote_url = repository.remote_url() if repository is not None else None
         if not remote_url:
             return WorkspaceServiceOwner(workspace_id=workspace_id)
-        with _reporting("hub_unreachable", "The service owner could not be read."):
+        with _reporting("hub_unreachable", "service_owner_read_failed"):
             client = self._relay_client(workspace_id, remote_url)
             try:
                 owner = client.owner_get()
@@ -272,17 +274,16 @@ class WorkspaceSyncService:
         if workspace_id is None or not remote_url:
             raise AppApiError(
                 "workspace_sync_disabled",
-                "Enable workspace synchronization before transferring service ownership.",
+                "workspace_sync_disabled.service_owner",
                 status_code=409,
             )
         current_device_id = ensure_device_identity().device_id
         if device_id != current_device_id:
             raise AppApiError(
                 "service_owner_target_invalid",
-                "The Desktop takeover can target only this device.",
                 status_code=400,
             )
-        with _reporting("hub_unreachable", "The service owner could not be changed."):
+        with _reporting("hub_unreachable", "service_owner_change_failed"):
             client = self._relay_client(workspace_id, remote_url)
             try:
                 previous = client.owner_get()
@@ -306,7 +307,9 @@ class WorkspaceSyncService:
         try:
             set_device_display_name(request.display_name)
         except ValueError as exc:
-            raise AppApiError("device_name_invalid", str(exc), status_code=400) from exc
+            raise AppApiError(
+                "device_name_invalid", reason=str(exc), status_code=400
+            ) from exc
         root = _workspace_root()
         if root is not None:
             publish_device_record(root, ssh_public_key_fingerprint=_key_fingerprint())
@@ -323,12 +326,11 @@ class WorkspaceSyncService:
         """
         location = _location(request.hub)
         target = request.workspace_id or _workspace_id() or ""
-        with _reporting("sync_preview_failed", "The hub could not be compared."):
+        with _reporting("sync_preview_failed"):
             if not target or target not in self._workspace_ids(location):
                 raise AppApiError(
                     "sync_preview_unavailable",
-                    f"{location.label} does not hold this workspace, so enabling "
-                    "synchronization would register it rather than join it.",
+                    params={"label": location.label},
                     status_code=409,
                 )
             url = connection.hub_remote_url(location, target)
@@ -349,7 +351,7 @@ class WorkspaceSyncService:
         location = _location(request.hub)
         url = self._remote_url(location, request.workspace_id, create=True)
         with (
-            _reporting("sync_enable_failed", "Synchronization could not be enabled."),
+            _reporting("sync_enable_failed", "sync_enable_failed.enable"),
             self._paused(),
         ):
             enroll(
@@ -375,12 +377,10 @@ class WorkspaceSyncService:
         if LocalSyncRepository(destination).holds_shared_content:
             raise AppApiError(
                 "workspace_already_exists",
-                "That directory already holds a GuildBotics workspace. "
-                "Enable synchronization on it instead of taking a copy.",
                 context={"workspace_dir": str(destination)},
                 status_code=409,
             )
-        with _reporting("sync_clone_failed", "The workspace could not be taken."):
+        with _reporting("sync_clone_failed"):
             url = connection.hub_remote_url(location, request.workspace_id)
             clone_workspace(
                 url,
@@ -432,12 +432,10 @@ class WorkspaceSyncService:
         if repository is None:
             raise AppApiError(
                 "workspace_not_configured",
-                "Select a workspace before discarding a rejected change.",
+                "workspace_not_configured.discard",
                 status_code=409,
             )
-        with _reporting(
-            "sync_discard_failed", "The rejected change could not be discarded."
-        ):
+        with _reporting("sync_discard_failed"):
             repository.discard_rejected(rejection_id)
         return self.get_status()
 
@@ -468,7 +466,6 @@ class WorkspaceSyncService:
             detail = status.last_error_code or status.state
             raise AppApiError(
                 "service_start_sync_failed",
-                "The service cannot start because workspace synchronization failed.",
                 context={"detail": detail},
                 status_code=409,
             )
@@ -479,7 +476,7 @@ class WorkspaceSyncService:
         if runtime is None:
             raise AppApiError(
                 "hub_unreachable",
-                "The service cannot start because the Hub is unavailable.",
+                "service_start_hub_unavailable",
                 status_code=409,
             )
         device_id = ensure_device_identity().device_id
@@ -493,7 +490,7 @@ class WorkspaceSyncService:
             )
             raise AppApiError(
                 exc.code,
-                str(exc),
+                reason=str(exc),
                 context=context,
                 status_code=409,
             ) from exc
@@ -517,7 +514,7 @@ class WorkspaceSyncService:
         manager = current_sync_manager()
         if manager is None:
             return self.activate()
-        with _reporting("sync_retry_failed", "Synchronization could not be retried."):
+        with _reporting("sync_retry_failed"):
             manager.resume()
         return self.get_status()
 
@@ -531,7 +528,7 @@ class WorkspaceSyncService:
         location = _location(request.hub)
         url = self._remote_url(location, request.workspace_id, create=True)
         with (
-            _reporting("sync_enable_failed", "The hub could not be changed."),
+            _reporting("sync_enable_failed", "sync_enable_failed.change"),
             self._paused(),
         ):
             enroll(
@@ -563,8 +560,7 @@ class WorkspaceSyncService:
         except SyncStillStoppingError as exc:
             raise AppApiError(
                 "workspace_sync_busy",
-                "Synchronization is still finishing its last cycle. "
-                "Try again in a moment.",
+                "workspace_sync_busy.cycle",
                 context={"detail": str(exc)},
                 status_code=409,
             ) from exc
@@ -665,7 +661,7 @@ class WorkspaceSyncService:
         remote_url = repository.remote_url() if repository is not None else None
         if workspace_id is None or not remote_url:
             return None
-        with _reporting("hub_unreachable", "The hub of this workspace is unknown."):
+        with _reporting("hub_unreachable", "hub_unknown"):
             return connection.location_from_remote_url(remote_url, workspace_id), (
                 workspace_id
             )
@@ -691,14 +687,22 @@ class WorkspaceSyncService:
         if create and not workspace_id:
             with _reporting(
                 "hub_register_failed",
-                f"{location.label} did not accept the workspace.",
+                params={"label": location.label},
             ):
                 connection.create_hub_workspace(location, target)
-        with _reporting("hub_unreachable", f"{location.label} could not be reached."):
+        with _reporting(
+            "hub_unreachable",
+            "hub_target_unreachable",
+            params={"label": location.label},
+        ):
             return connection.hub_remote_url(location, target)
 
     def _workspace_ids(self, location: HubLocation) -> list[str]:
-        with _reporting("hub_unreachable", f"{location.label} could not be reached."):
+        with _reporting(
+            "hub_unreachable",
+            "hub_target_unreachable",
+            params={"label": location.label},
+        ):
             return connection.list_hub_workspaces(location)
 
 
@@ -716,8 +720,6 @@ def _location(target: HubTarget) -> HubLocation:
         if host.read_hub() is None:
             raise AppApiError(
                 "hub_not_hosted",
-                "This machine hosts no hub. Give the address of the machine "
-                "that does, as user@host, or make this one a hub first.",
                 status_code=409,
             )
         return HubLocation()
@@ -726,7 +728,7 @@ def _location(target: HubTarget) -> HubLocation:
     except InvalidHubEndpointError as exc:
         raise AppApiError(
             "invalid_hub_endpoint",
-            str(exc),
+            reason=str(exc),
             context={"endpoint": endpoint},
             status_code=400,
         ) from exc
@@ -771,12 +773,10 @@ def _own_workspace_id() -> str:
     if root is None:
         raise AppApiError(
             "workspace_not_configured",
-            "Select a workspace before connecting it to a hub.",
+            "workspace_not_configured.connect",
             status_code=409,
         )
-    with _reporting(
-        "sync_enable_failed", "This workspace could not be given an identifier."
-    ):
+    with _reporting("sync_enable_failed", "sync_enable_failed.identity"):
         return ensure_workspace_identity(root).workspace_id
 
 
@@ -957,7 +957,9 @@ def _status_model(
 
 
 @contextmanager
-def _reporting(code: str, message: str) -> Iterator[None]:
+def _reporting(
+    code: str, message_key: str | None = None, *, params: dict[str, str] | None = None
+) -> Iterator[None]:
     """Turn a hub or repository failure into an answer the Desktop can show.
 
     These operations fail for ordinary reasons -- the hub is off, a key is not
@@ -968,5 +970,9 @@ def _reporting(code: str, message: str) -> Iterator[None]:
         yield
     except _HUB_FAILURES as exc:
         raise AppApiError(
-            code, message, context={"detail": str(exc)}, status_code=409
+            code,
+            message_key,
+            params=params,
+            context={"detail": str(exc)},
+            status_code=409,
         ) from exc

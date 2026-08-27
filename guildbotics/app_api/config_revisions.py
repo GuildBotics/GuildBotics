@@ -84,12 +84,12 @@ def apply_config_write[T](
     except SharedFileInvalidError as exc:
         # The caller named something that is not a config file at all, so this
         # is a malformed request rather than a race with another machine.
-        raise AppApiError("config_revision_invalid", str(exc), status_code=400) from exc
+        raise AppApiError(
+            "config_revision_invalid", reason=str(exc), status_code=400
+        ) from exc
     except StaleConfigWriteError as exc:
         raise AppApiError(
             CONFIG_CHANGED,
-            "This screen was loaded before a more recent change, so nothing "
-            "was saved. Reload it and make the change again.",
             context={"path": exc.relative_path, "revisions": exc.revisions},
             status_code=409,
         ) from exc

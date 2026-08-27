@@ -95,7 +95,7 @@ class WorkspaceSecretService:
         """
         self._sync.refresh()
         transfer, store = self._require_transfer()
-        with _reporting("The credentials could not be sent to the hub."):
+        with _reporting("secret_send_failed"):
             try:
                 outcomes = (
                     transfer.send(request.keys)
@@ -110,10 +110,6 @@ class WorkspaceSecretService:
                 # leave the user staring at that state with no way to read it.
                 raise AppApiError(
                     "secret_publish_failed",
-                    "The hub received the values, but recording them in this "
-                    "workspace failed, so the keys show as needing a check. "
-                    "Fix the cause below and send again: the next send builds "
-                    "on what the hub holds and settles the difference.",
                     context={"detail": str(exc)},
                     status_code=500,
                 ) from exc
@@ -128,7 +124,7 @@ class WorkspaceSecretService:
         """
         self._sync.refresh()
         transfer, store = self._require_transfer()
-        with _reporting("The credentials could not be fetched from the hub."):
+        with _reporting("secret_fetch_failed"):
             outcomes = (
                 transfer.fetch(request.keys)
                 if request.keys
@@ -158,7 +154,7 @@ class WorkspaceSecretService:
         if store is None or transfer is None:
             raise AppApiError(
                 "workspace_sync_disabled",
-                "Connect this workspace to a hub before transferring secrets.",
+                "workspace_sync_disabled.secrets",
                 status_code=409,
             )
         return transfer, store
@@ -256,7 +252,7 @@ def _secrets(
 
 
 @contextmanager
-def _reporting(message: str) -> Iterator[None]:
+def _reporting(message_key: str) -> Iterator[None]:
     """Report a hub that did not answer, rather than crashing on it.
 
     A hub that cannot be reached is the most ordinary thing that goes wrong in
@@ -269,7 +265,7 @@ def _reporting(message: str) -> Iterator[None]:
     except _HUB_FAILURES as exc:
         raise AppApiError(
             _hub_error_code(exc),
-            message,
+            message_key,
             context={"detail": str(exc)},
             status_code=409,
         ) from exc

@@ -2164,7 +2164,7 @@ async def test_troubleshoot_keeps_the_app_api_error_a_turn_raises(
 
     async def fail(*_: Any, **__: Any) -> Any:
         raise AppApiError(
-            "person_not_found", "Person 'bot' not found.", status_code=400
+            "person_not_found", reason="Person 'bot' not found.", status_code=400
         )
 
     monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)

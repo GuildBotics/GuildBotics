@@ -1,5 +1,14 @@
 let apiBase = import.meta.env.VITE_GUILDBOTICS_API_BASE ?? "http://127.0.0.1:8765";
 let sessionToken = import.meta.env.VITE_GUILDBOTICS_API_TOKEN ?? "";
+let apiLanguage = "en";
+
+/**
+ * Name the display language on every request, so error sentences come back
+ * in the language the screen is in. Kept in step by i18n's language events.
+ */
+export function setApiLanguage(language: string) {
+  apiLanguage = language;
+}
 
 export function configureApi(token: string, baseUrl?: string) {
   sessionToken = token;
@@ -1704,6 +1713,7 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
     method: "POST",
     headers: {
       "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Language": apiLanguage,
     },
     body: formData,
   });
@@ -1766,6 +1776,7 @@ async function request<T>(
     headers: {
       "Content-Type": "application/json",
       "X-GuildBotics-Session-Token": sessionToken,
+      "X-GuildBotics-Language": apiLanguage,
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });

@@ -103,6 +103,27 @@ def test_transferring_without_a_hub_is_refused_plainly(client: TestClient) -> No
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "workspace_sync_disabled"
+    assert (
+        response.json()["message"]
+        == "Connect this workspace to a hub before transferring secrets."
+    )
+
+
+def test_error_sentences_come_back_in_the_language_the_request_names(
+    client: TestClient,
+) -> None:
+    """The same refusal, in the language the screen said it is displaying."""
+    response = client.post(
+        "/workspace/secrets/send",
+        headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+        json={},
+    )
+
+    assert response.status_code == HTTP_CONFLICT
+    assert (
+        response.json()["message"]
+        == "認証情報を転送する前に、このワークスペースを Hub へ接続してください。"
+    )
 
 
 def test_a_value_entered_here_is_waiting_to_be_sent(connected: TestClient) -> None:

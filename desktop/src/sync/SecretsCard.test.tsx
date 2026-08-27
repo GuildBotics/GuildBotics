@@ -251,7 +251,10 @@ describe("SecretsCard", () => {
     await user.click(screen.getByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }));
 
     expect(await screen.findByText(t("sync.secrets.transferFailed"))).toBeInTheDocument();
-    expect(screen.getByText(t("apiErrors.secret_publish_failed"))).toBeInTheDocument();
+    // The sentence is the backend's, already rendered in the screen's language.
+    expect(
+      screen.getByText("The hub received the values, but recording them failed."),
+    ).toBeInTheDocument();
     expect(screen.getByText("config directory is read-only")).toBeInTheDocument();
     // A failed transfer may still have moved the hub's side, so the states
     // are asked for right away rather than left to the next poll.

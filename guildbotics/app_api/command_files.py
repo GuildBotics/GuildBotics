@@ -98,7 +98,9 @@ def decode_file_id(file_id: str) -> str:
         return base64.urlsafe_b64decode(file_id + padding).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
         raise _error(
-            "command_file_not_found", f"Unknown command file: {file_id!r}."
+            "command_file_not_found",
+            "command_file_not_found.unknown",
+            params={"file_id": file_id},
         ) from exc
 
 
@@ -137,8 +139,9 @@ class CommandFileService:
             if sibling.exists() or sibling.is_symlink():
                 raise _error(
                     "command_file_exists",
-                    f"Command '{command}' already exists.",
-                    {"relative_path": _relative_to(self._root, sibling)},
+                    "command_file_exists.exists",
+                    params={"command": command},
+                    context={"relative_path": _relative_to(self._root, sibling)},
                 )
         self._reject_shadowed_creation(command, target)
         source = _INITIAL_SOURCE[file_format] if content is None else content
@@ -159,8 +162,8 @@ class CommandFileService:
         if current != expected_revision:
             raise _error(
                 "command_file_changed",
-                "The command file changed since it was loaded.",
-                {"current_revision": current},
+                "command_file_changed.reloaded",
+                context={"current_revision": current},
             )
         self._atomic_write(path, content)
         return self._detail(path)
@@ -185,8 +188,8 @@ class CommandFileService:
         if current != expected_revision:
             raise _error(
                 "command_file_changed",
-                "The command file changed since it was loaded.",
-                {"current_revision": current},
+                "command_file_changed.reloaded",
+                context={"current_revision": current},
             )
         path.unlink()
         return self.list_files()
@@ -202,7 +205,8 @@ class CommandFileService:
             if change.command in commands:
                 raise _error(
                     "command_file_exists",
-                    f"Command '{change.command}' is proposed more than once.",
+                    "command_file_exists.duplicate",
+                    params={"command": change.command},
                 )
             commands.add(change.command)
             extension = EXTENSION_BY_FORMAT[change.format]
@@ -210,27 +214,27 @@ class CommandFileService:
             if change.relative_path != expected_relative:
                 raise _error(
                     "command_file_invalid_name",
-                    "The proposed command path does not match its name and format.",
-                    {"relative_path": change.relative_path},
+                    "command_file_invalid_name.path",
+                    context={"relative_path": change.relative_path},
                 )
             self._check_content(change.content)
             try:
                 validate_generated_command_source(extension, change.content)
             except CommandValidationError as exc:
-                raise _error(exc.code, str(exc), exc.context) from exc
+                raise _error(exc.code, reason=str(exc), context=exc.context) from exc
             if change.operation == "update":
                 target = self.resolve_existing(change.file_id)
                 if _relative_to(self._root, target) != expected_relative:
                     raise _error(
                         "command_file_changed",
-                        "The proposed update no longer targets the selected command.",
+                        "command_file_changed.retargeted",
                     )
                 current = target.read_bytes()
                 if file_revision(current) != change.expected_revision:
                     raise _error(
                         "command_file_changed",
-                        "The command file changed since the proposal was created.",
-                        {"current_revision": file_revision(current)},
+                        "command_file_changed.proposal",
+                        context={"current_revision": file_revision(current)},
                     )
                 mode = stat.S_IMODE(target.stat().st_mode)
             else:
@@ -240,8 +244,11 @@ class CommandFileService:
                     if sibling.exists() or sibling.is_symlink():
                         raise _error(
                             "command_file_exists",
-                            f"Command '{change.command}' already exists.",
-                            {"relative_path": _relative_to(self._root, sibling)},
+                            "command_file_exists.exists",
+                            params={"command": change.command},
+                            context={
+                                "relative_path": _relative_to(self._root, sibling)
+                            },
                         )
                 self._reject_shadowed_creation(change.command, target)
                 mode = 0o755 if change.format == "shell" else 0o644
@@ -249,7 +256,8 @@ class CommandFileService:
             if resolved in targets:
                 raise _error(
                     "command_file_exists",
-                    f"Command '{change.command}' is proposed more than once.",
+                    "command_file_exists.duplicate",
+                    params={"command": change.command},
                 )
             targets.add(resolved)
             prepared.append((change, target, mode))
@@ -290,8 +298,8 @@ class CommandFileService:
             context["resolved_relative_path"] = _display_relative(resolved)
         raise _error(
             "command_file_shadowed",
-            f"Command '{command}' would be shadowed by a higher-priority file.",
-            context,
+            params={"command": command},
+            context=context,
         )
 
     def _validate_command_name(self, command: str, extension: str) -> str:
@@ -311,7 +319,8 @@ class CommandFileService:
         if not is_within(resolved, root_resolved):
             raise _error(
                 "command_file_not_found",
-                f"Command path escapes the shared root: {relative!r}.",
+                "command_file_not_found.escapes",
+                params={"relative": relative},
             )
         return candidate
 
@@ -326,16 +335,22 @@ class CommandFileService:
             or "\x00" in relative
         ):
             raise _error(
-                "command_file_not_found", f"Unknown command file: {file_id!r}."
+                "command_file_not_found",
+                "command_file_not_found.unknown",
+                params={"file_id": file_id},
             )
         if not is_command_source_path(relative_path):
             raise _error(
-                "command_file_not_found", f"Unknown command file: {file_id!r}."
+                "command_file_not_found",
+                "command_file_not_found.unknown",
+                params={"file_id": file_id},
             )
         target = self._safe_target(relative)
         if not target.is_file():
             raise _error(
-                "command_file_not_found", f"Unknown command file: {file_id!r}."
+                "command_file_not_found",
+                "command_file_not_found.unknown",
+                params={"file_id": file_id},
             )
         # Only the effective shared file is editable: an inactive localized
         # sibling or a file shadowed by a higher-priority candidate is not shown
@@ -350,7 +365,9 @@ class CommandFileService:
             strict=False
         ):
             raise _error(
-                "command_file_not_found", f"Unknown command file: {file_id!r}."
+                "command_file_not_found",
+                "command_file_not_found.unknown",
+                params={"file_id": file_id},
             )
         return target
 
@@ -358,14 +375,12 @@ class CommandFileService:
         if "\x00" in content:
             raise _error(
                 "command_file_invalid_source",
-                "Command source must not contain NUL bytes.",
-                {"reason": "nul_byte"},
+                context={"reason": "nul_byte"},
             )
         if len(content.encode("utf-8")) > MAX_COMMAND_FILE_BYTES:
             raise _error(
                 "command_file_too_large",
-                "Command source exceeds the maximum allowed size.",
-                {"max_bytes": str(MAX_COMMAND_FILE_BYTES)},
+                context={"max_bytes": str(MAX_COMMAND_FILE_BYTES)},
             )
 
     def _atomic_write(self, path: Path, content: str, mode: int | None = None) -> None:
@@ -458,11 +473,18 @@ def _display_relative(path: Path) -> str:
 
 
 def _error(
-    code: str, message: str, context: dict[str, str] | None = None
+    code: str,
+    message_key: str | None = None,
+    *,
+    reason: str | None = None,
+    params: dict[str, str] | None = None,
+    context: dict[str, str] | None = None,
 ) -> AppApiError:
     return AppApiError(
         code,
-        message,
+        message_key,
+        reason=reason,
+        params=params,
         status_code=_STATUS_BY_CODE.get(code, 400),
         context=context or {},
     )
@@ -471,6 +493,7 @@ def _error(
 def _invalid_name(command: str) -> AppApiError:
     return _error(
         "command_file_invalid_name",
-        f"Invalid command name: {command!r}.",
-        {"command": command},
+        "command_file_invalid_name.value",
+        params={"command": command},
+        context={"command": command},
     )
