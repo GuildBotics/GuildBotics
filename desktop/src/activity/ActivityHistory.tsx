@@ -1269,17 +1269,17 @@ function formatShortTimestamp(iso: string): string {
   });
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 // The member cell is narrow, so the inline reset drops whichever half is
-// redundant: same-day resets show only the time, later resets only the date.
-// The full timestamp stays available in the row tooltip.
-function formatCompactReset(iso: string): string {
+// redundant: a reset less than 24 hours away shows the time, later resets
+// the date. Calendar day is the wrong cut — a 5h window that crosses
+// midnight is still soon, and the time is what you need. The full timestamp
+// stays in the row tooltip.
+export function formatCompactReset(iso: string, now: Date = new Date()): string {
   const date = new Date(iso);
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  if (sameDay) {
+  const remainingMs = date.getTime() - now.getTime();
+  if (Number.isFinite(remainingMs) && remainingMs >= 0 && remainingMs < MS_PER_DAY) {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
   return date.toLocaleDateString([], { month: "numeric", day: "numeric" });
@@ -1361,21 +1361,26 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
         }
         const level = !hasPercent ? "" : percent >= 100 ? "danger" : percent >= 80 ? "warning" : "";
         const summary = hasPercent ? `${labelPrefix}${percent}%` : labelPrefix.trim();
+        // The row uses display:contents, so the native tooltip has to live on
+        // the visible cells rather than the row wrapper.
+        const title = window.resets_at
+          ? `${summary}${summary ? " · " : ""}${formatShortTimestamp(window.resets_at)}`
+          : summary;
         return (
           <span
             key={`${window.window}-${index}`}
             className={`activity-member-usage-row${level ? ` activity-member-usage-${level}` : ""}`}
-            title={
-              window.resets_at
-                ? `${summary}${summary ? " · " : ""}${formatShortTimestamp(window.resets_at)}`
-                : summary
-            }
           >
-            {label ? <span className="activity-member-usage-window">{label}</span> : null}
+            {label ? (
+              <span className="activity-member-usage-window" title={title}>
+                {label}
+              </span>
+            ) : null}
             {hasPercent ? (
               <span
                 className="activity-member-usage-bar"
                 role="meter"
+                title={title}
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={percent}
@@ -1384,7 +1389,7 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
                 <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
               </span>
             ) : null}
-            <span className="activity-member-usage-value">
+            <span className="activity-member-usage-value" title={title}>
               {hasPercent ? `${percent}%${reset ? ` · ${reset}` : ""}` : reset}
             </span>
           </span>

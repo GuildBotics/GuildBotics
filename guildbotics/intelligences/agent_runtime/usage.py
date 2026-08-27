@@ -67,17 +67,23 @@ class CliAgentUsageSnapshot:
     checked_at: str = ""
 
 
+_CODEX_MAIN_LIMIT_ID = "codex"
+
+
 def parse_codex_rate_limits(result: Any) -> CliAgentUsageSnapshot:
     """Build a usage snapshot from an ``account/rateLimits/read`` result."""
     data = result if isinstance(result, dict) else {}
     buckets = data.get("rateLimitsByLimitId", data.get("rate_limits_by_limit_id"))
-    candidates = list(buckets.values()) if isinstance(buckets, dict) else []
+    candidates: list[tuple[Any, Any]] = (
+        list(buckets.items()) if isinstance(buckets, dict) else []
+    )
     rate_limits = data.get("rateLimits", data.get("rate_limits"))
     if not candidates and isinstance(rate_limits, dict):
-        candidates = [rate_limits]
-    windows: list[CliAgentUsageWindow] = []
+        candidates = [(_CODEX_MAIN_LIMIT_ID, rate_limits)]
+    main_windows: list[CliAgentUsageWindow] = []
+    extra_windows: list[CliAgentUsageWindow] = []
     limit_reached = False
-    for candidate in candidates:
+    for bucket_key, candidate in candidates:
         if not isinstance(candidate, dict):
             continue
         limit_reached = limit_reached or bool(
@@ -85,23 +91,44 @@ def parse_codex_rate_limits(result: Any) -> CliAgentUsageSnapshot:
                 "rateLimitReachedType", candidate.get("rate_limit_reached_type")
             )
         )
+        label = _codex_bucket_label(bucket_key, candidate)
+        # Main 5h/1w windows lead; extras may arrive first in the payload.
+        bucket_windows = extra_windows if label else main_windows
         for name in ("primary", "secondary"):
-            window = _parse_window(name, candidate.get(name))
+            window = _parse_window(name, candidate.get(name), label)
             if window is None:
                 continue
-            windows.append(window)
+            bucket_windows.append(window)
             limit_reached = limit_reached or (
                 (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT
             )
     return CliAgentUsageSnapshot(
         agent="codex",
-        windows=windows,
+        windows=main_windows + extra_windows,
         limit_reached=limit_reached,
         checked_at=datetime.now(UTC).isoformat(),
     )
 
 
-def _parse_window(name: str, raw: Any) -> CliAgentUsageWindow | None:
+def _codex_bucket_label(bucket_key: Any, candidate: dict[str, Any]) -> str:
+    """Qualify extra Codex buckets so equal-duration windows stay distinct.
+
+    The main ``codex`` bucket keeps an empty label so its 5h/1w meters stay
+    unchanged. Extra buckets prefer ``limitName`` (e.g. ``gpt-reserve``) and
+    fall back to ``limitId``.
+    """
+    limit_id = candidate.get("limitId", candidate.get("limit_id"))
+    if not isinstance(limit_id, str) or not limit_id:
+        limit_id = bucket_key if isinstance(bucket_key, str) else ""
+    if limit_id == _CODEX_MAIN_LIMIT_ID:
+        return ""
+    limit_name = candidate.get("limitName", candidate.get("limit_name"))
+    if isinstance(limit_name, str) and limit_name:
+        return limit_name
+    return limit_id
+
+
+def _parse_window(name: str, raw: Any, label: str = "") -> CliAgentUsageWindow | None:
     if not isinstance(raw, dict):
         return None
     value = raw.get("usedPercent", raw.get("used_percent"))
@@ -116,6 +143,7 @@ def _parse_window(name: str, raw: Any) -> CliAgentUsageWindow | None:
         used_percent=used_percent,
         resets_at=_parse_reset(raw.get("resetsAt", raw.get("resets_at"))),
         window_minutes=_parse_minutes(_first_present(raw, _WINDOW_MINUTES_KEYS)),
+        label=label,
     )
 
 

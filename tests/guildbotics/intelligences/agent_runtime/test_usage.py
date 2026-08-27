@@ -50,7 +50,9 @@ def test_parse_codex_rate_limits_reads_camel_case_buckets() -> None:
     assert primary.used_percent == 42.5
     assert primary.resets_at == "2033-05-18T03:33:20+00:00"
     assert primary.window_minutes == 300
+    assert primary.label == ""
     assert snapshot.windows[1].window_minutes == 10_080
+    assert snapshot.windows[1].label == ""
     assert snapshot.checked_at
 
 
@@ -62,6 +64,74 @@ def test_parse_codex_rate_limits_reads_snake_case_flat_shape() -> None:
     assert snapshot.limit_reached
     assert snapshot.windows[0].used_percent == 100
     assert snapshot.windows[0].window_minutes is None
+
+
+def test_parse_codex_rate_limits_labels_extra_buckets() -> None:
+    # Codex App Server reports a separate weekly quota (gpt-reserve) alongside
+    # the main 5h/1w windows. Same duration is not a duplicate; the extra
+    # bucket's limitName must survive so the UI can tell the two 1w meters
+    # apart. Extra buckets may arrive first in the payload; the main windows
+    # still lead the snapshot so the compact meters stay 5h, 1w, then extras.
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "base_model_inference": {
+                    "limitId": "base_model_inference",
+                    "limitName": "gpt-reserve",
+                    "primary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 10_080,
+                        "resetsAt": 1_788_427_524,
+                    },
+                    "secondary": None,
+                },
+                "codex": {
+                    "limitId": "codex",
+                    "limitName": None,
+                    "primary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1_787_840_724,
+                    },
+                    "secondary": {
+                        "usedPercent": 0,
+                        "windowDurationMins": 10_080,
+                        "resetsAt": 1_788_427_524,
+                    },
+                },
+            }
+        }
+    )
+
+    assert [
+        (window.window, window.window_minutes, window.label)
+        for window in snapshot.windows
+    ] == [
+        ("primary", 300, ""),
+        ("secondary", 10_080, ""),
+        ("primary", 10_080, "gpt-reserve"),
+    ]
+
+
+def test_parse_codex_rate_limits_uses_limit_id_when_name_missing() -> None:
+    snapshot = parse_codex_rate_limits(
+        {
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "primary": {"usedPercent": 10, "windowDurationMins": 300},
+                },
+                "base_model_inference": {
+                    "limitName": None,
+                    "primary": {"usedPercent": 20, "windowDurationMins": 10_080},
+                },
+            }
+        }
+    )
+
+    assert [window.label for window in snapshot.windows] == [
+        "",
+        "base_model_inference",
+    ]
 
 
 def test_parse_codex_rate_limits_honors_reached_type_flag() -> None:
