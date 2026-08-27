@@ -260,6 +260,39 @@ describe("SecretsCard", () => {
     );
   });
 
+  it("shows only the most recent transfer's failure", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({
+        sendable_keys: ["A_TOKEN"],
+        fetchable_keys: ["B_TOKEN"],
+        pending_count: 1,
+        attention_count: 1,
+      }),
+    );
+    vi.mocked(sendWorkspaceSecrets).mockRejectedValue(
+      new ApiRequestError({ code: "hub_unreachable", message: "unreachable", context: {} }),
+    );
+    vi.mocked(fetchWorkspaceSecrets).mockResolvedValue({
+      results: [{ key: "B_TOKEN", status: "fetched", generation: 1 }],
+      secrets: secrets(),
+    });
+    renderCard();
+
+    await user.click(
+      await screen.findByRole("button", { name: t("sync.secrets.sendAll", { count: 1 }) }),
+    );
+    expect(await screen.findByText(t("sync.secrets.transferFailed"))).toBeInTheDocument();
+
+    // A fetch that succeeds afterwards must not leave the send's failure on
+    // screen, telling the user the transfer that just worked went wrong.
+    await user.click(
+      screen.getByRole("button", { name: t("sync.secrets.fetchAll", { count: 1 }) }),
+    );
+
+    await waitFor(() => expect(screen.queryByText(t("sync.secrets.transferFailed"))).toBeNull());
+  });
+
   it("explains what happened and what settles it when a badge is hovered", async () => {
     const user = userEvent.setup();
     vi.mocked(getWorkspaceSecrets).mockResolvedValue(

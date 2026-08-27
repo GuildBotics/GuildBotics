@@ -246,7 +246,8 @@ describe("saying where the hub is", () => {
     // "could not be reached" covers an unregistered device key, a name that
     // does not resolve, and a hub whose command is missing. Which one it is
     // only exists in the detail, and dropping it left the screen unable to
-    // name any of the three fixes.
+    // name any of the three fixes. The sentence itself is localized by the
+    // error's code.
     const user = userEvent.setup();
     vi.mocked(inspectHub).mockRejectedValue(
       new ApiRequestError({
@@ -262,7 +263,7 @@ describe("saying where the hub is", () => {
     renderSettings();
     await lookUpHub(user);
 
-    expect(await screen.findByText("hub.local could not be reached.")).toBeInTheDocument();
+    expect(await screen.findByText(t("apiErrors.hub_unreachable"))).toBeInTheDocument();
     expect(screen.getByText(/Connection timed out/)).toBeInTheDocument();
   });
 

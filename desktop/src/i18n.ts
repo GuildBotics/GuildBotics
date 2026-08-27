@@ -9,11 +9,43 @@ const resources = {
   en: {
     translation: {
       // Localized messages for backend API errors, keyed by their `code`.
-      // A code without an entry falls back to the backend's own sentence,
-      // so keys are added per code as they gain a translation.
+      // A code without an entry falls back to the backend's own sentence --
+      // deliberate for codes whose message IS the specific reason (e.g.
+      // device_name_invalid, invalid_hub_endpoint); every code a sync screen
+      // can surface has an entry here.
       apiErrors: {
+        config_busy:
+          "Synchronization is still writing to this workspace, so nothing was saved. Try again in a moment.",
+        host_key_changed:
+          "The hub offered a different host key than the one confirmed. Check the fingerprint again before trusting it.",
+        host_key_not_confirmed:
+          "The hub's host key has not been confirmed yet. Check the fingerprint, then continue.",
+        hub_create_failed: "This machine could not be made a hub.",
+        hub_not_hosted:
+          "That machine hosts no hub. Give the address of the machine that does, as user@host, or make it a hub first.",
+        hub_register_failed: "The hub did not accept the workspace.",
+        hub_unreachable:
+          "The hub machine could not be reached. Check that it is running and that the address is right, then try again.",
+        openssh_missing: "No OpenSSH client was found. Install OpenSSH, then try again.",
         secret_publish_failed:
           "The hub received the values, but recording them in this workspace failed, so the keys show as needing a check. Fix the cause below and send again: the next send builds on what the hub holds and settles the difference.",
+        service_owner_target_invalid: "The Desktop takeover can target only this device.",
+        service_start_sync_failed:
+          "The service cannot start because workspace synchronization failed.",
+        ssh_key_failed: "An SSH key could not be created on this device.",
+        sync_clone_failed: "The workspace could not be taken from the hub.",
+        sync_discard_failed: "The rejected change could not be discarded.",
+        sync_enable_failed: "Synchronization could not be enabled.",
+        sync_preview_failed: "The hub could not be compared.",
+        sync_preview_unavailable:
+          "The hub does not hold this workspace, so enabling synchronization would register it rather than join it.",
+        sync_retry_failed: "Synchronization could not be retried.",
+        workspace_already_exists:
+          "That directory already holds a GuildBotics workspace. Enable synchronization on it instead of taking a copy.",
+        workspace_not_configured: "Select a workspace first, then try again.",
+        workspace_sync_busy:
+          "Synchronization is still finishing its last cycle. Try again in a moment.",
+        workspace_sync_disabled: "Connect this workspace to a hub first.",
       },
       app: {
         nav: {
@@ -1889,8 +1921,38 @@ const resources = {
   ja: {
     translation: {
       apiErrors: {
+        config_busy:
+          "同期がこのワークスペースへ書き込み中のため、保存されませんでした。少し待ってから、もう一度実行してください。",
+        host_key_changed:
+          "Hub が、確認済みのものと異なるホスト鍵を提示しました。信頼する前に、もう一度 fingerprint を確認してください。",
+        host_key_not_confirmed:
+          "Hub のホスト鍵がまだ確認されていません。fingerprint を確認してから続行してください。",
+        hub_create_failed: "このマシンを Hub にできませんでした。",
+        hub_not_hosted:
+          "そのマシンは Hub を動かしていません。Hub を動かしているマシンを user@host の形で指定するか、先にそのマシンを Hub にしてください。",
+        hub_register_failed: "Hub がこのワークスペースを受け付けませんでした。",
+        hub_unreachable:
+          "Hub マシンに接続できませんでした。Hub の稼働と接続先を確認してから、もう一度実行してください。",
+        openssh_missing:
+          "OpenSSH クライアントが見つかりません。OpenSSH をインストールしてから、もう一度実行してください。",
         secret_publish_failed:
           "Hub マシンは値を受け取りましたが、このワークスペースへの記録に失敗したため、該当の key は「確認が必要です」と表示されます。下記の原因を解消してから、もう一度送信してください。次の送信は Hub が持つ世代を引き継いで差分を解消します。",
+        service_owner_target_invalid: "Desktop への引き継ぎは、このマシンだけを対象にできます。",
+        service_start_sync_failed: "ワークスペースの同期に失敗したため、サービスを開始できません。",
+        ssh_key_failed: "このマシンで SSH 鍵を作成できませんでした。",
+        sync_clone_failed: "Hub からワークスペースを取得できませんでした。",
+        sync_discard_failed: "退避された変更を破棄できませんでした。",
+        sync_enable_failed: "同期を有効にできませんでした。",
+        sync_preview_failed: "Hub と比較できませんでした。",
+        sync_preview_unavailable:
+          "Hub はこのワークスペースを保持していないため、同期を有効にすると参加ではなく新規登録になります。",
+        sync_retry_failed: "同期を再試行できませんでした。",
+        workspace_already_exists:
+          "そのディレクトリには既に GuildBotics ワークスペースがあります。複製ではなく、そのワークスペースで同期を有効にしてください。",
+        workspace_not_configured: "先にワークスペースを選択してから、もう一度実行してください。",
+        workspace_sync_busy:
+          "同期がまだ前の cycle を終えていません。少し待ってから、もう一度実行してください。",
+        workspace_sync_disabled: "先にこのワークスペースを Hub へ接続してください。",
       },
       app: {
         nav: {

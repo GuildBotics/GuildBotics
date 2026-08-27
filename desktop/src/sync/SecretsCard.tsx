@@ -75,13 +75,12 @@ export function SecretsCard() {
   // asked for right away rather than left to the next poll, and the screen
   // shows what the failure left behind next to the message saying why.
   const refreshStates = () => void queryClient.invalidateQueries({ queryKey: SECRETS_QUERY_KEY });
-  const fetching = useMutation({
-    mutationFn: (keys: string[]) => fetchWorkspaceSecrets({ keys }),
-    onSuccess: applied,
-    onError: refreshStates,
-  });
-  const sending = useMutation({
-    mutationFn: (keys: string[]) => sendWorkspaceSecrets({ keys }),
+  // One mutation for both directions. The alert below shows its error, which
+  // a new attempt clears -- two mutations would keep a failed send on screen
+  // through every later fetch, since neither ever resets the other.
+  const transfer = useMutation({
+    mutationFn: ({ kind, keys }: { kind: "fetch" | "send"; keys: string[] }) =>
+      kind === "send" ? sendWorkspaceSecrets({ keys }) : fetchWorkspaceSecrets({ keys }),
     onSuccess: applied,
     onError: refreshStates,
   });
@@ -93,7 +92,8 @@ export function SecretsCard() {
   // Only how many the buttons say, and whether there is anything to press.
   const fetchable = data.fetchable_keys;
   const sendable = data.sendable_keys;
-  const busy = fetching.isPending || sending.isPending;
+  const busy = transfer.isPending;
+  const active = transfer.isPending ? transfer.variables.kind : null;
   return (
     <Card withBorder radius="md" p="md">
       <Stack gap="sm">
@@ -110,10 +110,7 @@ export function SecretsCard() {
             {t(`sync.secrets.alert.${alert}.body`)}
           </Alert>
         ) : null}
-        <RequestErrorAlert
-          cause={sending.error ?? fetching.error}
-          title={t("sync.secrets.transferFailed")}
-        />
+        <RequestErrorAlert cause={transfer.error} title={t("sync.secrets.transferFailed")} />
         {refused.length > 0 ? (
           <Alert
             color="warning"
@@ -137,16 +134,16 @@ export function SecretsCard() {
         <Group gap="xs">
           <Button
             disabled={fetchable.length === 0 || busy}
-            loading={fetching.isPending}
-            onClick={() => fetching.mutate([])}
+            loading={active === "fetch"}
+            onClick={() => transfer.mutate({ kind: "fetch", keys: [] })}
             size="xs"
           >
             {t("sync.secrets.fetchAll", { count: fetchable.length })}
           </Button>
           <Button
             disabled={sendable.length === 0 || busy}
-            loading={sending.isPending}
-            onClick={() => sending.mutate([])}
+            loading={active === "send"}
+            onClick={() => transfer.mutate({ kind: "send", keys: [] })}
             size="xs"
             variant="light"
           >
@@ -172,8 +169,8 @@ export function SecretsCard() {
                 <SecretRow
                   busy={busy}
                   key={state.key}
-                  onFetch={() => fetching.mutate([state.key])}
-                  onSend={() => sending.mutate([state.key])}
+                  onFetch={() => transfer.mutate({ kind: "fetch", keys: [state.key] })}
+                  onSend={() => transfer.mutate({ kind: "send", keys: [state.key] })}
                   state={state}
                 />
               ))}
