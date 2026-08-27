@@ -13,6 +13,7 @@ import {
   blockModes,
   blockHoverCardPosition,
   buildActivityBlocks,
+  formatCompactReset,
   matchActivityHistory,
   orderedActivityLinks,
   stackedEventTops,
@@ -538,6 +539,10 @@ describe("ActivityHistoryPage", () => {
     return new Date(iso).toLocaleDateString([], { month: "numeric", day: "numeric" });
   }
 
+  function localeShortTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   function localeShortDateTime(iso: string): string {
     return new Date(iso).toLocaleString([], {
       month: "numeric",
@@ -688,11 +693,11 @@ describe("ActivityHistoryPage", () => {
 
     expect(await screen.findByRole("meter", { name: "5h 42%" })).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "1w 78%" })).toBeInTheDocument();
-    // Same-day resets show only the time inline to fit the narrow member
-    // cell; the full timestamp lives in the row tooltip.
+    // Resets less than 24h away show only the time inline to fit the
+    // narrow member cell; the full timestamp lives in the row tooltip.
     expect(screen.getByText(/42%/)).not.toHaveTextContent(localeShortDate("2026-07-01T14:00:00Z"));
     expect(screen.getByText(/42%/)).toHaveTextContent(/42% · \d{1,2}:\d{2}/);
-    expect(screen.getByText(/42%/).closest(".activity-member-usage-row")).toHaveAttribute(
+    expect(screen.getByText(/42%/)).toHaveAttribute(
       "title",
       expect.stringContaining(localeShortDateTime("2026-07-01T14:00:00Z")),
     );
@@ -700,6 +705,57 @@ describe("ActivityHistoryPage", () => {
     expect(screen.getByText(/78%/)).toHaveTextContent(localeShortDate("2026-07-04T09:00:00Z"));
     expect(screen.getByText(/78%/)).not.toHaveTextContent(/\d{1,2}:\d{2}/);
     expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
+  it("shows the time when a 5h reset crosses midnight but is still within 24h", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 0,
+          resets_at: "2026-07-02T06:00:00Z",
+          window_minutes: 300,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    const value = await screen.findByText(/0%/);
+    expect(value).toHaveTextContent(localeShortTime("2026-07-02T06:00:00Z"));
+    expect(value).not.toHaveTextContent(localeShortDate("2026-07-02T06:00:00Z"));
+  });
+
+  it("distinguishes same-duration Codex windows by the extra bucket label", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 0,
+          window_minutes: 300,
+        },
+        {
+          window: "secondary",
+          used_percent: 0,
+          window_minutes: 10080,
+        },
+        {
+          window: "primary",
+          used_percent: 0,
+          window_minutes: 10080,
+          label: "gpt-reserve",
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 0%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w 0%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w gpt-reserve 0%" })).toBeInTheDocument();
+    expect(
+      [...document.querySelectorAll(".activity-member-usage-window")].map((el) => el.textContent),
+    ).toEqual(["5h", "1w", "1w gpt-reserve"]);
   });
 
   it("prefers measured usage over stale rate-limit events for the member badge", async () => {
@@ -828,7 +884,7 @@ describe("ActivityHistoryPage", () => {
       localeShortDate("2026-07-04T09:00:00Z"),
     );
     expect(screen.queryByRole("meter")).toBe(null);
-    expect(row.closest(".activity-member-usage-row")).toHaveAttribute(
+    expect(row).toHaveAttribute(
       "title",
       expect.stringContaining(localeShortDateTime("2026-07-04T09:00:00Z")),
     );
@@ -928,6 +984,39 @@ describe("ActivityHistoryPage", () => {
       null,
     );
     expect(screen.getByRole("button", { name: "PR #7 Merged" })).toBeInTheDocument();
+  });
+});
+
+describe("formatCompactReset", () => {
+  const now = new Date("2026-07-01T12:00:00Z");
+
+  function localeShortDate(iso: string): string {
+    return new Date(iso).toLocaleDateString([], { month: "numeric", day: "numeric" });
+  }
+
+  function localeShortTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  it("shows the time when the reset is later today", () => {
+    expect(formatCompactReset("2026-07-01T14:00:00Z", now)).toBe(
+      localeShortTime("2026-07-01T14:00:00Z"),
+    );
+  });
+
+  it("shows the time when the reset is tomorrow but still within 24 hours", () => {
+    expect(formatCompactReset("2026-07-02T06:00:00Z", now)).toBe(
+      localeShortTime("2026-07-02T06:00:00Z"),
+    );
+  });
+
+  it("shows the date when the reset is 24 hours away or later", () => {
+    expect(formatCompactReset("2026-07-02T12:00:00Z", now)).toBe(
+      localeShortDate("2026-07-02T12:00:00Z"),
+    );
+    expect(formatCompactReset("2026-07-04T09:00:00Z", now)).toBe(
+      localeShortDate("2026-07-04T09:00:00Z"),
+    );
   });
 });
 

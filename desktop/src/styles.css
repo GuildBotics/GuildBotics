@@ -1559,42 +1559,44 @@ pre {
   }
 }
 
+/* One grid for the whole member: label / 52px bar / value. display:contents
+   on the row lets every window share those columns, so bars stay aligned
+   without subgrid (which WebView may ignore). The bar track is a fixed 52px
+   so a longer label ellipsizes instead of shrinking this member's meters. */
 .activity-member-usage {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px max-content;
+  column-gap: 4px;
+  font-size: 10px;
+  line-height: 1.2;
   margin-top: 4px;
   min-width: 0;
+  row-gap: 2px;
+  width: 100%;
 }
 
-/* No flex-wrap here: wrapping is decided from pre-shrink sizes, so it would
-   kick in even when shrinking the bar could fit everything on one line. */
 .activity-member-usage-row {
-  align-items: center;
   color: var(--color-text-subtle);
-  display: flex;
-  font-size: 10px;
-  gap: 4px;
-  line-height: 1.2;
-  min-width: 0;
+  display: contents;
 }
 
 .activity-member-usage-window {
-  flex-shrink: 0;
-  min-width: 16px;
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* The bar absorbs all shrinking so the percent and reset text stay fully
-   visible; in the worst case the text wraps to the next line instead of
-   being clipped. */
 .activity-member-usage-bar {
   background: var(--color-border);
   border-radius: 2px;
-  flex: 1 1 32px;
+  grid-column: 2;
   height: 4px;
-  max-width: 52px;
-  min-width: 10px;
+  min-width: 52px;
   overflow: hidden;
+  width: 52px;
 }
 
 .activity-member-usage-fill {
@@ -1612,7 +1614,7 @@ pre {
 }
 
 .activity-member-usage-value {
-  flex-shrink: 0;
+  grid-column: 3;
   white-space: nowrap;
 }
 
