@@ -163,6 +163,8 @@ This is the flow where you ask a member for work through a GitHub Projects ticke
 
 **Note**: GitHub integration is optional. Without it you can still use the Slack chat workflow and automate commands on a schedule.
 
+**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App, so that the per-repository boundary is enforced by GitHub's own authorization. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
+
 ### What It Does
 
 - **Assign work on the task board**: pick the member in the ticket's `Agent` field and move the ticket to the ready lane, and the member runs that task
@@ -172,7 +174,7 @@ This is the flow where you ask a member for work through a GitHub Projects ticke
 
 ### Create a GitHub Project
 
-Create a GitHub Projects (v2) project and add the following columns (statuses) up front:
+Create a GitHub Projects (v2) project in the organization and add the following columns (statuses) up front:
 
 - Todo (ready)
 - In Progress
@@ -187,14 +189,34 @@ Prepare an account the member uses to access GitHub. Any of the following works:
 - **Machine account** (machine user)
   - Recommended if you want the feel of "working with an AI agent through the task board and pull requests". Note that under [GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#3-account-requirements), each user may create only one free machine account.
 - **GitHub App**
-  - There is no limit on the number of accounts, but a GitHub App cannot access a GitHub Project owned by a **personal** account. GitHub also labels it as a bot, which takes away some of the atmosphere.
-- **Proxy agent** (use your own account for the AI agent)
-  - The simplest option. With this approach it looks less like working with an AI agent and more like talking to yourself.
+  - There is no limit on the number of accounts. GitHub labels it as a bot, which takes away some of the atmosphere.
 
 **Using a machine account**:
 
-1. Add the machine account you created to the Project and the repository as a collaborator
-2. Issue a **Classic** PAT (Personal Access Token) with both the `repo` and `project` scopes
+Issue a **fine-grained personal access token** for the machine account, scoped to the target repositories only. Classic PATs are not used: a classic PAT reaches every repository the account can see, so it cannot carry a per-repository boundary.
+
+1. Make the machine account a **member** of the organization. Invitations are sent from the organization's People page (`https://github.com/orgs/<org>/people`) with **Invite member**. After it joins, confirm the account appears in the **Members** list on that page (if it appears under **Outside collaborators** instead, it is not a member, and an outside collaborator cannot select the organization as the fine-grained PAT's **Resource owner** in a later step)
+2. Allow fine-grained PAT access on the organization side: in the organization's **Settings → Third-party Access → Personal access tokens → Settings**, select **Allow access via fine-grained personal access tokens**. If **Require administrator approval** is enabled, the token you create in a later step does not work until an organization owner approves it under **Settings → Third-party Access → Personal access tokens → Pending requests**
+3. On each repository that member works on, open **Settings → Collaborators and teams** and add the machine account as a collaborator (Write or higher) (when the organization grants Write or higher to all members under **Member privileges → Base permissions**, no individual entry is needed; the default is Read)
+4. Open the Project board, choose **Settings** from the **…** menu at the top right, and check **Manage access** (this is the Project's own settings page, not the organization's Settings). The **Who has access** section at the top of the page shows the Project's **Base role** — the permission every organization member gets on this Project (a separate setting from the repository Base permissions in step 3). When the Base role is Write or higher, no individual entry is needed. When it is Read or lower, add the machine account as a collaborator (Write or higher) with **Invite collaborators**
+5. Sign in as the machine account, open **Settings → Developer settings → Personal access tokens → Fine-grained tokens**, and press **Generate new token**
+6. Configure the token as follows
+
+   - **Token name**: anything (for example `guildbotics-alice`)
+   - **Expiration**: your choice (when it expires, reissue the token and re-register it in the desktop app)
+   - **Resource owner**: select the target **organization**, not the machine account itself
+   - **Repository access**: choose **Only select repositories** and select only the repositories that member works on
+   - **Repository permissions**:
+     - **Contents**: Read and write (cloning the repository and pushing the working branch)
+     - **Issues**: Read and write (reading and writing issues, comments, labels, open/close, reactions)
+     - **Metadata**: Read-only (added automatically once any other permission is selected)
+     - **Pull requests**: Read and write (creating and updating PRs, review comments and replies, reactions)
+     - **Workflows**: Read and write (only if the member changes files under `.github/workflows`)
+   - **Organization permissions**:
+     - **Projects**: Read and write (reading the Projects v2 board and creating / updating the `Agent` field)
+
+7. Press **Generate token** and copy the token shown (it cannot be displayed again once you leave the page). If a **Pending** badge appears next to the token name, it is awaiting approval and does not work until an organization owner approves it on the **Pending requests** page from step 2; complete the approval before moving on
+8. In the desktop app, open **Setup → Members → GitHub**, select "Machine Account (Machine User)", paste the token into **Access token**, and save
 
 **Using a GitHub App**:
 
@@ -210,11 +232,7 @@ When adding **Workflows** to an existing App, approve the requested permission u
 After creating the GitHub App:
 
 1. Use "Generate a private key" on the GitHub App settings page to download and store the `.pem` file
-2. Install the app to your repository / organization from "Install App" and obtain the **installation ID**. The trailing number of the URL shown after installation (`.../settings/installations/<installation ID>`) is the installation ID. Keep it — you need it during configuration
-
-**Using a proxy agent**:
-
-Issue a **Classic** PAT for your own account as well, with both the `repo` and `project` scopes.
+2. Install the app to the organization from "Install App" and obtain the **installation ID**. Select only the repositories that member works on. The trailing number of the URL shown after installation (`.../settings/installations/<installation ID>`) is the installation ID. Keep it — you need it during configuration
 
 ### Prepare Credentials and the Execution Environment
 
@@ -485,7 +503,7 @@ same input again after the result has been pushed.
 
 **GitHub access** (per member, format: `{PERSON_ID}_...`):
 
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: PAT for a machine account / proxy agent
+- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: fine-grained PAT for a machine account
 - GitHub App IDs live in the member YAML (`account_info.github_app_id` / `github_installation_id`); the PEM is stored in the OS keychain as `{PERSON_ID}_GITHUB_PRIVATE_KEY`
 
 Secrets stored in the OS keychain are loaded automatically. GuildBotics does not read a workspace `.env`.
@@ -861,7 +879,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | `guildbotics` command not found | On macOS/Linux, run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. On Windows, open a new shell after installation and check `%USERPROFILE%\.guildbotics\bin` in the user PATH |
 | Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
-| Cannot write to GitHub | Check the member's PAT scopes (`repo` + `project`) or the GitHub App permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this |
+| Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |

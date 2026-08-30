@@ -1030,7 +1030,7 @@ guildbotics member github pr create [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
-| `--draft [auto\|true\|false]` | Open as a draft PR; 'auto' drafts when the member is a proxy agent. [default: auto] |
+| `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

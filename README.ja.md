@@ -163,6 +163,8 @@ GitHub Projects のチケットでメンバーに作業を依頼し、調査・�
 
 **注**: GitHub 統合は任意です。GitHub 統合なしでも、Slack チャットワークフローやスケジュール実行によるコマンド自動化は利用できます。
 
+**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とし、リポジトリ単位の境界を GitHub 側の認可で作ります。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
+
 ### できること
 
 - **タスクボードでのタスク依頼**: チケットの `Agent` フィールドでメンバーを選び、着手可能レーンへ移動すれば、メンバーがそのタスクを実行します
@@ -172,7 +174,7 @@ GitHub Projects のチケットでメンバーに作業を依頼し、調査・�
 
 ### GitHub プロジェクトを作成する
 
-GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステータス）をあらかじめ追加しておきます。
+organization で GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステータス）をあらかじめ追加しておきます。
 
 - Todo（着手可能）
 - In Progress（進行中）
@@ -187,14 +189,33 @@ GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステ�
 - **マシンアカウント**（マシンユーザー）
   - 「AIエージェントとタスクボードやPull Requestを通じて対話しながら進める」という雰囲気が味わえるという意味でおすすめの方法ですが、[GitHub の利用規約上](https://docs.github.com/ja/site-policy/github-terms/github-terms-of-service#3-account-requirements)、無料で作成できるマシンアカウントは、1ユーザーにつき1つだけとなっていますのでご注意ください。
 - **GitHub App**
-  - アカウント作成数に制限がないというメリットはありますが、**個人**アカウントの GitHub Project へのアクセスはできません。また、GitHub サイト上ではボットであることが明記されるため、少し雰囲気が削がれます。
-- **代理エージェント**（自分自身のアカウントを AI エージェント用に利用する）
-  - 最も簡単な利用方法です。ただし、この方法の場合、AIエージェントと対話しながら進めるというよりは自問自答しているという見た目になります。
+  - アカウント作成数に制限がないというメリットがあります。ただし、GitHub サイト上ではボットであることが明記されるため、少し雰囲気が削がれます。
 
 **マシンアカウントを利用する場合**:
 
-1. 作成したマシンアカウントを Project およびリポジトリに Collaborator として追加してください
-2. **Classic** PAT (Personal Access Token) を発行してください。スコープは `repo` と `project` の 2 つを選択してください
+マシンアカウントには、対象リポジトリだけに権限を絞った **fine-grained PAT**（Fine-grained personal access token）を発行します。Classic PAT は利用しません（Classic PAT はアカウントがアクセスできる全リポジトリに及ぶため、リポジトリ単位の境界を作れません）。
+
+1. 作成したマシンアカウントを organization の**メンバー**として参加させてください。招待は organization の People ページ（`https://github.com/orgs/<org名>/people`）の **Invite member** から行えます。参加後、同じページの **Members** 一覧にマシンアカウントが表示されることを確認してください（**Outside collaborators** 側に表示されている場合はメンバーではありません。outside collaborator のままでは、後の手順で fine-grained PAT の **Resource owner** に organization を選べません）
+2. organization 側で fine-grained PAT のアクセスを許可してください。organization の **Settings → Third-party Access → Personal access tokens → Settings** で **Allow access via fine-grained personal access tokens** を選択します。**Require administrator approval** を有効にしている場合は、後の手順でトークンを発行したあと、organization の owner が **Settings → Third-party Access → Personal access tokens → Pending requests** で承認するまでトークンは機能しません
+3. 担当させる各リポジトリの **Settings → Collaborators and teams** で、マシンアカウントを Collaborator（Write 以上）として追加してください（organization の **Member privileges → Base permissions** で全メンバーに Write 以上を与えている場合は個別追加不要ですが、既定は Read です）
+4. Project のボードを開き、右上の **…**（三点）メニューから **Settings** を選び、**Manage access** を確認してください（organization の Settings ではなく、Project 自体の設定画面です）。画面上部の **Who has access** に、この Project の **Base role**（organization のメンバー全員に与えられる権限。手順 3 のリポジトリの Base permissions とは別の設定です）が表示されます。Base role が Write 以上なら個別追加は不要です。Read 以下の場合は、**Invite collaborators** でマシンアカウントを Collaborator（Write 以上）として追加してください
+5. マシンアカウントでログインし、**Settings → Developer settings → Personal access tokens → Fine-grained tokens** を開き、**Generate new token** を押してください
+6. 以下を設定します
+   - **Token name**: 任意（例: `guildbotics-alice`）
+   - **Expiration**: 任意（期限が切れたら再発行し、デスクトップアプリに再登録してください）
+   - **Resource owner**: マシンアカウント自身ではなく、対象の **organization** を選択します
+   - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します
+   - **Repository permissions**:
+     - **Contents**: Read and write（リポジトリの複製と作業ブランチの push）
+     - **Issues**: Read and write（Issue の読み書き、コメント、ラベル、開閉、リアクション）
+     - **Metadata**: Read-only（他の権限を選ぶと自動で付きます）
+     - **Pull requests**: Read and write（PR の作成・更新、レビューコメントと返信、リアクション）
+     - **Workflows**: Read and write（メンバーに `.github/workflows` 配下を変更させる場合のみ）
+   - **Organization permissions**:
+     - **Projects**: Read and write（Projects v2 のボード読み取りと、`Agent` フィールドの作成・更新）
+
+7. **Generate token** を押し、表示されたトークンをコピーしてください（この画面を離れると再表示できません）。発行後にトークン名の横へ **Pending** と表示された場合は承認待ちの状態で、organization の owner が手順 2 の **Pending requests** で承認するまでそのトークンは機能しません。承認を済ませてから次へ進んでください
+8. デスクトップアプリの **設定 → メンバー → GitHub** タブで「マシンアカウント（マシンユーザー）」を選び、**アクセストークン** に貼り付けて保存してください
 
 **GitHub App を利用する場合**:
 
@@ -210,11 +231,7 @@ GitHub Projects (v2) のプロジェクトを作成し、以下の列（ステ�
 GitHub App 作成後に以下の作業を行ってください。
 
 1. GitHub App 設定ページで「Generate a private key」により `.pem` ファイルをダウンロードして、保存してください
-2. 「Install App」からリポジトリ/組織にインストールを行い、**インストールID**を取得してください。インストール後に表示された画面の URL の末尾の数字（`.../settings/installations/<インストールID>`）がインストール ID です。設定時に利用するため、メモしておいてください
-
-**代理エージェントを利用する場合**:
-
-自分自身のアカウントを利用する場合も、**Classic** PAT を発行してください。スコープは `repo` と `project` の 2 つを選択してください。
+2. 「Install App」から organization にインストールを行い、**インストールID**を取得してください。インストール先のリポジトリは、そのメンバーに担当させるものだけを選択してください。インストール後に表示された画面の URL の末尾の数字（`.../settings/installations/<インストールID>`）がインストール ID です。設定時に利用するため、メモしておいてください
 
 ### 認証情報と実行環境を準備する
 
@@ -364,6 +381,7 @@ commands:
   - name: os_ui_language
     command: functions/get_os_ui_language
 ---
+
 入力メッセージは構造化データです。
 {% if os_ui_language.language_code == "en" %}
 `input`フィールドのテキストが日本語であれば英語に、英語であれば日本語に翻訳してください。
@@ -480,7 +498,7 @@ publisher が heartbeat を止め、状態が失効すると消えます。完�
 
 **GitHub アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
 
-- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント/代理エージェント用 PAT
+- `{PERSON_ID}_GITHUB_ACCESS_TOKEN`: マシンアカウント用の fine-grained PAT
 - GitHub App の ID はメンバー YAML（`account_info.github_app_id` / `github_installation_id`）に置き、PEM は OS キーチェーンの `{PERSON_ID}_GITHUB_PRIVATE_KEY` に保存します
 
 OS キーチェーンに保存されたシークレットは自動で読み込まれます。GuildBotics はワークスペースの `.env` を読みません。
@@ -548,6 +566,7 @@ SSH 鍵はワークスペースではなくマシンに属するため「device�
    ことの証明になるためです。これは接続できなかったときの対処ではなく前提条件です。次の手順で
    Hub のワークスペース一覧を SSH 経由で取得しますが、同期は SSH を非対話モードで実行するため、
    未登録の鍵はパスワード入力へ切り替わらずそこで失敗します。
+
 4. ワークスペースを持つマシンから、Hub マシンが SSH 経由で自身のコマンドに応答することを
    確認します。
 
@@ -559,6 +578,7 @@ SSH 鍵はワークスペースではなくマシンに属するため「device�
    非対話 SSH セッションの PATH に載っている必要があります。対話ログイン時の PATH とは
    一致しないことがあります。見つからない場合は
    [SSH 経由で `guildbotics` が見つからない](#ssh-経由で-guildbotics-が見つからない)を参照してください。
+
 5. デスクトップアプリに戻り、「同期」で Hub のアドレスを `user@host` の形で入力し
    「確認する」を選びます。
 6. 表示された fingerprint を Hub マシン側のものと見比べ、一致するものを確認します。Hub マシンでは
@@ -570,6 +590,7 @@ SSH 鍵はワークスペースではなくマシンに属するため「device�
 
    鍵を確認できるのはこの 1 回だけです。以降の同期は SSH を非対話モードで実行するため、
    OpenSSH 自身の初回確認プロンプトは表示されません。
+
 7. 「このワークスペースを Hub に登録する」を選びます。このワークスペース用の repository
    `~/.guildbotics/hub/workspaces/<ワークスペース ID>/repository.git` は、ここで作られます。
 
@@ -735,12 +756,12 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 その退避が表示されているマシンで、以下のコマンドを実行してください。コマンド中の記号は次の
 とおり置き換えます。
 
-| 記号 | 入れるもの |
-| --- | --- |
-| `<workspace>` | そのワークスペースのディレクトリ（「設定 → プロジェクト」の「ワークスペース」欄の値） |
-| `<回復用 ID>` | 一覧の「回復用 ID」の値 |
-| `<path>` | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/person.yml`） |
-| `<path>...` | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/person.yml`） |
+| 記号          | 入れるもの                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------------- |
+| `<workspace>` | そのワークスペースのディレクトリ（「設定 → プロジェクト」の「ワークスペース」欄の値）                         |
+| `<回復用 ID>` | 一覧の「回復用 ID」の値                                                                                       |
+| `<path>`      | 一覧の「対象ファイル」の 1 つ（例: `config/team/members/yuki/person.yml`）                                    |
+| `<path>...`   | 「対象ファイル」を空白区切りで並べたもの（例: `config/team/project.yml config/team/members/yuki/person.yml`） |
 
 1. 退避された内容を読みます。現在採用されている内容との差分を表示します（`+` の行が退避された側）。
 
@@ -783,15 +804,15 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 
 #### sidebar の表示の意味
 
-| 状態 | 意味 | 操作 |
-| --- | --- | --- |
-| 同期済み | このマシンと Hub の内容が一致 | なし |
-| 送信保留 | 未送信の変更がある | なし。自動で送信されます |
-| 受信中 | Hub の更新を取り込み中 | 待機 |
-| Hub 不達 | ローカル利用は可能、共有は遅延 | 待機、または「再試行」。回復しない場合は [1 台目を設定する](#1-台目を設定する)の SSH の前提条件を確認 |
-| 送信できない変更 | このマシンで直すまで共有できないファイルがある | 「同期設定」で対象と理由を確認 |
-| 共有データ異常 | 自動収束できなかった | 「同期設定」を開く |
-| 更新が必要 | 別マシンが新しいバージョンで書いた内容がある | このマシンの GuildBotics を更新 |
+| 状態             | 意味                                           | 操作                                                                                                  |
+| ---------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| 同期済み         | このマシンと Hub の内容が一致                  | なし                                                                                                  |
+| 送信保留         | 未送信の変更がある                             | なし。自動で送信されます                                                                              |
+| 受信中           | Hub の更新を取り込み中                         | 待機                                                                                                  |
+| Hub 不達         | ローカル利用は可能、共有は遅延                 | 待機、または「再試行」。回復しない場合は [1 台目を設定する](#1-台目を設定する)の SSH の前提条件を確認 |
+| 送信できない変更 | このマシンで直すまで共有できないファイルがある | 「同期設定」で対象と理由を確認                                                                        |
+| 共有データ異常   | 自動収束できなかった                           | 「同期設定」を開く                                                                                    |
+| 更新が必要       | 別マシンが新しいバージョンで書いた内容がある   | このマシンの GuildBotics を更新                                                                       |
 
 ### 設定ファイル
 
@@ -830,15 +851,15 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 
 ## トラブルシューティング
 
-| 症状 | 最初に確認すること |
-| --- | --- |
-| `guildbotics` コマンドが見つからない | macOS / Linux では `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。Windows では install 後に新しい shell を開き、user PATH の `%USERPROFILE%\.guildbotics\bin` を確認します |
-| どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います |
-| メンバーが動作しない・設定に不安がある | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください |
-| GitHub に書き込めない | メンバーの PAT スコープ（`repo` + `project`）または GitHub App の Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます |
-| Slack イベントを受信しない | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください |
-| コマンド実行が失敗した | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます |
-| スケジューラが止まった | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください |
+| 症状                                         | 最初に確認すること                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `guildbotics` コマンドが見つからない         | macOS / Linux では `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。Windows では install 後に新しい shell を開き、user PATH の `%USERPROFILE%\.guildbotics\bin` を確認します                                                                                                                                                                                                                  |
+| どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
+| メンバーが動作しない・設定に不安がある       | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
+| GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます |
+| Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください                                                                                                                                                                                                                                       |
+| コマンド実行が失敗した                       | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
+| スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |
 
 **診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
 

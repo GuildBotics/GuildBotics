@@ -37,7 +37,6 @@ class GitHubAppAuth(httpx.Auth):
     HUMAN: ClassVar[str] = "human"
     MACHINE_USER: ClassVar[str] = "machine_user"
     GITHUB_APPS: ClassVar[str] = "github_apps"
-    PROXY_AGENT: ClassVar[str] = "proxy_agent"
     handles_unauthorized: ClassVar[bool] = True
 
     requires_request_body = True
@@ -219,20 +218,6 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
     return client
 
 
-def get_signature_line(content: str) -> str:
-    """
-    Get the signature for a given content.
-
-    Args:
-        content (str): The content to check.
-
-    Returns:
-        str: The signature.
-    """
-    lines = content.splitlines()
-    return lines[-1] if lines else ""
-
-
 def get_github_username(person: Person, strict: bool = False) -> str:
     """
     Get the GitHub username of the person.
@@ -250,68 +235,51 @@ def get_github_account_type(person: Person) -> str:
     return str(person.account_info.get("github_account_type", "")).strip()
 
 
-def get_person_name(members: list[Person], username: str, comment_body: str) -> str:
+def get_person_name(members: list[Person], username: str) -> str:
     """
     Get the person name associated with a GitHub username.
 
     Args:
+        members (list[Person]): The team members to search.
         username (str): The GitHub username.
-        comment_body (str): The body of the comment.
 
     Returns:
         str: The person name.
     """
-    signature = get_signature_line(comment_body)
-    if signature.startswith("⚙"):
-        person_id = signature[1:].strip()
-        for member in members:
-            if member.person_id == person_id:
-                return member.name
-
     for member in members:
-        if is_proxy_agent(member):
-            continue
         if get_github_username(member) == username:
             return member.name
     return ""
 
 
-def is_proxy_agent(person: Person) -> bool:
+def get_agent_token(person: Person) -> str:
     """
-    Check if the current person is a proxy agent.
+    Get the token that addresses a member on GitHub.
+
+    The token names the member's option in the project's ``Agent`` field and is
+    also how a member is mentioned in issue and pull request text, because a
+    non-human member cannot always be a GitHub assignee.
+
+    Args:
+        person (Person): The member to address.
 
     Returns:
-        bool: True if the person is a proxy agent, False otherwise.
-    """
-    return get_github_account_type(person) == GitHubAppAuth.PROXY_AGENT
-
-
-def get_proxy_agent_signature(person: Person) -> str:
-    """
-    Get the signature for the proxy agent.
-
-    Returns:
-        str: The proxy agent's signature.
+        str: The member's agent token.
     """
     return f"⚙{person.person_id}"
 
 
-def get_author_type(person: Person, username: str, content: str) -> str:
+def get_author_type(person: Person, username: str) -> str:
     """
     Get the author type (user or assistant) for a given username.
 
     Args:
+        person (Person): The member reading the message.
         username (str): The username to check.
-        content (str): The content of the message.
 
     Returns:
         str: The author type.
     """
-    if is_proxy_agent(person):
-        if get_signature_line(content) == get_proxy_agent_signature(person):
-            return Message.ASSISTANT
-        else:
-            return Message.USER
     if username == get_github_username(person, strict=True):
         return Message.ASSISTANT
     return Message.USER

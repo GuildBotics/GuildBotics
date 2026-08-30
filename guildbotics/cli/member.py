@@ -1740,9 +1740,9 @@ async def _pr_inspect(
 @click.option("--issue-url", default="", help="Related issue URL to link to the PR.")
 @click.option(
     "--draft",
-    type=click.Choice(["auto", "true", "false"]),
-    default="auto",
-    help="Open as a draft PR; 'auto' drafts when the member is a proxy agent.",
+    type=click.Choice(["true", "false"]),
+    default="false",
+    help="Open the pull request as a draft.",
 )
 @_json_format_option
 def pr_create(

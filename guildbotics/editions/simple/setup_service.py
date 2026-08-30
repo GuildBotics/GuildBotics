@@ -847,7 +847,6 @@ class SimplePersonSetupService:
             "human",
             "machine_user",
             "github_apps",
-            "proxy_agent",
         }:
             github_account_type = person_type
         configured_roles = profile.get("roles", {}) if isinstance(profile, dict) else {}
@@ -1186,7 +1185,7 @@ class SimplePersonSetupService:
         github_account_type = (config.github_account_type or config.person_type).strip()
         if github_account_type in {"", "none", "human"}:
             return bool(config.github_username.strip())
-        return github_account_type in {"machine_user", "github_apps", "proxy_agent"}
+        return github_account_type in {"machine_user", "github_apps"}
 
     def _build_slack_message_channel(
         self, channel: str, *, person_id: str, participation: str = "strict"

@@ -89,7 +89,7 @@ class FakeClient:
         return FakeResponse([], status_code=self.delete_status_codes.get(endpoint, 200))
 
 
-def _service(person_type="proxy_agent"):
+def _service(person_type="machine_user"):
     person = Person(
         person_id="aiko",
         name="Aiko",
@@ -268,7 +268,7 @@ async def test_context_without_check_credentials_is_unchecked():
 
 
 @pytest.mark.asyncio
-async def test_pr_reply_uses_pull_replies_endpoint_and_proxy_signature():
+async def test_pr_reply_uses_pull_replies_endpoint():
     service = _service()
     fake = FakeClient()
     fake.graphql_payloads.append(_review_threads_payload())
@@ -282,14 +282,14 @@ async def test_pr_reply_uses_pull_replies_endpoint_and_proxy_signature():
     assert fake.posts[-1:] == [
         (
             "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed.\n\n⚙aiko"},
+            {"body": "Fixed."},
             None,
         )
     ]
 
 
 @pytest.mark.asyncio
-async def test_pr_review_comment_posts_diff_coordinates_and_proxy_signature():
+async def test_pr_review_comment_posts_diff_coordinates():
     service = _service()
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls/7"] = {
@@ -319,7 +319,7 @@ async def test_pr_review_comment_posts_diff_coordinates_and_proxy_signature():
         (
             "/repos/owner/repo/pulls/7/comments",
             {
-                "body": "Please simplify this branch.\n\n⚙aiko",
+                "body": "Please simplify this branch.",
                 "commit_id": "abc123",
                 "path": "guildbotics/example.py",
                 "line": 12,
@@ -397,7 +397,7 @@ async def test_pr_reply_allows_outdated_thread():
     assert fake.posts[-1:] == [
         (
             "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed.\n\n⚙aiko"},
+            {"body": "Fixed."},
             None,
         )
     ]
@@ -418,7 +418,7 @@ async def test_pr_reply_allows_resolved_thread():
     assert fake.posts[-1:] == [
         (
             "/repos/owner/repo/pulls/7/comments/101/replies",
-            {"body": "Fixed.\n\n⚙aiko"},
+            {"body": "Fixed."},
             None,
         )
     ]
@@ -1300,6 +1300,32 @@ async def test_pr_create_uses_explicit_base_branch():
         },
         None,
     )
+
+
+@pytest.mark.asyncio
+async def test_pr_create_opens_a_draft_when_draft_is_true():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/pulls"] = {
+        "number": 8,
+        "html_url": "https://github.com/owner/repo/pull/8",
+        "draft": True,
+    }
+    service._client = fake
+
+    result = await service.pr_create(
+        "owner/repo",
+        "feature",
+        "main",
+        "Title",
+        "Body",
+        "",
+        "true",
+    )
+
+    assert result["draft"] is True
+    assert fake.posts[0][1]["draft"] is True
 
 
 @pytest.mark.asyncio

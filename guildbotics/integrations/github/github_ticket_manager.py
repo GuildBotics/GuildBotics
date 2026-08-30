@@ -11,11 +11,10 @@ from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
+    get_agent_token,
     get_author_type,
     get_github_username,
     get_person_name,
-    get_proxy_agent_signature,
-    is_proxy_agent,
 )
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
@@ -58,7 +57,7 @@ class GitHubTicketManager(TicketManager):
         self.client: AsyncClient | None = None
         self.username = get_github_username(person, strict=True)
         self._username_lower = self.username.lower() if self.username else ""
-        self._mention_token = f"⚙{self.person.person_id}"
+        self._mention_token = get_agent_token(person)
 
         self.lane_map = self._load_lane_map(cast(dict | None, config.get("lane_map")))
 
@@ -78,7 +77,7 @@ class GitHubTicketManager(TicketManager):
             if member.person_type not in ["", "human"]:
                 agents.append(
                     {
-                        "name": get_proxy_agent_signature(member),
+                        "name": get_agent_token(member),
                         "description": member.name,
                     }
                 )
@@ -289,7 +288,7 @@ class GitHubTicketManager(TicketManager):
         Read-only. ``options`` are the members currently registered as field
         options; ``missing`` are configured non-human members not yet registered
         (what :meth:`sync_agent_field` would add). Each entry is
-        ``{"name": <signature>, "description": <member name>}``.
+        ``{"name": <agent token>, "description": <member name>}``.
         """
         self.custom_fields = {}  # force a fresh read
         fields = await self._get_custom_fields()
@@ -612,8 +611,8 @@ class GitHubTicketManager(TicketManager):
             cursor = payload["pageInfo"]["endCursor"]
         return all_items
 
-    def _is_my_response(self, username: str, content: str) -> bool:
-        return get_author_type(self.person, username, content) == Message.ASSISTANT
+    def _is_my_response(self, username: str) -> bool:
+        return get_author_type(self.person, username) == Message.ASSISTANT
 
     def _is_my_reaction(self, reaction: dict[str, Any]) -> bool:
         user = reaction.get("user") or {}
@@ -627,45 +626,21 @@ class GitHubTicketManager(TicketManager):
                 return True
         return False
 
-    def _strip_signature_line(self, text: str, signature: str) -> str:
-        """
-        Remove the trailing signature line if it matches the provided signature.
-        Args:
-            text (str): The original text.
-            signature (str): The signature line to remove.
-        Returns:
-            str: The text without the signature line.
-        """
-        stripped = text.rstrip()
-        if not stripped:
-            return ""
-        lines = stripped.splitlines()
-        if lines and lines[-1].strip() == signature:
-            return "\n".join(lines[:-1])
-        return text
-
-    def _text_mentions_me(
-        self, text: str | None, *, ignore_signature: bool = False
-    ) -> bool:
+    def _text_mentions_me(self, text: str | None) -> bool:
         """
         Return True when the given text contains a mention of the current user.
         Args:
             text (str | None): The text to check for mentions.
-            ignore_signature (bool): Whether to ignore the signature line.
         Returns:
             bool: True if the text mentions the user, False otherwise.
         """
         if not text:
             return False
 
-        content = text
-        if ignore_signature:
-            content = self._strip_signature_line(content, self._mention_token)
-
-        if self._mention_token and self._mention_token in content:
+        if self._mention_token and self._mention_token in text:
             return True
 
-        if not is_proxy_agent(self.person) and self._username_lower:
+        if self._username_lower:
             mention_re = (
                 r"(^|[^A-Za-z0-9_])@"
                 + re.escape(self._username_lower)
@@ -687,10 +662,9 @@ class GitHubTicketManager(TicketManager):
 
         comments = []
         for c in comments_data:
-            author_type = get_author_type(self.person, c["user"]["login"], c["body"])
+            author_type = get_author_type(self.person, c["user"]["login"])
             author = (
-                get_person_name(self.team.members, c["user"]["login"], c["body"])
-                or author_type
+                get_person_name(self.team.members, c["user"]["login"]) or author_type
             )
             comments.append(
                 Message(
@@ -711,7 +685,7 @@ class GitHubTicketManager(TicketManager):
         """
         pending = self._text_mentions_me(description)
         for comment in comments:
-            if self._text_mentions_me(comment.content, ignore_signature=True):
+            if self._text_mentions_me(comment.content):
                 pending = True
             if comment.author_type == Message.ASSISTANT:
                 pending = False
@@ -905,8 +879,7 @@ class GitHubTicketManager(TicketManager):
         last_comment = comments[-1]
         author = last_comment.get("author") or {}
         login = str(author.get("login") or "")
-        body = str(last_comment.get("body") or "")
-        if login and self._is_my_response(login, body):
+        if login and self._is_my_response(login):
             return False
         return not await self._comment_has_my_reaction(last_comment)
 
@@ -1002,9 +975,7 @@ class GitHubTicketManager(TicketManager):
             # Assignees and the Agent field are independent ways to assign this
             # member, and both can be set at once. Each active one carries its
             # own request time, so the most recent of them is the live request.
-            by_assignee = not is_proxy_agent(self.person) and any(
-                a.get("login") == self._username_lower for a in assignees
-            )
+            by_assignee = any(a.get("login") == self._username_lower for a in assignees)
             agent_field = GitHubTicketManager.FIELD_AGENT
             by_agent_field = field_values.get(agent_field) == self._mention_token
             is_assigned = by_assignee or by_agent_field
@@ -1221,8 +1192,6 @@ class GitHubTicketManager(TicketManager):
 
             if not has_author_mention:
                 comment = f"@{author_login}\n\n{comment}"
-        if is_proxy_agent(self.person):
-            comment = f"{comment}\n\n{self._mention_token}"
         await client.post(
             f"{self._get_issue_path(task.repository)}/{issue_number}/comments",
             json={"body": comment},

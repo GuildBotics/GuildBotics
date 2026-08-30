@@ -44,7 +44,7 @@ def test_render_and_parse_workflow_status_comment_round_trip():
         retry_after_at="2026-07-05T21:37:00+09:00",
         retry_after_text="try again at 9:37 PM",
     )
-    # The body may contain proxy agent signatures or @mentions.
+    # The body may contain agent tokens or @mentions.
     body = "@user\n\nSome human readable text.\n\n⚙aiko"
     rendered = render_workflow_status_comment(body=body, payload=payload)
 

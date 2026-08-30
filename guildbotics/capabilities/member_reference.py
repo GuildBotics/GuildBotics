@@ -116,7 +116,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
-                "[--issue-url <url>] [--draft auto|true|false]",
+                "[--issue-url <url>] [--draft true|false]",
                 "Open a PR, or return the existing open PR for the same head and base branches.",
             ),
             (

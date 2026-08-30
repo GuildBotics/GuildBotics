@@ -1005,7 +1005,6 @@ const resources = {
             none: "Do not link GitHub",
             machine_user: "Machine Account (Machine User)",
             github_apps: "GitHub Apps",
-            proxy_agent: "Proxy Agent (use your own account as an AI agent)",
             human: "Human",
           },
           tabs: {
@@ -2571,7 +2570,6 @@ const resources = {
             none: "GitHub連携なし",
             machine_user: "マシンアカウント（マシンユーザー）",
             github_apps: "GitHub Apps",
-            proxy_agent: "代理エージェント（自分自身のアカウントをAIエージェント用に利用する）",
             human: "人間",
           },
           tabs: {
