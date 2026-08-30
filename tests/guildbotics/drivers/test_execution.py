@@ -278,6 +278,23 @@ def test_task_run_begin_deduplicates_terminal_work_and_finishes() -> None:
         set_workspace_sync_port(None)
 
 
+def test_task_run_begin_allows_same_identity_for_different_members() -> None:
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        first = coordinator.begin("event-shared", "alice", "device-1")
+        assert first.accepted is True
+        coordinator.finish(first.run_id or "", "succeeded", "done")
+
+        second = coordinator.begin("event-shared", "bob", "device-1")
+        assert second.accepted is True
+        assert second.record is not None
+        assert second.record.member_id == "bob"
+    finally:
+        set_workspace_sync_port(None)
+
+
 def test_task_run_mark_interrupted_allows_a_new_identity_run() -> None:
     port = _BarrierPort()
     set_workspace_sync_port(port)

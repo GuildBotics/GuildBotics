@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from guildbotics.drivers.execution import ExecutionCoordinator
+from guildbotics.drivers.execution import ExecutionCoordinator, TaskRunCoordinator
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
@@ -115,6 +115,40 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
     assert retry_context["max_attempts"] == 5
     assert retry_context["is_final_attempt"] is False
     assert retry_context["run_id"]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    for person_id in ("yuki", "aiko"):
+        store.upsert_pending_event("slack", person_id, "C1", _event(), "strict")
+
+    ran: list[str] = []
+
+    class _FakeRunner:
+        def __init__(self, context, command, args):
+            self.person_id = context.person.person_id
+
+        async def run(self):
+            ran.append(self.person_id)
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
+    )
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    for person_id in ("yuki", "aiko"):
+        processed = await dispatcher.process_person(
+            Person(person_id=person_id, name=person_id, is_active=True)
+        )
+        assert processed == 1
+
+    assert ran == ["yuki", "aiko"]
 
 
 @pytest.mark.asyncio

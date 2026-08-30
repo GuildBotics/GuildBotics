@@ -356,10 +356,11 @@ class TaskRunCoordinator(ExecutionCoordinator):
     ) -> BeginResult:
         """Atomically accept a new work identity and publish its start.
 
-        The identity scan and record creation share the workspace write lock,
-        so two devices cannot both accept the same event or schedule slot.
-        The exact write's sync notification is then awaited outside that local
-        lock; a failed barrier never starts the caller's workflow.
+        The member/identity scan and record creation share the workspace write
+        lock, so two devices cannot both accept the same event or schedule slot
+        for one member. The exact write's sync notification is then awaited
+        outside that local lock; a failed barrier never starts the caller's
+        workflow.
         """
         owner_state = self._owner_state()
         if owner_state is False:
@@ -379,7 +380,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
             existing = [
                 record
                 for record in store.find_by_work_identity(identity)
-                if record.status != "interrupted"
+                if record.member_id == member_id and record.status != "interrupted"
             ]
             if existing:
                 record = max(existing, key=lambda item: item.started_at)
