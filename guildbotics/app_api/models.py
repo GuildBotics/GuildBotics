@@ -1183,7 +1183,7 @@ class ProjectStatusOptionsResponse(BaseModel):
 
 
 class AgentFieldOption(BaseModel):
-    """A single ``Agent`` field option, keyed by a member's proxy signature."""
+    """A single ``Agent`` field option, keyed by a member's agent token."""
 
     name: str
     description: str = ""
@@ -1225,7 +1225,7 @@ class DefaultPersonUpdateRequest(BaseModel):
 
 
 class MemberResolveRequest(BaseModel):
-    person_type: Literal["human", "machine_user", "github_apps", "proxy_agent"]
+    person_type: Literal["human", "machine_user", "github_apps"]
     identity: str = Field(min_length=1)
 
 

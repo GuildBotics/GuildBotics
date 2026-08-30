@@ -256,13 +256,7 @@ const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
-const GITHUB_ACCOUNT_TYPE_OPTIONS = [
-  "none",
-  "human",
-  "machine_user",
-  "github_apps",
-  "proxy_agent",
-] as const;
+const GITHUB_ACCOUNT_TYPE_OPTIONS = ["none", "human", "machine_user", "github_apps"] as const;
 const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 type GitHubAccountType = (typeof GITHUB_ACCOUNT_TYPE_OPTIONS)[number];
 type GitHubMemberType = Exclude<GitHubAccountType, "none">;
@@ -3244,8 +3238,7 @@ function MembersSection({
   const shouldSeedDefaultRoutine = projectGithubEnabled || usesGitHubMember;
   const configDir = resolveConfigDir(workspaceDir);
 
-  const requiresGitHubAuth =
-    githubAccountType === "machine_user" || githubAccountType === "proxy_agent";
+  const requiresGitHubAuth = githubAccountType === "machine_user";
   const requiresGitHubAppsAuth = githubAccountType === "github_apps";
   const authReady = requiresGitHubAuth
     ? githubAccessToken.trim().length > 0 || storedMemberSecrets.githubAccessToken
@@ -3528,7 +3521,7 @@ function MembersSection({
       request.github_app_id = githubAppId ? Number(githubAppId) : undefined;
       request.github_private_key_path = githubPrivateKeyPath || undefined;
     }
-    if (githubAccountType === "machine_user" || githubAccountType === "proxy_agent") {
+    if (githubAccountType === "machine_user") {
       request.github_access_token = githubAccessToken || undefined;
     }
     return request;
@@ -4404,7 +4397,7 @@ function MembersSection({
                       />
                     </>
                   ) : null}
-                  {githubAccountType === "machine_user" || githubAccountType === "proxy_agent" ? (
+                  {githubAccountType === "machine_user" ? (
                     <PasswordInput
                       label={
                         storedMemberSecrets.githubAccessToken ? (
@@ -6080,7 +6073,7 @@ export function getMemberFieldErrors(
   }
 
   if (
-    (values.githubAccountType === "machine_user" || values.githubAccountType === "proxy_agent") &&
+    values.githubAccountType === "machine_user" &&
     !values.githubAccessToken.trim() &&
     !values.storedMemberSecrets.githubAccessToken
   ) {

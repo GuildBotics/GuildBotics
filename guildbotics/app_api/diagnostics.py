@@ -20,10 +20,9 @@ from guildbotics.integrations.chat_profile import (
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
+    get_agent_token,
     get_github_account_type,
     get_github_username,
-    get_proxy_agent_signature,
-    is_proxy_agent,
 )
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
@@ -647,16 +646,11 @@ class ScenarioDiagnosticsService:
         nothing else. Otherwise the remediation depends on the member type: human
         members are assigned through GitHub assignees, so a human whose username
         does not resolve has a misconfigured username (the ``Agent`` field does
-        not apply to them). Non-human identities (proxy agents, GitHub Apps,
-        machine users) are assigned through the project's ``Agent`` field and need
-        a matching option.
+        not apply to them). Non-human identities (GitHub Apps, machine users) are
+        assigned through the project's ``Agent`` field and need a matching option.
         """
         username = get_github_username(member)
-        if (
-            not is_proxy_agent(member)
-            and username
-            and await ticket_manager.is_assignable_user(username)
-        ):
+        if username and await ticket_manager.is_assignable_user(username):
             return self._check(
                 "github",
                 "github_agent_assignment",
@@ -677,16 +671,16 @@ class ScenarioDiagnosticsService:
                 context={"github_username": username},
             )
 
-        signature = get_proxy_agent_signature(member)
+        token = get_agent_token(member)
         options = await ticket_manager.get_agent_field_options()
-        if signature in options:
+        if token in options:
             return self._check(
                 "github",
                 "github_agent_assignment",
                 "ok",
                 "Member is assigned through the project's Agent field option.",
                 person_id=member.person_id,
-                context={"agent_option": signature},
+                context={"agent_option": token},
             )
         return self._check(
             "github",
@@ -695,7 +689,7 @@ class ScenarioDiagnosticsService:
             "Member does not resolve to a GitHub user and has no Agent field "
             "option; set the Agent field for this member.",
             person_id=member.person_id,
-            context={"agent_option": signature},
+            context={"agent_option": token},
         )
 
     async def _check_slack(

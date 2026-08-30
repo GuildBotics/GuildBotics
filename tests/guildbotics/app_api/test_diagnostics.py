@@ -874,7 +874,7 @@ async def test_github_non_assignable_human_advises_repo_permissions(
 
 
 @pytest.mark.asyncio
-async def test_github_proxy_agent_without_agent_field_option_is_error(
+async def test_github_agent_member_without_agent_field_option_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
@@ -888,8 +888,8 @@ async def test_github_proxy_agent_without_agent_field_option_is_error(
                 _person(
                     "bot",
                     is_active=True,
-                    person_type="proxy_agent",
-                    account_info={"github_account_type": "proxy_agent"},
+                    person_type="github_apps",
+                    account_info={"github_account_type": "github_apps"},
                 )
             ],
             services=_github_services(),
@@ -907,7 +907,7 @@ async def test_github_proxy_agent_without_agent_field_option_is_error(
 
 
 @pytest.mark.asyncio
-async def test_github_proxy_agent_with_agent_field_option_is_ok(
+async def test_github_agent_member_with_agent_field_option_is_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
@@ -921,8 +921,8 @@ async def test_github_proxy_agent_with_agent_field_option_is_ok(
                 _person(
                     "bot",
                     is_active=True,
-                    person_type="proxy_agent",
-                    account_info={"github_account_type": "proxy_agent"},
+                    person_type="github_apps",
+                    account_info={"github_account_type": "github_apps"},
                 )
             ],
             services=_github_services(),

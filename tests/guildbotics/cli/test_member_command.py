@@ -1920,10 +1920,38 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
         "title": "PR title",
         "body": "## Summary\n\nPR body\n",
         "issue_url": "",
-        "draft": "auto",
+        "draft": "false",
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_rejects_unknown_draft_value():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--title",
+            "PR title",
+            "--content-stdin",
+            "--draft",
+            "auto",
+        ],
+        input="PR body\n",
+    )
+
+    assert result.exit_code != 0
+    assert "'auto' is not one of 'true', 'false'" in result.output
 
 
 def test_member_github_pr_create_rejects_multiline_title():

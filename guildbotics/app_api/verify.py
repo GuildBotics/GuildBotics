@@ -243,10 +243,7 @@ class VerifyService:
                 "github_app_id",
                 "github_private_key",
             ]
-        if github_account_type in {
-            GitHubAppAuth.MACHINE_USER,
-            GitHubAppAuth.PROXY_AGENT,
-        }:
+        if github_account_type == GitHubAppAuth.MACHINE_USER:
             return ["github_access_token"]
         return []
 

@@ -338,12 +338,6 @@ def test_verify_github_disabled_skips_credentials(
             {"ALICE_GITHUB_ACCESS_TOKEN": "token"},
             {"ALICE_GITHUB_ACCESS_TOKEN"},
         ),
-        (
-            GitHubAppAuth.PROXY_AGENT,
-            {},
-            {"ALICE_GITHUB_ACCESS_TOKEN": "token"},
-            {"ALICE_GITHUB_ACCESS_TOKEN"},
-        ),
     ],
 )
 def test_verify_github_credentials_present(
@@ -427,7 +421,6 @@ def test_verify_accepts_private_key_content_from_keychain(
     [
         (GitHubAppAuth.GITHUB_APPS, "account_info.github_app_id"),
         (GitHubAppAuth.MACHINE_USER, "ALICE_GITHUB_ACCESS_TOKEN"),
-        (GitHubAppAuth.PROXY_AGENT, "ALICE_GITHUB_ACCESS_TOKEN"),
     ],
 )
 def test_verify_github_credentials_missing(

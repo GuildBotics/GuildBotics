@@ -1791,14 +1791,16 @@ describe("getMemberFieldErrors", () => {
     ).toBe(t("setup.validation.memberIdDuplicate"));
   });
 
-  it("requires an access token for machine_user and proxy_agent members", () => {
-    for (const githubAccountType of ["machine_user", "proxy_agent"] as const) {
-      const errors = getMemberFieldErrors(
-        baseMemberValues({ personType: "agent", githubAccountType, githubAccessToken: "" }),
-        t,
-      );
-      expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenRequired"));
-    }
+  it("requires an access token for machine_user members", () => {
+    const errors = getMemberFieldErrors(
+      baseMemberValues({
+        personType: "agent",
+        githubAccountType: "machine_user",
+        githubAccessToken: "",
+      }),
+      t,
+    );
+    expect(errors.githubAccessToken).toBe(t("setup.validation.githubAccessTokenRequired"));
   });
 
   it("accepts a stored access token for machine_user members", () => {

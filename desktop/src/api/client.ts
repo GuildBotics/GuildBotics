@@ -656,7 +656,7 @@ export type ProjectConfigUpdateRequest = {
 };
 
 export type MemberPersonType = "human" | "agent";
-export type MemberGitHubAccountType = "" | "human" | "machine_user" | "github_apps" | "proxy_agent";
+export type MemberGitHubAccountType = "" | "human" | "machine_user" | "github_apps";
 export type ChatParticipationPolicy = "strict" | "social" | "muted";
 
 type MemberWriteRequestBase = {
@@ -688,7 +688,7 @@ type MemberWriteRequestBase = {
 export type MemberSetupRequest = MemberWriteRequestBase;
 
 export type MemberResolveRequest = {
-  person_type: "human" | "machine_user" | "github_apps" | "proxy_agent";
+  person_type: "human" | "machine_user" | "github_apps";
   identity: string;
 };
 

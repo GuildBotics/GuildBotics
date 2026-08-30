@@ -16,8 +16,6 @@ from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
     get_github_username,
-    get_proxy_agent_signature,
-    is_proxy_agent,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
 
@@ -108,11 +106,6 @@ class MemberGitHubCapabilityService:
             "speaking_style": self.person.speaking_style,
             "communication_style": build_member_communication_style(self.person),
             "github_username": get_github_username(self.person),
-            "proxy_agent_signature": (
-                get_proxy_agent_signature(self.person)
-                if is_proxy_agent(self.person)
-                else ""
-            ),
             "credential_status": credential_status,
             "memory": MemberMemoryService(self.person).load_context_memory(),
             # The full member command surface and cross-cutting rules. This is
@@ -412,11 +405,8 @@ class MemberGitHubCapabilityService:
             "head": head,
             "base": base_branch,
             "body": body,
+            "draft": draft == "true",
         }
-        if draft == "true" or (draft == "auto" and is_proxy_agent(self.person)):
-            payload["draft"] = True
-        elif draft == "false":
-            payload["draft"] = False
         resp = await client.post(endpoint, json=payload)
         _raise_for_status(resp)
         pr = resp.json()
@@ -477,7 +467,7 @@ class MemberGitHubCapabilityService:
         self._validate_review_comment_location(path, line, side, start_line, start_side)
         pr = await self._pull_request(resource)
         payload: dict[str, Any] = {
-            "body": self._append_signature(body),
+            "body": body.rstrip(),
             "commit_id": self._pull_request_head_sha(resource, pr),
             "path": path,
             "line": line,
@@ -519,7 +509,7 @@ class MemberGitHubCapabilityService:
         client = await self._get_client()
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments/{reply_target_id}/replies",
-            json={"body": self._append_signature(body)},
+            json={"body": body.rstrip()},
         )
         _raise_for_status(resp)
         reply = resp.json()
@@ -934,18 +924,9 @@ class MemberGitHubCapabilityService:
 
     async def _post_comment(self, endpoint: str, body: str) -> dict[str, Any]:
         client = await self._get_client()
-        resp = await client.post(endpoint, json={"body": self._append_signature(body)})
+        resp = await client.post(endpoint, json={"body": body.rstrip()})
         _raise_for_status(resp)
         return resp.json()
-
-    def _append_signature(self, body: str) -> str:
-        stripped = body.rstrip()
-        if not is_proxy_agent(self.person):
-            return stripped
-        signature = get_proxy_agent_signature(self.person)
-        if stripped.endswith(signature):
-            return stripped
-        return f"{stripped}\n\n{signature}" if stripped else signature
 
     def _comment_summary(self, comment: dict[str, Any]) -> dict[str, Any]:
         body = str(comment.get("body") or "")
@@ -955,7 +936,7 @@ class MemberGitHubCapabilityService:
             "id": comment.get("id"),
             "body": body,
             "author": login,
-            "author_type": get_author_type(self.person, login, body) if login else "",
+            "author_type": get_author_type(self.person, login) if login else "",
             "created_at": comment.get("created_at"),
             "html_url": comment.get("html_url"),
         }
@@ -982,7 +963,7 @@ class MemberGitHubCapabilityService:
             "id": comment.get("databaseId"),
             "body": body,
             "author": login,
-            "author_type": get_author_type(self.person, login, body) if login else "",
+            "author_type": get_author_type(self.person, login) if login else "",
             "created_at": comment.get("createdAt"),
             "html_url": comment.get("url"),
         }
