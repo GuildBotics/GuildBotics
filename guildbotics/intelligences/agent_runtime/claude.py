@@ -96,6 +96,7 @@ class ClaudeStreamJsonAdapter:
         self._timeout = timeout
         self._process: asyncio.subprocess.Process | None = None
         self._capabilities_checked = False
+        self._installed_version_cache: tuple[int, int, int] | None = None
         self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
@@ -378,6 +379,13 @@ class ClaudeStreamJsonAdapter:
             await self._member_broker.close()
 
     async def _ensure_supported(self, context: AgentExecutionContext) -> None:
+        # The working tree changes between turns of one run (the agent itself
+        # may write `.mcp.json`), so only the installed CLI's capabilities are
+        # cached; the project MCP gate is re-evaluated on every turn.
+        await self._ensure_capabilities(context)
+        await self._ensure_project_mcp_safe(context)
+
+    async def _ensure_capabilities(self, context: AgentExecutionContext) -> None:
         if self._capabilities_checked:
             return
         env, gh_config_dir = isolated_agent_environment()
@@ -419,27 +427,33 @@ class ClaudeStreamJsonAdapter:
                 "stream-json and exact-resume capabilities.",
                 details={"missing_capabilities": missing},
             )
-        if (context.cwd / ".mcp.json").is_file():
-            version = await self._installed_version(context)
-            if version < _PROJECT_MCP_SAFE_VERSION:
-                formatted = ".".join(map(str, version))
-                minimum = ".".join(map(str, _PROJECT_MCP_SAFE_VERSION))
-                raise AgentRuntimeError(
-                    AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                    "The installed Claude Code version can wait for project MCP "
-                    "approval despite --strict-mcp-config. Update Claude Code or "
-                    "remove the project .mcp.json before a headless turn.",
-                    details={
-                        "installed_version": formatted,
-                        "minimum_version": minimum,
-                    },
-                )
         self._capabilities_checked = True
+
+    async def _ensure_project_mcp_safe(self, context: AgentExecutionContext) -> None:
+        """Reject old Claude Code whenever the turn's tree has `.mcp.json`."""
+        if not (context.cwd / ".mcp.json").is_file():
+            return
+        version = await self._installed_version(context)
+        if version < _PROJECT_MCP_SAFE_VERSION:
+            formatted = ".".join(map(str, version))
+            minimum = ".".join(map(str, _PROJECT_MCP_SAFE_VERSION))
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
+                "The installed Claude Code version can wait for project MCP "
+                "approval despite --strict-mcp-config. Update Claude Code or "
+                "remove the project .mcp.json before a headless turn.",
+                details={
+                    "installed_version": formatted,
+                    "minimum_version": minimum,
+                },
+            )
 
     async def _installed_version(
         self, context: AgentExecutionContext
     ) -> tuple[int, int, int]:
         """Read the version only when a project MCP file makes it relevant."""
+        if self._installed_version_cache is not None:
+            return self._installed_version_cache
         env, gh_config_dir = isolated_agent_environment()
         process: asyncio.subprocess.Process | None = None
         try:
@@ -471,7 +485,8 @@ class ClaudeStreamJsonAdapter:
                 details={"version_output": version_text.strip()[:200]},
             )
         major, minor, patch = (int(part) for part in match.groups())
-        return major, minor, patch
+        self._installed_version_cache = (major, minor, patch)
+        return self._installed_version_cache
 
 
 def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:

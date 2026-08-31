@@ -860,6 +860,37 @@ async def test_claude_rejects_old_strict_mode_when_project_mcp_exists(
 
 
 @pytest.mark.asyncio
+async def test_claude_reevaluates_the_project_mcp_gate_on_every_turn(
+    monkeypatch, tmp_path
+) -> None:
+    """The agent itself can write `.mcp.json` between turns of one run."""
+    calls: list[str] = []
+
+    async def create_process(*args, **_kwargs):
+        calls.append(args[-1])
+        if args[-1] == "--help":
+            return _HelpProcess()
+        assert args[-1] == "--version"
+        return _CompletedProcess(stdout=b"2.1.224 (Claude Code)\n")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+    context = _context(tmp_path)
+
+    await adapter._ensure_supported(context)
+    (tmp_path / ".mcp.json").write_text('{"mcpServers":{}}\n')
+
+    for _ in range(2):
+        with pytest.raises(AgentRuntimeError) as excinfo:
+            await adapter._ensure_supported(context)
+        assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+    # The CLI's capabilities and version are cached; only the tree-dependent
+    # gate runs again.
+    assert calls == ["--help", "--version"]
+
+
+@pytest.mark.asyncio
 async def test_claude_nonzero_exit_is_process_failure(monkeypatch, tmp_path) -> None:
     stream = _StreamProcess([], returncode=9, stderr=b"provider stopped\n")
 
