@@ -131,4 +131,9 @@ def main() -> None:
         host=args.host,
         port=args.port,
         access_log=False,
+        # uvloop hands subprocesses a socketpair for stdio, and bun/node based
+        # agent CLIs (claude, agy, copilot) can exit before flushing a socket
+        # stdout, silently truncating what this process reads from them. The
+        # standard loop uses a pipe, which those runtimes flush synchronously.
+        loop="asyncio",
     )

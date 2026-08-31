@@ -133,6 +133,17 @@ def test_main_passes_env_session_token_and_origins_to_create_app(
     assert captured_launch["uvicorn"]["port"] == 8765
 
 
+def test_main_pins_the_standard_event_loop(
+    monkeypatch, captured_launch: dict[str, Any]
+) -> None:
+    """uvloop's socketpair stdio truncates bun/node agent CLI output on exit."""
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+
+    server.main()
+
+    assert captured_launch["uvicorn"]["loop"] == "asyncio"
+
+
 def test_main_does_not_print_the_session_token(
     monkeypatch, captured_launch: dict[str, Any], capsys
 ) -> None:

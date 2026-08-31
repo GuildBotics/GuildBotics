@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import TASK_RUN_ENV
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
@@ -15,8 +15,11 @@ from guildbotics.intelligences.agent_runtime.codex import (
     _sandbox_policy,
     _thread_sandbox,
 )
-from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
+from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MEMBER_BROKER_TOKEN_ENV,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -33,7 +36,6 @@ from guildbotics.runtime.person_lease import (
     LEASE_ID_ENV,
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
-    PersonExecutionLease,
 )
 
 
@@ -250,10 +252,31 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
     process = _Process()
 
     async def create_process(*args, **kwargs):
-        assert args == ("codex", "app-server")
+        assert args[:2] == ("codex", "app-server")
+        assert all(args[index] == "-c" for index in range(2, len(args), 2))
+        config = args[3::2]
+        assert any(
+            value.endswith('.url="http://127.0.0.1:43123/mcp"') for value in config
+        )
+        assert any(
+            value.endswith('.bearer_token_env_var="GUILDBOTICS_MEMBER_BROKER_TOKEN"')
+            for value in config
+        )
+        assert not any(".env_http_headers=" in value for value in config)
+        assert any(value.endswith(".required=true") for value in config)
+        assert any('enabled_tools=["guildbotics_member"]' in value for value in config)
         assert kwargs["start_new_session"] is True
-        assert kwargs["env"][TASK_RUN_ENV] == "run-1"
-        assert kwargs["env"]["GUILDBOTICS_WORKSPACE_ROOT"] == str(tmp_path)
+        assert kwargs["env"][MEMBER_BROKER_TOKEN_ENV]
+        for key in (
+            RUN_ENV,
+            TASK_RUN_ENV,
+            "GUILDBOTICS_WORKSPACE_ROOT",
+            LEASE_ID_ENV,
+            DELEGATION_ID_ENV,
+            LEASE_PERSON_ENV,
+            LEASE_RUN_ENV,
+        ):
+            assert key not in kwargs["env"]
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
@@ -300,7 +323,7 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
 
 
 @pytest.mark.asyncio
-async def test_codex_delegation_comes_from_the_held_lease_not_the_parent_env(
+async def test_codex_provider_never_inherits_the_parent_execution_grant(
     monkeypatch, tmp_path
 ) -> None:
     for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
@@ -313,27 +336,21 @@ async def test_codex_delegation_comes_from_the_held_lease_not_the_parent_env(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    lease = PersonExecutionLease("aiko", tmp_path)
-    metadata = lease.acquire(source="routine", command="ticket", work_id="issue-300")
     adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
     context = _context(tmp_path)
     events: list[AgentEvent] = []
-    try:
-        await adapter.run_turn(
-            "continue",
-            context,
-            ConversationRecord(key=context.conversation_key),
-            events.append,
-        )
-        await adapter.close()
-    finally:
-        lease.release()
+    await adapter.run_turn(
+        "continue",
+        context,
+        ConversationRecord(key=context.conversation_key),
+        events.append,
+    )
+    await adapter.close()
 
     env = launched[0]
-    assert env[LEASE_ID_ENV] == metadata.lease_id
-    assert env[DELEGATION_ID_ENV] == metadata.delegation_id
-    assert env[LEASE_PERSON_ENV] == "aiko"
-    assert env[LEASE_RUN_ENV] == "run-1"
+    assert env[MEMBER_BROKER_TOKEN_ENV]
+    for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
+        assert key not in env
 
 
 @pytest.mark.asyncio

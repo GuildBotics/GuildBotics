@@ -42,13 +42,22 @@ def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, 
 
 def _set_workflow_delegation(monkeypatch, person_id="aiko", run_id="run-1"):
     from guildbotics.runtime.person_lease import (
+        DELEGATION_ID_ENV,
+        LEASE_ID_ENV,
+        LEASE_PERSON_ENV,
+        LEASE_RUN_ENV,
         PersonExecutionLease,
-        delegation_environment,
     )
 
     lease = PersonExecutionLease(person_id)
     lease.acquire(source="routine", command="test", work_id="work-1")
-    for key, value in delegation_environment(run_id).items():
+    metadata = lease.bind_run_id(run_id)
+    for key, value in {
+        LEASE_ID_ENV: metadata.lease_id,
+        DELEGATION_ID_ENV: metadata.delegation_id,
+        LEASE_PERSON_ENV: metadata.person_id,
+        LEASE_RUN_ENV: metadata.run_id,
+    }.items():
         monkeypatch.setenv(key, value)
     return lease
 

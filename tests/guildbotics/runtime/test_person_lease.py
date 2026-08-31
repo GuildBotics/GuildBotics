@@ -14,9 +14,18 @@ from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
     current_person_lease,
-    delegation_environment,
     validate_delegation,
 )
+
+
+def _delegation_environment(lease: PersonExecutionLease, run_id: str) -> dict[str, str]:
+    metadata = lease.bind_run_id(run_id)
+    return {
+        LEASE_ID_ENV: metadata.lease_id,
+        DELEGATION_ID_ENV: metadata.delegation_id,
+        LEASE_PERSON_ENV: metadata.person_id,
+        LEASE_RUN_ENV: metadata.run_id,
+    }
 
 
 def _attempt_person_lease(data_root: str, connection) -> None:
@@ -85,7 +94,7 @@ def test_person_lease_serializes_across_processes(tmp_path: Path) -> None:
 def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
     lease = PersonExecutionLease("aiko", tmp_path)
     lease.acquire(source="routine", command="ticket", work_id="work-1")
-    env = delegation_environment("run-1")
+    env = _delegation_environment(lease, "run-1")
 
     assert (
         validate_delegation("aiko", workspace_root=tmp_path, environ=env)
@@ -111,9 +120,9 @@ def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
     lease = PersonExecutionLease("aiko", tmp_path)
     lease.acquire(source="routine", command="ticket", work_id="work-1")
 
-    first = delegation_environment("run-1")
+    first = _delegation_environment(lease, "run-1")
     lease.unbind_run_id("run-1")
-    second = delegation_environment("run-2")
+    second = _delegation_environment(lease, "run-2")
 
     assert first[LEASE_RUN_ENV] == "run-1"
     assert second[LEASE_RUN_ENV] == "run-2"

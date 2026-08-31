@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.antigravity import (
     _LOG_TAIL_BYTES,
     _MAX_PROMPT_BYTES,
@@ -28,6 +28,12 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
 )
 from guildbotics.intelligences.brains.cli_agent import normalize_cli_agent_retry_after
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+)
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "antigravity_stream_1_1_10.jsonl"
@@ -178,12 +184,38 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     assert result.provider_session_id == "8607305b-c0a7-4707-86fe-06e8314502ea"
     run_args = calls[-1]
     assert "--conversation" not in run_args
-    assert run_args[run_args.index("--add-dir") + 1] == str(tmp_path)
+    workspace_indexes = [
+        index for index, argument in enumerate(run_args) if argument == "--add-dir"
+    ]
+    assert len(workspace_indexes) == 2
+    assert run_args[workspace_indexes[0] + 1] == str(tmp_path)
     assert "--dangerously-skip-permissions" in run_args
-    assert run_args[run_args.index("--print") + 1] == "go"
+    prompt = run_args[run_args.index("--print") + 1]
+    assert "never run those commands" in prompt
+    assert prompt.endswith("\n\ngo")
     assert kwargs_log[-1]["limit"] == STREAM_READ_LIMIT
     assert kwargs_log[-1]["stdin"] is asyncio.subprocess.DEVNULL
-    assert kwargs_log[-1]["env"][RUN_ENV] == "run-1"
+    env = kwargs_log[-1]["env"]
+    for key in (
+        RUN_ENV,
+        TASK_RUN_ENV,
+        "GUILDBOTICS_WORKSPACE_ROOT",
+        LEASE_ID_ENV,
+        DELEGATION_ID_ENV,
+        LEASE_PERSON_ENV,
+        LEASE_RUN_ENV,
+    ):
+        assert key not in env
+    assert kwargs_log[-1]["cwd"] == str(tmp_path)
+    mcp_workspace = Path(run_args[workspace_indexes[1] + 1])
+    assert mcp_workspace != tmp_path
+    mcp_path = mcp_workspace / ".agents" / "mcp_config.json"
+    assert mcp_path.stat().st_mode & 0o777 == 0o600
+    mcp_config = json.loads(mcp_path.read_text())
+    server_name, server = next(iter(mcp_config["mcpServers"].items()))
+    assert server_name.startswith("guildbotics-member-")
+    assert server["serverUrl"] == "http://127.0.0.1:43123/mcp"
+    assert server["headers"]["Authorization"].startswith("Bearer ")
 
     deltas = [event for event in events if event.name == "delta"]
     assert [event.message for event in deltas] == [
@@ -215,6 +247,8 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     initialized = next(event for event in events if event.name == "initialized")
     assert initialized.details["permission_mode"] == "always-proceed"
     assert initialized.details["cwd"] == "/workspace"
+    await adapter.close()
+    assert not mcp_workspace.exists()
 
 
 @pytest.mark.asyncio

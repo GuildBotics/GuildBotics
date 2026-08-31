@@ -185,19 +185,6 @@ def current_person_lease() -> PersonExecutionLease | None:
     return _current_lease.get()
 
 
-def delegation_environment(run_id: str) -> dict[str, str]:
-    lease = current_person_lease()
-    if lease is None:
-        return {}
-    metadata = lease.bind_run_id(run_id)
-    return {
-        LEASE_ID_ENV: metadata.lease_id,
-        DELEGATION_ID_ENV: metadata.delegation_id,
-        LEASE_PERSON_ENV: metadata.person_id,
-        LEASE_RUN_ENV: metadata.run_id,
-    }
-
-
 def validate_delegation(
     person_id: str,
     *,

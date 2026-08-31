@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from acp_fake_peer import (
+    DEFAULT_OPTIONS,
+    AcpPeerBase,
+    install,
+    session_update,
+    text_chunk,
+)
 
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
@@ -22,13 +30,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
-
-from acp_fake_peer import (
-    DEFAULT_OPTIONS,
-    AcpPeerBase,
-    install,
-    session_update,
-    text_chunk,
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -247,6 +253,17 @@ def _named(events: list[AgentEvent], kind: AgentEventKind, name: str) -> AgentEv
 async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     monkeypatch, tmp_path
 ) -> None:
+    ambient_execution = (
+        RUN_ENV,
+        TASK_RUN_ENV,
+        "GUILDBOTICS_WORKSPACE_ROOT",
+        LEASE_ID_ENV,
+        DELEGATION_ID_ENV,
+        LEASE_PERSON_ENV,
+        LEASE_RUN_ENV,
+    )
+    for key in ambient_execution:
+        monkeypatch.setenv(key, "stale-parent-value")
     peer = _Peer(updates=[text_chunk("hello "), text_chunk("world")])
     launched = install(monkeypatch, peer)
 
@@ -256,12 +273,17 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     assert result.provider_session_id == _Peer.SESSION_ID
     assert result.provider_turn_id == ""
     assert result.finish_reason == "completed"
-    assert launched[0][0] == (
+    launch_argv = launched[0][0]
+    assert launch_argv[:4] == (
         "copilot",
         "--acp",
         "--no-auto-update",
         "--no-remote-export",
     )
+    assert launch_argv[4] == "--allow-tool"
+    assert launch_argv[5].startswith("guildbotics-member-")
+    assert launch_argv[5].endswith("(guildbotics_member)")
+    assert all(key not in launched[0][1]["env"] for key in ambient_execution)
     assert peer.methods() == [
         "initialize",
         "authenticate",
@@ -277,6 +299,14 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
         "resume_session": False,
         "auth_method": "copilot-login",
     }
+    server = peer.sent("session/new")["params"]["mcpServers"][0]
+    assert server["type"] == "http"
+    assert server["name"].startswith("guildbotics-member-")
+    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["headers"][0]["value"].startswith("Bearer ")
+    prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
+    assert "never run those commands" in prompt
+    assert prompt.endswith("\n\ndo the thing")
 
 
 def test_host_filesystem_access_is_the_only_launch_flag_it_changes() -> None:
@@ -297,8 +327,12 @@ def test_a_read_only_turn_stays_in_the_workspace_whatever_the_member_configured(
 
     assert "--allow-all-paths" not in host._launch_argv(context)
     # A host-access member's read-only turn is launched exactly like a
-    # workspace-access one.
-    assert host._launch_argv(context) == workspace._launch_argv(context)
+    # workspace-access one, apart from the intentionally random broker name.
+    host_argv = host._launch_argv(context)
+    workspace_argv = workspace._launch_argv(context)
+    assert host_argv[:5] == workspace_argv[:5]
+    assert host_argv[5].endswith("(guildbotics_member)")
+    assert workspace_argv[5].endswith("(guildbotics_member)")
 
 
 @pytest.mark.asyncio

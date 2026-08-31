@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from acp_fake_peer import (
+    DEFAULT_OPTIONS,
+    AcpPeerBase,
+    install,
+    session_update,
+    text_chunk,
+)
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
@@ -14,6 +21,9 @@ from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
     _launch_argv,
     _sandbox_profile,
+)
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -23,11 +33,8 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
     ConversationKey,
     ConversationRecord,
-    settings_fingerprint,
     ResumePolicy,
-)
-from guildbotics.intelligences.agent_runtime.member_broker import (
-    MemberCapabilityBroker,
+    settings_fingerprint,
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
@@ -35,14 +42,6 @@ from guildbotics.runtime.person_lease import (
     LEASE_ID_ENV,
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
-)
-
-from acp_fake_peer import (
-    DEFAULT_OPTIONS,
-    AcpPeerBase,
-    install,
-    session_update,
-    text_chunk,
 )
 
 #: Run identity and delegation grant the parent process holds while a workflow
@@ -284,7 +283,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     assert peer.sent("session/new")["params"]["cwd"] == str(tmp_path)
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
-    assert server["name"] == "guildbotics-member"
+    assert server["name"].startswith("guildbotics-member-")
     assert server["url"] == "http://127.0.0.1:43123/mcp"
     assert server["headers"][0]["name"] == "Authorization"
     assert server["headers"][0]["value"].startswith("Bearer ")

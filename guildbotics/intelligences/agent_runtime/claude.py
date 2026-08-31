@@ -15,9 +15,13 @@ from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
     isolated_agent_environment,
-    member_command_environment,
     remove_isolated_config,
     terminate_process_tree,
+)
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MEMBER_BROKER_TOKEN_ENV,
+    MemberCapabilityBroker,
+    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -30,7 +34,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
-from guildbotics.runtime.person_lease import delegation_environment
 
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
@@ -60,6 +63,11 @@ _EFFORT_VALUES = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LOGGER = getLogger(__name__)
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
+# Before this release, ``--strict-mcp-config`` could still wait for approval
+# of project-scoped servers it was explicitly told not to load. That makes a
+# headless turn unsafe only when the working tree actually has ``.mcp.json``.
+_PROJECT_MCP_SAFE_VERSION = (2, 1, 246)
+_VERSION_PATTERN = re.compile(r"\b(\d+)\.(\d+)\.(\d+)\b")
 _SESSION_LIMIT_PATTERN = re.compile(
     r"\AYou've hit your session limit"
     r"(?:\s*·\s*(?P<retry_after_text>resets\s+\d{1,2}:\d{2}\s*(?:am|pm)"
@@ -88,6 +96,7 @@ class ClaudeStreamJsonAdapter:
         self._timeout = timeout
         self._process: asyncio.subprocess.Process | None = None
         self._capabilities_checked = False
+        self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
         self,
@@ -97,9 +106,27 @@ class ClaudeStreamJsonAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         await self._ensure_supported(context)
+        try:
+            await self._member_broker.activate(context)
+        except MemberCapabilityBrokerError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS,
+                "Could not start the trusted member capability broker.",
+            ) from exc
+        try:
+            return await self._run_active_turn(prompt, context, conversation, emit)
+        finally:
+            await self._member_broker.deactivate(context)
+
+    async def _run_active_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
         env, gh_config_dir = isolated_agent_environment()
-        env.update(member_command_environment(context))
-        env.update(delegation_environment(context.run_id))
+        env.update(self._member_broker.provider_environment())
         permission_mode = (
             _READ_ONLY_PERMISSION_MODE if context.read_only else _PERMISSION_MODE
         )
@@ -117,9 +144,16 @@ class ClaudeStreamJsonAdapter:
             _SESSION_SETTINGS,
             "--permission-mode",
             permission_mode,
+            "--mcp-config",
+            _claude_mcp_config(self._member_broker),
+            "--strict-mcp-config",
         ]
         if context.read_only:
-            args.extend(("--allowed-tools", *_READ_ONLY_ALLOWED_TOOLS))
+            allowed_tools = (
+                *_READ_ONLY_ALLOWED_TOOLS,
+                f"mcp__{self._member_broker.endpoint.name}__guildbotics_member",
+            )
+            args.extend(("--allowed-tools", *allowed_tools))
             args.extend(("--disallowed-tools", *_READ_ONLY_DISALLOWED_TOOLS))
         _warn_unusable_effort_settings(context)
         args.extend(_effort_arguments(context))
@@ -161,7 +195,9 @@ class ClaudeStreamJsonAdapter:
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{"type": "text", "text": prompt}],
+                "content": [
+                    {"type": "text", "text": self._member_broker.prompt(prompt)}
+                ],
             },
         }
         process.stdin.write(
@@ -331,11 +367,15 @@ class ClaudeStreamJsonAdapter:
         )
 
     async def interrupt(self) -> None:
+        await self._member_broker.deactivate()
         if self._process is not None and self._process.returncode is None:
             await terminate_process_tree(self._process)
 
     async def close(self) -> None:
-        await self.interrupt()
+        try:
+            await self.interrupt()
+        finally:
+            await self._member_broker.close()
 
     async def _ensure_supported(self, context: AgentExecutionContext) -> None:
         if self._capabilities_checked:
@@ -363,7 +403,14 @@ class ClaudeStreamJsonAdapter:
         finally:
             remove_isolated_config(gh_config_dir)
         help_text = (stdout + stderr).decode(errors="replace")
-        required = ("--input-format", "--output-format", "stream-json", "--resume")
+        required = (
+            "--input-format",
+            "--output-format",
+            "stream-json",
+            "--resume",
+            "--mcp-config",
+            "--strict-mcp-config",
+        )
         missing = [flag for flag in required if flag not in help_text]
         if process.returncode != 0 or missing:
             raise AgentRuntimeError(
@@ -372,7 +419,79 @@ class ClaudeStreamJsonAdapter:
                 "stream-json and exact-resume capabilities.",
                 details={"missing_capabilities": missing},
             )
+        if (context.cwd / ".mcp.json").is_file():
+            version = await self._installed_version(context)
+            if version < _PROJECT_MCP_SAFE_VERSION:
+                formatted = ".".join(map(str, version))
+                minimum = ".".join(map(str, _PROJECT_MCP_SAFE_VERSION))
+                raise AgentRuntimeError(
+                    AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
+                    "The installed Claude Code version can wait for project MCP "
+                    "approval despite --strict-mcp-config. Update Claude Code or "
+                    "remove the project .mcp.json before a headless turn.",
+                    details={
+                        "installed_version": formatted,
+                        "minimum_version": minimum,
+                    },
+                )
         self._capabilities_checked = True
+
+    async def _installed_version(
+        self, context: AgentExecutionContext
+    ) -> tuple[int, int, int]:
+        """Read the version only when a project MCP file makes it relevant."""
+        env, gh_config_dir = isolated_agent_environment()
+        process: asyncio.subprocess.Process | None = None
+        try:
+            process = await create_agent_subprocess(
+                self._executable,
+                "--version",
+                cwd=str(context.cwd),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        except (OSError, TimeoutError) as exc:
+            if process is not None and process.returncode is None:
+                await terminate_process_tree(process)
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
+                f"Could not inspect the Claude Code version: {exc}",
+            ) from exc
+        finally:
+            remove_isolated_config(gh_config_dir)
+        version_text = (stdout + stderr).decode(errors="replace")
+        match = _VERSION_PATTERN.search(version_text)
+        if process.returncode != 0 or match is None:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
+                "Claude Code did not report a usable semantic version.",
+                details={"version_output": version_text.strip()[:200]},
+            )
+        major, minor, patch = (int(part) for part in match.groups())
+        return major, minor, patch
+
+
+def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:
+    """Build the only MCP configuration Claude may load for this process."""
+    endpoint = broker.endpoint
+    return json.dumps(
+        {
+            "mcpServers": {
+                endpoint.name: {
+                    "type": "http",
+                    "url": endpoint.url,
+                    "headers": {
+                        "Authorization": f"Bearer ${{{MEMBER_BROKER_TOKEN_ENV}}}"
+                    },
+                    "alwaysLoad": True,
+                }
+            }
+        },
+        separators=(",", ":"),
+    )
 
 
 def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:

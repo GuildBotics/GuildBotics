@@ -20,10 +20,6 @@ from guildbotics.intelligences.agent_runtime.acp import (
     non_negative_int,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
-from guildbotics.intelligences.agent_runtime.member_broker import (
-    MemberCapabilityBroker,
-    MemberCapabilityBrokerError,
-)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
     AgentEvent,
@@ -71,13 +67,6 @@ _KNOWN_EXTENSION_NOISE = frozenset(
 )
 #: The launch options this adapter can set on `grok agent stdio`.
 _EFFORT_SETTING_KEYS = frozenset({"model", "reasoning_effort"})
-_MEMBER_TOOL_INSTRUCTION = """<guildbotics_member_transport>
-A trusted MCP tool named `guildbotics_member` is available. Use it for every
-command documented as `guildbotics member ...`; never run those commands in the
-terminal. Pass the exact CLI tokens after `member` as `arguments`, without shell
-quoting, pass `--content-stdin` data through the tool's `stdin` field, and set
-`turn_grant` to `{turn_grant}`. This grant is valid only for this turn.
-</guildbotics_member_transport>"""
 
 
 class GrokAcpAdapter(AcpAdapterBase):
@@ -100,49 +89,6 @@ class GrokAcpAdapter(AcpAdapterBase):
         policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout, policy=policy)
-        self._member_broker = MemberCapabilityBroker()
-
-    async def close(self) -> None:
-        try:
-            await super().close()
-        finally:
-            await self._member_broker.close()
-
-    async def _prepare_turn(self, context: AgentExecutionContext) -> None:
-        mcp = as_dict(self._capabilities.get("mcpCapabilities"))
-        if not mcp.get("http"):
-            await self.close()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                "The installed Grok Build does not support HTTP MCP servers.",
-                details={"agent_version": self._agent_version},
-            )
-        try:
-            await self._member_broker.activate(context)
-        except MemberCapabilityBrokerError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Could not start the trusted member capability broker.",
-            ) from exc
-
-    async def _finish_turn(self, context: AgentExecutionContext) -> None:
-        await self._member_broker.deactivate(context)
-
-    def _agent_member_environment(
-        self, context: AgentExecutionContext
-    ) -> dict[str, str]:
-        # The Grok process receives neither the execution lease nor the
-        # delegation grant. Only the authenticated broker holds them.
-        return {}
-
-    def _mcp_servers(self, context: AgentExecutionContext) -> list[dict[str, Any]]:
-        return [self._member_broker.mcp_server]
-
-    def _turn_prompt(self, prompt: str, context: AgentExecutionContext) -> str:
-        instruction = _MEMBER_TOOL_INSTRUCTION.format(
-            turn_grant=self._member_broker.turn_grant
-        )
-        return f"{instruction}\n\n{prompt}"
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         return _launch_argv(

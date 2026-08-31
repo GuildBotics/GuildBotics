@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import suppress
 from logging import getLogger
 from typing import Any
@@ -11,7 +12,6 @@ from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
     isolated_agent_environment,
-    member_command_environment,
     remove_isolated_config,
     terminate_process_tree,
 )
@@ -20,6 +20,11 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     METHOD_NOT_FOUND,
     LineJsonRpcTransport,
     RpcError,
+)
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MEMBER_BROKER_TOKEN_ENV,
+    MemberCapabilityBroker,
+    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
@@ -34,7 +39,6 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
-from guildbotics.runtime.person_lease import delegation_environment
 
 _MODERN_APPROVAL_METHODS = frozenset(
     {
@@ -112,8 +116,28 @@ class CodexAppServerAdapter:
         self._active_thread_id = ""
         self._active_turn_id = ""
         self._policy = policy or AdapterFilesystemPolicy()
+        self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
+        try:
+            await self._member_broker.activate(context)
+        except MemberCapabilityBrokerError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS,
+                "Could not start the trusted member capability broker.",
+            ) from exc
+        try:
+            return await self._run_active_turn(prompt, context, conversation, emit)
+        finally:
+            await self._member_broker.deactivate(context)
+
+    async def _run_active_turn(
         self,
         prompt: str,
         context: AgentExecutionContext,
@@ -143,7 +167,12 @@ class CodexAppServerAdapter:
                 "turn/start",
                 {
                     "threadId": thread_id,
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": [
+                        {
+                            "type": "text",
+                            "text": self._member_broker.prompt(prompt),
+                        }
+                    ],
                     "cwd": str(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
                     "sandboxPolicy": _sandbox_policy(
@@ -262,6 +291,7 @@ class CodexAppServerAdapter:
         )
 
     async def interrupt(self) -> None:
+        await self._member_broker.deactivate()
         if self._active_thread_id and self._active_turn_id:
             # A second cancellation while the interrupt RPC is pending must not
             # skip the process-tree termination below.
@@ -278,6 +308,13 @@ class CodexAppServerAdapter:
             await terminate_process_tree(process)
 
     async def close(self) -> None:
+        try:
+            await self._close_provider()
+        finally:
+            await self._member_broker.close()
+
+    async def _close_provider(self) -> None:
+        """Stop only Codex App Server while preserving the active broker."""
         process = self._transport.process
         if process is not None and process.returncode is None:
             if process.stdin is not None:
@@ -296,15 +333,15 @@ class CodexAppServerAdapter:
         if self._transport.running:
             return
         if self._transport.process is not None:
-            await self.close()
+            await self._close_provider()
         cwd = context.cwd
         env, self._gh_config_dir = isolated_agent_environment()
-        env.update(member_command_environment(context))
-        env.update(delegation_environment(context.run_id))
+        env.update(self._member_broker.provider_environment())
         try:
             process = await create_agent_subprocess(
                 self._executable,
                 "app-server",
+                *_codex_mcp_arguments(self._member_broker),
                 cwd=str(cwd),
                 env=env,
                 stdin=asyncio.subprocess.PIPE,
@@ -557,6 +594,24 @@ class CodexAppServerAdapter:
                 "message": f"Unsupported request: {method}",
             },
         )
+
+
+def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
+    """Build strict per-process MCP overrides for Codex App Server."""
+    endpoint = broker.endpoint
+    prefix = f"mcp_servers.{endpoint.name}"
+    return (
+        "-c",
+        f"{prefix}.url={json.dumps(endpoint.url)}",
+        "-c",
+        f'{prefix}.bearer_token_env_var="{MEMBER_BROKER_TOKEN_ENV}"',
+        "-c",
+        f"{prefix}.required=true",
+        "-c",
+        f'{prefix}.enabled_tools=["guildbotics_member"]',
+        "-c",
+        f'{prefix}.tools.guildbotics_member.approval_mode="approve"',
+    )
 
 
 def _thread_sandbox(policy: AdapterFilesystemPolicy, read_only: bool = False) -> str:

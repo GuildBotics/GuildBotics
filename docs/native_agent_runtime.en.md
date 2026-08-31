@@ -199,21 +199,27 @@ provider API keys (`OPENAI_API_KEY` and friends): all of them are consumed insid
 GuildBotics process, and the member CLI loads its own from the OS keychain, so removing
 them changes nothing a member can legitimately do. The helpers and sockets that hand out
 a credential on demand (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`) are removed too,
-together with the parent process's run identity and execution delegation.
-A live delegation is a usable grant rather than a label, so
+together with the parent process's workspace root, run identity, and execution
+delegation. A live delegation is a usable grant rather than a label, so
 inheriting one would let a provider process call the member CLI directly and bypass
-the boundary its own transport enforces. The adapters and the broker that legitimately
-carry that metadata re-inject it from the execution context and the held lease, so each
-path grants exactly what it is entitled to.
+the boundary its own transport enforces. Only the broker re-injects that metadata from
+the execution context and the held lease.
 
-Grok receives a per-adapter HTTP MCP endpoint bound to
-`127.0.0.1` and an unguessable bearer grant. Its single `guildbotics_member` tool accepts
+Codex, Claude Code, Grok Build, GitHub Copilot, and Antigravity each receive a
+per-adapter HTTP MCP endpoint bound to `127.0.0.1` and an unguessable bearer grant.
+Grok Build and GitHub Copilot attach the endpoint through ACP `mcpServers`; Codex and
+Claude Code receive process-local MCP configuration. Codex reads the raw token from a
+dedicated environment variable through `bearer_token_env_var`, so Codex itself adds the
+required `Authorization: Bearer` prefix. Antigravity reads `.agents/mcp_config.json`
+from a private auxiliary workspace added with `--add-dir`; the process cwd and primary
+workspace remain the member's actual working directory. The single
+`guildbotics_member` tool accepts
 only tokenized arguments for the fixed `guildbotics member` entrypoint; it cannot choose
 an executable, invoke a shell, override the workspace, or act as another person. The
-endpoint runs in the GuildBotics process outside Grok's sandbox, is usable only while a
-turn is active, requires a second grant rotated on every turn, and is stopped with the
-adapter. The Grok process never receives the
-member execution lease or delegation identity.
+endpoint runs in the GuildBotics process outside the provider sandbox, is usable only
+while a turn is active, requires a second grant rotated on every turn, and is stopped
+with the adapter. Provider processes never receive the member execution lease or
+delegation identity.
 
 The broker launches the member CLI as a separate trusted process, where OS Keychain and
 other SecretStore backends remain available. It supplies the active turn's short-lived
@@ -221,8 +227,7 @@ lease only to that process. The CLI's `--workspace` always names the selected
 GuildBotics workspace root, while the child process cwd remains the member's isolated
 working directory; the workspace data root may be overridden independently. A read-only
 turn supplies no delegation, so the existing member CLI guard rejects every
-write-capable command. Other native adapters continue to use the same validated member
-capability boundary through their native command path.
+write-capable command. Every native adapter uses this same member capability boundary.
 
 ## Exact conversation identity and resume
 
@@ -369,16 +374,22 @@ are redacted, and long text is bounded. The records are available in Desktop
 Diagnostics and `<workspace-data-root>/run/diagnostics.jsonl`.
 
 If startup reports `unsupported_version`, update the provider CLI. Claude capability
-detection requires `--input-format`, `--output-format`, `stream-json`, and `--resume`;
+detection requires `--input-format`, `--output-format`, `stream-json`, `--resume`,
+`--mcp-config`, and `--strict-mcp-config`. Claude Code before 2.1.246 could still wait
+for approval of project MCP servers despite strict mode, so a workspace containing
+`.mcp.json` also requires 2.1.246 or later;
 Codex capability detection occurs through App Server initialization. ACP capability
 detection requires protocol version 1 plus either `loadSession` or
-`sessionCapabilities.resume`; Grok additionally requires HTTP MCP support for its
-trusted member capability transport. It never gates on the version string, so any newer
-CLI that still exposes those capabilities keeps working. Antigravity capability detection reads
-`agy --help` (which prints to stderr and exits 0) and requires `--print`,
+`sessionCapabilities.resume`; every ACP adapter additionally requires HTTP MCP support
+for its trusted member capability transport. It never gates on the version string, so
+any newer CLI that still exposes those capabilities keeps working. Antigravity
+capability detection reads `agy --help` (which prints to stderr and exits 0) and
+requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 0.2.118, GitHub Copilot CLI 1.0.77, and
-Antigravity 1.1.10.
+verified baselines are Grok Build 0.2.118 and GitHub Copilot CLI 1.0.77. Antigravity
+1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
+workspace remains an explicit machine-verification item before the adapter is declared
+supported for the trusted member transport.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. The xAI

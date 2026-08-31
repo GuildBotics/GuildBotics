@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+import sys
+
 import pytest
 
 from guildbotics.intelligences.agent_runtime.antigravity import (
@@ -8,8 +11,14 @@ from guildbotics.intelligences.agent_runtime.antigravity import (
 from guildbotics.intelligences.agent_runtime.claude import ClaudeStreamJsonAdapter
 from guildbotics.intelligences.agent_runtime.codex import CodexAppServerAdapter
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
-from guildbotics.intelligences.agent_runtime.factory import create_native_adapter
+from guildbotics.intelligences.agent_runtime.factory import (
+    NATIVE_ADAPTERS,
+    create_native_adapter,
+)
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
+)
 from guildbotics.intelligences.agent_runtime.policy import (
     AdapterFilesystemPolicy,
     NativeAgentPolicy,
@@ -74,3 +83,26 @@ def test_each_adapter_only_receives_its_own_policy(monkeypatch) -> None:
 def test_unknown_adapter_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown native agent adapter: gemini"):
         create_native_adapter("gemini", "aiko")
+
+
+def test_every_registered_provider_uses_only_the_member_broker(monkeypatch) -> None:
+    """Keep new registry entries inside the same untrusted-provider boundary."""
+    monkeypatch.setattr(
+        "guildbotics.intelligences.agent_runtime.factory.load_native_agent_policy",
+        lambda _person_id: NativeAgentPolicy(),
+    )
+
+    for adapter_name in set(NATIVE_ADAPTERS.values()):
+        adapter = create_native_adapter(adapter_name, "aiko")
+        assert isinstance(adapter._member_broker, MemberCapabilityBroker)
+        modules = {
+            sys.modules[adapter_type.__module__]
+            for adapter_type in type(adapter).__mro__
+            if adapter_type.__module__.startswith(
+                "guildbotics.intelligences.agent_runtime"
+            )
+        }
+        for module in modules:
+            source = inspect.getsource(module)
+            assert "delegation_environment(" not in source
+            assert "member_command_environment(" not in source

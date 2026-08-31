@@ -35,9 +35,9 @@ _WINDOWS = os.name == "nt"
 #: names do not read as credentials: the helpers and sockets that hand out a
 #: credential on demand, and the execution metadata that authorises a nested
 #: member CLI call. A live lease is a usable grant, so inheriting it lets the
-#: provider process bypass the boundary its own transport was given. Paths that
-#: legitimately carry that metadata re-inject it from the execution context
-#: right after this builder runs. Variables that hold a credential *value* are
+#: provider process bypass the boundary its own transport was given. Only the
+#: host-side member broker receives that metadata; provider processes never do.
+#: Variables that hold a credential *value* are
 #: not listed here: they are removed by name pattern, because an enumeration
 #: only ever holds the secrets somebody remembered to add to it.
 _STRIPPED_PARENT_ENV = (
@@ -47,6 +47,7 @@ _STRIPPED_PARENT_ENV = (
     "SSH_AUTH_SOCK",
     RUN_ENV,
     TASK_RUN_ENV,
+    GUILDBOTICS_WORKSPACE_ROOT,
     LEASE_ID_ENV,
     DELEGATION_ID_ENV,
     LEASE_PERSON_ENV,
@@ -89,7 +90,7 @@ def isolated_agent_environment() -> tuple[dict[str, str], str]:
 
 
 def member_command_environment(context: AgentExecutionContext) -> dict[str, str]:
-    """Build the minimal verified-execution metadata inherited by child member CLI."""
+    """Build verified-execution metadata for the host-side member CLI."""
     run_key = RUN_ENV if context.conversation_key.work_kind == "chat" else TASK_RUN_ENV
     env = {
         GUILDBOTICS_WORKSPACE_ROOT: str(context.workspace_data_root),

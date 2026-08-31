@@ -737,6 +737,7 @@ def test_native_environment_removes_direct_write_credentials(
         "SSH_AUTH_SOCK",
         RUN_ENV,
         TASK_RUN_ENV,
+        "GUILDBOTICS_WORKSPACE_ROOT",
         LEASE_ID_ENV,
         DELEGATION_ID_ENV,
         LEASE_PERSON_ENV,
