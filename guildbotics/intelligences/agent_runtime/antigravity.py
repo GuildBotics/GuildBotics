@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import tempfile
 from contextlib import suppress
 from logging import getLogger
@@ -21,9 +22,12 @@ from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
     isolated_agent_environment,
-    member_command_environment,
     remove_isolated_config,
     terminate_process_tree,
+)
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
+    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
@@ -36,7 +40,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
-from guildbotics.runtime.person_lease import delegation_environment
 
 _LOGGER = getLogger(__name__)
 
@@ -119,6 +122,8 @@ class AntigravityStreamJsonAdapter:
         self._capabilities_checked = False
         self._model_catalog: frozenset[str] = frozenset()
         self._model_catalog_read = False
+        self._member_broker = MemberCapabilityBroker()
+        self._mcp_workspace: Path | None = None
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The effort settings this adapter recognizes.
@@ -136,6 +141,26 @@ class AntigravityStreamJsonAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         await self._ensure_supported(context)
+        try:
+            await self._member_broker.activate(context)
+        except MemberCapabilityBrokerError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS,
+                "Could not start the trusted member capability broker.",
+            ) from exc
+        try:
+            return await self._run_active_turn(prompt, context, conversation, emit)
+        finally:
+            await self._member_broker.deactivate(context)
+
+    async def _run_active_turn(
+        self,
+        prompt: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        emit: EventSink,
+    ) -> AgentTerminalResult:
+        prompt = self._member_broker.prompt(prompt)
         prompt_bytes = len(prompt.encode())
         if prompt_bytes > _MAX_PROMPT_BYTES:
             raise AgentRuntimeError(
@@ -146,8 +171,7 @@ class AntigravityStreamJsonAdapter:
             )
         settings, rejected = await self._turn_settings(context)
         env, gh_config_dir = isolated_agent_environment()
-        env.update(member_command_environment(context))
-        env.update(delegation_environment(context.run_id))
+        mcp_workspace = self._ensure_mcp_workspace()
         log_fd, log_path = tempfile.mkstemp(prefix="guildbotics-agy-log-")
         os.close(log_fd)
         log_file = Path(log_path)
@@ -174,6 +198,11 @@ class AntigravityStreamJsonAdapter:
         try:
             self._process = await create_agent_subprocess(
                 *args,
+                # The repository remains the primary workspace and relative
+                # path base. The private root exists only to contribute this
+                # process's short-lived MCP configuration.
+                _WORKSPACE_FLAG,
+                str(mcp_workspace),
                 cwd=str(context.cwd),
                 env=env,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -338,11 +367,53 @@ class AntigravityStreamJsonAdapter:
         )
 
     async def interrupt(self) -> None:
+        await self._member_broker.deactivate()
         if self._process is not None and self._process.returncode is None:
             await terminate_process_tree(self._process)
 
     async def close(self) -> None:
-        await self.interrupt()
+        try:
+            await self.interrupt()
+        finally:
+            await self._member_broker.close()
+            if self._mcp_workspace is not None:
+                shutil.rmtree(self._mcp_workspace, ignore_errors=True)
+                self._mcp_workspace = None
+
+    def _ensure_mcp_workspace(self) -> Path:
+        """Create a private Antigravity workspace containing only broker MCP."""
+        if self._mcp_workspace is not None:
+            return self._mcp_workspace
+        root = Path(tempfile.mkdtemp(prefix="guildbotics-agy-mcp-"))
+        try:
+            config_dir = root / ".agents"
+            config_dir.mkdir(mode=0o700)
+            endpoint = self._member_broker.endpoint
+            payload = json.dumps(
+                {
+                    "mcpServers": {
+                        endpoint.name: {
+                            "serverUrl": endpoint.url,
+                            "headers": {"Authorization": endpoint.authorization},
+                        }
+                    }
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            config_path = config_dir / "mcp_config.json"
+            descriptor = os.open(
+                config_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(f"{payload}\n")
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+        self._mcp_workspace = root
+        return root
 
     async def _turn_settings(
         self, context: AgentExecutionContext

@@ -8,13 +8,16 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV
+from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_runtime.claude import (
     ClaudeStreamJsonAdapter,
     _decode_events,
     _session_limit_error,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MEMBER_BROKER_TOKEN_ENV,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -23,6 +26,12 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
     ConversationKey,
     ConversationRecord,
+)
+from guildbotics.runtime.person_lease import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
 )
 
 
@@ -45,9 +54,20 @@ class _HelpProcess:
 
     async def communicate(self):
         return (
-            b"--input-format stream-json --output-format stream-json --resume",
+            b"--input-format stream-json --output-format stream-json --resume "
+            b"--mcp-config --strict-mcp-config",
             b"",
         )
+
+
+class _CompletedProcess:
+    def __init__(self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
+        self._stdout = stdout
+        self._stderr = stderr
+        self.returncode = returncode
+
+    async def communicate(self):
+        return self._stdout, self._stderr
 
 
 class _StreamProcess:
@@ -155,12 +175,12 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
         ]
     )
     calls: list[tuple[Any, ...]] = []
+    provider_envs: list[dict[str, str]] = []
 
     async def create_process(*args, **kwargs):
         calls.append(args)
         if args[-1] != "--help":
-            assert kwargs["env"][RUN_ENV] == "run-1"
-            assert kwargs["env"]["GUILDBOTICS_WORKSPACE_ROOT"] == str(tmp_path)
+            provider_envs.append(kwargs["env"])
         return _HelpProcess() if args[-1] == "--help" else stream
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
@@ -191,6 +211,26 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     assert policy_event.approval == "bypassPermissions"
     assert policy_event.details == {"bash_sandbox": False, "read_only": False}
     assert "--allowed-tools" not in run_args
+    assert "--strict-mcp-config" in run_args
+    mcp_config = json.loads(run_args[run_args.index("--mcp-config") + 1])
+    server_name, server = next(iter(mcp_config["mcpServers"].items()))
+    assert server_name.startswith("guildbotics-member-")
+    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["headers"]["Authorization"] == (
+        "Bearer ${GUILDBOTICS_MEMBER_BROKER_TOKEN}"
+    )
+    env = provider_envs[0]
+    assert env[MEMBER_BROKER_TOKEN_ENV]
+    for key in (
+        RUN_ENV,
+        TASK_RUN_ENV,
+        "GUILDBOTICS_WORKSPACE_ROOT",
+        LEASE_ID_ENV,
+        DELEGATION_ID_ENV,
+        LEASE_PERSON_ENV,
+        LEASE_RUN_ENV,
+    ):
+        assert key not in env
     command_events = [event for event in events if event.kind is AgentEventKind.COMMAND]
     assert [(event.name, event.item_id) for event in command_events] == [
         ("started", "tool-1"),
@@ -206,7 +246,9 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     ]
     assert all(event.path == "guildbotics/a.py" for event in file_events)
     sent = json.loads(bytes(stream.stdin.data))
-    assert sent["message"]["content"][0]["text"] == "continue"
+    prompt = sent["message"]["content"][0]["text"]
+    assert "never run those commands" in prompt
+    assert prompt.endswith("\n\ncontinue")
 
 
 def _oversized_replay_messages() -> list[Any]:
@@ -783,6 +825,69 @@ async def test_claude_rejects_versions_without_stream_json(
         )
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+
+@pytest.mark.asyncio
+async def test_claude_rejects_old_strict_mode_when_project_mcp_exists(
+    monkeypatch, tmp_path
+) -> None:
+    (tmp_path / ".mcp.json").write_text('{"mcpServers":{}}\n')
+    calls: list[tuple[Any, ...]] = []
+
+    async def create_process(*args, **_kwargs):
+        calls.append(args)
+        if args[-1] == "--help":
+            return _HelpProcess()
+        assert args[-1] == "--version"
+        return _CompletedProcess(stdout=b"2.1.224 (Claude Code)\n")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        await ClaudeStreamJsonAdapter().run_turn(
+            "hello",
+            _context(tmp_path),
+            ConversationRecord(key=_context(tmp_path).conversation_key),
+            lambda _event: None,
+        )
+
+    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+    assert excinfo.value.details == {
+        "installed_version": "2.1.224",
+        "minimum_version": "2.1.246",
+    }
+    assert [args[-1] for args in calls] == ["--help", "--version"]
+
+
+@pytest.mark.asyncio
+async def test_claude_reevaluates_the_project_mcp_gate_on_every_turn(
+    monkeypatch, tmp_path
+) -> None:
+    """The agent itself can write `.mcp.json` between turns of one run."""
+    calls: list[str] = []
+
+    async def create_process(*args, **_kwargs):
+        calls.append(args[-1])
+        if args[-1] == "--help":
+            return _HelpProcess()
+        assert args[-1] == "--version"
+        return _CompletedProcess(stdout=b"2.1.224 (Claude Code)\n")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = ClaudeStreamJsonAdapter()
+    context = _context(tmp_path)
+
+    await adapter._ensure_supported(context)
+    (tmp_path / ".mcp.json").write_text('{"mcpServers":{}}\n')
+
+    for _ in range(2):
+        with pytest.raises(AgentRuntimeError) as excinfo:
+            await adapter._ensure_supported(context)
+        assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+    # The CLI's capabilities and version are cached; only the tree-dependent
+    # gate runs again.
+    assert calls == ["--help", "--version"]
 
 
 @pytest.mark.asyncio

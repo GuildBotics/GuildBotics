@@ -15,6 +15,7 @@ import socket
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,16 @@ _MAX_STDIN_BYTES = 2 * 1024 * 1024
 _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_OUTPUT_BYTES = STREAM_READ_LIMIT
 _COMMAND_TIMEOUT_SECONDS = 300.0
+MEMBER_BROKER_TOKEN_ENV = "GUILDBOTICS_MEMBER_BROKER_TOKEN"
+
+_MEMBER_TOOL_INSTRUCTION = """<guildbotics_member_transport>
+A trusted MCP tool named `guildbotics_member` is available. Use it for every
+command documented as `guildbotics member ...`; never run those commands in the
+terminal. Pass the exact CLI tokens after `member` as `arguments`, without shell
+quoting. For any command documented with `--content-file`, pass `--content-stdin`
+instead and put the exact UTF-8 content in the tool's `stdin` field. Set
+`turn_grant` to `{turn_grant}`. This grant is valid only for this turn.
+</guildbotics_member_transport>"""
 
 
 class MemberCapabilityBrokerError(RuntimeError):
@@ -58,6 +69,15 @@ class MemberCommandResult(BaseModel):
     exit_code: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True, slots=True)
+class MemberBrokerEndpoint:
+    """Provider-neutral connection details for the trusted MCP endpoint."""
+
+    name: str
+    url: str
+    authorization: str
 
 
 class _ScopedTokenVerifier(TokenVerifier):
@@ -90,6 +110,7 @@ class MemberCapabilityBroker:
     def __init__(self, command: tuple[str, ...] | None = None) -> None:
         self._command = command or _member_cli_command()
         self._token = secrets.token_urlsafe(32)
+        self._name = f"guildbotics-member-{secrets.token_hex(6)}"
         self._turn_grant = ""
         self._context: AgentExecutionContext | None = None
         self._command_lock = asyncio.Lock()
@@ -99,15 +120,30 @@ class MemberCapabilityBroker:
         self._url = ""
 
     @property
-    def mcp_server(self) -> dict[str, Any]:
-        """Return the ACP HTTP MCP server descriptor for this broker."""
+    def name(self) -> str:
+        """Return the stable per-process MCP server name."""
+        return self._name
+
+    @property
+    def endpoint(self) -> MemberBrokerEndpoint:
+        """Return connection details adapters serialize for their MCP client."""
         if not self._url:
             raise RuntimeError("Member capability broker is not running.")
+        return MemberBrokerEndpoint(
+            name=self._name,
+            url=self._url,
+            authorization=f"Bearer {self._token}",
+        )
+
+    @property
+    def mcp_server(self) -> dict[str, Any]:
+        """Return the ACP HTTP MCP server descriptor for this broker."""
+        endpoint = self.endpoint
         return {
             "type": "http",
-            "name": "guildbotics-member",
-            "url": self._url,
-            "headers": [{"name": "Authorization", "value": f"Bearer {self._token}"}],
+            "name": endpoint.name,
+            "url": endpoint.url,
+            "headers": [{"name": "Authorization", "value": endpoint.authorization}],
         }
 
     @property
@@ -116,6 +152,15 @@ class MemberCapabilityBroker:
         if not self._turn_grant:
             raise RuntimeError("Member capability broker has no active turn.")
         return self._turn_grant
+
+    def prompt(self, prompt: str) -> str:
+        """Prepend the common member-tool contract for the active turn."""
+        instruction = _MEMBER_TOOL_INSTRUCTION.format(turn_grant=self.turn_grant)
+        return f"{instruction}\n\n{prompt}"
+
+    def provider_environment(self) -> dict[str, str]:
+        """Return the bearer token source required by provider MCP clients."""
+        return {MEMBER_BROKER_TOKEN_ENV: self._token}
 
     async def activate(self, context: AgentExecutionContext) -> None:
         """Start the broker if needed and bind it to one active turn."""
@@ -146,9 +191,9 @@ class MemberCapabilityBroker:
         self._context = context
         self._turn_grant = secrets.token_urlsafe(24)
 
-    async def deactivate(self, context: AgentExecutionContext) -> None:
+    async def deactivate(self, context: AgentExecutionContext | None = None) -> None:
         """Revoke command execution after the matching turn finishes."""
-        if self._context is context:
+        if context is None or self._context is context:
             self._context = None
             self._turn_grant = ""
             process = self._process
@@ -158,17 +203,25 @@ class MemberCapabilityBroker:
     async def execute(
         self, turn_grant: str, arguments: list[str], stdin: str = ""
     ) -> MemberCommandResult:
-        """Run one member command for the active person and workspace."""
+        """Run one member command for the active person and workspace.
+
+        A request the broker refuses (expired grant, wrong person, oversized
+        input) comes back as an ``exit_code`` 2 result instead of a raised
+        error: providers such as Antigravity fold MCP tool errors into the
+        whole run's status, failing a turn the agent already recovered from.
+        Only infrastructure failures escape as exceptions.
+        """
         encoded_stdin = stdin.encode()
         if len(encoded_stdin) > _MAX_STDIN_BYTES:
-            raise ValueError("Member command stdin is too large.")
+            return _rejected("Member command stdin is too large.")
         async with self._command_lock:
             context = self._context
             if context is None:
-                raise ValueError("No GuildBotics turn is active.")
+                return _rejected("No GuildBotics turn is active.")
             if not secrets.compare_digest(turn_grant, self._turn_grant):
-                raise ValueError("The GuildBotics turn grant is invalid or expired.")
-            _validate_arguments(arguments, context.person_id)
+                return _rejected("The GuildBotics turn grant is invalid or expired.")
+            if reason := _rejection_reason(arguments, context.person_id):
+                return _rejected(reason)
             argv = (
                 *self._command,
                 "member",
@@ -264,7 +317,9 @@ class MemberCapabilityBroker:
             Pass command tokens after `guildbotics member` in ``arguments`` and
             include the active prompt's ``turn_grant``. Pass content for
             ``--content-stdin`` in ``stdin``. Never include shell quoting,
-            redirects, heredocs, `guildbotics`, or `member` itself.
+            redirects, heredocs, `guildbotics`, or `member` itself. A request
+            the broker refuses returns ``exit_code`` 2 with the reason in
+            ``stderr``.
             """
             return await self.execute(turn_grant, arguments, stdin)
 
@@ -333,27 +388,33 @@ def _member_environment(context: AgentExecutionContext) -> dict[str, str]:
     return env
 
 
-def _validate_arguments(arguments: list[str], person_id: str) -> None:
+def _rejected(reason: str) -> MemberCommandResult:
+    """Present one refused request as a command result the agent can read."""
+    return MemberCommandResult(exit_code=2, stdout="", stderr=reason)
+
+
+def _rejection_reason(arguments: list[str], person_id: str) -> str | None:
+    """Explain why the broker refuses these arguments, or ``None`` to run."""
     if not arguments:
-        raise ValueError("Member command arguments must not be empty.")
+        return "Member command arguments must not be empty."
     if len(arguments) > _MAX_ARGUMENTS:
-        raise ValueError("Member command has too many arguments.")
+        return "Member command has too many arguments."
     if sum(len(value.encode()) for value in arguments) > _MAX_ARGUMENT_BYTES:
-        raise ValueError("Member command arguments are too large.")
+        return "Member command arguments are too large."
     if any("\0" in value for value in arguments):
-        raise ValueError("Member command arguments must not contain NUL bytes.")
+        return "Member command arguments must not contain NUL bytes."
     if any(
         value == "--workspace" or value.startswith("--workspace=")
         for value in arguments
     ):
-        raise ValueError("The member capability workspace cannot be overridden.")
+        return "The member capability workspace cannot be overridden."
     people: list[str] = []
     index = 0
     while index < len(arguments):
         value = arguments[index]
         if value == "--person":
             if index + 1 >= len(arguments):
-                raise ValueError("--person requires the active member ID.")
+                return "--person requires the active member ID."
             people.append(arguments[index + 1])
             index += 2
             continue
@@ -361,9 +422,10 @@ def _validate_arguments(arguments: list[str], person_id: str) -> None:
             people.append(value.partition("=")[2])
         index += 1
     if people and any(value != person_id for value in people):
-        raise ValueError("Member capabilities cannot act as another person.")
+        return "Member capabilities cannot act as another person."
     if not people and arguments != ["help"]:
-        raise ValueError("Member commands must name the active person with --person.")
+        return "Member commands must name the active person with --person."
+    return None
 
 
 def _decode_output(value: bytes) -> str:

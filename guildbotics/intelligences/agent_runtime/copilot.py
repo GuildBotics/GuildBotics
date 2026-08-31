@@ -80,6 +80,12 @@ class CopilotAcpAdapter(AcpAdapterBase):
             # web and mobile: it carries workspace contents and takes its
             # instructions from GuildBotics alone.
             "--no-remote-export",
+            # Read-only turns decline every unexpected permission request, but
+            # the broker itself enforces the member command's read/write class.
+            # Allowing this one MCP tool keeps read-only member inspections
+            # usable without widening any other Copilot capability.
+            "--allow-tool",
+            f"{self._member_broker.name}(guildbotics_member)",
             # Copilot confines file access to the working directory unless this
             # is passed, which is exactly the public policy setting. A read-only
             # turn keeps the confined scope whatever the member configured: it

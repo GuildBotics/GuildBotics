@@ -181,27 +181,30 @@ LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）も渡りません。�
 消費するものであり、member CLIは自分でOSキーチェーンから読み込むため、この除去の影響を
 受けません。認証情報を渡す代わりに呼び出させる`git`/`ssh`のhelperとsocket
 （`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）も取り除きます。
-親プロセスのrun識別子とexecution delegationも同様に取り除きます。有効なdelegationは単なる
-識別ラベルではなくそのまま使えるgrantであるため、継承させると、providerのプロセスがmember CLIを
+親プロセスのworkspace root、run識別子、execution delegationも同様に取り除きます。有効な
+delegationは単なる識別ラベルではなくそのまま使えるgrantであるため、継承させると、providerのプロセスがmember CLIを
 直接呼び出し、自身のtransportが敷いている境界を迂回できてしまいます。この情報を正当に運ぶ
-adapterとbrokerは、実行contextと保持中のleaseから明示的に再注入するため、経路ごとに与えるべき
-権限だけが渡ります。
+brokerだけが、実行contextと保持中のleaseから明示的に再注入します。
 
-Grokには、`127.0.0.1`にbindしたadapter専用のHTTP MCP endpointと、推測困難なbearer grantを
-渡します。唯一の`guildbotics_member` toolが受け取るのは、固定された
+Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityには、`127.0.0.1`にbindした
+adapter専用のHTTP MCP endpointと、推測困難なbearer grantを渡します。ACPを使うGrok Buildと
+GitHub Copilotはsessionの`mcpServers`、CodexとClaude Codeはprocess単位のMCP設定を使います。
+Codexは生のtokenを専用環境変数から`bearer_token_env_var`で読み、必要な
+`Authorization: Bearer` prefixをCodex自身が付けます。Antigravityは`--add-dir`で追加した専用の
+補助workspaceにある`.agents/mcp_config.json`を読みます。process cwdとprimary workspaceは、
+memberの実作業ディレクトリのまま維持します。
+唯一の`guildbotics_member` toolが受け取るのは、固定された
 `guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、
-workspaceを上書きすること、別personとして動くことはできません。endpointはGrokのsandbox外にある
-GuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
-adapterとともに停止します。Grok processへmember execution leaseやdelegation identityを
-渡すことはありません。
+workspaceを上書きすること、別personとして動くことはできません。endpointはproviderのsandbox外に
+あるGuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
+adapterとともに停止します。各provider processへmember execution leaseやdelegation identityを渡しません。
 
 brokerはmember CLIを別のtrusted processとして起動するため、OS KeychainなどのSecretStore backendを
 そのまま利用できます。有効期間の短いleaseは、そのCLI processだけへ渡します。CLIの
 `--workspace`には常に選択中のGuildBotics workspace rootを指定し、child processのcwdはmemberの
 隔離作業ディレクトリのまま維持します。workspace data rootはこれらと独立して上書きできます。
 read-only turnではdelegationを渡さないため、既存のmember CLI guardが書き込み可能なcommandを
-すべて拒否します。その他のnative adapterも、それぞれのnative command経路から同じ検証済み
-member capability境界を使用します。
+すべて拒否します。全native adapterがこの同じmember capability境界を使用します。
 
 ## Slackスレッド・チケットとセッションの対応付け
 
@@ -354,16 +357,19 @@ cursor、実行権を記録し、同じ作業に属するイベントを対応�
 `<workspace-data-root>/run/diagnostics.jsonl`から確認できます。
 
 `unsupported_version`が記録された場合は、使用しているAI CLIツールを更新してください。
-Claude Codeでは`--input-format`、`--output-format`、`stream-json`、`--resume`への対応を確認します。
+Claude Codeでは`--input-format`、`--output-format`、`stream-json`、`--resume`、`--mcp-config`、
+`--strict-mcp-config`への対応を確認します。2.1.246より前はstrict modeでもproject MCP serverの
+承認待ちが起こりうるため、workspaceに`.mcp.json`がある場合は2.1.246以降を必須とします。
 CodexではApp Serverの初期化処理を通して、必要な機能に対応しているか確認します。
 ACPを使うAI CLIツールでは、`initialize`が返すプロトコル版数が1であることと、正確な再開に必要な
 `loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
-Grokではさらに、trusted member capability transportに必要なHTTP MCP対応も確認します。
+ACPを使うadapterではさらに、trusted member capability transportに必要なHTTP MCP対応も確認します。
 バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 0.2.118、GitHub Copilot CLI 1.0.77、
-Antigravity 1.1.10です。
+確認します。動作確認済みの基準バージョンは、Grok Build 0.2.118、GitHub Copilot CLI 1.0.77です。
+Antigravity 1.1.11が必要なflagを公開することは確認済みですが、追加した補助workspaceからMCP設定を
+読み込めることは、trusted member transportの対応版と宣言する前の実機確認項目として残します。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
 として分類します。標準エラー出力や応答本文の解析は行いません。xAIのretry-state通知は

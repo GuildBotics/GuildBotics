@@ -20,7 +20,6 @@ from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
     isolated_agent_environment,
-    member_command_environment,
     remove_isolated_config,
     terminate_process_tree,
 )
@@ -29,6 +28,10 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     METHOD_NOT_FOUND,
     LineJsonRpcTransport,
     RpcError,
+)
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
+    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -42,7 +45,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     EventSink,
 )
 from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
-from guildbotics.runtime.person_lease import delegation_environment
 
 ACP_PROTOCOL_VERSION = 1
 #: Version of the GuildBotics client contract, matching the Codex adapter's.
@@ -169,6 +171,7 @@ class AcpAdapterBase:
         #: Providers may end a rate-limited turn with a bare protocol error, so
         #: the notice is what classifies that terminal failure.
         self._turn_rate_limit: dict[str, Any] = {}
+        self._member_broker = MemberCapabilityBroker()
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The settings this adapter can really impose, normalized.
@@ -190,12 +193,22 @@ class AcpAdapterBase:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_started(context, emit)
         try:
-            await self._prepare_turn(context)
-            return await self._run_active_turn(prompt, context, conversation, emit)
+            try:
+                await self._member_broker.activate(context)
+            except MemberCapabilityBrokerError as exc:
+                raise AgentRuntimeError(
+                    AgentRuntimeErrorCategory.PROCESS,
+                    "Could not start the trusted member capability broker.",
+                ) from exc
+            await self._ensure_started(context, emit)
+            try:
+                await self._prepare_turn(context)
+                return await self._run_active_turn(prompt, context, conversation, emit)
+            finally:
+                await self._finish_turn(context)
         finally:
-            await self._finish_turn(context)
+            await self._member_broker.deactivate(context)
 
     async def _run_active_turn(
         self,
@@ -308,6 +321,7 @@ class AcpAdapterBase:
         )
 
     async def interrupt(self) -> None:
+        await self._member_broker.deactivate()
         if self._active_session_id:
             with suppress(asyncio.CancelledError, Exception):
                 await self._transport.notify(
@@ -318,6 +332,13 @@ class AcpAdapterBase:
             await terminate_process_tree(process)
 
     async def close(self) -> None:
+        try:
+            await self._close_provider()
+        finally:
+            await self._member_broker.close()
+
+    async def _close_provider(self) -> None:
+        """Stop only the ACP provider while preserving the active broker."""
         process = self._transport.process
         if process is not None and process.returncode is None:
             if process.stdin is not None:
@@ -342,10 +363,9 @@ class AcpAdapterBase:
         if self._transport.running and argv == self._launched_argv:
             return
         if self._transport.process is not None:
-            await self.close()
+            await self._close_provider()
         cwd = context.cwd
         env, self._gh_config_dir = isolated_agent_environment()
-        env.update(self._agent_member_environment(context))
         try:
             process = await create_agent_subprocess(
                 *argv,
@@ -904,26 +924,25 @@ class AcpAdapterBase:
 
     async def _prepare_turn(self, context: AgentExecutionContext) -> None:
         """Start provider-specific services needed while this turn is active."""
+        mcp = as_dict(self._capabilities.get("mcpCapabilities"))
+        if not mcp.get("http"):
+            await self.close()
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
+                f"The installed {self.product_label} does not support HTTP MCP servers.",
+                details={"agent_version": self._agent_version},
+            )
 
     async def _finish_turn(self, context: AgentExecutionContext) -> None:
         """Revoke provider-specific services after this turn finishes."""
 
-    def _agent_member_environment(
-        self, context: AgentExecutionContext
-    ) -> dict[str, str]:
-        """Metadata a provider process may pass to a nested member CLI."""
-        return {
-            **member_command_environment(context),
-            **delegation_environment(context.run_id),
-        }
-
     def _mcp_servers(self, context: AgentExecutionContext) -> list[dict[str, Any]]:
         """ACP MCP descriptors attached to a new or reloaded session."""
-        return []
+        return [self._member_broker.mcp_server]
 
     def _turn_prompt(self, prompt: str, context: AgentExecutionContext) -> str:
         """Add provider-specific execution instructions to the turn prompt."""
-        return prompt
+        return self._member_broker.prompt(prompt)
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         """The command line that starts this provider's ACP server."""

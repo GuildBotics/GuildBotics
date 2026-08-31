@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 from pathlib import Path
@@ -17,8 +18,8 @@ from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBrokerError,
     _member_cli_command,
     _member_environment,
+    _rejection_reason,
     _ScopedTokenVerifier,
-    _validate_arguments,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
@@ -169,12 +170,14 @@ async def test_execute_uses_fixed_member_entrypoint_and_trusted_environment(
 def test_arguments_are_scoped_to_active_person_and_workspace(
     arguments: list[str], message: str
 ) -> None:
-    with pytest.raises(ValueError, match=message):
-        _validate_arguments(arguments, "aiko")
+    reason = _rejection_reason(arguments, "aiko")
+
+    assert reason is not None
+    assert message in reason
 
 
 def test_help_is_the_only_command_that_does_not_require_a_person() -> None:
-    _validate_arguments(["help"], "aiko")
+    assert _rejection_reason(["help"], "aiko") is None
 
 
 def test_read_only_environment_removes_inherited_delegation(
@@ -194,10 +197,14 @@ def test_read_only_environment_removes_inherited_delegation(
 
 @pytest.mark.asyncio
 async def test_broker_rejects_commands_outside_an_active_turn(tmp_path) -> None:
+    """Rejections stay in-band; a raised MCP tool error would fail the turn."""
     broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
 
-    with pytest.raises(ValueError, match="No GuildBotics turn"):
-        await broker.execute("expired", ["help"])
+    result = await broker.execute("expired", ["help"])
+
+    assert result.exit_code == 2
+    assert "No GuildBotics turn" in result.stderr
+    assert result.stdout == ""
 
 
 @pytest.mark.asyncio
@@ -206,8 +213,10 @@ async def test_broker_rejects_an_expired_turn_grant(tmp_path) -> None:
     broker._context = _context(tmp_path)
     broker._turn_grant = "current"
 
-    with pytest.raises(ValueError, match="invalid or expired"):
-        await broker.execute("previous", ["help"])
+    result = await broker.execute("previous", ["help"])
+
+    assert result.exit_code == 2
+    assert "invalid or expired" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -261,6 +270,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     context = _context(tmp_path)
     await broker.activate(context)
     descriptor = broker.mcp_server
+    turn_grant = broker.turn_grant
 
     try:
         async with httpx2.AsyncClient(
@@ -298,6 +308,15 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
                             "arguments": ["help"],
                         },
                     )
+                    # A refused request must stay a structured result: an MCP
+                    # tool error here fails the entire Antigravity run status.
+                    rejected = await session.call_tool(
+                        "guildbotics_member",
+                        {
+                            "turn_grant": "stale-grant",
+                            "arguments": ["help"],
+                        },
+                    )
     finally:
         await broker.close()
 
@@ -307,6 +326,13 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
         "stdout": '{"ok": true}\n',
         "stderr": "",
     }
+    returned = json.dumps(result.structured_content)
+    assert authorization not in returned
+    assert turn_grant not in returned
+    assert rejected.is_error is False
+    assert rejected.structured_content is not None
+    assert rejected.structured_content["exit_code"] == 2
+    assert "invalid or expired" in rejected.structured_content["stderr"]
 
 
 @pytest.mark.asyncio
