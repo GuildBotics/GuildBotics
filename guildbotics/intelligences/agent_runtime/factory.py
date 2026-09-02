@@ -8,7 +8,6 @@ from guildbotics.intelligences.agent_runtime.codex import CodexAppServerAdapter
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import AgentAdapter
-from guildbotics.intelligences.agent_runtime.policy import load_native_agent_policy
 
 NATIVE_ADAPTERS = {
     "codex": "codex-app-server",
@@ -24,22 +23,16 @@ NATIVE_ADAPTERS = {
 }
 
 
-def create_native_adapter(name: str, person_id: str) -> AgentAdapter:
+def create_native_adapter(name: str) -> AgentAdapter:
     adapter = NATIVE_ADAPTERS.get(name, name)
     if adapter == "codex-app-server":
-        policy = load_native_agent_policy(person_id)
-        return CodexAppServerAdapter(policy=policy.for_adapter("codex"))
+        return CodexAppServerAdapter()
     if adapter == "claude-stream-json":
         return ClaudeStreamJsonAdapter()
     if adapter == "grok-acp":
-        policy = load_native_agent_policy(person_id)
-        return GrokAcpAdapter(policy=policy.for_adapter("grok"))
+        return GrokAcpAdapter()
     if adapter == "copilot-acp":
-        policy = load_native_agent_policy(person_id)
-        return CopilotAcpAdapter(policy=policy.for_adapter("copilot"))
+        return CopilotAcpAdapter()
     if adapter == "antigravity-stream-json":
-        # No filesystem policy: `agy --sandbox` only confines terminal
-        # commands, so exposing it as `filesystem_access` would promise a file
-        # scope it does not keep.
         return AntigravityStreamJsonAdapter()
     raise ValueError(f"Unknown native agent adapter: {name}")

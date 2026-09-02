@@ -28,7 +28,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
 _CACHED_TOKEN_METHOD = "cached_token"
 #: Interactive sign-in must never be started from a headless run.
@@ -86,23 +85,14 @@ class GrokAcpAdapter(AcpAdapterBase):
         *,
         executable: str = "grok",
         timeout: float = 3600.0,
-        policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
-        super().__init__(executable=executable, timeout=timeout, policy=policy)
+        super().__init__(executable=executable, timeout=timeout)
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
-        return _launch_argv(
-            self._executable,
-            self._policy,
-            context.read_only,
-            self.applied_settings(context),
-        )
+        return _launch_argv(self._executable, self.applied_settings(context))
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
-        return {
-            "filesystem_access": self._policy.filesystem_access,
-            "sandbox": _sandbox_profile(self._policy, context.read_only),
-        }
+        return {"sandbox": _SANDBOX_PROFILE, "read_only": context.read_only}
 
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
         # Grok Build names the model the process is fixed to in its
@@ -184,11 +174,14 @@ class GrokAcpAdapter(AcpAdapterBase):
         return super()._decode_extension(update, session_id)
 
 
+#: The one profile every turn runs under: reads anywhere, writes confined to
+#: the working directory, `~/.grok` and temp. The provider-neutral contract
+#: (working directory plus explicit grants) is not translated for Grok yet.
+_SANDBOX_PROFILE = "workspace"
+
+
 def _launch_argv(
-    executable: str,
-    policy: AdapterFilesystemPolicy,
-    read_only: bool,
-    settings: dict[str, Any] | None = None,
+    executable: str, settings: dict[str, Any] | None = None
 ) -> tuple[str, ...]:
     # `grok agent stdio` takes the model and reasoning effort as launch options.
     # They are process-wide rather than per-turn, which is exactly why this
@@ -204,7 +197,7 @@ def _launch_argv(
         # Headless runs must never let the CLI update itself mid-session.
         "--no-auto-update",
         "--sandbox",
-        _sandbox_profile(policy, read_only),
+        _SANDBOX_PROFILE,
         "agent",
         # These are `grok agent` options. The root parser accepts the same
         # spellings, but does not propagate always-approve to ACP sessions.
@@ -212,14 +205,6 @@ def _launch_argv(
         *options,
         "stdio",
     )
-
-
-def _sandbox_profile(policy: AdapterFilesystemPolicy, read_only: bool = False) -> str:
-    # A read-only turn only inspects recorded, untrusted state, so it keeps the
-    # confined profile no matter what the member configured.
-    if read_only:
-        return "workspace"
-    return "off" if policy.filesystem_access == "host" else "workspace"
 
 
 def _turn_usage_events(update: dict[str, Any], session_id: str) -> list[AgentEvent]:

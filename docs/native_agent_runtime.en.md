@@ -40,39 +40,125 @@ Each tool still reads its own definition under
 `intelligences/cli_agents/<tool>/`: that file carries the `parameters:` and
 `effort:` overlay described in the
 [custom command guide](custom_command_guide.en.md), which is how the
-provider-neutral `low` / `high` levels become provider settings. Those two keys
-are all there is to configure; the shipped defaults also declare
+provider-neutral `low` / `high` levels become provider settings, plus the
+`network:` block described below. The shipped defaults also declare
 `effort_fields:`, the descriptors the settings editor uses for typed editing.
 
-The only user-configurable runtime *boundary* is the per-adapter filesystem
-scope in `intelligences/native_agent_policy.yml`:
+## Sandbox contract
 
-```yaml
-codex:
-  filesystem_access: workspace
+Every AI CLI turn is confined by the same contract, whatever it is for (a
+ticket, a chat, the Desktop troubleshooter, command authoring). GuildBotics asks
+for three things and each adapter translates them into its provider's own
+sandbox settings. A request the provider cannot enforce on the current OS stops
+the agent from starting; it is never widened into something the provider can do.
+Codex's native Windows sandbox reads a fixed set of machine-wide roots and has
+not been verified to honour the profile's read paths or the network proxy, so
+Codex does not start on Windows until that check is done (it does under WSL,
+as Linux).
 
-grok:
-  filesystem_access: workspace
+- **Working directory**: the turn's `cwd` (the member's clone for ticket work,
+  `<workspace>/.guildbotics/local/work/...` for internal turns) is always
+  readable and writable. The workspace's `.guildbotics/config` and `state` are
+  not part of it.
+- **Beyond the working directory** there are three things. **Trees derived
+  from the PATH**: what you can run, agents can run. For each directory on
+  the PATH this device gives agents, the smallest tree holding it and the
+  packages its executables link into (`/opt/homebrew` for Homebrew's
+  `/opt/homebrew/bin`, `~/.local` for `~/.local/bin`) opens for reading.
+  There is no setting; every device derives this for every turn. The whole
+  tree opens, so every other command in it becomes runnable too: the sandbox
+  guards credentials, network and write locations, not the list of programs
+  that may start. A tree inside a credential directory (`~/.ssh`, a provider's
+  own directory) stays closed and is shown with the reason. **documents**:
+  directories under the home directory the work reads from or writes to
+  (`read` / `read_write`, relative paths only), created before a turn starts
+  when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
+  **This device's own settings**: extra paths the derivation cannot cover (a
+  cache a tool writes, data it keeps outside its install tree; absolute paths
+  allowed, must exist) and `deny` entries that close a tree or a corner of
+  one, in `local/cli_agent_filesystem_grants.yml`, never synchronized. The
+  credential directories are always closed by a built-in deny, so a tree that
+  contains one (`~/.local` around `~/.local/share/keyrings`) can open around it.
 
-copilot:
-  filesystem_access: workspace
-```
+  ```yaml
+  # config/intelligences/cli_agent_filesystem_grants.yml (shared)
+  documents:
+    - path: Documents/shared-documents
+      access: read
+    - path: Projects/generated-assets
+      access: read_write
+  ```
 
-New workspace setup copies this file from the packaged template. Existing workspaces
-that do not have the file continue to use that template until the policy is saved.
-Configure the team policy in Desktop under **LLM / AI CLI tools → Advanced → Native
-agent execution policy**. A member can inherit it or save an override from the
-member's **LLM / AI CLI tools** tab; the override is stored at
-`team/members/<person_id>/intelligences/native_agent_policy.yml`.
+  ```yaml
+  # local/cli_agent_filesystem_grants.yml (this device only)
+  paths:
+    - path: .cache/uv
+      access: read_write
+  deny:
+    - /opt/homebrew/etc
+  ```
 
-For headless operation, edit the YAML directly. `filesystem_access` accepts
-`workspace` (the default) or `host`. Workspace access maps to Codex workspace-write
-with network enabled; host access removes the Codex filesystem sandbox. Codex always
-uses the non-interactive `never` approval policy, and any unexpected approval request
-is declined. These fixed settings are not exposed as user choices.
+- **Network**: the `network:` block of the selected tool definition
+  (`cli_agents/<tool>/<slot>.yml`) states, separately, what shell commands and
+  their child processes (`command`) and the tool's built-in web search / URL
+  fetch (`web`) may reach. `mode` is one of `deny` / `allowlist` /
+  `unrestricted` (`off` would read as a YAML boolean), `allowed_domains` is
+  used only with `allowlist`, and `allow_local_network` opens localhost and the
+  LAN to commands. The shipped default closes both routes. A slot that omits
+  `network:` inherits the whole block from its tool's `default.yml`; a slot
+  that states it states all of it (a partial block is an error).
 
-For Grok Build, `workspace` maps to `--sandbox workspace` and `host` maps to
-`--sandbox off`. The launch command is fixed as
+  ```yaml
+  network:
+    command:
+      mode: allowlist
+      allowed_domains: [registry.npmjs.org]
+      allow_local_network: false
+    web:
+      mode: deny
+      allowed_domains: []
+  ```
+
+All of this is edited in Desktop under **LLM / AI CLI tools → Advanced settings**.
+The Network fields of each tool definition disable the modes the tool cannot
+enforce on this OS and say why. The "Directories shared by the workspace" card
+holds the documents; the "Directories on this device" card lists what this
+device's PATH makes readable (each row can be denied), the paths and denies
+added here, and what stays closed with its reason; both judge a typed or picked
+path before it is added (whether it exists here, whether it holds credentials).
+Every member's slots are resolved the way a turn is started: a member whose
+slot cannot start on this device is marked in the member list with the reasons,
+and the status band at the top says so until the setting is changed. The band's
+link opens the setting it is about: the member's slot for a network problem,
+the device's directory card for a grant problem.
+
+The provider's own model traffic and login, and the localhost member broker,
+are outside this setting. Which modes a provider can enforce is declared in the
+catalog in `guildbotics/intelligences/cli_agents.py`; saving a definition checks
+that some supported OS can enforce it, and starting an agent checks the current
+OS, both against the same catalog. Only Codex translates the contract so far;
+the other adapters keep the fixed behaviour described below.
+
+Codex receives the contract as configuration overrides at launch: a permission
+profile named `guildbotics`, selected through `default_permissions`. The profile
+is built from Codex's platform paths (`:minimal`) rather than its `:workspace`
+baseline, whose system-wide read would expose `~/.ssh` and `~/.codex/auth.json`:
+writes inside the workspace roots and temp, reads on the directories Codex's own
+binary is run through (the invoked link and its real location, never `~/.codex`
+itself), reads on the skill roots Codex scans (`~/.agents/skills`,
+`~/.codex/skills`, `~/.codex/_skills`, whichever exist, because the agent reads a
+skill's body from inside the sandbox), and each filesystem grant as `read` or
+`write`.
+`command` `deny` becomes `network.enabled=false`; `allowlist` becomes
+`network.enabled=true` with `features.network_proxy=true` and the domain rules;
+`unrestricted` becomes `network.enabled=true`. `web` `deny` becomes
+`web_search="disabled"` and `allowlist` becomes
+`tools.web_search.allowed_domains`. Neither `thread/start` nor `turn/start`
+carries a sandbox of its own, because either would override the profile. Codex
+always uses the non-interactive `never` approval policy, and any unexpected
+approval request is declined.
+
+Grok Build always launches with `--sandbox workspace`. The launch command is fixed as
 `grok --no-auto-update --sandbox <profile> agent --always-approve stdio`; no arbitrary
 CLI flag can be injected from configuration. `--always-approve` is always paired with a
 sandbox, and an unexpected ACP `session/request_permission` is declined and recorded.
@@ -83,15 +169,10 @@ sent back as an id. When no rejecting option is offered, the request is answered
 `--no-auto-update` keeps a headless run from updating the CLI mid-session, and
 GuildBotics never rewrites the user's `config.toml`.
 
-For GitHub Copilot, `workspace` is Copilot's own default -- file access is confined to
-the working directory and the system temporary directory -- and `host` adds
-`--allow-all-paths`, which removes that verification. A read-only turn keeps the
-confined scope even for a member configured with `host`: it reads untrusted recorded
-state such as logs, tickets, and chat, reads inside the allowed paths are never asked
-about, and its own reply would carry anything it read back out. Declining its writes
-does not close that path, so the scope itself is narrowed. The launch command is fixed
-as `copilot --acp --no-auto-update --no-remote-export [--allow-all-paths]`; no
-arbitrary CLI flag can be injected from configuration. `--no-remote-export` keeps a member's
+GitHub Copilot runs with its own default boundary (file access confined to the
+working directory and the system temp directories). The launch command is fixed as
+`copilot --acp --no-auto-update --no-remote-export`; no arbitrary CLI flag can be
+injected from configuration. `--no-remote-export` keeps a member's
 session from being exported to, or steered from, GitHub web and mobile: it carries
 workspace contents and must take its instructions from GuildBotics alone.
 
@@ -124,10 +205,9 @@ blocking the turn. Because `agy` reports a model back only when one was named on
 command line, a turn without `--model` records an empty model rather than guessing
 which account default it ran on.
 
-Antigravity is not part of `native_agent_policy.yml`. `agy --sandbox` restricts
-terminal commands only -- its own file-writing tools still reach outside the
-working directory -- so there is no file scope to expose as `filesystem_access`
-without promising something the flag does not keep.
+The contract is not translated for Antigravity yet. `agy --sandbox` restricts
+terminal commands only; its own file-writing tools still reach outside the
+working directory.
 
 Antigravity runs every turn with `--dangerously-skip-permissions` and with
 `--add-dir <cwd>`. That second flag is not optional: without it `agy` resolves every tool, including `run_command`,
@@ -156,7 +236,7 @@ Claude managed policy remains authoritative. Claude permission and sandbox setti
 are not stored in the workspace policy or exposed in Desktop.
 
 The effective policy and every approval decision are written as provider-neutral
-diagnostics events. Codex host access and Claude `bypassPermissions` can modify files
+diagnostics events. Claude `bypassPermissions` can modify files
 outside the workspace. Use them only with the documented credential isolation and in
 an environment whose host access is acceptable. Invalid types, removed keys, and
 unknown values fail validation instead of silently changing the effective boundary.

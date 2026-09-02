@@ -33,7 +33,7 @@ async def get_native_adapter(
             ]
             for existing in stale:
                 await registry.pop(existing).close()
-            adapter = create_native_adapter(adapter_name, person_id)
+            adapter = create_native_adapter(adapter_name)
             registry[key] = adapter
         return adapter
 

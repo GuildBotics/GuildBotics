@@ -21,6 +21,8 @@ import {
   updateCommandFile,
   getConfigStatus,
   getIntelligenceConfig,
+  evaluateGrant,
+  getSandboxStatus,
   getMemoryEvents,
   getMemberConfig,
   getRuntimeDebug,
@@ -379,6 +381,26 @@ describe("GET query parameter encoding", () => {
     await runScenarioDiagnostics();
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario");
+  });
+
+  it("fetches the sandbox status of this device", async () => {
+    const { calls } = captureFetch(jsonResponse({ platform: "darwin", members: [] }));
+    await getSandboxStatus();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/sandbox");
+  });
+
+  it("encodes grant evaluations", async () => {
+    const { calls } = captureFetch(jsonResponse({ valid: true }));
+    await evaluateGrant({ scope: "deny", path: "/opt/homebrew/etc" });
+    await evaluateGrant({ scope: "local", path: "/opt/home brew", access: "read_write" });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
+    );
   });
 
   it("encodes person_id for getIntelligenceConfig", async () => {

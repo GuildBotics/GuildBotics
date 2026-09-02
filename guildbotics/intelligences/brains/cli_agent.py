@@ -27,6 +27,7 @@ from guildbotics.intelligences.brains.util import (
     to_plain_text,
     to_response_class,
 )
+from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -34,6 +35,15 @@ from guildbotics.intelligences.effort import (
     effort_settings,
     resolve_effort,
     validate_effort_overlay,
+)
+from guildbotics.intelligences.sandbox import (
+    NetworkPolicy,
+    SandboxContract,
+    SandboxContractError,
+    load_local_grants,
+    load_shared_grants,
+    parse_network_policy,
+    resolve_access,
 )
 from guildbotics.observability import correlation_fields, span_scope
 from guildbotics.observability.diagnostics_events import (
@@ -99,6 +109,8 @@ class ExecutableInfo:
     adapter: str = ""
     effort: dict[str, dict] = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
+    #: Where the tool's commands and built-in web features may connect.
+    network: NetworkPolicy = field(default_factory=NetworkPolicy)
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
@@ -477,6 +489,9 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
                 definition.get("effort"), where=f"AI CLI tool '{slot}'"
             ),
             parameters=_parameters_of(definition),
+            network=parse_network_policy(
+                definition.get("network"), where=f"AI CLI tool '{slot}'"
+            ),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
     return cli_agent_mapping
@@ -744,6 +759,23 @@ class CliAgentBrain(Brain):
                 )
             lease = owned_lease
         try:
+            try:
+                sandbox = SandboxContract(
+                    network=self.executable_info.network,
+                    access=resolve_access(
+                        load_shared_grants(),
+                        load_local_grants(),
+                        get_cli_agent_search_path(),
+                    ),
+                )
+            except SandboxContractError as exc:
+                return CliAgentExecutionResult(
+                    stdout="",
+                    stderr=str(exc),
+                    returncode=1,
+                    error_category="configuration",
+                    error_details={"cli_agent": adapter_name},
+                )
             lease_metadata = lease.bind_run_id(run_id) if lease is not None else None
             context = AgentExecutionContext(
                 person_id=self.person_id,
@@ -775,6 +807,7 @@ class CliAgentBrain(Brain):
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
                 read_only=read_only,
+                sandbox=sandbox,
             )
             return await self._execute_native_turn(
                 input=input,

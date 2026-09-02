@@ -539,3 +539,39 @@ def test_system_alerts_endpoint_dismisses_alert(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"alerts": []}
+
+
+def test_a_sandbox_setting_this_device_cannot_enforce_stays_visible(
+    tmp_path: Path,
+) -> None:
+    service = SystemAlertService(DiagnosticsStore(tmp_path / "diagnostics.jsonl"))
+    problem = (
+        "aiko",
+        "default",
+        "network",
+        "Grok Build cannot enforce command network mode 'deny' on this OS.",
+    )
+
+    alerts = service.list_alerts(_runtime(), [problem]).alerts
+
+    assert [
+        (a.code, a.severity, a.person_id, a.command, a.setting, a.reason, a.actions)
+        for a in alerts
+    ] == [
+        (
+            "sandbox_unenforceable",
+            "warning",
+            "aiko",
+            "default",
+            "network",
+            problem[3],
+            ["setup"],
+        )
+    ]
+    # Closing the band does not settle it: the setting is still unenforceable.
+    service.dismiss(alerts[0].id)
+    assert [a.code for a in service.list_alerts(_runtime(), [problem]).alerts] == [
+        "sandbox_unenforceable"
+    ]
+    # Changing the setting does.
+    assert service.list_alerts(_runtime(), []).alerts == []

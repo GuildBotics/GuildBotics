@@ -1,8 +1,0 @@
-codex:
-  filesystem_access: workspace
-
-grok:
-  filesystem_access: workspace
-
-copilot:
-  filesystem_access: workspace

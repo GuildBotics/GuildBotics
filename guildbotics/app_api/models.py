@@ -15,6 +15,7 @@ from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationIn
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
+from guildbotics.intelligences.sandbox import LocalGrants, NetworkPolicy, SharedGrants
 from guildbotics.runtime.live_state import LivePresentation
 
 
@@ -946,6 +947,7 @@ SystemAlertCode = Literal[
     "rate_limited",
     "scheduler_failed",
     "worker_stopped",
+    "sandbox_unenforceable",
 ]
 SystemAlertSeverity = Literal["critical", "warning"]
 SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
@@ -961,6 +963,11 @@ class SystemAlert(BaseModel):
     person_id: str = ""
     command: str = ""
     trace_id: str = ""
+    #: What the alert is about when the code alone does not say, such as the
+    #: setting a device cannot enforce.
+    reason: str = ""
+    #: Which setting to open for it, when the code alone does not say.
+    setting: str = ""
     actions: list[SystemAlertAction] = Field(default_factory=list)
 
 
@@ -1071,6 +1078,109 @@ class CliAgentDefinition(BaseModel):
     #: protocol has nowhere to put these settings says so, so the editor can
     #: explain instead of collecting configuration that would be dropped.
     effort_supported: bool = True
+    #: This definition's own `network` block, or None when the file states
+    #: none. A request that omits it leaves the file's block as it is, so an
+    #: editor that does not surface the block cannot drop it.
+    network: NetworkPolicy | None = None
+    #: What the slot runs under when it states no block of its own: its tool's
+    #: default definition, or the closed policy when that states none either.
+    inherited_network: NetworkPolicy = Field(default_factory=NetworkPolicy)
+
+
+class CliAgentNetworkSupportInfo(BaseModel):
+    """What one tool can enforce, on this device and on any supported OS."""
+
+    command_modes: list[str] = Field(default_factory=list)
+    command_modes_anywhere: list[str] = Field(default_factory=list)
+    web_modes: list[str] = Field(default_factory=list)
+    local_network_modes: list[str] = Field(default_factory=list)
+    grant_accesses: list[str] = Field(default_factory=list)
+    contract_applied: bool = False
+
+
+GrantScope = Literal["document", "local", "deny"]
+
+
+class GrantEvaluation(BaseModel):
+    """What a grant the user is about to add would mean on this device."""
+
+    scope: GrantScope
+    path: str
+    access: str = ""
+    valid: bool
+    reason: str = ""
+    present: bool = False
+    #: Why the path holds credentials or provider state, or "".
+    sensitive: str = ""
+
+
+class SandboxGrantStatus(BaseModel):
+    path: str
+    access: str
+    present: bool
+
+
+class SandboxTreeStatus(BaseModel):
+    """A tree read because commands on this device's PATH live in it."""
+
+    path: str
+    sources: list[str] = Field(default_factory=list)
+
+
+class SandboxExcludedStatus(BaseModel):
+    """A tree the PATH led to that stays closed, and why."""
+
+    path: str
+    source: str
+    reason: str
+
+
+class SandboxDenyStatus(BaseModel):
+    path: str
+    builtin: bool
+
+
+class SandboxAccessStatus(BaseModel):
+    """The shared and local grants as they resolve on this device."""
+
+    documents: list[SandboxGrantStatus] = Field(default_factory=list)
+    paths: list[SandboxGrantStatus] = Field(default_factory=list)
+    trees: list[SandboxTreeStatus] = Field(default_factory=list)
+    excluded: list[SandboxExcludedStatus] = Field(default_factory=list)
+    denied: list[SandboxDenyStatus] = Field(default_factory=list)
+    #: Why the grants could not be resolved at all, or "".
+    problem: str = ""
+
+
+#: Which setting a sandbox problem is about, so the Desktop can open it: the
+#: slot's network block, or the directory grants.
+SandboxSetting = Literal["network", "grants"]
+
+
+class SandboxProblem(BaseModel):
+    setting: SandboxSetting
+    reason: str
+
+
+class SandboxSlotStatus(BaseModel):
+    slot: str
+    tool: str
+    contract_applied: bool
+    network: NetworkPolicy
+    #: Everything that keeps this slot from starting on this device.
+    problems: list[SandboxProblem] = Field(default_factory=list)
+
+
+class SandboxMemberStatus(BaseModel):
+    person_id: str
+    slots: list[SandboxSlotStatus] = Field(default_factory=list)
+
+
+class SandboxStatusResponse(BaseModel):
+    platform: str
+    working_directory: str
+    access: SandboxAccessStatus = Field(default_factory=SandboxAccessStatus)
+    members: list[SandboxMemberStatus] = Field(default_factory=list)
 
 
 class BrainAssignment(BaseModel):
@@ -1078,29 +1188,6 @@ class BrainAssignment(BaseModel):
     brain_class: str
     engine: Literal["llm", "cli"]
     target: str
-
-
-class AdapterNativeAgentPolicySettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    filesystem_access: Literal["workspace", "host"] = "workspace"
-
-
-class NativeAgentPolicySettings(BaseModel):
-    """Per-adapter policies. Each native adapter keeps its own field so one
-    adapter's sandbox choice can never be read as another's."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    codex: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
-    grok: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
-    copilot: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
 
 
 class LlmProvidersResponse(BaseModel):
@@ -1117,9 +1204,14 @@ class IntelligenceConfigResponse(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
-    native_agent_policy: NativeAgentPolicySettings = Field(
-        default_factory=NativeAgentPolicySettings
-    )
+    #: The workspace's shared grants (documents). They are the team's,
+    #: whichever scope is read, and only the team scope writes them.
+    filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
+    #: This device's own extra paths and denies, never synchronized.
+    local_grants: LocalGrants = Field(default_factory=LocalGrants)
+    #: Per tool, what this device and any supported OS can enforce.
+    network_support: dict[str, CliAgentNetworkSupportInfo] = Field(default_factory=dict)
+    platform: str = ""
     # Slot/feature names the team owns. A member may override their value but
     # cannot delete or rename them (the runtime merge would only revive them),
     # so the editor locks these names. Empty for the team scope.
@@ -1138,7 +1230,11 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
-    native_agent_policy: NativeAgentPolicySettings | None = None
+    #: None keeps the shared grants as they are; a value replaces them. Ignored
+    #: for a member scope, which has no grants of its own.
+    filesystem_grants: SharedGrants | None = None
+    #: None keeps this device's paths as they are; a value replaces them.
+    local_grants: LocalGrants | None = None
 
 
 class ProjectConfigResponse(BaseModel):

@@ -1,27 +1,23 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.models import (
-    AdapterNativeAgentPolicySettings,
     BrainAssignment,
     CliAgentDefinition,
     EffortFieldSpec,
     IntelligenceConfigResponse,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
-    NativeAgentPolicySettings,
 )
+from guildbotics.app_api.sandbox_status import network_support
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import (
     CreatedFile,
     SetupServiceError,
-)
-from guildbotics.intelligences.agent_runtime.policy import (
-    POLICY_ADAPTERS,
-    parse_native_agent_policy,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
@@ -30,12 +26,24 @@ from guildbotics.intelligences.cli_agents import (
     cli_agent_name_from_path,
     require_cli_agent_path,
     resolve_cli_agent_path,
+    unsupported_network_reason,
 )
 from guildbotics.intelligences.effort import (
     describe_overlay_problems,
     validate_effort_fields,
 )
 from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
+from guildbotics.intelligences.sandbox import (
+    FILESYSTEM_GRANTS_PATH,
+    LOCAL_GRANTS_FILENAME,
+    LocalGrants,
+    NetworkPolicy,
+    SandboxContractError,
+    SharedGrants,
+    parse_local_grants,
+    parse_network_policy,
+    parse_shared_grants,
+)
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
@@ -101,7 +109,10 @@ class IntelligenceConfigService:
             cli_agent_mapping=cli_agent_mapping,
             cli_agents=self._read_cli_agents(config_dir, person_id, cli_agent_mapping),
             brain_mapping=self._read_brain_assignments(brain_mapping),
-            native_agent_policy=self._read_native_agent_policy(config_dir, person_id),
+            filesystem_grants=self._read_shared_grants(config_dir),
+            local_grants=self._read_local_grants(config_dir),
+            network_support=network_support(),
+            platform=sys.platform,
             inherited_model_slots=inherited_model_slots,
             inherited_cli_slots=inherited_cli_slots,
             inherited_brain_features=inherited_brain_features,
@@ -153,7 +164,16 @@ class IntelligenceConfigService:
         )
         files.append(CreatedFile(path=brain_mapping_file, action="update"))
 
-        self._write_native_agent_policy(target_dir, request.native_agent_policy, files)
+        if request.filesystem_grants is not None:
+            grants_file = request.config_dir / FILESYSTEM_GRANTS_PATH
+            save_yaml_file(
+                grants_file, request.filesystem_grants.model_dump(mode="json")
+            )
+            files.append(CreatedFile(path=grants_file, action="update"))
+        if request.local_grants is not None:
+            local_file = self._local_grants_file(request.config_dir)
+            save_yaml_file(local_file, request.local_grants.model_dump(mode="json"))
+            files.append(CreatedFile(path=local_file, action="update"))
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
@@ -227,10 +247,13 @@ class IntelligenceConfigService:
             "cli_agents",
             [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
             {self._cli_agent_rel_path(agent): agent for agent in request.cli_agents},
-            lambda _base, agent: self._cli_def_yaml(agent),
+            lambda base, agent: self._cli_def_yaml(
+                agent,
+                agent.network
+                or self._network_of(base, where=f"AI CLI tool '{agent.path}'"),
+            ),
             files,
         )
-        self._reconcile_member_policy(request, team, target_dir, files)
 
         if target_dir.exists() and not any(target_dir.iterdir()):
             target_dir.rmdir()
@@ -317,25 +340,6 @@ class IntelligenceConfigService:
         if not any(directory.iterdir()):
             directory.rmdir()
 
-    def _reconcile_member_policy(
-        self,
-        request: IntelligenceConfigUpdateRequest,
-        team: IntelligenceConfigResponse,
-        target_dir: Path,
-        files: list[CreatedFile],
-    ) -> None:
-        policy_file = target_dir / "native_agent_policy.yml"
-        # Omitted policy: keep whatever the member already had (nothing to do).
-        if request.native_agent_policy is None:
-            return
-        if request.native_agent_policy != team.native_agent_policy:
-            self._write_native_agent_policy(
-                target_dir, request.native_agent_policy, files
-            )
-        elif policy_file.exists():
-            policy_file.unlink()
-            files.append(CreatedFile(path=policy_file, action="delete"))
-
     def _normalize_cli_mapping(self, mapping: dict[str, str]) -> dict[str, str]:
         """Reject any slot that names a tool outside the built-in catalog.
 
@@ -410,23 +414,50 @@ class IntelligenceConfigService:
             where=f"AI CLI tool '{agent.path}'",
         )
         agent_file = target_dir / rel_path
+        existing = self._read_optional_yaml(agent_file)
+        network = agent.network
+        if network is None:
+            network = self._network_of(existing, where=f"AI CLI tool '{agent.path}'")
+        if network is not None:
+            # A shared definition must be enforceable somewhere; which device
+            # can run it is decided when a turn starts there.
+            reason = unsupported_network_reason(agent.name, network, None)
+            if reason:
+                raise SetupServiceError(
+                    "invalid_network_settings", f"AI CLI tool '{agent.path}': {reason}"
+                )
         # The file is written even for an empty mapping, as an explicit
         # `effort: {}`. Deleting it instead would fall through to the packaged
         # template, whose mapping would silently take effect again -- so
         # clearing the field in the editor would not clear anything.
         agent_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(agent_file, self._cli_def_yaml(agent))
+        save_yaml_file(agent_file, self._cli_def_yaml(agent, network))
         files.append(CreatedFile(path=agent_file, action="update"))
 
     @staticmethod
-    def _cli_def_yaml(agent: CliAgentDefinition) -> dict[str, Any]:
+    def _cli_def_yaml(
+        agent: CliAgentDefinition, network: NetworkPolicy | None
+    ) -> dict[str, Any]:
         """An AI CLI tool's definition file.
 
-        The tool is driven entirely by its adapter, so the only thing its file
-        configures is which settings each effort level imposes. There is nothing
-        else in it to preserve, and the whole file is rewritten.
+        The tool is driven entirely by its adapter, so its file configures only
+        which settings each effort level imposes and where the tool may
+        connect. The whole file is rewritten from those.
         """
-        return {"parameters": agent.parameters, "effort": agent.effort}
+        data: dict[str, Any] = {"parameters": agent.parameters, "effort": agent.effort}
+        if network is not None:
+            data["network"] = network.model_dump(mode="json")
+        return data
+
+    @staticmethod
+    def _network_of(data: dict[str, Any], *, where: str) -> NetworkPolicy | None:
+        """A definition's own `network` block, validated, or None if absent."""
+        if "network" not in data:
+            return None
+        try:
+            return parse_network_policy(data.get("network"), where=where)
+        except SandboxContractError as exc:
+            raise SetupServiceError("invalid_network_settings", str(exc)) from exc
 
     def _model_def_yaml(
         self, base: dict[str, Any], model: ModelDefinition, described: set[str]
@@ -693,9 +724,50 @@ class IntelligenceConfigService:
                     inherited_effort=inherited_effort,
                     effort_fields=effort_fields,
                     effort_supported=effort_supported,
+                    network=self._network_of(data, where=f"AI CLI tool '{agent_path}'"),
+                    inherited_network=self._inherited_network(
+                        config_dir, person_id, tool
+                    ),
                 )
             )
         return agents
+
+    def _inherited_network(
+        self, config_dir: Path, person_id: str | None, tool: str
+    ) -> NetworkPolicy:
+        """What a slot on ``tool`` runs under when it states no block itself."""
+        default_path = cli_agent_default_path(tool)
+        for data in (
+            self._cli_tool_default(config_dir, person_id, tool),
+            self._template_yaml(default_path),
+        ):
+            network = self._network_of(data, where=f"AI CLI tool '{default_path}'")
+            if network is not None:
+                return network
+        return NetworkPolicy()
+
+    def _read_shared_grants(self, config_dir: Path) -> SharedGrants:
+        """The workspace's shared grants; absent file, none."""
+        data = self._read_optional_yaml(config_dir / FILESYSTEM_GRANTS_PATH)
+        try:
+            return parse_shared_grants(data or None, where=FILESYSTEM_GRANTS_PATH)
+        except SandboxContractError as exc:
+            raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+
+    def _read_local_grants(self, config_dir: Path) -> LocalGrants:
+        """This device's own grants; absent file, none."""
+        data = self._read_optional_yaml(self._local_grants_file(config_dir))
+        try:
+            return parse_local_grants(
+                data or None, where=f"local/{LOCAL_GRANTS_FILENAME}"
+            )
+        except SandboxContractError as exc:
+            raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
+
+    @staticmethod
+    def _local_grants_file(config_dir: Path) -> Path:
+        """``<workspace>/.guildbotics/local/...``, beside the shared config."""
+        return config_dir.parent / "local" / LOCAL_GRANTS_FILENAME
 
     @staticmethod
     def _reject_unusable_effort(
@@ -752,37 +824,6 @@ class IntelligenceConfigService:
                     )
                 )
         return assignments
-
-    def _read_native_agent_policy(
-        self, config_dir: Path, person_id: str | None
-    ) -> NativeAgentPolicySettings:
-        payload = self._read_scoped_yaml(
-            config_dir, person_id, "native_agent_policy.yml"
-        )
-        policy = parse_native_agent_policy(payload)
-        return NativeAgentPolicySettings(
-            **{
-                adapter: AdapterNativeAgentPolicySettings(
-                    filesystem_access=cast(
-                        Any, policy.for_adapter(adapter).filesystem_access
-                    )
-                )
-                for adapter in POLICY_ADAPTERS
-            }
-        )
-
-    def _write_native_agent_policy(
-        self,
-        target_dir: Path,
-        policy: NativeAgentPolicySettings | None,
-        files: list[CreatedFile],
-    ) -> None:
-        if policy is None:
-            return
-        target_dir.mkdir(parents=True, exist_ok=True)
-        policy_file = target_dir / "native_agent_policy.yml"
-        save_yaml_file(policy_file, policy.model_dump(mode="json"))
-        files.append(CreatedFile(path=policy_file, action="update"))
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
         if assignment.engine == "cli":

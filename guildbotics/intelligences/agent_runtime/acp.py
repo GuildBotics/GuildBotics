@@ -44,7 +44,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
 ACP_PROTOCOL_VERSION = 1
 #: Version of the GuildBotics client contract, matching the Codex adapter's.
@@ -136,7 +135,6 @@ class AcpAdapterBase:
         *,
         executable: str,
         timeout: float = 3600.0,
-        policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         self._executable = executable
         self._timeout = timeout
@@ -146,7 +144,6 @@ class AcpAdapterBase:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_agent_request,
         )
-        self._policy = policy or AdapterFilesystemPolicy()
         self._gh_config_dir = ""
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""

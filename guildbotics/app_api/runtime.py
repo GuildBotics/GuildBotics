@@ -59,6 +59,7 @@ from guildbotics.app_api.models import (
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
+    SandboxStatusResponse,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SystemAlertsResponse,
@@ -75,6 +76,11 @@ from guildbotics.app_api.models import (
     VerifyResponse,
     to_command_arguments,
     to_command_inputs,
+)
+from guildbotics.app_api.sandbox_status import (
+    SandboxProblemEntry,
+    sandbox_problems,
+    sandbox_status,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
@@ -1018,7 +1024,32 @@ class AppRuntime:
         return self._lifecycle.get_status()
 
     def get_system_alerts(self) -> SystemAlertsResponse:
-        return self._system_alerts.list_alerts(self.get_scheduler_status())
+        return self._system_alerts.list_alerts(
+            self.get_scheduler_status(), self._sandbox_problems()
+        )
+
+    def _active_agent_ids(self) -> list[str]:
+        try:
+            team = self._get_context().team
+        except Exception:  # pylint: disable=broad-exception-caught
+            return []
+        return sorted(
+            member.person_id
+            for member in team.members
+            if member.is_active and member.person_type != "human"
+        )
+
+    def _sandbox_problems(self) -> list[SandboxProblemEntry]:
+        try:
+            return sandbox_problems(self._active_agent_ids())
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A broken definition is reported where it is edited; the alert
+            # band is not the place to fail.
+            return []
+
+    def get_sandbox_status(self) -> SandboxStatusResponse:
+        """Every active member's AI CLI slots, resolved against this device."""
+        return sandbox_status(self._active_agent_ids())
 
     def dismiss_system_alert(self, alert_id: str) -> SystemAlertsResponse:
         active_ids = {alert.id for alert in self.get_system_alerts().alerts}

@@ -578,14 +578,6 @@ class SimpleProjectSetupService:
         save_yaml_file(cli_mapping_file, cli_mapping)
         files.append(CreatedFile(path=cli_mapping_file, action="create"))
 
-        native_policy_file = config.config_dir / "intelligences/native_agent_policy.yml"
-        if not native_policy_file.exists():
-            native_policy_template = (
-                get_template_path() / "intelligences/native_agent_policy.yml"
-            )
-            shutil.copy2(native_policy_template, native_policy_file)
-            files.append(CreatedFile(path=native_policy_file, action="create"))
-
         # Tool definitions live at `cli_agents/<tool>/default.yml`, so the copy
         # walks one level down rather than the directory root. These templates
         # are copied as bytes rather than read and written as text: a text

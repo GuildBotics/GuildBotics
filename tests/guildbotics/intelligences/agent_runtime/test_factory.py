@@ -19,10 +19,6 @@ from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
 )
-from guildbotics.intelligences.agent_runtime.policy import (
-    AdapterFilesystemPolicy,
-    NativeAgentPolicy,
-)
 
 
 @pytest.mark.parametrize(
@@ -44,56 +40,23 @@ from guildbotics.intelligences.agent_runtime.policy import (
     ],
 )
 def test_aliases_resolve_to_their_adapter(
-    monkeypatch, name: str, expected: type, adapter_name: str
+    name: str, expected: type, adapter_name: str
 ) -> None:
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.factory.load_native_agent_policy",
-        lambda _person_id: NativeAgentPolicy(),
-    )
-
-    adapter = create_native_adapter(name, "aiko")
+    adapter = create_native_adapter(name)
 
     assert isinstance(adapter, expected)
     assert adapter.name == adapter_name
 
 
-def test_each_adapter_only_receives_its_own_policy(monkeypatch) -> None:
-    policy = NativeAgentPolicy(
-        codex=AdapterFilesystemPolicy(filesystem_access="host"),
-        grok=AdapterFilesystemPolicy(filesystem_access="workspace"),
-        copilot=AdapterFilesystemPolicy(filesystem_access="host"),
-    )
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.factory.load_native_agent_policy",
-        lambda _person_id: policy,
-    )
-
-    codex = create_native_adapter("codex", "aiko")
-    grok = create_native_adapter("grok", "aiko")
-    copilot = create_native_adapter("copilot", "aiko")
-
-    assert codex._policy.filesystem_access == "host"
-    assert grok._policy.filesystem_access == "workspace"
-    assert copilot._policy.filesystem_access == "host"
-    # Antigravity takes no filesystem policy: `agy --sandbox` only confines
-    # terminal commands, so there is no file scope to hand it.
-    assert not hasattr(create_native_adapter("antigravity", "aiko"), "_policy")
-
-
 def test_unknown_adapter_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown native agent adapter: gemini"):
-        create_native_adapter("gemini", "aiko")
+        create_native_adapter("gemini")
 
 
-def test_every_registered_provider_uses_only_the_member_broker(monkeypatch) -> None:
+def test_every_registered_provider_uses_only_the_member_broker() -> None:
     """Keep new registry entries inside the same untrusted-provider boundary."""
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.factory.load_native_agent_policy",
-        lambda _person_id: NativeAgentPolicy(),
-    )
-
     for adapter_name in set(NATIVE_ADAPTERS.values()):
-        adapter = create_native_adapter(adapter_name, "aiko")
+        adapter = create_native_adapter(adapter_name)
         assert isinstance(adapter._member_broker, MemberCapabilityBroker)
         modules = {
             sys.modules[adapter_type.__module__]
