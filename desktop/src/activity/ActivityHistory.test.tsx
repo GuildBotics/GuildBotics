@@ -242,11 +242,6 @@ beforeEach(() => {
     cli_agent_mapping: { default: "cli_agents/claude/default.yml" },
     cli_agents: [],
     brain_mapping: [],
-    native_agent_policy: {
-      codex: { filesystem_access: "workspace" },
-      grok: { filesystem_access: "workspace" },
-      copilot: { filesystem_access: "workspace" },
-    },
   });
   vi.mocked(getCliAgentDetections).mockResolvedValue({
     agents: [
@@ -643,11 +638,6 @@ describe("ActivityHistoryPage", () => {
       cli_agent_mapping: { default: `cli_agents/${agent}/default.yml` },
       cli_agents: [],
       brain_mapping: [],
-      native_agent_policy: {
-        codex: { filesystem_access: "workspace" },
-        grok: { filesystem_access: "workspace" },
-        copilot: { filesystem_access: "workspace" },
-      },
     });
     vi.mocked(getCliAgentUsage).mockResolvedValue({
       usages: [

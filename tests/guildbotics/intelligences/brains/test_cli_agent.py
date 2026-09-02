@@ -846,3 +846,66 @@ def test_diagnostics_reflect_the_level_not_the_baseline(monkeypatch, tmp_path) -
     assert mapped_payload["unsupported"] is False
     # Only the level's own contribution counts as applied, not the baseline.
     assert mapped_payload["applied_keys"] == ["effort"]
+
+
+def test_a_slot_inherits_the_tools_network_block(monkeypatch, tmp_path) -> None:
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/default.yml",
+        "network:\n  command:\n    mode: allowlist\n    allowed_domains: [registry.npmjs.org]\n"
+        "    allow_local_network: false\n  web:\n    mode: deny\n    allowed_domains: []\n",
+    )
+    _write_definition(tmp_path, "cli_agents/codex/writer.yml", "effort: {}\n")
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"writer": "cli_agents/codex/writer.yml"},
+    )
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    assert resolved["writer"].network.command.mode == "allowlist"
+    assert resolved["writer"].network.command.allowed_domains == ["registry.npmjs.org"]
+    assert resolved["writer"].network.web.mode == "deny"
+    cli_agent.person_cli_agent_mapping.clear()
+
+
+def test_a_definition_without_a_network_block_is_closed(monkeypatch, tmp_path) -> None:
+    _write_definition(tmp_path, "cli_agents/codex/default.yml", "effort: {}\n")
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+    )
+
+    resolved = cli_agent.get_cli_agent_mapping("aiko")
+
+    assert resolved["default"].network == cli_agent.NetworkPolicy()
+    cli_agent.person_cli_agent_mapping.clear()
+
+
+def test_a_partial_network_block_names_the_slot_it_came_from(
+    monkeypatch, tmp_path
+) -> None:
+    """A slot states the whole block or none of it; a half block is a mistake."""
+    _write_definition(
+        tmp_path,
+        "cli_agents/codex/default.yml",
+        "network:\n  command:\n    mode: unrestricted\n    allowed_domains: []\n"
+        "    allow_local_network: false\n",
+    )
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent,
+        "load_person_slot_mapping",
+        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+    )
+
+    with pytest.raises(ValueError, match="AI CLI tool 'default'"):
+        cli_agent.get_cli_agent_mapping("aiko")
+    cli_agent.person_cli_agent_mapping.clear()

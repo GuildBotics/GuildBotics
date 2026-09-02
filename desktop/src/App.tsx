@@ -368,10 +368,29 @@ function systemAlertMessage(t: TFunction, alert: SystemAlert) {
     person: alert.person_id || t("systemAlerts.unknownMember"),
     command: alert.command || t("systemAlerts.unknownCommand"),
     count: alert.occurrence_count,
+    reason: alert.reason,
   });
 }
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
+  if (alert.code === "sandbox_unenforceable") {
+    // A network problem sits in the member's own slot; a grant problem in the
+    // workspace's directory cards under the advanced intelligence settings.
+    const search =
+      alert.setting === "network" && alert.person_id
+        ? new URLSearchParams({
+            section: "members",
+            person_id: alert.person_id,
+            tab: "intelligence",
+            slot: alert.command,
+          })
+        : new URLSearchParams({
+            section: "intelligence",
+            advanced: "intelligence",
+            focus: "grants-device",
+          });
+    return `/setup?${search.toString()}`;
+  }
   if (alert.code !== "credential_github" || !alert.person_id) {
     return "/setup";
   }

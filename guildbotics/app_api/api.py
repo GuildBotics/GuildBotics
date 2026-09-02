@@ -67,6 +67,8 @@ from guildbotics.app_api.models import (
     DeviceSshKey,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
+    GrantEvaluation,
+    GrantScope,
     HealthResponse,
     HotkeySettings,
     HubConnection,
@@ -90,6 +92,7 @@ from guildbotics.app_api.models import (
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
+    SandboxStatusResponse,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
@@ -119,6 +122,9 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.sandbox_status import (
+    evaluate_grant,
+)
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
@@ -995,6 +1001,31 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CliAgentUsagesResponse:
         return await app_runtime.get_cli_agent_usage(refresh=refresh)
+
+    @app.get(
+        "/intelligences/sandbox",
+        response_model=SandboxStatusResponse,
+        responses=error_responses,
+    )
+    def sandbox_status_view(
+        _: None = Depends(require_token),
+    ) -> SandboxStatusResponse:
+        """What every active member's AI CLI slots may reach on this device."""
+        return app_runtime.get_sandbox_status()
+
+    @app.get(
+        "/intelligences/grant-evaluation",
+        response_model=GrantEvaluation,
+        responses=error_responses,
+    )
+    def grant_evaluation_view(
+        scope: GrantScope,
+        path: str,
+        access: str = "read",
+        _: None = Depends(require_token),
+    ) -> GrantEvaluation:
+        """What a grant the user is about to add would mean on this device."""
+        return evaluate_grant(scope, path, access)
 
     @app.get(
         "/intelligences/model-providers",

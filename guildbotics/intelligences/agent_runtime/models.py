@@ -8,6 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from guildbotics.intelligences.sandbox import SandboxContract
+
 
 class ResumePolicy(StrEnum):
     FRESH = "fresh"
@@ -36,6 +38,9 @@ class AgentRuntimeErrorCategory(StrEnum):
     CANCELLED = "cancelled"
     SESSION_UNAVAILABLE = "session_unavailable"
     UNSUPPORTED_VERSION = "unsupported_version"
+    #: The turn's settings ask for something the provider cannot enforce on
+    #: this device; nothing was started.
+    CONFIGURATION = "configuration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,10 +97,13 @@ class AgentExecutionContext:
     attempt: int = 1
     continuation_input: str = ""
     participant_labels: str = ""
-    # A read-only turn only inspects recorded state. Adapters must enforce this
-    # at the provider level rather than trusting the prompt: the material such a
-    # turn reads (logs, tickets, chat, tool output) is untrusted input.
+    # A read-only turn only inspects recorded state, so it holds no execution
+    # lease and may run while the member is busy. It is not a weaker sandbox:
+    # every turn reads untrusted material, and every turn is confined by the
+    # same ``sandbox`` contract.
     read_only: bool = False
+    #: What the provider must enforce around ``cwd`` for this turn.
+    sandbox: SandboxContract = field(default_factory=SandboxContract)
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:

@@ -33,39 +33,104 @@ antigravity: antigravity
 ```
 
 各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
-このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
-プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
-（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。
-設定として書くのはこの2つだけです。同梱の既定ファイルはこのほかに、
-設定エディタの型付き編集用の宣言である `effort_fields:` を持ちます。
+このファイルが持つのは`parameters:`と`effort:`のオーバーレイ（プロバイダ非依存の`low` / `high`を
+AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）と、
+後述の`network:`ブロックです。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
+`effort_fields:`を持ちます。
 
-ユーザーが変更できる実行時の**境界**は、
-`intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
+## sandbox契約
 
-```yaml
-codex:
-  filesystem_access: workspace
+AI CLIツールのターンは、種別（チケット、チャット、Desktopの診断、コマンド作成）によらず同じ
+契約で封じ込めます。GuildBoticsが要求するのは次の3つで、各アダプタがそれをプロバイダ自身の
+sandbox設定へ変換します。プロバイダが現在のOSで強制できない要求は、より広い権限へ置き換えずに
+エージェントを起動しません。Codexのnative Windows sandboxは読める場所が固定で、profileのread指定と
+network proxyを反映するか未検証のため、Windowsでは実機確認が済むまでCodexを起動しません
+（WSL上のLinuxとしては起動します）。
 
-grok:
-  filesystem_access: workspace
+- **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
+  `<workspace>/.guildbotics/local/work/...`）は常に読み書きできます。ワークスペースの
+  `.guildbotics/config`や`state`は含みません
+- **作業ディレクトリの外**は3つあります。**PATH から導く木**: あなたが実行できるものは
+  エージェントも実行できます。この端末がエージェントに渡すPATHの各ディレクトリについて、そこにある
+  実行ファイルのlink先まで含む最小の木（Homebrewの`/opt/homebrew/bin`なら`/opt/homebrew`、
+  `~/.local/bin`なら`~/.local`）を読み取りで開きます。設定はなく、端末ごとに毎ターン導出します。
+  開くのは木全体なので、同じ木にある他のコマンドも実行できます。sandboxが守るのはcredentialと
+  networkと書き込み先であって、起動できるプログラムの一覧ではありません。credentialの置き場
+  （`~/.ssh`、各providerの認証ディレクトリなど）の内側に落ちる木は開かず、実効権限に理由付きで出します。
+  **documents**: 作業の入出力に使うホームディレクトリ配下のディレクトリ（`read` / `read_write`、
+  相対パスのみ）で、無ければ起動前に作成します。ワークスペース共通の
+  `intelligences/cli_agent_filesystem_grants.yml`で共有します。**この端末だけの設定**: 導出で足りない
+  追加パス（ツールが書くキャッシュ、インストール先の外に置くデータ。絶対パス可、存在必須）と、開けたくない
+  木やその一部を閉じる`deny`を`local/cli_agent_filesystem_grants.yml`に置き、同期しません。
+  credentialの置き場は同梱の一覧として常に`deny`で閉じ、`~/.local`のようにそれを含む木も、その隅だけ
+  読めないまま開けます
 
-copilot:
-  filesystem_access: workspace
-```
+  ```yaml
+  # config/intelligences/cli_agent_filesystem_grants.yml（共有）
+  documents:
+    - path: Documents/shared-documents
+      access: read
+    - path: Projects/generated-assets
+      access: read_write
+  ```
 
-新しいワークスペースを作成すると、このファイルがパッケージのテンプレートからコピーされます。
-このファイルがない既存のワークスペースでは、設定を保存するまでパッケージの既定値を使用します。
-チーム共通の設定は、Desktopの **LLM・AI CLIツール → 詳細設定** で変更できます。
-メンバーごとの設定では、チーム設定を継承するか、個別の値を保存できます。個別設定は
-`team/members/<person_id>/intelligences/native_agent_policy.yml`に保存されます。
+  ```yaml
+  # local/cli_agent_filesystem_grants.yml（この端末だけ）
+  paths:
+    - path: .cache/uv
+      access: read_write
+  deny:
+    - /opt/homebrew/etc
+  ```
 
-画面を利用できない環境ではYAMLを直接編集できます。`filesystem_access`には、既定値の
-`workspace`または`host`を指定できます。`workspace`ではファイルアクセスをワークスペース内に
-制限し、`host`ではファイルアクセスの制限を設けません。どちらの場合もネットワークアクセスは
-有効です。Codexには操作の確認を求めない`never`を常に指定し、Codexから予期しない確認要求が
-届いた場合は拒否します。ネットワークアクセスと確認方法はユーザー設定として公開しません。
+- **network**: 選択中のAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`ブロックで、
+  シェルコマンド・子プロセス（`command`）と、ツール組み込みのWeb検索・URL取得（`web`）を
+  別々に指定します。`mode`は`deny` / `allowlist` / `unrestricted`のいずれかで（`off`はYAMLでは
+  真偽値になるため使いません）、`allowlist`のときだけ`allowed_domains`を使います。
+  `allow_local_network`は`command`からlocalhostとLANへの接続を許可する設定です。同梱の
+  既定値は両経路とも`deny`です。slotが`network:`を省略すると同じツールの`default.yml`から
+  ブロック全体を継承し、記述する場合はブロック全体を書きます（部分的な上書きはエラー）
 
-Grok Buildでは、`workspace`が`--sandbox workspace`、`host`が`--sandbox off`に対応します。
+  ```yaml
+  network:
+    command:
+      mode: allowlist
+      allowed_domains: [registry.npmjs.org]
+      allow_local_network: false
+    web:
+      mode: deny
+      allowed_domains: []
+  ```
+
+これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。各AI CLIツール定義の「ネットワーク」欄は
+プロバイダと現在のOSで強制できない選択肢を無効にして理由を出します。「ワークスペース共通のディレクトリ」カードが
+documentsを、「この端末のディレクトリ」カードがこの端末のPATHから読み取り可能になる場所（行ごとに禁止できる）、
+ここで足した追加パスと禁止、開かない場所とその理由を持ち、どちらも入力または選択したパスを保存前に判定します
+（存在有無、認証情報を含む場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、
+この端末で起動できないメンバーはメンバー一覧に理由付きで示され、設定を直すまで画面上部に状態異常が出ます。
+状態異常のリンクは原因の設定を直接開きます（networkの問題ならそのメンバーのスロット、ディレクトリの問題なら
+「この端末のディレクトリ」カード）。
+
+プロバイダ自身のモデル通信・認証と、localhostのmember brokerは、この設定の対象外です。
+プロバイダごとに強制できる`mode`は`guildbotics/intelligences/cli_agents.py`のカタログが正本で、
+定義の保存時は「いずれかのOSで強制できるか」、エージェント起動時は「現在のOSで強制できるか」を
+同じカタログで検証します。Codex以外のアダプタはまだこの契約を変換しておらず、次のとおり従来の
+固定動作で実行します。
+
+Codexは、起動時の設定オーバーライドで`guildbotics`という名前のpermission profileを定義し、
+`default_permissions`でそれを選択します。profileはCodexのplatform path（`:minimal`）のreadから
+組み立て、ワークスペースrootと一時ディレクトリのwrite、Codex自身のbinaryを実行するのに要する
+ディレクトリ（起動したlinkとその実体を置く場所。`~/.codex`直下は含みません）のread、Codexがskillを走査する
+場所（`~/.agents/skills`、`~/.codex/skills`、`~/.codex/_skills`のうち存在するもの。skillの本文はagentが
+sandbox内で読むため）のread、filesystem grantを`read` / `write`として追加します。`:workspace`は継承しません。システム全体のreadになり、`~/.ssh`や
+`~/.codex/auth.json`が読めてしまうためです。`command`の`deny`はprofileの`network.enabled=false`、`allowlist`は
+`network.enabled=true` + `features.network_proxy=true` + domain規則、`unrestricted`は
+`network.enabled=true`に対応します。`web`の`deny`は`web_search="disabled"`、`allowlist`は
+`tools.web_search.allowed_domains`です。`thread/start`と`turn/start`にはsandboxを渡しません
+（渡すとprofileを上書きするため）。Codexには操作の確認を求めない`never`を常に指定し、Codexから
+予期しない確認要求が届いた場合は拒否します。
+
+Grok Buildは常に`--sandbox workspace`で起動します。
 起動時のコマンドは`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`で
 固定し、任意のCLIオプションを設定から注入することはできません。`--always-approve`は必ず
 sandboxと併用し、ACPの`session/request_permission`で予期しない確認要求が届いた場合は拒否して
@@ -75,15 +140,10 @@ sandboxと併用し、ACPの`session/request_permission`で予期しない確認
 読み替えず`cancelled`を返します。headless実行中にCLIが自動更新されないよう`--no-auto-update`を常に渡し、
 ユーザーの`config.toml`は書き換えません。
 
-GitHub Copilotでは、`workspace`がCopilot自身の既定動作（作業ディレクトリとシステムの一時
-ディレクトリにファイルアクセスを制限）に対応し、`host`ではその検証を無効にする
-`--allow-all-paths`を追加します。ただし読み取り専用のターンでは、メンバーが`host`を設定して
-いても作業ディレクトリ内に制限したまま実行します。読み取り専用のターンはログ・チケット・チャット
-など信頼できない記録を読み取る前提であり、許可されたパス内の読み取りには確認要求が発生せず、
-読み取った内容はそのターンの応答から外部へ出ます。書き込みを拒否するだけではこの経路を塞げない
-ため、アクセス範囲自体を狭めます。起動時のコマンドは
-`copilot --acp --no-auto-update --no-remote-export [--allow-all-paths]`で固定し、任意のCLI
-オプションを設定から注入することはできません。`--no-remote-export`は、メンバーのセッションが
+GitHub CopilotはCopilot自身の既定動作（作業ディレクトリとシステムの一時ディレクトリにファイル
+アクセスを制限）で実行します。起動時のコマンドは
+`copilot --acp --no-auto-update --no-remote-export`で固定し、任意のCLIオプションを設定から
+注入することはできません。`--no-remote-export`は、メンバーのセッションが
 GitHubのWebやモバイルへ書き出されたり、そこから操作されたりすることを防ぎます。セッションには
 ワークスペースの内容が含まれ、指示はGuildBoticsからのみ受け取るべきだからです。
 
@@ -112,9 +172,8 @@ Antigravityのモデルと効きの強さは毎ターンのコマンドライン
 コマンドラインで明示した場合だけなので、`--model`を渡さないターンではアカウント既定の
 モデル名を推測せず、空のモデル名を記録します。
 
-Antigravityは`native_agent_policy.yml`の対象外です。`agy --sandbox`が制限するのはターミナル
+Antigravityへはsandbox契約をまだ変換していません。`agy --sandbox`が制限するのはターミナル
 実行だけで、`agy`自身のファイル書き込みツールは作業ディレクトリの外へ到達できます。
-`filesystem_access`として公開すると、実際には守られない範囲を約束することになるためです。
 
 Antigravityは毎ターン`--dangerously-skip-permissions`を
 指定し、あわせて`--add-dir <cwd>`を渡します。後者は省略できません。これが無いと`agy`は
@@ -139,8 +198,8 @@ Claude Codeは、操作ごとの確認を省略する`bypassPermissions`で常�
 確認方法とsandboxはワークスペース設定に保存せず、Desktopにも設定項目を表示しません。
 
 実際に適用した設定と操作ごとの承認判断は、AI CLIツールに依存しない共通形式の診断記録へ
-保存します。Codexで`host`を選択した場合と、Claude Codeを`bypassPermissions`で実行する
-場合は、ワークスペース外のファイルも変更できます。認証情報の分離を維持し、ワークスペース外の
+保存します。Claude Codeを`bypassPermissions`で実行する場合は、ワークスペース外のファイルも
+変更できます。認証情報の分離を維持し、ワークスペース外の
 アクセスを許容できる環境で使用してください。不正な型、廃止された設定項目、未知の値が指定された
 場合は、別の権限へ暗黙に置き換えず、設定エラーとして停止します。
 

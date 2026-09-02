@@ -704,7 +704,7 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
 async def test_registry_keeps_only_one_native_process_per_person(monkeypatch) -> None:
     created: list[_TrackedAdapter] = []
 
-    def create_adapter(name: str, _person_id: str):
+    def create_adapter(name: str):
         adapter = _TrackedAdapter(name)
         created.append(adapter)
         return adapter

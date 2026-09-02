@@ -378,6 +378,8 @@ const resources = {
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
+          sandbox_unenforceable:
+            "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
         },
         actions: {
           diagnostics: "Run diagnostics",
@@ -885,6 +887,68 @@ const resources = {
             agent_home_missing: "The skill directory for this AI CLI tool has not been detected.",
             error: "GuildBotics skill status could not be read.",
           },
+          network: {
+            title: "Network",
+            description:
+              "Where this tool's shell commands and built-in web tools may connect. Both routes start closed.",
+            inherited: "Inherited from the tool default",
+            customize: "Customize for this slot",
+            useDefault: "Use the tool default",
+            resetToPackaged: "Reset to the packaged defaults",
+            command: "Commands and child processes",
+            commandDescription: "The OS sandbox enforces network access for every shell command.",
+            web: "Built-in web tools",
+            webDescription:
+              "Applied as the provider's own tool settings (web search, URL fetch); not enforced by the OS sandbox.",
+            mode: "Mode",
+            modes: {
+              deny: "Deny",
+              allowlist: "Allowed domains only",
+              unrestricted: "Unrestricted",
+            },
+            unsupportedHere: "{{tool}} cannot enforce this on this device.",
+            unsupportedAnywhere: "{{tool}} cannot enforce this on any OS.",
+            allowedDomains: "Allowed domains",
+            allowedDomainsPlaceholder: "registry.npmjs.org",
+            allowLocalNetwork: "Allow localhost and LAN",
+            allowLocalNetworkUnsupported:
+              "{{tool}} cannot open the local network separately under this mode.",
+            contractPending:
+              "{{tool}} does not apply these settings yet and keeps its previous fixed behaviour.",
+          },
+          documents: {
+            title: "Directories shared by the workspace",
+            description:
+              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn is always readable and writable.",
+            empty: "No directories registered.",
+            pathPlaceholder: "Documents/shared-documents",
+          },
+          deviceAccess: {
+            title: "Directories on this device",
+            description:
+              "Access to any directory. So that commands can run, the directories on the PATH environment variable are readable by default. Kept on this device and never synchronized.",
+            empty: "Nothing beyond the OS directories.",
+            source: "PATH: {{sources}}",
+            deny: "Denied",
+            builtin: "built in",
+            pathPlaceholder: ".cache/uv or /opt/homebrew/etc",
+          },
+          grants: {
+            path: "Path",
+            access: "Access",
+            accessLabels: { read: "Read", read_write: "Read / write" },
+            presentHere: "On this device",
+            absentHere: "Not on this device",
+            add: "Add",
+            choose: "Choose a directory",
+            accessFor: "Access to {{path}}",
+            remove: "Remove {{path}}",
+            sensitiveTitle: "This directory holds credentials or provider state",
+            sensitiveBody:
+              "Granting {{path}} lets agents read what is under {{reason}}. Add it only if the work really needs it.",
+            duplicate: "Already added.",
+            loadError: "Suggestions could not be loaded.",
+          },
           advanced: "Advanced settings",
           createBeforeAdvanced: "Create the initial settings before editing detailed AI behavior.",
           loadingAdvanced: "Loading advanced settings...",
@@ -933,26 +997,6 @@ const resources = {
           effortJsonDescription:
             'One block per effort level, e.g. {"high": {"reasoning_effort": "high"}}. Only low and high can be mapped: "default" means no intervention, so a mapping for it is rejected.',
           effortJsonError: "Enter a JSON object keyed by effort level.",
-          nativePolicy: "Native AI CLI tool execution permissions",
-          nativePolicyDescription: "Choose where each native AI CLI tool can access files.",
-          nativeAgents: {
-            codex: "Codex",
-            grok: "Grok Build",
-            copilot: "GitHub Copilot",
-          },
-          filesystemAccessFor: "{{agent}} file access",
-          sandboxMapping: {
-            codex: "Runs Codex with workspace-write or danger-full-access.",
-            grok: "Runs grok with --sandbox workspace or --sandbox off.",
-            copilot: "Runs copilot confined to the working directory, or with --allow-all-paths.",
-          },
-          filesystemOptions: {
-            workspace: "Workspace only",
-            host: "Unrestricted",
-          },
-          hostAccessWarningTitle: "Unrestricted file access",
-          hostAccessWarningBody:
-            "{{agent}} can read and write files outside the workspace. Select this only when it is genuinely required.",
         },
         members: {
           avatar: {
@@ -984,6 +1028,7 @@ const resources = {
             "GuildBotics cannot run without an active member. Add at least one member before finishing setup.",
           memberActive: "Active",
           memberInactive: "Inactive",
+          blockedHere: "Cannot start on this device",
           memberHuman: "Human",
           defaultPersonBadge: "Default",
           defaultPersonLabel: "Default executor",
@@ -2248,6 +2293,8 @@ const resources = {
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
+          sandbox_unenforceable:
+            "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
         },
         actions: {
           diagnostics: "診断を実行",
@@ -2449,6 +2496,68 @@ const resources = {
             agent_home_missing: "このAI CLIツールのスキル配置先はまだ検出されていません。",
             error: "GuildBoticsスキル の状態を取得できませんでした。",
           },
+          network: {
+            title: "ネットワーク",
+            description:
+              "このツールのシェルコマンドと組み込み Web 機能がどこへ接続できるかを決めます。どちらの経路も既定では閉じています。",
+            inherited: "ツール既定を継承",
+            customize: "このスロット用に変更する",
+            useDefault: "ツール既定に戻す",
+            resetToPackaged: "同梱の既定値に戻す",
+            command: "コマンドと子プロセス",
+            commandDescription:
+              "シェルコマンドごとに OS の sandbox がネットワークアクセスを強制します。",
+            web: "組み込み Web 機能",
+            webDescription:
+              "プロバイダ自身の機能設定（Web 検索、URL 取得）として適用され、OS の sandbox では強制されません。",
+            mode: "モード",
+            modes: {
+              deny: "拒否",
+              allowlist: "許可ドメインのみ",
+              unrestricted: "制限なし",
+            },
+            unsupportedHere: "{{tool}} はこの端末ではこの設定を強制できません。",
+            unsupportedAnywhere: "{{tool}} はどの OS でもこの設定を強制できません。",
+            allowedDomains: "許可ドメイン",
+            allowedDomainsPlaceholder: "registry.npmjs.org",
+            allowLocalNetwork: "localhost と LAN への接続を許可",
+            allowLocalNetworkUnsupported:
+              "{{tool}} はこのモードでは local network を個別に開けません。",
+            contractPending: "{{tool}} はまだこの設定を適用せず、従来の固定動作で実行します。",
+          },
+          documents: {
+            title: "ワークスペース共通のディレクトリ",
+            description:
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリは常に読み書きできます。",
+            empty: "登録されたディレクトリはありません。",
+            pathPlaceholder: "Documents/shared-documents",
+          },
+          deviceAccess: {
+            title: "この端末のディレクトリ",
+            description:
+              "任意のディレクトリに対するアクセス設定を行います。コマンド実行を可能にするため、PATH 環境変数に指定されているディレクトリはデフォルトで読み取り可能になっています。この設定はこの端末にだけ保存され、同期されません。",
+            empty: "OS 標準のディレクトリ以外はありません。",
+            source: "PATH: {{sources}}",
+            deny: "禁止",
+            builtin: "同梱",
+            pathPlaceholder: ".cache/uv や /opt/homebrew/etc",
+          },
+          grants: {
+            path: "パス",
+            access: "アクセス",
+            accessLabels: { read: "読み取り", read_write: "読み書き" },
+            presentHere: "この端末にあり",
+            absentHere: "この端末にはなし",
+            add: "追加",
+            choose: "ディレクトリを選択",
+            accessFor: "{{path}} のアクセス",
+            remove: "{{path}} を削除",
+            sensitiveTitle: "認証情報やプロバイダの状態を含むディレクトリです",
+            sensitiveBody:
+              "{{path}} を許可すると、{{reason}} 配下をエージェントが読めるようになります。作業に本当に必要な場合だけ追加してください。",
+            duplicate: "追加済みです。",
+            loadError: "候補を読み込めませんでした。",
+          },
           advanced: "詳細設定",
           createBeforeAdvanced: "詳細なAI挙動を編集するには、先に初期設定を作成してください。",
           loadingAdvanced: "詳細設定を読み込み中...",
@@ -2497,27 +2606,6 @@ const resources = {
           effortJsonDescription:
             'エフォートレベルごとに1ブロックを記述します（例: {"high": {"reasoning_effort": "high"}}）。指定できるのは low と high のみです。"default" は介入しないという意味なので、記述するとエラーになります。',
           effortJsonError: "エフォートレベルをキーとするJSONオブジェクトを入力してください。",
-          nativePolicy: "ネイティブAI CLIツールの実行権限",
-          nativePolicyDescription:
-            "各ネイティブAI CLIツールがアクセスできるファイルの範囲を設定します。",
-          nativeAgents: {
-            codex: "Codex",
-            grok: "Grok Build",
-            copilot: "GitHub Copilot",
-          },
-          filesystemAccessFor: "{{agent}}のファイルアクセス",
-          sandboxMapping: {
-            codex: "Codexをworkspace-writeまたはdanger-full-accessで実行します。",
-            grok: "grokを--sandbox workspaceまたは--sandbox offで実行します。",
-            copilot: "copilotを作業ディレクトリ内に制限して、または--allow-all-pathsで実行します。",
-          },
-          filesystemOptions: {
-            workspace: "ワークスペース内のみ",
-            host: "制限なし",
-          },
-          hostAccessWarningTitle: "ファイルアクセスを制限しない設定",
-          hostAccessWarningBody:
-            "{{agent}}がワークスペース外のファイルも読み書きできるようになります。本当に必要な場合だけ選択してください。",
         },
         members: {
           avatar: {
@@ -2549,6 +2637,7 @@ const resources = {
             "有効メンバーが0人の状態ではGuildBoticsは実行できません。セットアップ完了前に1人以上追加してください。",
           memberActive: "有効",
           memberInactive: "無効",
+          blockedHere: "この端末では起動不可",
           memberHuman: "人間",
           defaultPersonBadge: "既定",
           defaultPersonLabel: "既定の実行者",

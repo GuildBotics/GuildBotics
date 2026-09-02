@@ -862,9 +862,9 @@ discarding; the activity history record stays either way.
 **LLM / AI CLI tool settings**:
 
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
-- `intelligences/native_agent_policy.yml`: filesystem access scope for Codex, Grok Build, and GitHub Copilot CLI (`workspace` or `host`). It is created during setup of a new workspace and configured under **LLM / AI CLI tools → Advanced settings** in the desktop app, or by editing the file directly in environments without a screen. Network access and the no-confirmation execution mode are fixed inside the GuildBotics integration
-- `intelligences/cli_agents/<tool>/*.yml`: the effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `team/members/<person_id>/intelligences/`: optional per-member overrides, including the execution permissions for Codex, Grok Build, and GitHub Copilot CLI. By default they inherit the team settings
+- `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. What each device reads because its PATH leads there is derived on that device; device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
+- `intelligences/cli_agents/<tool>/*.yml`: the effort mapping and the `network:` block (where commands and built-in web tools may connect) for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
+- `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
 

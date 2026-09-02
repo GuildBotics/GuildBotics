@@ -283,6 +283,28 @@ describe("App", () => {
     vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
   });
 
+  it("links a sandbox alert to the setting it is about", () => {
+    const base = {
+      id: "sandbox:aiko:default",
+      code: "sandbox_unenforceable" as const,
+      severity: "warning" as const,
+      opened_at: "",
+      updated_at: "",
+      occurrence_count: 1,
+      person_id: "aiko",
+      command: "default",
+      trace_id: "",
+      reason: "x",
+      actions: ["setup" as const],
+    };
+    expect(systemAlertSetupTarget({ ...base, setting: "network" })).toBe(
+      "/setup?section=members&person_id=aiko&tab=intelligence&slot=default",
+    );
+    expect(systemAlertSetupTarget({ ...base, setting: "grants" })).toBe(
+      "/setup?section=intelligence&advanced=intelligence&focus=grants-device",
+    );
+  });
+
   it("links a GitHub credential alert to the affected member's GitHub settings", () => {
     expect(
       systemAlertSetupTarget({

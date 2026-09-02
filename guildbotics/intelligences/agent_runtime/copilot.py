@@ -27,7 +27,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 
 #: The only method Copilot advertises. Its ``_meta.terminal-auth`` tells the
 #: client to run ``copilot login`` in a terminal, so this adapter can verify a
@@ -63,9 +62,8 @@ class CopilotAcpAdapter(AcpAdapterBase):
         *,
         executable: str = "copilot",
         timeout: float = 3600.0,
-        policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
-        super().__init__(executable=executable, timeout=timeout, policy=policy)
+        super().__init__(executable=executable, timeout=timeout)
         #: The setting values Copilot reported back for the live session, never
         #: the ones that were requested.
         self._confirmed: dict[str, str] = {}
@@ -86,24 +84,14 @@ class CopilotAcpAdapter(AcpAdapterBase):
             # usable without widening any other Copilot capability.
             "--allow-tool",
             f"{self._member_broker.name}(guildbotics_member)",
-            # Copilot confines file access to the working directory unless this
-            # is passed, which is exactly the public policy setting. A read-only
-            # turn keeps the confined scope whatever the member configured: it
-            # reads untrusted recorded state, and its own reply is an exfil
-            # channel that declining writes does not close.
-            *(
-                ("--allow-all-paths",)
-                if _allows_host_paths(self._policy, context)
-                else ()
-            ),
+            # Copilot confines file access to the working directory by default.
+            # The provider-neutral contract (working directory plus explicit
+            # grants) is not translated for Copilot yet.
         )
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
         return {
-            "filesystem_access": self._policy.filesystem_access,
-            "allowed_paths": (
-                "host" if _allows_host_paths(self._policy, context) else "workspace"
-            ),
+            "allowed_paths": "workspace",
             "allow_all": _allow_all(context),
             "read_only": context.read_only,
         }
@@ -218,19 +206,6 @@ class CopilotAcpAdapter(AcpAdapterBase):
                 },
             )
         ]
-
-
-def _allows_host_paths(
-    policy: AdapterFilesystemPolicy, context: AgentExecutionContext
-) -> bool:
-    """Whether this turn may reach files outside the working directory.
-
-    A read-only turn only inspects recorded, untrusted state, so it keeps the
-    confined scope no matter what the member configured. Declining its writes is
-    not enough on its own: reads inside the allowed paths never ask, and the
-    turn's own reply would carry whatever it read back out.
-    """
-    return policy.filesystem_access == "host" and not context.read_only
 
 
 def _allow_all(context: AgentExecutionContext) -> str:

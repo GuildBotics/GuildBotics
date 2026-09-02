@@ -65,6 +65,7 @@ import {
   type CommandOption,
   type DiagnosticCheck,
   type CliAgentDetection,
+  CLOSED_NETWORK_POLICY,
   type CliAgentDefinition,
   type EffortFieldSpec,
   type EffortOverlay,
@@ -72,10 +73,6 @@ import {
   type ConfigStatus,
   type BrainAssignment,
   type IntelligenceConfig,
-  NATIVE_POLICY_ADAPTERS,
-  type NativeAgentFilesystemAccess,
-  type NativeAgentPolicyAdapter,
-  type NativeAgentPolicySettings,
   type ModelDefinition,
   type MemberSetupRequest,
   type ChatParticipationPolicy,
@@ -113,6 +110,7 @@ import {
   updateDefaultPerson,
   updateMemberConfig,
   updateIntelligenceConfig,
+  getSandboxStatus,
   updateProjectConfig,
   memberAvatarUrl,
   uploadMemberAvatar,
@@ -138,6 +136,8 @@ import { SecretStatusHint } from "../sync/SecretStatusHint";
 import { SyncSettings } from "../sync/SyncSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
+import { GrantsCards } from "./GrantsCards";
+import { NetworkPolicyField } from "./NetworkPolicyField";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -248,6 +248,43 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
     <Badge variant="light" color="neutral" style={{ flexShrink: 0 }}>
       {label}
     </Badge>
+  );
+}
+
+/**
+ * Whether this member's AI CLI slots can start on this device, resolved the
+ * same way a turn is started. Shown only when something blocks a slot: the
+ * reasons name the setting (a network mode the tool cannot enforce here, a
+ * local path that does not exist), and the tooltip lists them per slot.
+ */
+function MemberSandboxBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
+  const { t } = useTranslation();
+  const status = useQuery({ queryKey: ["sandbox-status"], queryFn: getSandboxStatus, enabled });
+  const slots = status.data?.members.find((m) => m.person_id === personId)?.slots ?? [];
+  const reasons = slots.flatMap((slot) =>
+    slot.problems.map(({ reason }) => (slots.length > 1 ? `${slot.slot}: ${reason}` : reason)),
+  );
+  if (reasons.length === 0) {
+    return null;
+  }
+  return (
+    <Tooltip
+      label={
+        <Stack gap={2}>
+          {reasons.map((reason) => (
+            <Text key={reason} size="xs">
+              {reason}
+            </Text>
+          ))}
+        </Stack>
+      }
+      multiline
+      maw={420}
+    >
+      <Badge color="danger" variant="light" style={{ flexShrink: 0 }}>
+        {t("setup.members.blockedHere")}
+      </Badge>
+    </Tooltip>
   );
 }
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "energetic"] as const;
@@ -433,6 +470,12 @@ export function SetupPage() {
       : undefined,
   );
   const [focusMemberId] = useState(searchParams.get("person_id")?.trim() || undefined);
+  // The slot and card a system alert points at; each is a mount-time copy for
+  // the same reason as the member focus above. Whether the advanced settings
+  // open is read live, so a second alert link on the same page still opens them.
+  const [focusSlot] = useState(searchParams.get("slot")?.trim() || undefined);
+  const [focusElement] = useState(searchParams.get("focus")?.trim() || undefined);
+  const openAdvanced = searchParams.get("advanced") === "intelligence";
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
@@ -742,6 +785,8 @@ export function SetupPage() {
           {activeSection === "intelligence" ? (
             <IntelligenceSection
               form={form}
+              openAdvanced={openAdvanced}
+              focusElement={focusElement}
               saveState={saveState}
               persisted={canSaveProject && !workspaceSwitching}
               saving={saveMutation.isPending}
@@ -780,6 +825,7 @@ export function SetupPage() {
               providers={llmProviders.data ?? []}
               initialTab={focusMemberTab}
               initialMemberId={focusMemberId}
+              initialSlot={focusSlot}
               onMemberActiveDelta={(delta) => {
                 if (!hasExistingProject && delta !== 0) {
                   setDraftActiveMemberCount((count) => Math.max(0, count + delta));
@@ -1070,6 +1116,8 @@ function ProjectSection({
 
 function IntelligenceSection({
   form,
+  openAdvanced,
+  focusElement,
   saveState,
   persisted,
   saving,
@@ -1080,6 +1128,9 @@ function IntelligenceSection({
   providers,
 }: {
   form: ProjectForm;
+  /** A system alert asked for the advanced settings, and for one card in them. */
+  openAdvanced: boolean;
+  focusElement?: string;
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
@@ -1356,12 +1407,20 @@ function IntelligenceSection({
         </Card>
 
         {persisted ? (
-          <Accordion variant="contained">
+          <Accordion
+            variant="contained"
+            // Remounted when an alert link asks to open it, so it opens again
+            // even if the user had closed it since the last link.
+            key={openAdvanced ? "open" : "closed"}
+            defaultValue={openAdvanced ? "advanced-intelligence" : null}
+          >
             <Accordion.Item value="advanced-intelligence">
               <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
               <Accordion.Panel>
                 <IntelligenceEditor
                   enabled={persisted}
+                  openAdvanced={openAdvanced}
+                  focusElement={focusElement}
                   onRegisterSave={(save) => {
                     saveAdvanced.current = save;
                   }}
@@ -1671,64 +1730,13 @@ function DefaultCliAgentCards({
   );
 }
 
-function NativeAgentPolicyEditor({
-  policy,
-  onChange,
-}: {
-  policy: NativeAgentPolicySettings;
-  onChange: (policy: NativeAgentPolicySettings) => void;
-}) {
-  const { t } = useTranslation();
-  const filesystemOptions = ["workspace", "host"] as const;
-  const setAdapter = (
-    adapter: NativeAgentPolicyAdapter,
-    filesystem_access: NativeAgentFilesystemAccess,
-  ) => onChange({ ...policy, [adapter]: { filesystem_access } });
-
-  return (
-    <Card withBorder radius="sm" p="md">
-      <Stack gap="md">
-        <div>
-          <Text fw={700} size="sm">
-            {t("setup.intelligence.nativePolicy")}
-          </Text>
-          <Text size="sm" c="dimmed">
-            {t("setup.intelligence.nativePolicyDescription")}
-          </Text>
-        </div>
-        {NATIVE_POLICY_ADAPTERS.map((adapter) => {
-          const agent = t(`setup.intelligence.nativeAgents.${adapter}`);
-          return (
-            <Stack gap="xs" key={adapter}>
-              <Select
-                label={t("setup.intelligence.filesystemAccessFor", { agent })}
-                description={t(`setup.intelligence.sandboxMapping.${adapter}`)}
-                data={filesystemOptions.map((value) => ({
-                  value,
-                  label: t(`setup.intelligence.filesystemOptions.${value}`),
-                }))}
-                value={policy[adapter].filesystem_access}
-                onChange={(value) =>
-                  setAdapter(adapter, (value ?? "workspace") as NativeAgentFilesystemAccess)
-                }
-              />
-              {policy[adapter].filesystem_access === "host" ? (
-                <Alert color="warning" title={t("setup.intelligence.hostAccessWarningTitle")}>
-                  {t("setup.intelligence.hostAccessWarningBody", { agent })}
-                </Alert>
-              ) : null}
-            </Stack>
-          );
-        })}
-      </Stack>
-    </Card>
-  );
-}
-
 function IntelligenceEditor({
   personId,
   savePersonId,
   enabled,
+  focusSlot,
+  openAdvanced = false,
+  focusElement,
   detections,
   llmProviderAvailability,
   providers,
@@ -1741,6 +1749,11 @@ function IntelligenceEditor({
   personId?: string;
   savePersonId?: string;
   enabled: boolean;
+  /** An AI CLI slot to open and scroll to, from a system alert. */
+  focusSlot?: string;
+  /** A system alert asked for the advanced settings, and for one card in them. */
+  openAdvanced?: boolean;
+  focusElement?: string;
   detections: CliAgentDetection[];
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -1787,15 +1800,33 @@ function IntelligenceEditor({
       );
       queryClient.invalidateQueries({ queryKey: ["intelligence-config", personId ?? "team"] });
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
+      // The saved settings resolve differently now: the preview and the
+      // status band both read them back.
+      queryClient.invalidateQueries({ queryKey: ["sandbox-status"] });
+      queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
     },
   });
-
+  const sandboxRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
+  const sandboxStatus = useQuery({
+    queryKey: ["sandbox-status", sandboxRefreshKey],
+    queryFn: getSandboxStatus,
+    enabled: enabled && Boolean(query.data),
+  });
   const querySerializedPayload = query.data
     ? JSON.stringify(toIntelligenceUpdatePayload(query.data, savePersonId))
     : "";
   const draftKey = `${personId ?? "team"}:${querySerializedPayload}`;
   const activeDraftState = draftState?.key === draftKey ? draftState : null;
   const draft = activeDraftState?.config ?? query.data ?? null;
+  const focusedSlotPresent = Boolean(focusSlot && draft?.cli_agent_mapping[focusSlot]);
+  // A focused slot lives inside the advanced settings too.
+  const openAdvancedPanel = openAdvanced || Boolean(focusSlot);
+  useEffect(() => {
+    if (focusSlot && focusedSlotPresent) scrollToElement(`network-${focusSlot}`);
+  }, [focusSlot, focusedSlotPresent]);
+  useEffect(() => {
+    if (openAdvanced && focusElement && draft) scrollToElement(focusElement);
+  }, [openAdvanced, focusElement, draft]);
   const payload = draft ? toIntelligenceUpdatePayload(draft, savePersonId) : null;
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
@@ -2272,12 +2303,10 @@ function IntelligenceEditor({
         <Switch
           label={t("setup.intelligence.inheritTeamDefaults")}
           checked={draft.inherited}
-          onChange={(event) =>
-            updateDraft((current) => ({
-              ...current,
-              inherited: event.currentTarget.checked,
-            }))
-          }
+          onChange={(event) => {
+            const inherited = event.currentTarget.checked;
+            updateDraft((current) => ({ ...current, inherited }));
+          }}
         />
       ) : null}
       {(() => {
@@ -2485,7 +2514,7 @@ function IntelligenceEditor({
                   </Button>
                 </Group>
 
-                <Accordion variant="separated">
+                <Accordion variant="separated" defaultValue={focusSlot}>
                   {cliSlots.map((slotKey) => {
                     const path = draft.cli_agent_mapping[slotKey];
                     const agentDef = draft.cli_agents.find((a) => a.path === path);
@@ -2574,6 +2603,18 @@ function IntelligenceEditor({
                                 })
                               }
                             />
+                            <NetworkPolicyField
+                              id={`network-${slotKey}`}
+                              value={agentDef.network ?? null}
+                              inherited={agentDef.inherited_network ?? CLOSED_NETWORK_POLICY}
+                              tool={agentDef.name}
+                              toolLabel={detection?.label ?? agentDef.name}
+                              support={draft.network_support?.[agentDef.name]}
+                              isToolDefault={agentDef.path === cliToolDefaultPath(agentDef.path)}
+                              onChange={(network) =>
+                                handleUpdateCliAgentDef(agentDef.path, { network })
+                              }
+                            />
                           </Stack>
                         </Accordion.Panel>
                       </Accordion.Item>
@@ -2583,12 +2624,21 @@ function IntelligenceEditor({
               </Stack>
             </Card>
 
-            <NativeAgentPolicyEditor
-              policy={draft.native_agent_policy}
-              onChange={(policy) =>
-                updateDraft((current) => ({ ...current, native_agent_policy: policy }))
-              }
-            />
+            {/* Section 4: what agents may reach beyond their working directory
+                (the workspace's and this device's, so team scope only) */}
+            {!personId ? (
+              <GrantsCards
+                shared={draft.filesystem_grants ?? { documents: [] }}
+                local={draft.local_grants ?? { paths: [], deny: [] }}
+                status={sandboxStatus.data?.access}
+                onSharedChange={(filesystem_grants) =>
+                  updateDraft((current) => ({ ...current, filesystem_grants }))
+                }
+                onLocalChange={(local_grants) =>
+                  updateDraft((current) => ({ ...current, local_grants }))
+                }
+              />
+            ) : null}
           </Stack>
         );
         if (!personId) {
@@ -2643,7 +2693,13 @@ function IntelligenceEditor({
                 />
               </Stack>
             </Card>
-            <Accordion variant="contained">
+            <Accordion
+              variant="contained"
+              // Remounted when an alert link asks to open it, so it opens
+              // again even if the user had closed it since the last link.
+              key={openAdvancedPanel ? "open" : "closed"}
+              defaultValue={openAdvancedPanel ? "advanced-intelligence" : null}
+            >
               <Accordion.Item value="advanced-intelligence">
                 <Accordion.Control>{t("setup.intelligence.advanced")}</Accordion.Control>
                 <Accordion.Panel>{advancedBody}</Accordion.Panel>
@@ -2675,6 +2731,7 @@ function MembersSection({
   providers,
   initialTab,
   initialMemberId,
+  initialSlot,
   onMemberActiveDelta,
 }: {
   activeMemberCount: number;
@@ -2696,6 +2753,8 @@ function MembersSection({
   providers: LlmProviderInfo[];
   initialTab?: MemberEditorTab;
   initialMemberId?: string;
+  /** An AI CLI slot to open in that member's intelligence tab. */
+  initialSlot?: string;
   onMemberActiveDelta: (delta: number) => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -3684,8 +3743,8 @@ function MembersSection({
         {displayedMembers.length > 0 ? (
           <Stack gap={6}>
             {displayedMembers.map((member) => (
-              <Group key={member.person_id} justify="space-between">
-                <Group gap="xs" align="center">
+              <Group key={member.person_id} justify="space-between" wrap="nowrap">
+                <Group gap="xs" align="center" wrap="nowrap" style={{ minWidth: 0 }}>
                   <Avatar
                     src={memberAvatarUrl(member.person_id, avatarTimestamp)}
                     size="sm"
@@ -3693,11 +3752,14 @@ function MembersSection({
                   >
                     {member.name.substring(0, 2).toUpperCase()}
                   </Avatar>
-                  <Text size="sm">
+                  <Text size="sm" truncate>
                     {member.name} ({member.person_id})
                   </Text>
+                  {member.person_type !== "human" ? (
+                    <MemberSandboxBadge personId={member.person_id} enabled={hasPersistedProject} />
+                  ) : null}
                 </Group>
-                <Group gap="xs" wrap="nowrap">
+                <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
                   <Group w={72} justify="flex-end" gap="xs" wrap="nowrap">
                     {member.person_id === defaultPersonId ? (
                       <Badge color="success" variant="light" style={{ flexShrink: 0 }}>
@@ -4180,6 +4242,7 @@ function MembersSection({
                       personId={editingPersonId}
                       savePersonId={personId.trim()}
                       enabled={Boolean(configDir)}
+                      focusSlot={editingPersonId === initialMemberId ? initialSlot : undefined}
                       detections={cliDetections}
                       llmProviderAvailability={llmProviderAvailability}
                       providers={providers}
@@ -4896,12 +4959,10 @@ function PatrolSettingsEditor({
                     <TextInput
                       label={t("commands.command")}
                       value={draft.customCommand}
-                      onChange={(event) =>
-                        updateScheduled(draft.id, (current) => ({
-                          ...current,
-                          customCommand: event.currentTarget.value,
-                        }))
-                      }
+                      onChange={(event) => {
+                        const customCommand = event.currentTarget.value;
+                        updateScheduled(draft.id, (current) => ({ ...current, customCommand }));
+                      }}
                     />
                   )}
 
@@ -4915,15 +4976,13 @@ function PatrolSettingsEditor({
                           required={argument.required}
                           placeholder={argument.default || argument.kind}
                           value={draft.argValues[argument.name] ?? ""}
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            const value = event.currentTarget.value;
                             updateScheduled(draft.id, (current) => ({
                               ...current,
-                              argValues: {
-                                ...current.argValues,
-                                [argument.name]: event.currentTarget.value,
-                              },
-                            }))
-                          }
+                              argValues: { ...current.argValues, [argument.name]: value },
+                            }));
+                          }}
                         />
                       ))}
                     </div>
@@ -4933,12 +4992,10 @@ function PatrolSettingsEditor({
                       label={t("commands.extraArgs")}
                       placeholder={t("commands.extraArgsPlaceholder")}
                       value={draft.extraArgs}
-                      onChange={(event) =>
-                        updateScheduled(draft.id, (current) => ({
-                          ...current,
-                          extraArgs: event.currentTarget.value,
-                        }))
-                      }
+                      onChange={(event) => {
+                        const extraArgs = event.currentTarget.value;
+                        updateScheduled(draft.id, (current) => ({ ...current, extraArgs }));
+                      }}
                     />
                   ) : null}
 
@@ -4963,12 +5020,10 @@ function PatrolSettingsEditor({
                       description={t("setup.members.patrol.cronHint")}
                       value={draft.cron}
                       error={cronError}
-                      onChange={(event) =>
-                        updateScheduled(draft.id, (current) => ({
-                          ...current,
-                          cron: event.currentTarget.value,
-                        }))
-                      }
+                      onChange={(event) => {
+                        const cron = event.currentTarget.value;
+                        updateScheduled(draft.id, (current) => ({ ...current, cron }));
+                      }}
                     />
                   ) : (
                     <div className="schedule-grid">
@@ -6606,8 +6661,22 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agent_mapping: config.cli_agent_mapping,
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
-    native_agent_policy: config.native_agent_policy,
+    // The grants are the workspace's and this device's; a member payload
+    // carries neither.
+    ...(personId
+      ? {}
+      : {
+          filesystem_grants: config.filesystem_grants ?? { documents: [] },
+          local_grants: config.local_grants ?? { paths: [], deny: [] },
+        }),
   };
+}
+
+/** Bring a settings control into view once it exists; a no-op where it does not. */
+function scrollToElement(id: string) {
+  window.requestAnimationFrame(() => {
+    document.getElementById(id)?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  });
 }
 
 function stringOrEmpty(value: unknown): string {

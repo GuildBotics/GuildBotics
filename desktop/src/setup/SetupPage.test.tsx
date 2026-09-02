@@ -19,6 +19,7 @@ import {
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
+  getSandboxStatus,
   getProjectConfig,
   getProjectStatusOptions,
   getRoleOptions,
@@ -39,6 +40,7 @@ import {
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
 } from "../api/client";
+import { CLOSED_NETWORK_POLICY, type SandboxStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
 import {
@@ -234,13 +236,9 @@ vi.mock("../api/client", async (importOriginal) => {
         },
       ],
       brain_mapping: [],
-      native_agent_policy: {
-        codex: { filesystem_access: "workspace" },
-        grok: { filesystem_access: "workspace" },
-        copilot: { filesystem_access: "workspace" },
-      },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
+    getSandboxStatus: vi.fn(async () => sandboxStatus()),
     getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
     getAgentFieldState: vi.fn(async () => ({
       available: false,
@@ -417,6 +415,29 @@ describe("SetupPage", () => {
       "aria-selected",
       "true",
     );
+  });
+
+  it("opens a member's AI CLI slot from a sandbox alert link", async () => {
+    renderSetupPage("/setup?section=members&person_id=alice&tab=intelligence&slot=default");
+
+    await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
+    expect(screen.getByRole("tab", { name: t("setup.members.tabs.intelligence") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // The slot's accordion item is open, so its network block is in view.
+    const slot = await screen.findByRole("button", { name: /^default/ });
+    expect(slot).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("opens the advanced intelligence settings from a sandbox alert link", async () => {
+    renderSetupPage("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
+
+    const advanced = await screen.findByRole("button", {
+      name: t("setup.intelligence.advanced"),
+    });
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByTestId("grants:device")).toBeInTheDocument();
   });
 
   it("allows sidebar navigation after opening a members deep link", async () => {
@@ -1277,6 +1298,16 @@ function renderSetupPage(path: string) {
   );
 }
 
+function sandboxStatus(overrides: Partial<SandboxStatusResponse> = {}): SandboxStatusResponse {
+  return {
+    platform: "darwin",
+    working_directory: "<workspace>",
+    access: { documents: [], paths: [], trees: [], excluded: [], denied: [], problem: "" },
+    members: [],
+    ...overrides,
+  };
+}
+
 function memberConfig() {
   return {
     person_id: "alice",
@@ -2052,11 +2083,6 @@ describe("toIntelligenceUpdatePayload", () => {
       },
     ],
     brain_mapping: [],
-    native_agent_policy: {
-      codex: { filesystem_access: "workspace" as const },
-      grok: { filesystem_access: "workspace" as const },
-      copilot: { filesystem_access: "workspace" as const },
-    },
   };
 
   it("emits a full team-default update", () => {
@@ -2068,7 +2094,6 @@ describe("toIntelligenceUpdatePayload", () => {
       models: team.models,
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
-      native_agent_policy: team.native_agent_policy,
     });
   });
 
@@ -2083,7 +2108,6 @@ describe("toIntelligenceUpdatePayload", () => {
       cli_agent_mapping: team.cli_agent_mapping,
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
-      native_agent_policy: team.native_agent_policy,
     });
   });
 
@@ -2321,6 +2345,60 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: "Upload File" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Import from GitHub" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Import from Slack" })).toBeDisabled();
+  });
+
+  it("marks a member whose AI CLI slot cannot start on this device, with the reasons", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "kenji", name: "Kenji", person_type: "agent", is_active: true, roles: [] },
+      ],
+    });
+    vi.mocked(getSandboxStatus).mockResolvedValue(
+      sandboxStatus({
+        members: [
+          {
+            person_id: "alice",
+            slots: [
+              {
+                slot: "default",
+                tool: "codex",
+                contract_applied: true,
+                network: CLOSED_NETWORK_POLICY,
+                problems: [],
+              },
+            ],
+          },
+          {
+            person_id: "kenji",
+            slots: [
+              {
+                slot: "default",
+                tool: "grok",
+                contract_applied: true,
+                network: CLOSED_NETWORK_POLICY,
+                problems: [
+                  {
+                    setting: "network",
+                    reason: "Grok Build cannot enforce command network mode 'deny' on this OS.",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    renderSetupPage("/setup?section=members");
+
+    const badge = await screen.findByText(t("setup.members.blockedHere"));
+    expect(screen.getAllByText(t("setup.members.blockedHere"))).toHaveLength(1);
+    await userEvent.hover(badge);
+    expect(
+      await screen.findByText("Grok Build cannot enforce command network mode 'deny' on this OS."),
+    ).toBeInTheDocument();
   });
 
   it("sorts members by name and shows the AI CLI tool badge only for agents", async () => {
@@ -3488,11 +3566,6 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     brain_mapping: [
       { name: "writer", brain_class: "WriterBrain", engine: "llm", target: "default" },
     ],
-    native_agent_policy: {
-      codex: { filesystem_access: "workspace" },
-      grok: { filesystem_access: "workspace" },
-      copilot: { filesystem_access: "workspace" },
-    },
     ...overrides,
   };
 }
@@ -3998,75 +4071,6 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
   });
 
-  it("saves one native adapter policy without changing the others", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      }),
-    );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-    await saveSection(user);
-
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
-    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      codex: { filesystem_access: "workspace" },
-      grok: { filesystem_access: "host" },
-    });
-  });
-
-  it("shows the unrestricted-access warning for the adapter it applies to", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.codex"),
-        }),
-      }),
-    );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-
-    const warning = await screen.findByText(
-      t("setup.intelligence.hostAccessWarningBody", {
-        agent: t("setup.intelligence.nativeAgents.codex"),
-      }),
-    );
-    expect(warning).toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        t("setup.intelligence.hostAccessWarningBody", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      ),
-    ).not.toBeInTheDocument();
-  });
-
-  it("explains the real sandbox each native adapter uses", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    expect(
-      await screen.findByText(t("setup.intelligence.sandboxMapping.grok")),
-    ).toBeInTheDocument();
-    expect(screen.getByText(t("setup.intelligence.sandboxMapping.codex"))).toBeInTheDocument();
-  });
-
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {
     const user = userEvent.setup();
     vi.mocked(updateIntelligenceConfig).mockRejectedValueOnce(new Error("write blew up"));
@@ -4249,28 +4253,22 @@ describe("IntelligenceEditor (member override)", () => {
     expect(byValue("custom")).not.toBeDisabled();
   });
 
-  it("persists a member-specific Grok filesystem boundary", async () => {
+  it("shows the member's own editor when inheriting is switched off", async () => {
     const user = userEvent.setup();
-    await openMemberIntelligenceAdvanced(user);
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({ person_id: "alice", inherited: true }),
+    );
+    await openMemberIntelligenceTab(user);
+    expect(await screen.findByText(t("setup.intelligence.inheritingTitle"))).toBeInTheDocument();
 
     await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      }),
+      screen.getByRole("switch", { name: t("setup.intelligence.inheritTeamDefaults") }),
     );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      grok: { filesystem_access: "host" },
-    });
+    expect(
+      await screen.findByRole("button", { name: t("setup.intelligence.advanced") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.intelligence.inheritingTitle"))).not.toBeInTheDocument();
   });
 
   it("sends inherit_team_defaults when the inherit switch is enabled", async () => {
