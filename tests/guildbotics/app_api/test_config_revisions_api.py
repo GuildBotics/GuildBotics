@@ -348,7 +348,7 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
     assert read["revisions"]
     override = config_dir / "team/members/alice/intelligences"
     override.mkdir(parents=True)
-    (override / "native_agent_policy.yml").write_text("codex: {}\n", encoding="utf-8")
+    (override / "model_mapping.yml").write_text("{}\n", encoding="utf-8")
 
     response = client.put(
         "/config/intelligences",
@@ -364,7 +364,7 @@ def test_a_member_inheriting_the_team_defaults_is_still_guarded(
 
     assert response.status_code == HTTP_CONFLICT
     assert response.json()["code"] == "config_changed"
-    assert (override / "native_agent_policy.yml").exists()
+    assert (override / "model_mapping.yml").exists()
 
 
 def test_an_intelligence_save_reports_where_its_directory_now_stands(

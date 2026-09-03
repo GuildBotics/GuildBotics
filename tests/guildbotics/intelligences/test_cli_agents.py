@@ -13,7 +13,9 @@ from guildbotics.intelligences.cli_agents import (
     require_cli_agent_path,
     resolve_cli_agent_path,
     resolve_default_cli_executable,
+    unsupported_network_reason,
 )
+from guildbotics.intelligences.sandbox import NetworkPolicy, parse_network_policy
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:
@@ -223,3 +225,78 @@ def test_resolve_default_cli_executable_missing_definition(
 
     # No agent named "ghost" in config or template.
     assert resolve_default_cli_executable() == ""
+
+
+# --- network enforcement catalog ---------------------------------------------
+
+
+def _network(
+    command: str = "deny", web: str = "deny", **command_extra
+) -> NetworkPolicy:
+    def route(mode: str) -> dict:
+        domains = ["example.com"] if mode == "allowlist" else []
+        return {"mode": mode, "allowed_domains": domains}
+
+    return parse_network_policy(
+        {"command": {**route(command), **command_extra}, "web": route(web)},
+        where="test",
+    )
+
+
+def test_the_closed_default_is_enforceable_by_every_tool_except_where_declared() -> (
+    None
+):
+    """The shipped default must be startable, or the tool never runs."""
+    for agent in CLI_AGENTS:
+        reason = unsupported_network_reason(agent.name, _network(), None)
+        # Antigravity's terminal sandbox has not been measured, and Grok cannot
+        # close child network on macOS: both are declared, not discovered.
+        assert bool(reason) == (agent.name == "antigravity"), agent.name
+
+
+def test_grok_closes_command_network_on_linux_only() -> None:
+    assert unsupported_network_reason("grok", _network(), "linux") == ""
+    # Codex claims nothing on native Windows: every mode is refused there with
+    # the one reason, while the shared definition itself stays valid.
+    assert unsupported_network_reason("codex", _network(), "darwin") == ""
+    for mode in ("deny", "allowlist", "unrestricted"):
+        assert (
+            unsupported_network_reason("codex", _network(mode), "win32")
+            == "Codex has not been verified to enforce the sandbox on this OS."
+        )
+    assert unsupported_network_reason("codex", _network(), None) == ""
+    assert "on this OS" in unsupported_network_reason("grok", _network(), "darwin")
+    # Saving asks whether any OS could enforce it.
+    assert unsupported_network_reason("grok", _network(), None) == ""
+    assert "allowlist" in unsupported_network_reason(
+        "grok", _network("allowlist"), None
+    )
+
+
+def test_copilot_has_no_domain_allowlist_on_either_route() -> None:
+    assert "allowlist" in unsupported_network_reason(
+        "copilot", _network("allowlist"), None
+    )
+    assert "web network mode 'allowlist'" in unsupported_network_reason(
+        "copilot", _network(web="allowlist"), None
+    )
+    assert unsupported_network_reason("copilot", _network("unrestricted"), None) == ""
+
+
+def test_local_network_is_a_separate_switch_only_where_the_tool_has_one() -> None:
+    local = _network(allow_local_network=True)
+    assert "local network" in unsupported_network_reason("codex", local, None)
+    assert (
+        unsupported_network_reason(
+            "codex", _network("allowlist", allow_local_network=True), None
+        )
+        == ""
+    )
+    assert unsupported_network_reason("claude", local, None) == ""
+    assert unsupported_network_reason("copilot", local, None) == ""
+    assert "local network" in unsupported_network_reason("grok", local, "linux")
+
+
+def test_an_unknown_tool_has_no_catalog_entry() -> None:
+    with pytest.raises(ValueError, match="not a supported AI CLI tool"):
+        unsupported_network_reason("gemini", _network(), None)

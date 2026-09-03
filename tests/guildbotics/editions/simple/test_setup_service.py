@@ -708,10 +708,7 @@ def test_intelligence_templates_are_copied_byte_for_byte(
     differing -- a difference nobody made, in files nobody edited."""
     templates = tmp_path / "templates"
     shutil.copytree(setup_service.get_template_path(), templates)
-    crlf = [
-        templates / "intelligences/native_agent_policy.yml",
-        *sorted((templates / "intelligences/cli_agents").glob("*/*.yml")),
-    ]
+    crlf = sorted((templates / "intelligences/cli_agents").glob("*/*.yml"))
     for template in crlf:
         template.write_bytes(template.read_bytes().replace(b"\n", b"\r\n"))
     monkeypatch.setattr(setup_service, "get_template_path", lambda: templates)

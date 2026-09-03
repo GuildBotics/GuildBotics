@@ -240,7 +240,7 @@ def test_a_file_another_device_added_refuses_a_directory_save(
     """The screen prunes what it did not read, so an addition it never saw is stale."""
     write(config_dir, MODEL_MAPPING, project_yaml("gpt"))
     expected = repository.tree_revisions("intelligences")
-    write(config_dir, "intelligences/native_agent_policy.yml", project_yaml("codex"))
+    write(config_dir, "intelligences/cli_agent_mapping.yml", project_yaml("codex"))
 
     with pytest.raises(StaleConfigWriteError) as error:
         repository.write(refuse_to_run, expected=expected)
@@ -254,7 +254,7 @@ def test_a_directory_another_device_created_refuses_a_save(
     """A member inheriting the team defaults has no files, and still has a position."""
     scope = "team/members/aiko/intelligences"
     expected = repository.tree_revisions(scope)
-    write(config_dir, f"{scope}/native_agent_policy.yml", project_yaml("codex"))
+    write(config_dir, f"{scope}/cli_agent_mapping.yml", project_yaml("codex"))
 
     with pytest.raises(StaleConfigWriteError):
         repository.write(refuse_to_run, expected=expected)

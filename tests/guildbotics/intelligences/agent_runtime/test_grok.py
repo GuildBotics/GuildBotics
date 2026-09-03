@@ -20,7 +20,6 @@ from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
     _launch_argv,
-    _sandbox_profile,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
@@ -36,7 +35,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
     settings_fingerprint,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -1194,23 +1192,11 @@ async def test_initialize_declares_no_client_capabilities(
 
 
 @pytest.mark.asyncio
-async def test_host_policy_disables_the_sandbox(monkeypatch, tmp_path) -> None:
+async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> None:
     peer = _Peer()
     launched = install(monkeypatch, peer)
-    adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
 
-    await _run(adapter, tmp_path)
-
-    assert launched[0][0][2:4] == ("--sandbox", "off")
-
-
-@pytest.mark.asyncio
-async def test_read_only_turns_keep_the_confined_sandbox(monkeypatch, tmp_path) -> None:
-    peer = _Peer()
-    launched = install(monkeypatch, peer)
-    adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
-
-    await _run(adapter, tmp_path, read_only=True)
+    await _run(GrokAcpAdapter(), tmp_path, read_only=True)
 
     assert launched[0][0][2:4] == ("--sandbox", "workspace")
 
@@ -1262,16 +1248,8 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
 # --- pure helpers ------------------------------------------------------------
 
 
-def test_sandbox_profile_maps_the_public_policy_values() -> None:
-    assert _sandbox_profile(AdapterFilesystemPolicy("workspace")) == "workspace"
-    assert _sandbox_profile(AdapterFilesystemPolicy("host")) == "off"
-    assert _sandbox_profile(AdapterFilesystemPolicy("host"), read_only=True) == (
-        "workspace"
-    )
-
-
 def test_launch_argv_places_options_in_their_parser_scopes() -> None:
-    argv = _launch_argv("grok", AdapterFilesystemPolicy("workspace"), False)
+    argv = _launch_argv("grok")
 
     assert argv.index("--no-auto-update") < argv.index("agent")
     assert argv.index("--sandbox") < argv.index("agent")

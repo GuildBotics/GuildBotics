@@ -833,9 +833,9 @@ Two Person distinctions matter architecturally:
   `intelligences/agent_runtime/`, register it in `agent_runtime/factory.py`, and add
   its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
   `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
-  a tool without an adapter cannot run. The user-configurable filesystem boundary, for
-  the adapters that can enforce one, is declared in
-  `templates/intelligences/native_agent_policy.yml`.
+  a tool without an adapter cannot run. Declare which network modes the tool can
+  enforce in its catalog entry, and translate the sandbox contract
+  (`intelligences/sandbox.py`) in the adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the

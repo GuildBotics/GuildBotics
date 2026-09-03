@@ -206,7 +206,8 @@ export type SystemAlert = {
     | "command_failed"
     | "rate_limited"
     | "scheduler_failed"
-    | "worker_stopped";
+    | "worker_stopped"
+    | "sandbox_unenforceable";
   severity: "critical" | "warning";
   opened_at: string;
   updated_at: string;
@@ -214,6 +215,10 @@ export type SystemAlert = {
   person_id: string;
   command: string;
   trace_id: string;
+  // What the alert is about when the code alone does not say.
+  reason?: string;
+  // Which setting to open for it, when the code alone does not say.
+  setting?: string;
   actions: Array<"diagnostics" | "setup" | "trace" | "service">;
 };
 
@@ -877,6 +882,139 @@ export type CliAgentDefinition = {
   // False when the tool's protocol has nowhere to put these settings, so the
   // editor explains rather than collecting configuration that would be dropped.
   effort_supported?: boolean;
+  // This definition's own `network` block; null when the file states none and
+  // the slot runs under `inherited_network`.
+  network?: NetworkPolicy | null;
+  inherited_network?: NetworkPolicy;
+};
+
+export type NetworkMode = "deny" | "allowlist" | "unrestricted";
+
+export type NetworkPolicy = {
+  command: { mode: NetworkMode; allowed_domains: string[]; allow_local_network: boolean };
+  web: { mode: NetworkMode; allowed_domains: string[] };
+};
+
+export const CLOSED_NETWORK_POLICY: NetworkPolicy = {
+  command: { mode: "deny", allowed_domains: [], allow_local_network: false },
+  web: { mode: "deny", allowed_domains: [] },
+};
+
+export type GrantAccess = "read" | "read_write";
+
+// A directory below the home directory the workspace's agents use for their
+// work; shared, resolved on every device the same way.
+export type DocumentGrant = {
+  path: string;
+  access: GrantAccess;
+};
+
+// The workspace-shared part of what agents may reach.
+export type SharedGrants = {
+  documents: DocumentGrant[];
+};
+
+// A path this device alone grants; may be absolute, never synchronized.
+export type LocalPathGrant = {
+  path: string;
+  access: GrantAccess;
+};
+
+export type LocalGrants = {
+  paths: LocalPathGrant[];
+  // Directories this device closes: a tree its PATH derived, or a corner of one.
+  deny: string[];
+};
+
+// What one tool can enforce natively, on this device and on any supported OS.
+export type CliAgentNetworkSupport = {
+  command_modes: NetworkMode[];
+  command_modes_anywhere: NetworkMode[];
+  web_modes: NetworkMode[];
+  local_network_modes: NetworkMode[];
+  grant_accesses: GrantAccess[];
+  contract_applied: boolean;
+};
+
+export type GrantScope = "document" | "local" | "deny";
+
+// What a grant the user is about to add would mean on this device.
+export type GrantEvaluation = {
+  scope: GrantScope;
+  path: string;
+  access: string;
+  valid: boolean;
+  reason: string;
+  present: boolean;
+  sensitive: string;
+};
+
+// A document or local path grant as it resolves on this device. `path` is for
+// display; `grant` is the entry as the grant file spells it, which is what the
+// editor's own list holds.
+export type SandboxGrantStatus = {
+  path: string;
+  grant: string;
+  access: string;
+  present: boolean;
+};
+
+// A tree read because commands on this device's PATH live in it. `grant` is
+// how the local grant file names the tree to close it.
+export type SandboxTreeStatus = {
+  path: string;
+  grant: string;
+  sources: string[];
+};
+
+// A tree the PATH led to that stays closed, and why.
+export type SandboxExcludedStatus = {
+  path: string;
+  source: string;
+  reason: string;
+};
+
+export type SandboxDenyStatus = {
+  path: string;
+  builtin: boolean;
+};
+
+export type SandboxAccessStatus = {
+  documents: SandboxGrantStatus[];
+  paths: SandboxGrantStatus[];
+  trees: SandboxTreeStatus[];
+  excluded: SandboxExcludedStatus[];
+  denied: SandboxDenyStatus[];
+  problem: string;
+};
+
+// Which setting a sandbox problem is about: the slot's network block, or the
+// directory grants.
+export type SandboxSetting = "network" | "grants";
+
+export type SandboxProblem = {
+  setting: SandboxSetting;
+  reason: string;
+};
+
+export type SandboxSlotStatus = {
+  slot: string;
+  tool: string;
+  contract_applied: boolean;
+  network: NetworkPolicy;
+  problems: SandboxProblem[];
+};
+
+export type SandboxMemberStatus = {
+  person_id: string;
+  slots: SandboxSlotStatus[];
+};
+
+export type SandboxStatusResponse = {
+  platform: string;
+  working_directory: string;
+  access: SandboxAccessStatus;
+  members: SandboxMemberStatus[];
 };
 
 export type BrainAssignment = {
@@ -885,19 +1023,6 @@ export type BrainAssignment = {
   engine: "llm" | "cli";
   target: string;
 };
-
-export type NativeAgentFilesystemAccess = "workspace" | "host";
-
-// One entry per native adapter; the backend rejects unknown keys.
-export type NativeAgentPolicySettings = {
-  codex: { filesystem_access: NativeAgentFilesystemAccess };
-  grok: { filesystem_access: NativeAgentFilesystemAccess };
-  copilot: { filesystem_access: NativeAgentFilesystemAccess };
-};
-
-export const NATIVE_POLICY_ADAPTERS = ["codex", "grok", "copilot"] as const;
-
-export type NativeAgentPolicyAdapter = (typeof NATIVE_POLICY_ADAPTERS)[number];
 
 // A selectable LLM provider, discovered server-side from
 // `models/<provider>/default.yml`. Single source of truth for the catalog.
@@ -925,7 +1050,12 @@ export type IntelligenceConfig = {
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
-  native_agent_policy: NativeAgentPolicySettings;
+  // The workspace's shared grants (the team's, whichever scope is read) and
+  // this device's own extra paths.
+  filesystem_grants?: SharedGrants;
+  local_grants?: LocalGrants;
+  network_support?: Record<string, CliAgentNetworkSupport>;
+  platform?: string;
   // Team-owned slot/feature names. A member may override their value but cannot
   // delete or rename them. Empty for the team scope.
   inherited_model_slots?: string[];
@@ -943,7 +1073,9 @@ export type IntelligenceConfigUpdateRequest = {
   cli_agent_mapping?: Record<string, string>;
   cli_agents?: CliAgentDefinition[];
   brain_mapping?: BrainAssignment[];
-  native_agent_policy?: NativeAgentPolicySettings;
+  // Replace the shared grants / this device's paths when given; omitted keeps them.
+  filesystem_grants?: SharedGrants;
+  local_grants?: LocalGrants;
 };
 
 export type ConfigWriteResponse = {
@@ -1502,6 +1634,20 @@ export async function updateIntelligenceConfig(
   body: IntelligenceConfigUpdateRequest,
 ): Promise<ConfigWriteResponse> {
   return request("/config/intelligences", { method: "PUT", body });
+}
+
+export async function getSandboxStatus(): Promise<SandboxStatusResponse> {
+  return request("/intelligences/sandbox");
+}
+
+export async function evaluateGrant(query: {
+  scope: GrantScope;
+  path: string;
+  access?: GrantAccess;
+}): Promise<GrantEvaluation> {
+  const params = new URLSearchParams({ scope: query.scope, path: query.path });
+  if (query.access) params.set("access", query.access);
+  return request(`/intelligences/grant-evaluation?${params.toString()}`);
 }
 
 export async function runCommand(body: {

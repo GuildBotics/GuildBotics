@@ -29,7 +29,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -309,32 +308,6 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     assert prompt.endswith("\n\ndo the thing")
 
 
-def test_host_filesystem_access_is_the_only_launch_flag_it_changes() -> None:
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-
-    argv = adapter._launch_argv(_context(Path("/tmp")))
-
-    assert argv[-1] == "--allow-all-paths"
-
-
-def test_a_read_only_turn_stays_in_the_workspace_whatever_the_member_configured(
-    tmp_path,
-) -> None:
-    """Declining its writes is not enough: an unrestricted read leaves in the reply."""
-    host = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-    workspace = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("workspace"))
-    context = _context(tmp_path, read_only=True)
-
-    assert "--allow-all-paths" not in host._launch_argv(context)
-    # A host-access member's read-only turn is launched exactly like a
-    # workspace-access one, apart from the intentionally random broker name.
-    host_argv = host._launch_argv(context)
-    workspace_argv = workspace._launch_argv(context)
-    assert host_argv[:5] == workspace_argv[:5]
-    assert host_argv[5].endswith("(guildbotics_member)")
-    assert workspace_argv[5].endswith("(guildbotics_member)")
-
-
 @pytest.mark.asyncio
 async def test_a_peer_that_does_not_speak_v1_is_rejected(monkeypatch, tmp_path) -> None:
     peer = _Peer(initialize=_initialize(protocolVersion=2))
@@ -526,26 +499,6 @@ async def test_a_read_only_turn_makes_copilot_ask_before_acting(
     policy = _named(events, AgentEventKind.APPROVAL, "policy")
     assert policy.approval == "never"
     assert policy.details == {
-        "filesystem_access": "workspace",
-        "allowed_paths": "workspace",
-        "allow_all": "off",
-        "read_only": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_a_read_only_turn_reports_the_scope_it_really_got(
-    monkeypatch, tmp_path
-) -> None:
-    """The member configured host access, but this turn does not have it."""
-    peer = _Peer()
-    install(monkeypatch, peer)
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-
-    _result, events = await _run(adapter, tmp_path, read_only=True)
-
-    assert _named(events, AgentEventKind.APPROVAL, "policy").details == {
-        "filesystem_access": "host",
         "allowed_paths": "workspace",
         "allow_all": "off",
         "read_only": True,
@@ -725,41 +678,6 @@ async def test_a_session_this_process_still_holds_is_never_reloaded(
         ]
         == "high"
     )
-
-
-@pytest.mark.asyncio
-async def test_a_narrower_turn_restarts_the_process_it_cannot_reuse(
-    monkeypatch, tmp_path
-) -> None:
-    """`--allow-all-paths` is fixed at startup, so a read-only turn needs its own.
-
-    Reusing the running process would leave host-wide reads available while the
-    turn reports the workspace scope.
-    """
-    first = _Peer(updates=[text_chunk("wrote")])
-    second = _Peer(updates=[text_chunk("looked")])
-    launched = install(monkeypatch, first, second)
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-    conversation = ConversationRecord(
-        key=ConversationKey("aiko", "copilot", "ticket", "issue-364")
-    )
-
-    normal = await adapter.run_turn(
-        "one", _context(tmp_path), conversation, lambda _event: None
-    )
-    conversation.provider_session_id = normal.provider_session_id
-    events: list[AgentEvent] = []
-    read_only = await adapter.run_turn(
-        "two", _context(tmp_path, read_only=True), conversation, events.append
-    )
-    await adapter.close()
-
-    assert "--allow-all-paths" in launched[0][0]
-    assert "--allow-all-paths" not in launched[1][0]
-    assert read_only.output == "looked"
-    # The restarted process holds nothing, so the session is reloaded into it.
-    assert "session/load" in second.methods()
-    assert second.current["allow_all"] == "off"
 
 
 @pytest.mark.asyncio
