@@ -9,6 +9,7 @@ import {
   evaluateGrant,
   type GrantEvaluation,
   type LocalGrants,
+  type SandboxAccessStatus,
   type SharedGrants,
 } from "../api/client";
 import i18n from "../i18n";
@@ -24,14 +25,62 @@ vi.mock("../api/client", async (importOriginal) => ({
 
 const t = i18n.getFixedT("en");
 
+/** How the device reports the saved grants: display form beside the grant file's spelling. */
+const macStatus: SandboxAccessStatus = {
+  documents: [{ path: "$HOME/Documents", grant: "Documents", access: "read", present: true }],
+  paths: [{ path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false }],
+  trees: [
+    { path: "$HOME/.local", grant: ".local", sources: ["$HOME/.local/bin"] },
+    {
+      path: "/opt/homebrew",
+      grant: "/opt/homebrew",
+      sources: ["/opt/homebrew/bin", "/opt/homebrew/sbin"],
+    },
+  ],
+  excluded: [
+    {
+      path: "$HOME/.codex/packages/standalone",
+      source: "$HOME/.local/bin",
+      reason: "it is under ~/.codex",
+    },
+  ],
+  denied: [{ path: "$HOME/.ssh", builtin: true }],
+  problem: "",
+};
+
+/** A Windows device spells the same rows with backslashes after `$HOME`. */
+const windowsStatus: SandboxAccessStatus = {
+  documents: [],
+  paths: [
+    {
+      path: "$HOME\\AppData\\Local\\uv\\cache",
+      grant: "AppData/Local/uv/cache",
+      access: "read_write",
+      present: false,
+    },
+  ],
+  trees: [
+    {
+      path: "$HOME\\AppData\\Local\\Programs\\Python",
+      grant: "AppData\\Local\\Programs\\Python",
+      sources: ["$HOME\\AppData\\Local\\Programs\\Python\\Scripts"],
+    },
+  ],
+  excluded: [],
+  denied: [{ path: "$HOME\\.ssh", builtin: true }],
+  problem: "",
+};
+
 function Harness({
   shared: initialShared = { documents: [] },
   local: initialLocal = { paths: [], deny: [] },
+  status = macStatus,
   onShared,
   onLocal,
 }: {
   shared?: SharedGrants;
   local?: LocalGrants;
+  status?: SandboxAccessStatus;
   onShared?: (shared: SharedGrants) => void;
   onLocal?: (local: LocalGrants) => void;
 }) {
@@ -44,23 +93,7 @@ function Harness({
         <GrantsCards
           shared={shared}
           local={local}
-          status={{
-            documents: [{ path: "$HOME/Documents", access: "read", present: true }],
-            paths: [{ path: "/opt/nowhere", access: "read", present: false }],
-            trees: [
-              { path: "$HOME/.local", sources: ["$HOME/.local/bin"] },
-              { path: "/opt/homebrew", sources: ["/opt/homebrew/bin", "/opt/homebrew/sbin"] },
-            ],
-            excluded: [
-              {
-                path: "$HOME/.codex/packages/standalone",
-                source: "$HOME/.local/bin",
-                reason: "it is under ~/.codex",
-              },
-            ],
-            denied: [{ path: "$HOME/.ssh", builtin: true }],
-            problem: "",
-          }}
+          status={status}
           onSharedChange={(next) => {
             setShared(next);
             onShared?.(next);
@@ -168,6 +201,53 @@ describe("GrantsCards", () => {
       await screen.findByRole("option", { name: t("setup.intelligence.grants.accessLabels.read") }),
     );
     expect(onLocal).toHaveBeenLastCalledWith({ paths: [], deny: [] });
+  });
+
+  it("denies a PATH directory in place on a device that spells paths with backslashes", async () => {
+    const user = userEvent.setup();
+    const onLocal = vi.fn();
+    render(
+      <Harness
+        status={windowsStatus}
+        local={{ paths: [{ path: "AppData/Local/uv/cache", access: "read_write" }], deny: [] }}
+        onLocal={onLocal}
+      />,
+    );
+    const device = within(screen.getByTestId("grants:device"));
+    const python = "$HOME\\AppData\\Local\\Programs\\Python";
+    const access = device.getByRole("combobox", {
+      name: t("setup.intelligence.grants.accessFor", { path: python }),
+    });
+    // The added path is matched to its row by the file's spelling, whatever
+    // separators the device shows it with.
+    expect(device.getByText("AppData/Local/uv/cache").parentElement).toHaveTextContent(
+      t("setup.intelligence.grants.absentHere"),
+    );
+
+    await user.click(access);
+    await user.click(
+      await screen.findByRole("option", { name: t("setup.intelligence.deviceAccess.deny") }),
+    );
+
+    // The deny is written as the device spells the tree, so the row it
+    // closes is the one that changes: no second row for the same directory.
+    expect(onLocal).toHaveBeenLastCalledWith({
+      paths: [{ path: "AppData/Local/uv/cache", access: "read_write" }],
+      deny: ["AppData\\Local\\Programs\\Python"],
+    });
+    expect(access).toHaveValue(t("setup.intelligence.deviceAccess.deny"));
+    expect(
+      device.getAllByRole("combobox", {
+        name: t("setup.intelligence.grants.accessFor", { path: python }),
+      }),
+    ).toHaveLength(1);
+    expect(
+      device.queryByRole("combobox", {
+        name: t("setup.intelligence.grants.accessFor", {
+          path: "AppData\\Local\\Programs\\Python",
+        }),
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("adds a typed path as read/write or as a deny once the keystrokes settle, and removes them", async () => {
@@ -318,6 +398,25 @@ describe("GrantsCards", () => {
         multiple: false,
         defaultPath: undefined,
       });
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it("relativizes a picked directory to a Windows home directory", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { homeDir } = await import("@tauri-apps/api/path");
+    vi.mocked(homeDir).mockResolvedValueOnce("C:\\Users\\me\\");
+    vi.mocked(open).mockResolvedValueOnce("C:\\Users\\me\\AppData\\Local\\uv\\cache");
+    Object.assign(window, { __TAURI_INTERNALS__: {} });
+    try {
+      const user = userEvent.setup();
+      render(<Harness status={windowsStatus} />);
+      const device = within(screen.getByTestId("grants:device"));
+      const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+
+      await user.click(device.getByRole("button", { name: t("setup.intelligence.grants.choose") }));
+      await waitFor(() => expect(path).toHaveValue("AppData\\Local\\uv\\cache"));
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }

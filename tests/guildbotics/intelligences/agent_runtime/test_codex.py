@@ -1146,9 +1146,19 @@ def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -
             {"mode": "allowlist", "allowed_domains": ["docs.npmjs.com"]},
         ),
         access=ResolvedAccess(
-            documents=(ResolvedGrant(path=tmp_path / "shared", access="read"),),
-            paths=(ResolvedGrant(path=tmp_path / "out", access="read_write"),),
-            trees=(DerivedTree(tmp_path / "opt/node", (tmp_path / "opt/node/bin",)),),
+            documents=(ResolvedGrant(tmp_path / "shared", "read", grant="shared"),),
+            paths=(
+                ResolvedGrant(
+                    tmp_path / "out", "read_write", grant=str(tmp_path / "out")
+                ),
+            ),
+            trees=(
+                DerivedTree(
+                    tmp_path / "opt/node",
+                    (tmp_path / "opt/node/bin",),
+                    grant=str(tmp_path / "opt/node"),
+                ),
+            ),
             excluded=(
                 ExcludedTree(
                     tmp_path / "home/.codex/x", tmp_path / "bin", "it is under ~/.codex"

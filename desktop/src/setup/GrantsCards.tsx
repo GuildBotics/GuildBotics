@@ -66,19 +66,10 @@ export function GrantsCards({
   );
 }
 
-/** A saved path as the device shows it: `$HOME/x` for a home-relative `x`. */
-function shown(path: string): string {
-  return path.startsWith("/") ? path : `$HOME/${path}`;
-}
-
-/** The saved form of a path the device showed: home-relative when under it. */
-function saved(path: string): string {
-  return path.startsWith("$HOME/") ? path.slice("$HOME/".length) : path;
-}
-
 /** A picked absolute path, relative to the home directory when under it. */
 function homeRelative(path: string, home: string): string {
-  return path.startsWith(`${home}/`) ? path.slice(home.length + 1) : path;
+  const under = ["/", "\\"].some((separator) => path.startsWith(home + separator));
+  return under ? path.slice(home.length + 1) : path;
 }
 
 function isTauriRuntime(): boolean {
@@ -96,8 +87,7 @@ function DocumentsCard({
   onChange: (documents: DocumentGrant[]) => void;
 }) {
   const { t } = useTranslation();
-  const present = (path: string) =>
-    status?.documents.find((row) => row.path === `$HOME/${path}`)?.present;
+  const present = (path: string) => status?.documents.find((row) => row.grant === path)?.present;
   return (
     <AccessCard
       id="grants-documents"
@@ -148,6 +138,10 @@ function DocumentsCard({
  * grant in place), the install locations its PATH leads to (readable unless
  * denied), and what stays closed regardless -- the built-in credential
  * directories and PATH entries that fall inside them.
+ *
+ * Rows are matched to the setting by the spelling the device reports for
+ * them (`grant`), never by re-deriving it here: how a path is written
+ * relative to the home differs between OSes.
  */
 function DeviceAccessCard({
   local,
@@ -160,12 +154,11 @@ function DeviceAccessCard({
 }) {
   const { t } = useTranslation();
   const trees = status?.trees ?? [];
-  const treePaths = new Set(trees.map((tree) => tree.path));
-  const denied = (displayed: string) => local.deny.some((entry) => shown(entry) === displayed);
+  const treeGrants = new Set(trees.map((tree) => tree.grant));
   const own: { path: string; access: Access }[] = [
     ...local.paths,
     ...local.deny
-      .filter((entry) => !treePaths.has(shown(entry)))
+      .filter((entry) => !treeGrants.has(entry))
       .map((entry) => ({ path: entry, access: "deny" as const })),
   ];
   const setOwn = (target: string, access: Access | null) =>
@@ -179,12 +172,10 @@ function DeviceAccessCard({
         ...(access === "deny" ? [target] : []),
       ],
     });
-  const setTree = (displayed: string, deny: boolean) =>
+  const setTree = (grant: string, deny: boolean) =>
     onChange({
       ...local,
-      deny: deny
-        ? [...local.deny, saved(displayed)]
-        : local.deny.filter((entry) => shown(entry) !== displayed),
+      deny: deny ? [...local.deny, grant] : local.deny.filter((entry) => entry !== grant),
     });
   const closed = [
     ...(status?.denied.filter((d) => d.builtin) ?? []).map((d) => ({
@@ -218,7 +209,7 @@ function DeviceAccessCard({
           path: (
             <Group gap="xs">
               {mono(row.path)}
-              {status?.paths.find((g) => g.path === shown(row.path))?.present === false ? (
+              {status?.paths.find((g) => g.grant === row.path)?.present === false ? (
                 <Badge color="danger" variant="light" size="xs">
                   {t("setup.intelligence.grants.absentHere")}
                 </Badge>
@@ -250,8 +241,8 @@ function DeviceAccessCard({
             <AccessSelect
               path={tree.path}
               accesses={["read", "deny"]}
-              value={denied(tree.path) ? "deny" : "read"}
-              onChange={(access) => setTree(tree.path, access === "deny")}
+              value={local.deny.includes(tree.grant) ? "deny" : "read"}
+              onChange={(access) => setTree(tree.grant, access === "deny")}
             />
           ),
         })),

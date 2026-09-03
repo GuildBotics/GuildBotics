@@ -97,13 +97,15 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     status = sandbox_status(["aiko", "kenji"], platform="darwin")
 
     # A preview creates nothing: the missing document directory is shown absent.
-    assert [(g.path, g.present) for g in status.access.documents] == [
-        ("$HOME/tools", True),
-        ("$HOME/Projects/out", False),
+    # Each row carries the spelling the grant file uses beside its display
+    # form, so the editor matches rows to entries without re-deriving it.
+    assert [(g.path, g.grant, g.present) for g in status.access.documents] == [
+        ("$HOME/tools", "tools", True),
+        ("$HOME/Projects/out", "Projects/out", False),
     ]
     assert not (home / "Projects/out").exists()
-    assert [(t.path, t.sources) for t in status.access.trees] == [
-        ("$HOME/.local", ["$HOME/.local/bin"])
+    assert [(t.path, t.grant, t.sources) for t in status.access.trees] == [
+        ("$HOME/.local", ".local", ["$HOME/.local/bin"])
     ]
     assert [(d.path, d.builtin) for d in status.access.denied] == [
         ("$HOME/.ssh", True),
