@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from pydantic import (
@@ -255,12 +255,16 @@ def load_local_grants() -> LocalGrants:
 class ResolvedGrant:
     """A directory grant as it stands on this device.
 
-    ``present`` is False for a document directory a preview found missing;
-    a turn creates it instead, so what the provider receives is always there.
+    ``grant`` is the path as the grant file spells it, so a row shown for
+    this device can be matched back to the entry that produced it without
+    the reader re-deriving how a path is written on this OS. ``present`` is
+    False for a document directory a preview found missing; a turn creates
+    it instead, so what the provider receives is always there.
     """
 
     path: Path
     access: GrantAccess
+    grant: str
     present: bool = True
 
 
@@ -269,11 +273,13 @@ class DerivedTree:
     """A tree this device reads because commands on its PATH live there.
 
     ``sources`` are the PATH directories that led here: `/opt/homebrew` for
-    `/opt/homebrew/bin` and `/opt/homebrew/sbin` alike.
+    `/opt/homebrew/bin` and `/opt/homebrew/sbin` alike. ``grant`` is how the
+    local grant file would name the tree to close it (see ``grant_spelling``).
     """
 
     path: Path
     sources: tuple[Path, ...]
+    grant: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,7 +321,7 @@ class ResolvedAccess:
             if grant.present:
                 seen[grant.path] = grant
         for tree in self.trees:
-            seen.setdefault(tree.path, ResolvedGrant(tree.path, "read"))
+            seen.setdefault(tree.path, ResolvedGrant(tree.path, "read", tree.grant))
         return tuple(
             grant
             for grant in seen.values()
@@ -377,7 +383,7 @@ def _resolve_document(
                 f"document grant '{grant.path}' exists but is not a directory"
             ) from exc
     elif not target.exists():
-        return ResolvedGrant(target, grant.access, present=False)
+        return ResolvedGrant(target, grant.access, grant.path, present=False)
     real = target.resolve()
     if not real.is_dir():
         raise SandboxContractError(
@@ -387,7 +393,7 @@ def _resolve_document(
         raise SandboxContractError(
             f"document grant '{grant.path}' must stay below the home directory"
         )
-    return ResolvedGrant(real, grant.access)
+    return ResolvedGrant(real, grant.access, grant.path)
 
 
 def local_path_missing(path: str) -> str:
@@ -404,12 +410,12 @@ def _resolve_local(
     if not real.is_dir():
         if strict:
             raise SandboxContractError(local_path_missing(grant.path))
-        return ResolvedGrant(real, grant.access, present=False)
+        return ResolvedGrant(real, grant.access, grant.path, present=False)
     if real == home_root or real == Path(real.anchor):
         raise SandboxContractError(
             f"local path '{grant.path}' would grant the whole home directory or root"
         )
-    return ResolvedGrant(real, grant.access)
+    return ResolvedGrant(real, grant.access, grant.path)
 
 
 def _resolve_deny(path: str, home_root: Path) -> Path:
@@ -464,7 +470,10 @@ def path_read_trees(
             else:
                 trees.setdefault(root, []).append(source)
     return (
-        tuple(DerivedTree(path, tuple(sources)) for path, sources in trees.items()),
+        tuple(
+            DerivedTree(path, tuple(sources), grant_spelling(path, home_root))
+            for path, sources in trees.items()
+        ),
         tuple(excluded),
     )
 
@@ -709,6 +718,19 @@ def _first_symlink_component(path: Path) -> Path | None:
         if parent != Path(parent.anchor) and parent.is_symlink():
             return parent
     return path if path.is_symlink() else None
+
+
+def grant_spelling(path: PurePath, home: PurePath) -> str:
+    """How a grant file names ``path``: relative to the home directory when
+    under it, absolute otherwise, in this OS's own separators.
+
+    This is the inverse of resolving a grant, spelled once here so that what a
+    device reports for a derived tree is exactly what closing that tree with
+    ``deny`` would be written as.
+    """
+    if path.is_relative_to(home) and path != home:
+        return str(path.relative_to(home))
+    return str(path)
 
 
 def redact_path(

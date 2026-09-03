@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 import yaml
@@ -22,6 +22,7 @@ from guildbotics.intelligences.sandbox import (
     parse_local_grants,
     parse_network_policy,
     parse_shared_grants,
+    grant_spelling,
     redact_path,
     resolve_access,
     path_read_trees,
@@ -547,6 +548,23 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
         ],
     }
     assert policy["network"] == _CLOSED
+
+
+def test_grant_spelling_is_how_the_grant_file_names_a_path() -> None:
+    # Relative to the home when under it, absolute otherwise, in the OS's own
+    # separators: what a device reports for a tree is exactly what closing it
+    # with `deny` is written as, on Windows too.
+    home = PureWindowsPath("C:/Users/me")
+    assert grant_spelling(PureWindowsPath("C:/Users/me/AppData/Local/x"), home) == (
+        "AppData\\Local\\x"
+    )
+    assert grant_spelling(PureWindowsPath("C:/Program Files/Git"), home) == (
+        "C:\\Program Files\\Git"
+    )
+    posix = PurePosixPath("/Users/me")
+    assert grant_spelling(PurePosixPath("/Users/me/.local"), posix) == ".local"
+    assert grant_spelling(PurePosixPath("/opt/homebrew"), posix) == "/opt/homebrew"
+    assert grant_spelling(posix, posix) == "/Users/me"
 
 
 def test_redaction_leaves_unrelated_paths_alone(tmp_path: Path) -> None:

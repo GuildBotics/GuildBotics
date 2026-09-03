@@ -1115,15 +1115,26 @@ class GrantEvaluation(BaseModel):
 
 
 class SandboxGrantStatus(BaseModel):
+    """A document or local path grant as it resolves on this device.
+
+    ``path`` is for display; ``grant`` is the entry as the grant file spells
+    it, which is what the editor's own list holds.
+    """
+
     path: str
+    grant: str
     access: str
     present: bool
 
 
 class SandboxTreeStatus(BaseModel):
-    """A tree read because commands on this device's PATH live in it."""
+    """A tree read because commands on this device's PATH live in it.
+
+    ``grant`` is how the local grant file names the tree to close it.
+    """
 
     path: str
+    grant: str
     sources: list[str] = Field(default_factory=list)
 
 

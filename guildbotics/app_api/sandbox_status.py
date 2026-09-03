@@ -123,7 +123,10 @@ def _access_status(
 ) -> SandboxAccessStatus:
     def grant(g: ResolvedGrant) -> SandboxGrantStatus:
         return SandboxGrantStatus(
-            path=redact_path(g.path, home), access=g.access, present=g.present
+            path=redact_path(g.path, home),
+            grant=g.grant,
+            access=g.access,
+            present=g.present,
         )
 
     return SandboxAccessStatus(
@@ -132,6 +135,7 @@ def _access_status(
         trees=[
             SandboxTreeStatus(
                 path=redact_path(t.path, home),
+                grant=t.grant,
                 sources=[redact_path(s, home) for s in t.sources],
             )
             for t in access.trees
