@@ -205,6 +205,34 @@ def test_every_declared_sync_composition_root_installs_the_queue() -> None:
     assert unused == []
 
 
+#: The one module that drives the sandbox runtime. The contract is enforced by
+#: exactly one layer, so an adapter that imported the SDK itself would be a
+#: second one, translating the contract its own way.
+BOUNDARY_RUNTIME = Path("intelligences/boundary/runtime.py")
+
+
+def test_only_the_boundary_runtime_drives_the_sandbox_sdk() -> None:
+    offenders: list[str] = []
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        relative = path.relative_to(PACKAGE_ROOT)
+        if relative == BOUNDARY_RUNTIME:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+            offenders.extend(
+                f"{relative}: {name}"
+                for name in names
+                if _matches(name, ("microsandbox",))
+            )
+    assert offenders == []
+
+
 def test_native_provider_wire_protocol_does_not_leak_into_app_or_frontend() -> None:
     wire_tokens = (
         "item/commandExecution/requestApproval",
