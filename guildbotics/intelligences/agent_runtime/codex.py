@@ -699,23 +699,22 @@ def _codex_sandbox_overrides(
         "default_permissions": _PERMISSION_PROFILE,
         f"{profile}.filesystem": filesystem,
     }
-    command = contract.network.command
-    overrides[f"{profile}.network.enabled"] = command.mode != "deny"
-    if command.mode == "allowlist":
+    network = contract.network
+    overrides[f"{profile}.network.enabled"] = network.mode != "deny"
+    if network.mode == "deny":
+        overrides["web_search"] = "disabled"
+    elif network.mode == "allowlist":
         # Domain rules are enforced only through the network proxy; without
-        # it `enabled = true` would open every host.
+        # it `enabled = true` would open every host. Web search takes the
+        # same rule through its own filter.
         overrides["features.network_proxy"] = True
         overrides[f"{profile}.network.domains"] = dict.fromkeys(
-            command.allowed_domains, "allow"
+            network.allowed_domains, "allow"
         )
         overrides[f"{profile}.network.allow_local_binding"] = (
-            command.allow_local_network
+            network.allow_local_network
         )
-    web = contract.network.web
-    if web.mode == "deny":
-        overrides["web_search"] = "disabled"
-    elif web.mode == "allowlist":
-        overrides["tools.web_search.allowed_domains"] = list(web.allowed_domains)
+        overrides["tools.web_search.allowed_domains"] = list(network.allowed_domains)
     return overrides
 
 

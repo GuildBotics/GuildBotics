@@ -1198,12 +1198,9 @@ def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(
 # --- network block of an AI CLI tool definition -------------------------------
 
 _NETWORK = {
-    "command": {
-        "mode": "allowlist",
-        "allowed_domains": ["registry.npmjs.org"],
-        "allow_local_network": False,
-    },
-    "web": {"mode": "deny", "allowed_domains": []},
+    "mode": "allowlist",
+    "allowed_domains": ["registry.npmjs.org"],
+    "allow_local_network": False,
 }
 
 
@@ -1309,7 +1306,7 @@ def test_read_config_returns_the_grants_and_what_this_device_can_enforce(
     }
     assert response.platform
     assert response.network_support["codex"].contract_applied is True
-    assert "allowlist" not in response.network_support["copilot"].command_modes_anywhere
+    assert "allowlist" not in response.network_support["copilot"].modes_anywhere
     # A member scope reads the same grants: they are the workspace's.
     member = IntelligenceConfigService().read_config(
         config_dir=config_dir, person_id="alice"

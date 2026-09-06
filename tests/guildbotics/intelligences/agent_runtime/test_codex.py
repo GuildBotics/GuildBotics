@@ -1100,8 +1100,11 @@ async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_the
 # --- sandbox contract translation --------------------------------------------
 
 
-def _network(command: dict[str, Any], web: dict[str, Any]) -> NetworkPolicy:
-    return parse_network_policy({"command": command, "web": web}, where="test")
+def _network(mode: str, *domains: str, local: bool = False) -> NetworkPolicy:
+    return parse_network_policy(
+        {"mode": mode, "allowed_domains": list(domains), "allow_local_network": local},
+        where="test",
+    )
 
 
 def _codex_binary(tmp_path: Path) -> Path:
@@ -1137,14 +1140,7 @@ def test_the_closed_contract_becomes_a_minimal_profile_with_no_network(
 
 def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -> None:
     contract = SandboxContract(
-        network=_network(
-            {
-                "mode": "allowlist",
-                "allowed_domains": ["registry.npmjs.org"],
-                "allow_local_network": True,
-            },
-            {"mode": "allowlist", "allowed_domains": ["docs.npmjs.com"]},
-        ),
+        network=_network("allowlist", "registry.npmjs.org", local=True),
         access=ResolvedAccess(
             documents=(ResolvedGrant(tmp_path / "shared", "read", grant="shared"),),
             paths=(
@@ -1194,21 +1190,15 @@ def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -
         "registry.npmjs.org": "allow"
     }
     assert overrides["permissions.guildbotics.network.allow_local_binding"] is True
-    assert overrides["tools.web_search.allowed_domains"] == ["docs.npmjs.com"]
+    # Web search follows the same rule through its own filter.
+    assert overrides["tools.web_search.allowed_domains"] == ["registry.npmjs.org"]
     assert "web_search" not in overrides
 
 
-def test_unrestricted_routes_open_the_network_without_a_proxy(tmp_path: Path) -> None:
-    contract = SandboxContract(
-        network=_network(
-            {
-                "mode": "unrestricted",
-                "allowed_domains": [],
-                "allow_local_network": False,
-            },
-            {"mode": "unrestricted", "allowed_domains": []},
-        )
-    )
+def test_an_unrestricted_policy_opens_the_network_without_a_proxy(
+    tmp_path: Path,
+) -> None:
+    contract = SandboxContract(network=_network("unrestricted"))
 
     overrides = _codex_sandbox_overrides(contract, _codex_binary(tmp_path))
 
@@ -1273,7 +1263,7 @@ async def test_the_profile_is_configured_at_launch_and_reported(
         policy.details["requested_policy"]["filesystem"]["working_directory"]
         == "<workspace>"
     )
-    assert policy.details["requested_policy"]["network"]["command"]["mode"] == "deny"
+    assert policy.details["requested_policy"]["network"]["mode"] == "deny"
     assert policy.details["adapter_settings"]["default_permissions"] == "guildbotics"
     assert config
 
@@ -1289,12 +1279,7 @@ async def test_a_contract_codex_cannot_enforce_never_starts_the_process(
         return _Process()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    contract = SandboxContract(
-        network=_network(
-            {"mode": "deny", "allowed_domains": [], "allow_local_network": True},
-            {"mode": "deny", "allowed_domains": []},
-        )
-    )
+    contract = SandboxContract(network=_network("deny", local=True))
     context = _context(tmp_path, sandbox=contract)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
@@ -1327,16 +1312,7 @@ async def test_a_turn_under_a_different_contract_gets_its_own_process(
     closed = _context(tmp_path)
     opened = _context(
         tmp_path,
-        sandbox=SandboxContract(
-            network=_network(
-                {
-                    "mode": "unrestricted",
-                    "allowed_domains": [],
-                    "allow_local_network": False,
-                },
-                {"mode": "deny", "allowed_domains": []},
-            )
-        ),
+        sandbox=SandboxContract(network=_network("unrestricted")),
     )
     record = ConversationRecord(key=closed.conversation_key)
 

@@ -1,24 +1,26 @@
 """From the sandbox contract to what one turn's microVM is made of.
 
-The contract names host directories and network modes; the microVM needs
+The contract names host directories and a network mode; the microVM needs
 mounts, a network policy, a working directory, and an environment. This module
 is the single translation, and it knows no provider and no runtime: an adapter
 hands over the contract and gets back a :class:`BoundarySpec` it cannot loosen.
 
-Filesystem: the working directory is mounted read-write at the same guest path,
-a document directory at the same path below the guest home, a device-local
-path at its own path, each read-only when the grant says so. Nothing else of
-the host is mounted, so credentials, the workspace configuration, and other
-members' clones are unreachable rather than forbidden. A deny inside an opened
-tree is covered with an empty read-only mount; a deny outside one closes nothing
-that was open. The trees a device's PATH derives are not mounted at all: the
+Filesystem: every granted directory -- the working directory, the documents,
+the device-local paths -- is mounted at the same path it has on the host, and
+the guest's home directory is the host's home path, so a path means the same
+thing on both sides: what the user typed, what the Desktop shows, and what the
+provider's session state records all agree. The working directory is always
+read-write; a grant is read-only when it says so. Nothing else of the host is
+mounted, so credentials, the workspace configuration, and other members'
+clones are unreachable rather than forbidden. A deny inside an opened tree is
+covered with an empty read-only mount; a deny outside one closes nothing that
+was open. The trees a device's PATH derives are not mounted at all: the
 agent's tools live inside the boundary.
 
-Network: the microVM's gateway enforces the policy, so the provider's built-in
-web tools and the commands it runs are one flow with one rule. The two routes
-of the contract therefore combine: unrestricted on either opens everything,
-otherwise egress is closed except DNS, the domains either route allows, the
-provider's own API domains, and the host ports GuildBotics itself needs.
+Network: the microVM's gateway enforces the one rule the contract states.
+Unrestricted opens all egress; otherwise egress is closed except DNS, the
+domains the contract allows, the provider's own API domains, and the host
+ports GuildBotics itself needs.
 """
 
 from __future__ import annotations
@@ -30,14 +32,9 @@ from pathlib import Path, PurePath, PurePosixPath
 from guildbotics.intelligences.sandbox import (
     NetworkPolicy,
     ResolvedAccess,
-    ResolvedGrant,
     SandboxContract,
 )
 
-#: The home directory inside the boundary. Provider state and the snapshot's
-#: toolchain live there, and document grants are mounted below it at the
-#: relative path the grant names.
-GUEST_HOME = "/root"
 #: Upstream resolvers the boundary's DNS gateway forwards to. Without an
 #: explicit upstream, Codex's built-in resolver gets no answer from the
 #: gateway's default in time and its login fails; naming one is what makes
@@ -81,9 +78,15 @@ class BoundaryNetwork:
 
 @dataclass(frozen=True, slots=True)
 class BoundarySpec:
-    """Everything the runtime needs to build one turn's microVM."""
+    """Everything the runtime needs to build one turn's microVM.
+
+    ``home`` is the guest's home directory: the host's, as the guest spells
+    it. The snapshot the turn boots from was built with the same home, so
+    the provider's state is where the provider looks for it.
+    """
 
     cwd: str
+    home: str
     mounts: tuple[BoundaryMount, ...]
     network: BoundaryNetwork
     env: Mapping[str, str]
@@ -110,13 +113,13 @@ def build_boundary_spec(
             egress is restricted; they are GuildBotics' choice, not the user's.
         env: The environment the provider process starts with. The host's
             environment is never inherited: the boundary is another machine.
-        home: The host home directory document grants were resolved under.
+        home: The host home directory, which is the guest's home too.
         nameservers: Upstream DNS resolvers for the boundary's gateway.
     """
-    home_root = (home or Path.home()).resolve()
     return BoundarySpec(
         cwd=guest_path(cwd),
-        mounts=_mounts(contract.access, cwd, home_root),
+        home=guest_path((home or Path.home()).resolve()),
+        mounts=_mounts(contract.access, cwd),
         network=_network(
             contract.network, tuple(host_ports), tuple(provider_domains), nameservers
         ),
@@ -127,11 +130,10 @@ def build_boundary_spec(
 def guest_path(path: PurePath) -> str:
     """Where a host path appears inside the boundary.
 
-    A POSIX path keeps its spelling, so the provider's session state records
-    the same working directory inside and outside. A Windows drive becomes a
-    top-level directory named after its letter (``C:\\work`` is ``/c/work``);
-    the runtime's documentation leaves this to the caller, and this is the
-    one convention GuildBotics uses.
+    A POSIX path keeps its spelling. A Windows drive becomes a top-level
+    directory named after its letter (``C:\\work`` is ``/c/work``); the
+    runtime's documentation leaves this to the caller, and this is the one
+    convention GuildBotics uses.
     """
     if not path.is_absolute():
         raise BoundarySpecError(f"'{path}' is not an absolute path")
@@ -143,21 +145,20 @@ def guest_path(path: PurePath) -> str:
     return "/".join(("", drive[0].lower(), *path.parts[1:]))
 
 
-def _mounts(
-    access: ResolvedAccess, cwd: Path, home_root: Path
-) -> tuple[BoundaryMount, ...]:
+def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[BoundaryMount, ...]:
     """The host-backed mounts, outermost first, then the denies they cover."""
-    opened: dict[str, BoundaryMount] = {}
-
-    def open_(guest: str, host: Path, readonly: bool) -> None:
-        opened.setdefault(guest, BoundaryMount(guest, host, readonly))
-
-    open_(guest_path(cwd), cwd, readonly=False)
-    for grant in _open_grants(access, access.documents):
-        relative = grant.path.relative_to(home_root).as_posix()
-        open_(f"{GUEST_HOME}/{relative}", grant.path, grant.access == "read")
-    for grant in _open_grants(access, access.paths):
-        open_(guest_path(grant.path), grant.path, grant.access == "read")
+    opened: dict[str, BoundaryMount] = {
+        guest_path(cwd): BoundaryMount(guest_path(cwd), cwd, readonly=False)
+    }
+    for grant in (*access.documents, *access.paths):
+        denied = any(grant.path.is_relative_to(d.path) for d in access.denied)
+        if grant.present and not denied:
+            opened.setdefault(
+                guest_path(grant.path),
+                BoundaryMount(
+                    guest_path(grant.path), grant.path, grant.access == "read"
+                ),
+            )
     covers = {
         f"{mount.guest}/{denied.path.relative_to(mount.host).as_posix()}"
         for denied in access.denied
@@ -173,34 +174,18 @@ def _mounts(
     )
 
 
-def _open_grants(
-    access: ResolvedAccess, grants: Iterable[ResolvedGrant]
-) -> Iterable[ResolvedGrant]:
-    """The grants that stand: present on this device and not denied outright."""
-    for grant in grants:
-        if grant.present and not any(
-            grant.path.is_relative_to(denied.path) for denied in access.denied
-        ):
-            yield grant
-
-
 def _network(
     policy: NetworkPolicy,
     host_ports: tuple[int, ...],
     provider_domains: tuple[str, ...],
     nameservers: Iterable[str],
 ) -> BoundaryNetwork:
-    routes = (policy.command, policy.web)
-    unrestricted = any(route.mode == "unrestricted" for route in routes)
-    domains = (
-        ()
-        if unrestricted
-        else (*provider_domains, *(d for r in routes for d in r.allowed_domains))
-    )
+    unrestricted = policy.mode == "unrestricted"
+    domains = () if unrestricted else (*provider_domains, *policy.allowed_domains)
     return BoundaryNetwork(
         unrestricted=unrestricted,
         domains=tuple(dict.fromkeys(domains)),
         host_ports=tuple(dict.fromkeys(host_ports)),
-        local_network=policy.command.allow_local_network,
+        local_network=policy.allow_local_network,
         nameservers=tuple(nameservers),
     )

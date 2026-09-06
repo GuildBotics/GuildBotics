@@ -890,14 +890,17 @@ export type CliAgentDefinition = {
 
 export type NetworkMode = "deny" | "allowlist" | "unrestricted";
 
+// One rule for the commands a tool runs and its own web tools alike.
 export type NetworkPolicy = {
-  command: { mode: NetworkMode; allowed_domains: string[]; allow_local_network: boolean };
-  web: { mode: NetworkMode; allowed_domains: string[] };
+  mode: NetworkMode;
+  allowed_domains: string[];
+  allow_local_network: boolean;
 };
 
 export const CLOSED_NETWORK_POLICY: NetworkPolicy = {
-  command: { mode: "deny", allowed_domains: [], allow_local_network: false },
-  web: { mode: "deny", allowed_domains: [] },
+  mode: "deny",
+  allowed_domains: [],
+  allow_local_network: false,
 };
 
 export type GrantAccess = "read" | "read_write";
@@ -928,9 +931,8 @@ export type LocalGrants = {
 
 // What one tool can enforce natively, on this device and on any supported OS.
 export type CliAgentNetworkSupport = {
-  command_modes: NetworkMode[];
-  command_modes_anywhere: NetworkMode[];
-  web_modes: NetworkMode[];
+  modes: NetworkMode[];
+  modes_anywhere: NetworkMode[];
   local_network_modes: NetworkMode[];
   grant_accesses: GrantAccess[];
   contract_applied: boolean;

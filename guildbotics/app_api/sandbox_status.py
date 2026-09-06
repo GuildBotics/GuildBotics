@@ -59,9 +59,8 @@ def network_support(
     """The catalog's enforcement claims, for the editor's controls."""
     return {
         agent.name: CliAgentNetworkSupportInfo(
-            command_modes=sorted(agent.network.command_modes_on(platform)),
-            command_modes_anywhere=sorted(agent.network.command_modes_on(None)),
-            web_modes=sorted(agent.network.web_modes),
+            modes=sorted(agent.network.modes_on(platform)),
+            modes_anywhere=sorted(agent.network.modes_on(None)),
             local_network_modes=sorted(agent.network.local_network_modes),
             grant_accesses=sorted(agent.network.grant_accesses),
             contract_applied=agent.network.contract_applied,

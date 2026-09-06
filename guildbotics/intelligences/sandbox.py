@@ -3,9 +3,9 @@
 Every turn an AI CLI tool runs for GuildBotics is confined the same way,
 whatever the turn is for: the agent may read and write its working directory,
 read the trees the commands on this device's PATH live in, plus the
-directories the user granted under their home; the commands it runs and the
-provider's built-in web tools reach the network only as the selected tool
-definition allows. The contract is what GuildBotics asks for; each adapter
+directories the user granted under their home; it reaches the network only as
+the selected tool definition allows, whether through a command it runs or the
+provider's built-in web tools. The contract is what GuildBotics asks for; each adapter
 translates it into its provider's own sandbox settings, and refuses to start
 when the provider cannot enforce it on the current OS.
 """
@@ -55,17 +55,21 @@ class SandboxContractError(ValueError):
     """Raised when a sandbox setting is malformed or cannot be honoured."""
 
 
-class _NetworkRoute(BaseModel):
-    """One network path: what may connect, and to where.
+class NetworkPolicy(BaseModel):
+    """The ``network`` block of an AI CLI tool definition: what a turn may reach.
 
-    ``mode`` is a plain string, never a YAML boolean: ``off`` / ``on`` read as
-    booleans under YAML 1.1, which is why the closed value is spelled ``deny``.
+    One rule covers the provider's own web tools and every command it runs,
+    because the boundary that enforces it cannot tell the two apart. ``mode``
+    is a plain string, never a YAML boolean: ``off`` / ``on`` read as booleans
+    under YAML 1.1, which is why the closed value is spelled ``deny``.
+    ``allow_local_network`` opens the host and its private networks as well.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     mode: NetworkMode = "deny"
     allowed_domains: list[str] = Field(default_factory=list)
+    allow_local_network: bool = False
 
     @field_validator("allowed_domains")
     @classmethod
@@ -86,25 +90,6 @@ class _NetworkRoute(BaseModel):
             raise ValueError("allowed_domains is only used with mode 'allowlist'")
 
 
-class CommandNetworkRoute(_NetworkRoute):
-    """Shell commands and their child processes."""
-
-    allow_local_network: bool = False
-
-
-class WebNetworkRoute(_NetworkRoute):
-    """The provider's in-process web tools (search, fetch, URL reads)."""
-
-
-class NetworkPolicy(BaseModel):
-    """The ``network`` block of an AI CLI tool definition."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    command: CommandNetworkRoute = Field(default_factory=CommandNetworkRoute)
-    web: WebNetworkRoute = Field(default_factory=WebNetworkRoute)
-
-
 def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
     """Validate a definition's ``network`` block; absent means closed.
 
@@ -116,14 +101,9 @@ def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
         return NetworkPolicy()
     if not isinstance(raw, dict):
         raise SandboxContractError(f"{where}: 'network' must be a mapping")
-    if set(raw) != {"command", "web"}:
-        raise SandboxContractError(
-            f"{where}: 'network' must state both 'command' and 'web'"
-        )
     try:
         policy = NetworkPolicy.model_validate(raw)
-        policy.command.check()
-        policy.web.check()
+        policy.check()
     except (ValidationError, ValueError) as exc:
         raise SandboxContractError(f"{where}: invalid 'network': {exc}") from exc
     return policy

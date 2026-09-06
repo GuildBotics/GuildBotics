@@ -852,8 +852,8 @@ def test_a_slot_inherits_the_tools_network_block(monkeypatch, tmp_path) -> None:
     _write_definition(
         tmp_path,
         "cli_agents/codex/default.yml",
-        "network:\n  command:\n    mode: allowlist\n    allowed_domains: [registry.npmjs.org]\n"
-        "    allow_local_network: false\n  web:\n    mode: deny\n    allowed_domains: []\n",
+        "network:\n  mode: allowlist\n  allowed_domains: [registry.npmjs.org]\n"
+        "  allow_local_network: false\n",
     )
     _write_definition(tmp_path, "cli_agents/codex/writer.yml", "effort: {}\n")
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -866,9 +866,8 @@ def test_a_slot_inherits_the_tools_network_block(monkeypatch, tmp_path) -> None:
 
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 
-    assert resolved["writer"].network.command.mode == "allowlist"
-    assert resolved["writer"].network.command.allowed_domains == ["registry.npmjs.org"]
-    assert resolved["writer"].network.web.mode == "deny"
+    assert resolved["writer"].network.mode == "allowlist"
+    assert resolved["writer"].network.allowed_domains == ["registry.npmjs.org"]
     cli_agent.person_cli_agent_mapping.clear()
 
 

@@ -230,16 +230,10 @@ def test_resolve_default_cli_executable_missing_definition(
 # --- network enforcement catalog ---------------------------------------------
 
 
-def _network(
-    command: str = "deny", web: str = "deny", **command_extra
-) -> NetworkPolicy:
-    def route(mode: str) -> dict:
-        domains = ["example.com"] if mode == "allowlist" else []
-        return {"mode": mode, "allowed_domains": domains}
-
+def _network(mode: str = "deny", **extra) -> NetworkPolicy:
+    domains = ["example.com"] if mode == "allowlist" else []
     return parse_network_policy(
-        {"command": {**route(command), **command_extra}, "web": route(web)},
-        where="test",
+        {"mode": mode, "allowed_domains": domains, **extra}, where="test"
     )
 
 
@@ -254,7 +248,7 @@ def test_the_closed_default_is_enforceable_by_every_tool_except_where_declared()
         assert bool(reason) == (agent.name == "antigravity"), agent.name
 
 
-def test_grok_closes_command_network_on_linux_only() -> None:
+def test_grok_closes_the_network_on_linux_only() -> None:
     assert unsupported_network_reason("grok", _network(), "linux") == ""
     # Codex claims nothing on native Windows: every mode is refused there with
     # the one reason, while the shared definition itself stays valid.
@@ -273,12 +267,9 @@ def test_grok_closes_command_network_on_linux_only() -> None:
     )
 
 
-def test_copilot_has_no_domain_allowlist_on_either_route() -> None:
-    assert "allowlist" in unsupported_network_reason(
+def test_copilot_has_no_domain_allowlist() -> None:
+    assert "network mode 'allowlist'" in unsupported_network_reason(
         "copilot", _network("allowlist"), None
-    )
-    assert "web network mode 'allowlist'" in unsupported_network_reason(
-        "copilot", _network(web="allowlist"), None
     )
     assert unsupported_network_reason("copilot", _network("unrestricted"), None) == ""
 

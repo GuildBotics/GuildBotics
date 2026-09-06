@@ -208,7 +208,7 @@ class Boundary:
                 list(args),
                 stdin=Stdin.pipe(),
                 cwd=self.spec.cwd,
-                env=dict(self.spec.env) or None,
+                env={"HOME": self.spec.home, **self.spec.env},
             )
         except Exception as exc:
             raise BoundaryError(

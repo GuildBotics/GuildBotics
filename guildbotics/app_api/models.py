@@ -1090,9 +1090,8 @@ class CliAgentDefinition(BaseModel):
 class CliAgentNetworkSupportInfo(BaseModel):
     """What one tool can enforce, on this device and on any supported OS."""
 
-    command_modes: list[str] = Field(default_factory=list)
-    command_modes_anywhere: list[str] = Field(default_factory=list)
-    web_modes: list[str] = Field(default_factory=list)
+    modes: list[str] = Field(default_factory=list)
+    modes_anywhere: list[str] = Field(default_factory=list)
     local_network_modes: list[str] = Field(default_factory=list)
     grant_accesses: list[str] = Field(default_factory=list)
     contract_applied: bool = False

@@ -84,22 +84,18 @@ network proxyを反映するか未検証のため、Windowsでは実機確認が
   ```
 
 - **network**: 選択中のAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`ブロックで、
-  シェルコマンド・子プロセス（`command`）と、ツール組み込みのWeb検索・URL取得（`web`）を
-  別々に指定します。`mode`は`deny` / `allowlist` / `unrestricted`のいずれかで（`off`はYAMLでは
-  真偽値になるため使いません）、`allowlist`のときだけ`allowed_domains`を使います。
-  `allow_local_network`は`command`からlocalhostとLANへの接続を許可する設定です。同梱の
-  既定値は両経路とも`deny`です。slotが`network:`を省略すると同じツールの`default.yml`から
-  ブロック全体を継承し、記述する場合はブロック全体を書きます（部分的な上書きはエラー）
+  シェルコマンド・子プロセスからの接続も、ツール組み込みのWeb検索・URL取得も、まとめて1つの規則で
+  指定します（強制する境界が両者を区別できないため）。`mode`は`deny` / `allowlist` / `unrestricted`の
+  いずれかで（`off`はYAMLでは真偽値になるため使いません）、`allowlist`のときだけ`allowed_domains`を
+  使います。`allow_local_network`はlocalhostとLANへの接続も許可する設定です。同梱の既定値は`deny`です。
+  slotが`network:`を省略すると同じツールの`default.yml`からブロック全体を継承し、記述する場合は
+  ブロック全体を書きます
 
   ```yaml
   network:
-    command:
-      mode: allowlist
-      allowed_domains: [registry.npmjs.org]
-      allow_local_network: false
-    web:
-      mode: deny
-      allowed_domains: []
+    mode: allowlist
+    allowed_domains: [registry.npmjs.org]
+    allow_local_network: false
   ```
 
 これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。各AI CLIツール定義の「ネットワーク」欄は
@@ -123,10 +119,10 @@ Codexは、起動時の設定オーバーライドで`guildbotics`という名�
 ディレクトリ（起動したlinkとその実体を置く場所。`~/.codex`直下は含みません）のread、Codexがskillを走査する
 場所（`~/.agents/skills`、`~/.codex/skills`、`~/.codex/_skills`のうち存在するもの。skillの本文はagentが
 sandbox内で読むため）のread、filesystem grantを`read` / `write`として追加します。`:workspace`は継承しません。システム全体のreadになり、`~/.ssh`や
-`~/.codex/auth.json`が読めてしまうためです。`command`の`deny`はprofileの`network.enabled=false`、`allowlist`は
-`network.enabled=true` + `features.network_proxy=true` + domain規則、`unrestricted`は
-`network.enabled=true`に対応します。`web`の`deny`は`web_search="disabled"`、`allowlist`は
-`tools.web_search.allowed_domains`です。`thread/start`と`turn/start`にはsandboxを渡しません
+`~/.codex/auth.json`が読めてしまうためです。`deny`はprofileの`network.enabled=false`と
+`web_search="disabled"`、`allowlist`は`network.enabled=true` + `features.network_proxy=true` + domain規則
+（同じdomainを`tools.web_search.allowed_domains`にも渡します）、`unrestricted`は
+`network.enabled=true`に対応します。`thread/start`と`turn/start`にはsandboxを渡しません
 （渡すとprofileを上書きするため）。Codexには操作の確認を求めない`never`を常に指定し、Codexから
 予期しない確認要求が届いた場合は拒否します。
 

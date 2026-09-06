@@ -39,7 +39,8 @@ type Props = {
 };
 
 /**
- * The `network` block of an AI CLI tool definition.
+ * The `network` block of an AI CLI tool definition: one rule for the
+ * commands the tool runs and its own web tools alike.
  *
  * A slot either inherits its tool's block whole or states its own whole:
  * there is no per-field merge, so the editor works on a complete copy. Modes
@@ -60,8 +61,22 @@ export function NetworkPolicyField({
   const { t } = useTranslation();
   const policy = value ?? inherited ?? CLOSED_NETWORK_POLICY;
   const editable = isToolDefault || value !== null;
+  const modesHere = support?.modes ?? MODES;
+  const modesAnywhere = support?.modes_anywhere ?? MODES;
+  const localNetworkModes = support?.local_network_modes ?? [];
 
-  const update = (next: NetworkPolicy) => onChange(next);
+  const setPolicy = (patch: Partial<NetworkPolicy>) => onChange({ ...policy, ...patch });
+  const modeDescription = (mode: NetworkMode) => {
+    if (!modesAnywhere.includes(mode)) {
+      return t("setup.intelligence.network.unsupportedAnywhere", { tool: toolLabel });
+    }
+    if (!modesHere.includes(mode)) {
+      return t("setup.intelligence.network.unsupportedHere", { tool: toolLabel });
+    }
+    return "";
+  };
+  const selectedDescription = modeDescription(policy.mode);
+  const localAllowed = localNetworkModes.includes(policy.mode);
 
   return (
     <Fieldset
@@ -103,125 +118,55 @@ export function NetworkPolicyField({
             </>
           )}
         </Group>
-        <RouteFields
-          route="command"
-          policy={policy}
-          editable={editable}
-          toolLabel={toolLabel}
-          modesHere={support?.command_modes ?? MODES}
-          modesAnywhere={support?.command_modes_anywhere ?? MODES}
-          localNetworkModes={support?.local_network_modes ?? []}
-          onChange={update}
-        />
-        <RouteFields
-          route="web"
-          policy={policy}
-          editable={editable}
-          toolLabel={toolLabel}
-          modesHere={support?.web_modes ?? MODES}
-          modesAnywhere={support?.web_modes ?? MODES}
-          localNetworkModes={[]}
-          onChange={update}
-        />
-      </Stack>
-    </Fieldset>
-  );
-}
-
-function RouteFields({
-  route,
-  policy,
-  editable,
-  toolLabel,
-  modesHere,
-  modesAnywhere,
-  localNetworkModes,
-  onChange,
-}: {
-  route: "command" | "web";
-  policy: NetworkPolicy;
-  editable: boolean;
-  toolLabel: string;
-  modesHere: NetworkMode[];
-  modesAnywhere: NetworkMode[];
-  localNetworkModes: NetworkMode[];
-  onChange: (next: NetworkPolicy) => void;
-}) {
-  const { t } = useTranslation();
-  const current = policy[route];
-  const setRoute = (patch: Partial<NetworkPolicy["command"]>) =>
-    onChange({ ...policy, [route]: { ...current, ...patch } });
-  const modeDescription = (mode: NetworkMode) => {
-    if (!modesAnywhere.includes(mode)) {
-      return t("setup.intelligence.network.unsupportedAnywhere", { tool: toolLabel });
-    }
-    if (!modesHere.includes(mode)) {
-      return t("setup.intelligence.network.unsupportedHere", { tool: toolLabel });
-    }
-    return "";
-  };
-  const selectedDescription = modeDescription(current.mode);
-  const localAllowed = localNetworkModes.includes(current.mode);
-  return (
-    <Stack gap="xs">
-      <div>
-        <Text size="sm" fw={600}>
-          {t(`setup.intelligence.network.${route}`)}
-        </Text>
-        <Text size="xs" c="dimmed">
-          {t(`setup.intelligence.network.${route}Description`)}
-        </Text>
-      </div>
-      <Select
-        label={t("setup.intelligence.network.mode")}
-        size="xs"
-        data={MODES.map((mode) => ({
-          value: mode,
-          label: t(`setup.intelligence.network.modes.${mode}`),
-          disabled: !modesAnywhere.includes(mode),
-        }))}
-        value={current.mode}
-        disabled={!editable}
-        description={selectedDescription || undefined}
-        error={
-          selectedDescription && !modesHere.includes(current.mode) ? selectedDescription : undefined
-        }
-        onChange={(mode) => {
-          if (!mode) return;
-          const next = mode as NetworkMode;
-          setRoute({
-            mode: next,
-            allowed_domains: next === "allowlist" ? current.allowed_domains : [],
-            ...(route === "command" && !localNetworkModes.includes(next)
-              ? { allow_local_network: false }
-              : {}),
-          });
-        }}
-      />
-      {current.mode === "allowlist" ? (
-        <TagsInput
-          label={t("setup.intelligence.network.allowedDomains")}
-          placeholder={t("setup.intelligence.network.allowedDomainsPlaceholder")}
+        <Select
+          label={t("setup.intelligence.network.mode")}
           size="xs"
-          value={current.allowed_domains}
+          data={MODES.map((mode) => ({
+            value: mode,
+            label: t(`setup.intelligence.network.modes.${mode}`),
+            disabled: !modesAnywhere.includes(mode),
+          }))}
+          value={policy.mode}
           disabled={!editable}
-          onChange={(allowed_domains) => setRoute({ allowed_domains })}
+          description={selectedDescription || undefined}
+          error={
+            selectedDescription && !modesHere.includes(policy.mode)
+              ? selectedDescription
+              : undefined
+          }
+          onChange={(mode) => {
+            if (!mode) return;
+            const next = mode as NetworkMode;
+            setPolicy({
+              mode: next,
+              allowed_domains: next === "allowlist" ? policy.allowed_domains : [],
+              ...(localNetworkModes.includes(next) ? {} : { allow_local_network: false }),
+            });
+          }}
         />
-      ) : null}
-      {route === "command" ? (
+        {policy.mode === "allowlist" ? (
+          <TagsInput
+            label={t("setup.intelligence.network.allowedDomains")}
+            placeholder={t("setup.intelligence.network.allowedDomainsPlaceholder")}
+            size="xs"
+            value={policy.allowed_domains}
+            disabled={!editable}
+            onChange={(allowed_domains) => setPolicy({ allowed_domains })}
+          />
+        ) : null}
         <Switch
           label={t("setup.intelligence.network.allowLocalNetwork")}
           size="xs"
-          checked={policy.command.allow_local_network}
+          checked={policy.allow_local_network}
           disabled={!editable || !localAllowed}
           description={
             !localAllowed
               ? t("setup.intelligence.network.allowLocalNetworkUnsupported", { tool: toolLabel })
               : undefined
           }
-          onChange={(event) => setRoute({ allow_local_network: event.currentTarget.checked })}
+          onChange={(event) => setPolicy({ allow_local_network: event.currentTarget.checked })}
         />
-      ) : null}
-    </Stack>
+      </Stack>
+    </Fieldset>
   );
 }

@@ -99,24 +99,21 @@ as Linux).
   ```
 
 - **Network**: the `network:` block of the selected tool definition
-  (`cli_agents/<tool>/<slot>.yml`) states, separately, what shell commands and
-  their child processes (`command`) and the tool's built-in web search / URL
-  fetch (`web`) may reach. `mode` is one of `deny` / `allowlist` /
+  (`cli_agents/<tool>/<slot>.yml`) states what the turn may reach, whether
+  through a shell command and its child processes or through the tool's
+  built-in web search / URL fetch: one rule, because the boundary enforcing
+  it cannot tell the two apart. `mode` is one of `deny` / `allowlist` /
   `unrestricted` (`off` would read as a YAML boolean), `allowed_domains` is
   used only with `allowlist`, and `allow_local_network` opens localhost and the
-  LAN to commands. The shipped default closes both routes. A slot that omits
-  `network:` inherits the whole block from its tool's `default.yml`; a slot
-  that states it states all of it (a partial block is an error).
+  LAN as well. The shipped default is closed. A slot that omits `network:`
+  inherits the whole block from its tool's `default.yml`; a slot that states
+  it states all of it.
 
   ```yaml
   network:
-    command:
-      mode: allowlist
-      allowed_domains: [registry.npmjs.org]
-      allow_local_network: false
-    web:
-      mode: deny
-      allowed_domains: []
+    mode: allowlist
+    allowed_domains: [registry.npmjs.org]
+    allow_local_network: false
   ```
 
 All of this is edited in Desktop under **LLM / AI CLI tools → Advanced settings**.
@@ -149,11 +146,10 @@ itself), reads on the skill roots Codex scans (`~/.agents/skills`,
 `~/.codex/skills`, `~/.codex/_skills`, whichever exist, because the agent reads a
 skill's body from inside the sandbox), and each filesystem grant as `read` or
 `write`.
-`command` `deny` becomes `network.enabled=false`; `allowlist` becomes
-`network.enabled=true` with `features.network_proxy=true` and the domain rules;
-`unrestricted` becomes `network.enabled=true`. `web` `deny` becomes
-`web_search="disabled"` and `allowlist` becomes
-`tools.web_search.allowed_domains`. Neither `thread/start` nor `turn/start`
+`deny` becomes `network.enabled=false` and `web_search="disabled"`; `allowlist`
+becomes `network.enabled=true` with `features.network_proxy=true`, the domain
+rules, and the same domains in `tools.web_search.allowed_domains`;
+`unrestricted` becomes `network.enabled=true`. Neither `thread/start` nor `turn/start`
 carries a sandbox of its own, because either would override the profile. Codex
 always uses the non-interactive `never` approval policy, and any unexpected
 approval request is declined.

@@ -35,12 +35,10 @@ class CliAgentNetworkSupport(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    #: Command modes per ``sys.platform`` value; ``ANY_PLATFORM`` is the default.
-    command_modes: dict[str, frozenset[str]] = {ANY_PLATFORM: _ALL_MODES}
-    #: Modes the built-in web tools can be held to.
-    web_modes: frozenset[str] = _ALL_MODES
-    #: Command modes under which local network reachability is a separate
-    #: switch (``allow_local_network``); elsewhere it follows the mode itself.
+    #: Modes per ``sys.platform`` value; ``ANY_PLATFORM`` is the default.
+    modes: dict[str, frozenset[str]] = {ANY_PLATFORM: _ALL_MODES}
+    #: Modes under which local network reachability is a separate switch
+    #: (``allow_local_network``); elsewhere it follows the mode itself.
     local_network_modes: frozenset[str] = frozenset()
     #: Grant accesses the tool can hold commands and its file tools to.
     grant_accesses: frozenset[str] = frozenset({"read", "read_write"})
@@ -49,13 +47,11 @@ class CliAgentNetworkSupport(BaseModel):
     #: is neither validated nor reported for it.
     contract_applied: bool = False
 
-    def command_modes_on(self, platform: str | None) -> frozenset[str]:
+    def modes_on(self, platform: str | None) -> frozenset[str]:
         """Modes enforceable on one platform, or on any platform when None."""
         if platform is None:
-            return frozenset().union(*self.command_modes.values())
-        return self.command_modes.get(
-            platform, self.command_modes.get(ANY_PLATFORM, frozenset())
-        )
+            return frozenset().union(*self.modes.values())
+        return self.modes.get(platform, self.modes.get(ANY_PLATFORM, frozenset()))
 
 
 class CliAgentInfo(BaseModel):
@@ -79,14 +75,14 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=10,
         executable="codex",
         config_reference=f"{CLI_AGENT_ROOT}/codex/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Commands: permission profile + network proxy. Web search: its own
-        # domain filter. Local reachability is a proxy switch, so it only
-        # exists once the proxy (allowlist) is on. The native Windows sandbox
+        # Permission profile + network proxy, with the same rule handed to
+        # web search's domain filter. Local reachability is a proxy switch,
+        # so it only exists once the proxy (allowlist) is on. The native Windows sandbox
         # reads only fixed machine-wide roots (openai/codex#27171) and has not
         # been verified to honour the profile's read paths or the proxy, so
         # nothing is claimed there until it is.
         network=CliAgentNetworkSupport(
-            command_modes={"darwin": _ALL_MODES, "linux": _ALL_MODES},
+            modes={"darwin": _ALL_MODES, "linux": _ALL_MODES},
             local_network_modes=frozenset({"allowlist"}),
             contract_applied=True,
         ),
@@ -114,7 +110,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # it; macOS commands always reach the network. WebFetch takes a
         # domain rule, and WebSearch is switched off under a web allowlist.
         network=CliAgentNetworkSupport(
-            command_modes={
+            modes={
                 "linux": frozenset({"deny", "unrestricted"}),
                 ANY_PLATFORM: frozenset({"unrestricted"}),
             }
@@ -129,8 +125,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # The local sandbox switches outbound and local network on or off; its
         # URL rules decide prompts, not what the sandbox lets through.
         network=CliAgentNetworkSupport(
-            command_modes={ANY_PLATFORM: frozenset({"deny", "unrestricted"})},
-            web_modes=frozenset({"deny", "unrestricted"}),
+            modes={ANY_PLATFORM: frozenset({"deny", "unrestricted"})},
             local_network_modes=frozenset({"deny"}),
         ),
     ),
@@ -146,7 +141,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # Its terminal sandbox takes extra directories only as read/write
         # workspace roots, so a read-only grant has no spelling.
         network=CliAgentNetworkSupport(
-            command_modes={ANY_PLATFORM: frozenset({"unrestricted"})},
+            modes={ANY_PLATFORM: frozenset({"unrestricted"})},
             grant_accesses=frozenset({"read_write"}),
         ),
     ),
@@ -193,21 +188,15 @@ def unsupported_network_reason(
     info = cli_agent_info(tool)
     where = "on this OS" if platform else "on any OS"
     support = info.network
-    command = network.command
-    if platform and not support.command_modes_on(platform):
+    if platform and not support.modes_on(platform):
         return f"{info.label} has not been verified to enforce the sandbox on this OS."
-    if command.mode not in support.command_modes_on(platform):
-        return (
-            f"{info.label} cannot enforce command network mode "
-            f"'{command.mode}' {where}."
-        )
-    if command.allow_local_network and command.mode not in support.local_network_modes:
+    if network.mode not in support.modes_on(platform):
+        return f"{info.label} cannot enforce network mode '{network.mode}' {where}."
+    if network.allow_local_network and network.mode not in support.local_network_modes:
         return (
             f"{info.label} cannot open the local network separately under "
-            f"command network mode '{command.mode}'."
+            f"network mode '{network.mode}'."
         )
-    if network.web.mode not in support.web_modes:
-        return f"{info.label} cannot enforce web network mode '{network.web.mode}'."
     return ""
 
 

@@ -890,16 +890,11 @@ const resources = {
           network: {
             title: "Network",
             description:
-              "Where this tool's shell commands and built-in web tools may connect. Both routes start closed.",
+              "Where this tool may connect, through the commands it runs or its own web tools alike. It starts closed.",
             inherited: "Inherited from the tool default",
             customize: "Customize for this slot",
             useDefault: "Use the tool default",
             resetToPackaged: "Reset to the packaged defaults",
-            command: "Commands and child processes",
-            commandDescription: "The OS sandbox enforces network access for every shell command.",
-            web: "Built-in web tools",
-            webDescription:
-              "Applied as the provider's own tool settings (web search, URL fetch); not enforced by the OS sandbox.",
             mode: "Mode",
             modes: {
               deny: "Deny",
@@ -2499,17 +2494,11 @@ const resources = {
           network: {
             title: "ネットワーク",
             description:
-              "このツールのシェルコマンドと組み込み Web 機能がどこへ接続できるかを決めます。どちらの経路も既定では閉じています。",
+              "このツールが実行するコマンドと組み込み Web 機能の両方について、どこへ接続できるかを決めます。既定では閉じています。",
             inherited: "ツール既定を継承",
             customize: "このスロット用に変更する",
             useDefault: "ツール既定に戻す",
             resetToPackaged: "同梱の既定値に戻す",
-            command: "コマンドと子プロセス",
-            commandDescription:
-              "シェルコマンドごとに OS の sandbox がネットワークアクセスを強制します。",
-            web: "組み込み Web 機能",
-            webDescription:
-              "プロバイダ自身の機能設定（Web 検索、URL 取得）として適用され、OS の sandbox では強制されません。",
             mode: "モード",
             modes: {
               deny: "拒否",

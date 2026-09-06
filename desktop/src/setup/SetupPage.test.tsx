@@ -2382,7 +2382,7 @@ describe("MembersSection", () => {
                 problems: [
                   {
                     setting: "network",
-                    reason: "Grok Build cannot enforce command network mode 'deny' on this OS.",
+                    reason: "Grok Build cannot enforce network mode 'deny' on this OS.",
                   },
                 ],
               },
@@ -2397,7 +2397,7 @@ describe("MembersSection", () => {
     expect(screen.getAllByText(t("setup.members.blockedHere"))).toHaveLength(1);
     await userEvent.hover(badge);
     expect(
-      await screen.findByText("Grok Build cannot enforce command network mode 'deny' on this OS."),
+      await screen.findByText("Grok Build cannot enforce network mode 'deny' on this OS."),
     ).toBeInTheDocument();
   });
 

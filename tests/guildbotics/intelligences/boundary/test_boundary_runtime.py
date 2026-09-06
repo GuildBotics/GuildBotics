@@ -141,9 +141,12 @@ def _spec(**overrides: Any) -> BoundarySpec:
     )
     fields: dict[str, Any] = {
         "cwd": "/work/repo",
+        "home": "/home/u",
         "mounts": (
             BoundaryMount("/work/repo", Path("/work/repo"), readonly=False),
-            BoundaryMount("/root/Documents", Path("/home/u/Documents"), readonly=True),
+            BoundaryMount(
+                "/home/u/Documents", Path("/home/u/Documents"), readonly=True
+            ),
             BoundaryMount("/work/repo/private", None, readonly=True),
         ),
         "network": network,
@@ -199,13 +202,13 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     assert created["ephemeral"] is True
     assert created["workdir"] == "/work/repo"
     volumes = created["volumes"]
-    assert list(volumes) == ["/work/repo", "/root/Documents", "/work/repo/private"]
+    assert list(volumes) == ["/work/repo", "/home/u/Documents", "/work/repo/private"]
     assert (volumes["/work/repo"].kind, volumes["/work/repo"].bind) == (
         MountKind.BIND,
         "/work/repo",
     )
     assert volumes["/work/repo"].readonly is False
-    assert volumes["/root/Documents"].readonly is True
+    assert volumes["/home/u/Documents"].readonly is True
     cover = volumes["/work/repo/private"]
     assert (cover.kind, cover.readonly) == (MountKind.TMPFS, True)
     assert boundary.spec is not None
@@ -289,7 +292,9 @@ async def test_run_starts_the_command_in_the_cwd_with_the_spec_environment(
     (call,) = sandbox.instance.execs  # type: ignore[union-attr]
     assert (call["cmd"], call["args"]) == ("codex", ["app-server", "-c", "x=1"])
     assert call["cwd"] == "/work/repo"
-    assert call["env"] == {"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+    # The guest's home is the host's, so the provider keeps its state where
+    # the snapshot put it.
+    assert call["env"] == {"HOME": "/home/u", "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
     assert call["stdin"] == microsandbox.Stdin.pipe()
 
     with pytest.raises(BoundaryError, match="agent unreachable"):

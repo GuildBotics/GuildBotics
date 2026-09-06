@@ -16,9 +16,8 @@ import { NetworkPolicyField } from "./NetworkPolicyField";
 const t = i18n.getFixedT("en");
 
 const CODEX: CliAgentNetworkSupport = {
-  command_modes: ["allowlist", "deny", "unrestricted"],
-  command_modes_anywhere: ["allowlist", "deny", "unrestricted"],
-  web_modes: ["allowlist", "deny", "unrestricted"],
+  modes: ["allowlist", "deny", "unrestricted"],
+  modes_anywhere: ["allowlist", "deny", "unrestricted"],
   local_network_modes: ["allowlist"],
   grant_accesses: ["read", "read_write"],
   contract_applied: true,
@@ -26,8 +25,8 @@ const CODEX: CliAgentNetworkSupport = {
 
 const GROK_ON_MAC: CliAgentNetworkSupport = {
   ...CODEX,
-  command_modes: ["unrestricted"],
-  command_modes_anywhere: ["deny", "unrestricted"],
+  modes: ["unrestricted"],
+  modes_anywhere: ["deny", "unrestricted"],
   local_network_modes: [],
   contract_applied: false,
 };
@@ -69,10 +68,8 @@ describe("NetworkPolicyField", () => {
     render(<Harness onChange={onChange} />);
 
     expect(screen.getByText(t("setup.intelligence.network.inherited"))).toBeInTheDocument();
-    const [commandMode] = screen.getAllByRole("combobox", {
-      name: t("setup.intelligence.network.mode"),
-    });
-    expect(commandMode).toBeDisabled();
+    const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
+    expect(mode).toBeDisabled();
 
     await user.click(
       screen.getByRole("button", { name: t("setup.intelligence.network.customize") }),
@@ -90,10 +87,8 @@ describe("NetworkPolicyField", () => {
     const onChange = vi.fn();
     render(<Harness initial={structuredClone(CLOSED_NETWORK_POLICY)} onChange={onChange} />);
 
-    const [commandMode] = screen.getAllByRole("combobox", {
-      name: t("setup.intelligence.network.mode"),
-    });
-    await user.click(commandMode);
+    const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
+    await user.click(mode);
     await user.click(
       await screen.findByRole("option", { name: t("setup.intelligence.network.modes.allowlist") }),
     );
@@ -102,34 +97,31 @@ describe("NetworkPolicyField", () => {
       name: t("setup.intelligence.network.allowedDomains"),
     });
     await user.type(domains, "registry.npmjs.org{enter}");
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        command: {
-          mode: "allowlist",
-          allowed_domains: ["registry.npmjs.org"],
-          allow_local_network: false,
-        },
-      }),
-    );
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: "allowlist",
+      allowed_domains: ["registry.npmjs.org"],
+      allow_local_network: false,
+    });
 
-    await user.click(commandMode);
+    await user.click(mode);
     await user.click(
       await screen.findByRole("option", { name: t("setup.intelligence.network.modes.deny") }),
     );
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        command: { mode: "deny", allowed_domains: [], allow_local_network: false },
-      }),
-    );
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: "deny",
+      allowed_domains: [],
+      allow_local_network: false,
+    });
   });
 
   it("explains a mode this device cannot enforce and warns when the tool ignores the block", () => {
     render(<Harness initial={structuredClone(CLOSED_NETWORK_POLICY)} support={GROK_ON_MAC} />);
 
+    // Shown as the select's description and, since it is the selected mode,
+    // as its error too.
     expect(
-      screen.getAllByText(t("setup.intelligence.network.unsupportedHere", { tool: "Codex" }))
-        .length,
-    ).toBeGreaterThan(0);
+      screen.getAllByText(t("setup.intelligence.network.unsupportedHere", { tool: "Codex" })),
+    ).toHaveLength(2);
     expect(
       screen.getByText(t("setup.intelligence.network.contractPending", { tool: "Codex" })),
     ).toBeInTheDocument();
@@ -143,24 +135,20 @@ describe("NetworkPolicyField", () => {
     render(<Harness isToolDefault onChange={onChange} />);
 
     expect(screen.queryByText(t("setup.intelligence.network.inherited"))).not.toBeInTheDocument();
-    const [commandMode] = screen.getAllByRole("combobox", {
-      name: t("setup.intelligence.network.mode"),
-    });
-    expect(commandMode).toBeEnabled();
+    const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
+    expect(mode).toBeEnabled();
     const reset = screen.getByRole("button", {
       name: t("setup.intelligence.network.resetToPackaged"),
     });
     expect(reset).toBeDisabled();
 
-    await user.click(commandMode);
+    await user.click(mode);
     await user.click(
       await screen.findByRole("option", {
         name: t("setup.intelligence.network.modes.unrestricted"),
       }),
     );
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ command: expect.objectContaining({ mode: "unrestricted" }) }),
-    );
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "unrestricted" }));
 
     await user.click(reset);
     expect(onChange).toHaveBeenLastCalledWith(CLOSED_NETWORK_POLICY);

@@ -28,29 +28,21 @@ from guildbotics.intelligences.sandbox import (
     path_read_trees,
 )
 
-_CLOSED = {
-    "command": {"mode": "deny", "allowed_domains": [], "allow_local_network": False},
-    "web": {"mode": "deny", "allowed_domains": []},
-}
+_CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
 
-def test_an_absent_network_block_is_closed_on_both_routes() -> None:
+def test_an_absent_network_block_is_closed() -> None:
     policy = parse_network_policy(None, where="x")
 
     assert policy == NetworkPolicy()
-    assert policy.command.mode == "deny"
-    assert policy.web.mode == "deny"
-    assert policy.command.allow_local_network is False
+    assert policy.model_dump(mode="json") == _CLOSED
 
 
 def test_a_full_network_block_round_trips() -> None:
     raw = {
-        "command": {
-            "mode": "allowlist",
-            "allowed_domains": ["registry.npmjs.org"],
-            "allow_local_network": True,
-        },
-        "web": {"mode": "unrestricted", "allowed_domains": []},
+        "mode": "allowlist",
+        "allowed_domains": ["registry.npmjs.org"],
+        "allow_local_network": True,
     }
 
     policy = parse_network_policy(raw, where="x")
@@ -61,35 +53,21 @@ def test_a_full_network_block_round_trips() -> None:
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ({"command": _CLOSED["command"]}, "must state both 'command' and 'web'"),
         ("deny", "must be a mapping"),
+        ({**_CLOSED, "mode": "allowlist"}, "needs at least one allowed domain"),
         (
-            {**_CLOSED, "command": {**_CLOSED["command"], "mode": "allowlist"}},
-            "needs at least one allowed domain",
-        ),
-        (
-            {
-                **_CLOSED,
-                "web": {"mode": "deny", "allowed_domains": ["docs.npmjs.com"]},
-            },
+            {**_CLOSED, "allowed_domains": ["docs.npmjs.com"]},
             "only used with mode 'allowlist'",
         ),
+        ({**_CLOSED, "x": 1}, "Extra inputs"),
         (
-            {**_CLOSED, "web": {"mode": "unrestricted", "allowed_domains": [], "x": 1}},
-            "Extra inputs",
-        ),
-        (
-            {
-                **_CLOSED,
-                "web": {"mode": "allowlist", "allowed_domains": ["https://a.example"]},
-            },
+            {**_CLOSED, "mode": "allowlist", "allowed_domains": ["https://a.example"]},
             "is not a domain name",
         ),
+        ({"command": _CLOSED, "web": _CLOSED}, "Extra inputs"),
     ],
 )
-def test_partial_or_inconsistent_network_blocks_are_rejected(
-    raw: object, message: str
-) -> None:
+def test_inconsistent_network_blocks_are_rejected(raw: object, message: str) -> None:
     with pytest.raises(SandboxContractError, match=message) as excinfo:
         parse_network_policy(raw, where="AI CLI tool 'x'")
 
@@ -98,11 +76,8 @@ def test_partial_or_inconsistent_network_blocks_are_rejected(
 
 def test_a_yaml_boolean_mode_is_rejected_rather_than_read_as_a_mode() -> None:
     """`mode: off` is `False` under YAML 1.1; it must not pass as anything."""
-    raw = yaml.safe_load(
-        "command:\n  mode: off\n  allowed_domains: []\n  allow_local_network: false\n"
-        "web:\n  mode: off\n  allowed_domains: []\n"
-    )
-    assert raw["command"]["mode"] is False
+    raw = yaml.safe_load("mode: off\nallowed_domains: []\nallow_local_network: false\n")
+    assert raw["mode"] is False
 
     with pytest.raises(SandboxContractError):
         parse_network_policy(raw, where="x")

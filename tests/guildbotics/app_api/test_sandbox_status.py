@@ -21,15 +21,10 @@ from guildbotics.intelligences.sandbox import (
 )
 
 
-def _network(command: str = "deny", web: str = "deny", **extra):
-    def route(mode: str) -> dict:
-        return {
-            "mode": mode,
-            "allowed_domains": ["example.com"] if mode == "allowlist" else [],
-        }
-
+def _network(mode: str = "deny", **extra):
+    domains = ["example.com"] if mode == "allowlist" else []
     return parse_network_policy(
-        {"command": {**route(command), **extra}, "web": route(web)}, where="test"
+        {"mode": mode, "allowed_domains": domains, **extra}, where="test"
     )
 
 
@@ -54,10 +49,10 @@ def home(monkeypatch, tmp_path: Path) -> Path:
 def test_network_support_reports_this_device_and_any_os() -> None:
     support = network_support("darwin")
 
-    assert support["codex"].command_modes == ["allowlist", "deny", "unrestricted"]
+    assert support["codex"].modes == ["allowlist", "deny", "unrestricted"]
     assert support["codex"].contract_applied is True
-    assert support["grok"].command_modes == ["unrestricted"]
-    assert support["grok"].command_modes_anywhere == ["deny", "unrestricted"]
+    assert support["grok"].modes == ["unrestricted"]
+    assert support["grok"].modes_anywhere == ["deny", "unrestricted"]
     assert support["antigravity"].grant_accesses == ["read_write"]
     assert support["claude"].contract_applied is False
 
@@ -117,7 +112,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     assert [(p.setting, p.reason) for p in aiko.problems] == [
         (
             "network",
-            "Codex cannot open the local network separately under command network mode 'deny'.",
+            "Codex cannot open the local network separately under network mode 'deny'.",
         )
     ]
     kenji = status.members[1].slots[0]

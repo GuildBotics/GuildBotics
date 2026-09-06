@@ -8,14 +8,12 @@ import pytest
 
 from guildbotics.intelligences.boundary.spec import (
     DEFAULT_NAMESERVERS,
-    GUEST_HOME,
     BoundaryMount,
     BoundarySpecError,
     build_boundary_spec,
     guest_path,
 )
 from guildbotics.intelligences.sandbox import (
-    CommandNetworkRoute,
     DeniedPath,
     DerivedTree,
     DocumentGrant,
@@ -26,7 +24,6 @@ from guildbotics.intelligences.sandbox import (
     ResolvedGrant,
     SandboxContract,
     SharedGrants,
-    WebNetworkRoute,
     resolve_access,
 )
 
@@ -52,13 +49,14 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
     spec = build_boundary_spec(_contract(), cwd, home=tmp_path)
 
     assert spec.cwd == cwd.as_posix()
+    assert spec.home == tmp_path.resolve().as_posix()
     assert spec.mounts == (BoundaryMount(cwd.as_posix(), cwd, readonly=False),)
     assert spec.env == {}
 
 
-def test_documents_mount_below_the_guest_home_and_local_paths_at_their_own(
-    tmp_path: Path,
-) -> None:
+def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
+    """Inside and outside agree on what a path means: the guest's home is
+    the host's, so a document grant sits where the user's own `~` has it."""
     home = tmp_path / "home"
     cwd = home / "repo"
     cache = tmp_path / "cache"
@@ -78,11 +76,14 @@ def test_documents_mount_below_the_guest_home_and_local_paths_at_their_own(
 
     spec = build_boundary_spec(_contract(access), cwd, home=home)
 
+    assert spec.home == home.as_posix()
     assert set(spec.mounts) == {
         BoundaryMount(cwd.as_posix(), cwd, readonly=False),
-        BoundaryMount(f"{GUEST_HOME}/out", home / "out", readonly=False),
+        BoundaryMount((home / "out").as_posix(), home / "out", readonly=False),
         BoundaryMount(
-            f"{GUEST_HOME}/Documents/notes", home / "Documents" / "notes", readonly=True
+            (home / "Documents" / "notes").as_posix(),
+            home / "Documents" / "notes",
+            readonly=True,
         ),
         BoundaryMount(cache.as_posix(), cache, readonly=True),
     }
@@ -110,10 +111,10 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     ]
 
 
-def test_a_deny_inside_an_opened_tree_is_covered_wherever_that_tree_appears(
+def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
     tmp_path: Path,
 ) -> None:
-    """The same host directory can be reachable at two guest paths."""
+    """Nested grants share one guest path per host path, so one cover."""
     home = tmp_path / "home"
     cwd = home / "Documents" / "repo"
     secret = cwd / "private"
@@ -127,11 +128,8 @@ def test_a_deny_inside_an_opened_tree_is_covered_wherever_that_tree_appears(
 
     spec = build_boundary_spec(_contract(access), cwd, home=home)
 
-    covers = {m for m in spec.mounts if m.host is None}
-    assert covers == {
-        BoundaryMount(f"{cwd.as_posix()}/private", None, readonly=True),
-        BoundaryMount(f"{GUEST_HOME}/Documents/repo/private", None, readonly=True),
-    }
+    covers = [m for m in spec.mounts if m.host is None]
+    assert covers == [BoundaryMount(f"{cwd.as_posix()}/private", None, readonly=True)]
     guests = [m.guest for m in spec.mounts]
     assert guests.index(f"{cwd.as_posix()}/private") > guests.index(cwd.as_posix())
 
@@ -243,19 +241,12 @@ def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
     assert network.nameservers == DEFAULT_NAMESERVERS
 
 
-def test_both_routes_allowlists_combine_because_the_gateway_sees_one_flow(
-    tmp_path: Path,
-) -> None:
+def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> None:
     spec = build_boundary_spec(
         _contract(
-            command=CommandNetworkRoute(
-                mode="allowlist",
-                allowed_domains=["pypi.org", "files.pythonhosted.org"],
-                allow_local_network=True,
-            ),
-            web=WebNetworkRoute(
-                mode="allowlist", allowed_domains=["pypi.org", "docs.python.org"]
-            ),
+            mode="allowlist",
+            allowed_domains=["pypi.org", "files.pythonhosted.org", "api.openai.com"],
+            allow_local_network=True,
         ),
         tmp_path,
         provider_domains=["api.openai.com"],
@@ -264,28 +255,14 @@ def test_both_routes_allowlists_combine_because_the_gateway_sees_one_flow(
     )
 
     network = spec.network
-    assert network.domains == (
-        "api.openai.com",
-        "pypi.org",
-        "files.pythonhosted.org",
-        "docs.python.org",
-    )
+    assert network.domains == ("api.openai.com", "pypi.org", "files.pythonhosted.org")
     assert network.local_network
     assert network.nameservers == ("10.0.0.53",)
 
 
-@pytest.mark.parametrize(
-    "network",
-    [
-        {"command": CommandNetworkRoute(mode="unrestricted")},
-        {"web": WebNetworkRoute(mode="unrestricted")},
-    ],
-)
-def test_an_unrestricted_route_on_either_side_opens_all_egress(
-    tmp_path: Path, network: dict[str, object]
-) -> None:
+def test_unrestricted_opens_all_egress(tmp_path: Path) -> None:
     spec = build_boundary_spec(
-        _contract(**network),
+        _contract(mode="unrestricted"),
         tmp_path,
         provider_domains=["api.openai.com"],
         home=tmp_path,
