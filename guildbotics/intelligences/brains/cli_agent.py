@@ -14,6 +14,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    AccessContractError,
+    NetworkPolicy,
+    load_local_grants,
+    load_shared_grants,
+    parse_network_policy,
+    resolve_access,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
@@ -35,15 +44,6 @@ from guildbotics.intelligences.effort import (
     effort_settings,
     resolve_effort,
     validate_effort_overlay,
-)
-from guildbotics.intelligences.sandbox import (
-    NetworkPolicy,
-    SandboxContract,
-    SandboxContractError,
-    load_local_grants,
-    load_shared_grants,
-    parse_network_policy,
-    resolve_access,
 )
 from guildbotics.observability import correlation_fields, span_scope
 from guildbotics.observability.diagnostics_events import (
@@ -760,7 +760,7 @@ class CliAgentBrain(Brain):
             lease = owned_lease
         try:
             try:
-                sandbox = SandboxContract(
+                contract = AccessContract(
                     network=self.executable_info.network,
                     access=resolve_access(
                         load_shared_grants(),
@@ -768,7 +768,7 @@ class CliAgentBrain(Brain):
                         get_cli_agent_search_path(),
                     ),
                 )
-            except SandboxContractError as exc:
+            except AccessContractError as exc:
                 return CliAgentExecutionResult(
                     stdout="",
                     stderr=str(exc),
@@ -807,7 +807,7 @@ class CliAgentBrain(Brain):
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
                 read_only=read_only,
-                sandbox=sandbox,
+                contract=contract,
             )
             return await self._execute_native_turn(
                 input=input,

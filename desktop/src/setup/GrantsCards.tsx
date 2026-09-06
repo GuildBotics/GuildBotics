@@ -23,7 +23,7 @@ import {
   type GrantAccess,
   type GrantScope,
   type LocalGrants,
-  type SandboxAccessStatus,
+  type EnvironmentAccessStatus,
   type SharedGrants,
 } from "../api/client";
 
@@ -50,7 +50,7 @@ export function GrantsCards({
   shared: SharedGrants;
   local: LocalGrants;
   /** How the saved grants resolve on this device, once the preview has them. */
-  status?: SandboxAccessStatus;
+  status?: EnvironmentAccessStatus;
   onSharedChange: (shared: SharedGrants) => void;
   onLocalChange: (local: LocalGrants) => void;
 }) {
@@ -83,7 +83,7 @@ function DocumentsCard({
   onChange,
 }: {
   documents: DocumentGrant[];
-  status?: SandboxAccessStatus;
+  status?: EnvironmentAccessStatus;
   onChange: (documents: DocumentGrant[]) => void;
 }) {
   const { t } = useTranslation();
@@ -149,7 +149,7 @@ function DeviceAccessCard({
   onChange,
 }: {
   local: LocalGrants;
-  status?: SandboxAccessStatus;
+  status?: EnvironmentAccessStatus;
   onChange: (local: LocalGrants) => void;
 }) {
   const { t } = useTranslation();

@@ -43,7 +43,7 @@
 - `guildbotics/commands/*` … コマンド種別（md/py/sh/yml + inline）の実行基盤
 - `guildbotics/editions/*` … Edition 抽象と Simple edition（setup_service は GUI からも再利用）
 - `guildbotics/integrations/*` … GitHub / Slack など外部サービス client（capability から使う）
-- `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`）、AI CLI turn の sandbox 契約（`sandbox.py`）と、それを強制する境界（`boundary/`。`spec.py` が契約 → microVM の mount / network / cwd / env への provider 非依存の変換、`runtime.py` が microsandbox SDK を扱う唯一の module。`tests/guildbotics/test_layer_boundaries.py` で担保）
+- `guildbotics/intelligences/*` … brains（`agno_agent` / `cli_agent`）、LLM 判定関数（`functions.py`）、LLM provider / AI CLIツールカタログ（`llm_providers.py` / `cli_agents.py`）、AI CLI turn のエージェント隔離環境（`agent_environment/`。`contract.py` が「何を許すか」のアクセス契約 = データ、`spec.py` が契約 → microVM の mount / network / cwd / env への provider 非依存の変換、`runtime.py` が契約を強制する実体で microsandbox SDK を扱う唯一の module。`tests/guildbotics/test_layer_boundaries.py` で担保。「sandbox」という語は provider 自身のネイティブ sandbox だけを指す）
 - `guildbotics/observability/*` … diagnostics record の記録・永続化（`diagnostics_store.py`）、trace 相関、interactive session
 - `guildbotics/runtime/*` … `Context`、member 解決、brain / integration / loader の factory
 - `guildbotics/workspace/*` … Workspace storage。Workspace ID / device ID（`identity.py`）、共有ファイルの種別別 validation（`validation.py`）、Config の blob ID compare-and-set（`config_repository.py`）。共有書き込みを直列化する lock は `utils/shared_write_lock.py`（`observability` からも取れる必要があるため `utils` にある）

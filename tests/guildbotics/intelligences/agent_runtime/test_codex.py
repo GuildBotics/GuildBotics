@@ -31,14 +31,14 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
     DeniedPath,
     DerivedTree,
     ExcludedTree,
     NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
-    SandboxContract,
+    AccessContract,
     parse_network_policy,
 )
 from guildbotics.runtime.person_lease import (
@@ -1097,7 +1097,7 @@ async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_the
     assert "temperature" in caplog.text
 
 
-# --- sandbox contract translation --------------------------------------------
+# --- access contract translation --------------------------------------------
 
 
 def _network(mode: str, *domains: str, local: bool = False) -> NetworkPolicy:
@@ -1119,7 +1119,7 @@ def test_the_closed_contract_becomes_a_minimal_profile_with_no_network(
 ) -> None:
     binary = _codex_binary(tmp_path)
 
-    overrides = _codex_sandbox_overrides(SandboxContract(), binary)
+    overrides = _codex_sandbox_overrides(AccessContract(), binary)
 
     assert overrides == {
         "default_permissions": "guildbotics",
@@ -1139,7 +1139,7 @@ def test_the_closed_contract_becomes_a_minimal_profile_with_no_network(
 
 
 def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -> None:
-    contract = SandboxContract(
+    contract = AccessContract(
         network=_network("allowlist", "registry.npmjs.org", local=True),
         access=ResolvedAccess(
             documents=(ResolvedGrant(tmp_path / "shared", "read", grant="shared"),),
@@ -1198,7 +1198,7 @@ def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -
 def test_an_unrestricted_policy_opens_the_network_without_a_proxy(
     tmp_path: Path,
 ) -> None:
-    contract = SandboxContract(network=_network("unrestricted"))
+    contract = AccessContract(network=_network("unrestricted"))
 
     overrides = _codex_sandbox_overrides(contract, _codex_binary(tmp_path))
 
@@ -1279,8 +1279,8 @@ async def test_a_contract_codex_cannot_enforce_never_starts_the_process(
         return _Process()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    contract = SandboxContract(network=_network("deny", local=True))
-    context = _context(tmp_path, sandbox=contract)
+    contract = AccessContract(network=_network("deny", local=True))
+    context = _context(tmp_path, contract=contract)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
         await CodexAppServerAdapter().run_turn(
@@ -1312,7 +1312,7 @@ async def test_a_turn_under_a_different_contract_gets_its_own_process(
     closed = _context(tmp_path)
     opened = _context(
         tmp_path,
-        sandbox=SandboxContract(network=_network("unrestricted")),
+        contract=AccessContract(network=_network("unrestricted")),
     )
     record = ConversationRecord(key=closed.conversation_key)
 
@@ -1343,7 +1343,7 @@ def test_the_skill_roots_codex_scans_are_readable_when_they_exist(
         (home / ".codex/_skills").resolve(),
     )
     overrides = _codex_sandbox_overrides(
-        SandboxContract(), _codex_binary(tmp_path), roots
+        AccessContract(), _codex_binary(tmp_path), roots
     )
     filesystem = overrides["permissions.guildbotics.filesystem"]
     assert filesystem[str((home / ".agents/skills").resolve())] == "read"

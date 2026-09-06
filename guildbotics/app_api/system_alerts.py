@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from guildbotics.app_api.agent_environment_status import EnvironmentProblemEntry
 from guildbotics.app_api.models import (
     RuntimeStatus,
     SystemAlert,
@@ -16,7 +17,6 @@ from guildbotics.app_api.models import (
     SystemAlertSeverity,
     SystemAlertsResponse,
 )
-from guildbotics.app_api.sandbox_status import SandboxProblemEntry
 from guildbotics.observability.diagnostics_store import (
     DiagnosticsCursor,
     DiagnosticsStore,
@@ -76,11 +76,11 @@ class SystemAlertService:
     def list_alerts(
         self,
         runtime: RuntimeStatus,
-        sandbox_problems: list[SandboxProblemEntry] | None = None,
+        agent_environment_problems: list[EnvironmentProblemEntry] | None = None,
     ) -> SystemAlertsResponse:
         """Fold recorded diagnostics and current state into open alerts.
 
-        ``sandbox_problems`` are ``(person_id, slot, setting, reason)`` for
+        ``agent_environment_problems`` are ``(person_id, slot, setting, reason)`` for
         every AI CLI slot this device cannot enforce as configured; each stays
         open, and its dismissal is forgotten, until the setting changes.
         """
@@ -96,7 +96,9 @@ class SystemAlertService:
                 changed = cursor != self._cursor
                 self._cursor = cursor
             changed = (
-                self._reconcile_runtime_dismissals(runtime, sandbox_problems or [])
+                self._reconcile_runtime_dismissals(
+                    runtime, agent_environment_problems or []
+                )
                 or changed
             )
             if changed:
@@ -105,7 +107,9 @@ class SystemAlertService:
                 key: alert.model_copy(deep=True) for key, alert in self._alerts.items()
             }
             dismissed = set(self._dismissed)
-        self._apply_runtime(alerts, runtime, dismissed, sandbox_problems or [])
+        self._apply_runtime(
+            alerts, runtime, dismissed, agent_environment_problems or []
+        )
         ordered = sorted(
             alerts.values(),
             key=lambda alert: (alert.severity != "critical", alert.opened_at, alert.id),
@@ -403,14 +407,14 @@ class SystemAlertService:
         alerts: dict[str, SystemAlert],
         runtime: RuntimeStatus,
         dismissed: set[str],
-        sandbox_problems: list[SandboxProblemEntry],
+        agent_environment_problems: list[EnvironmentProblemEntry],
     ) -> None:
-        for person_id, slot, setting, reason in sandbox_problems:
+        for person_id, slot, setting, reason in agent_environment_problems:
             self._open_runtime(
                 alerts,
                 dismissed,
-                key=f"sandbox:{person_id}:{slot}",
-                code="sandbox_unenforceable",
+                key=f"agent-environment:{person_id}:{slot}",
+                code="agent_environment_unavailable",
                 severity="warning",
                 timestamp="",
                 person_id=person_id,
@@ -440,7 +444,9 @@ class SystemAlertService:
             )
 
     def _reconcile_runtime_dismissals(
-        self, runtime: RuntimeStatus, sandbox_problems: list[SandboxProblemEntry]
+        self,
+        runtime: RuntimeStatus,
+        agent_environment_problems: list[EnvironmentProblemEntry],
     ) -> bool:
         before = set(self._dismissed)
         if runtime.scheduler.state != "failed":
@@ -449,7 +455,7 @@ class SystemAlertService:
         # be enforced, and clears itself when the setting changes; the
         # user's way out is the setting, not the close button.
         for key in list(self._dismissed):
-            if key.startswith("sandbox:"):
+            if key.startswith("agent-environment:"):
                 self._dismissed.discard(key)
         auth_failed = set(runtime.events.events_auth_failed_persons)
         for key in list(self._dismissed):

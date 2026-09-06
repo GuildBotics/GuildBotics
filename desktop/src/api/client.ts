@@ -207,7 +207,7 @@ export type SystemAlert = {
     | "rate_limited"
     | "scheduler_failed"
     | "worker_stopped"
-    | "sandbox_unenforceable";
+    | "agent_environment_unavailable";
   severity: "critical" | "warning";
   opened_at: string;
   updated_at: string;
@@ -954,7 +954,7 @@ export type GrantEvaluation = {
 // A document or local path grant as it resolves on this device. `path` is for
 // display; `grant` is the entry as the grant file spells it, which is what the
 // editor's own list holds.
-export type SandboxGrantStatus = {
+export type EnvironmentGrantStatus = {
   path: string;
   grant: string;
   access: string;
@@ -963,60 +963,60 @@ export type SandboxGrantStatus = {
 
 // A tree read because commands on this device's PATH live in it. `grant` is
 // how the local grant file names the tree to close it.
-export type SandboxTreeStatus = {
+export type EnvironmentTreeStatus = {
   path: string;
   grant: string;
   sources: string[];
 };
 
 // A tree the PATH led to that stays closed, and why.
-export type SandboxExcludedStatus = {
+export type EnvironmentExcludedStatus = {
   path: string;
   source: string;
   reason: string;
 };
 
-export type SandboxDenyStatus = {
+export type EnvironmentDenyStatus = {
   path: string;
   builtin: boolean;
 };
 
-export type SandboxAccessStatus = {
-  documents: SandboxGrantStatus[];
-  paths: SandboxGrantStatus[];
-  trees: SandboxTreeStatus[];
-  excluded: SandboxExcludedStatus[];
-  denied: SandboxDenyStatus[];
+export type EnvironmentAccessStatus = {
+  documents: EnvironmentGrantStatus[];
+  paths: EnvironmentGrantStatus[];
+  trees: EnvironmentTreeStatus[];
+  excluded: EnvironmentExcludedStatus[];
+  denied: EnvironmentDenyStatus[];
   problem: string;
 };
 
 // Which setting a sandbox problem is about: the slot's network block, or the
 // directory grants.
-export type SandboxSetting = "network" | "grants";
+export type EnvironmentSetting = "network" | "grants";
 
-export type SandboxProblem = {
-  setting: SandboxSetting;
+export type EnvironmentProblem = {
+  setting: EnvironmentSetting;
   reason: string;
 };
 
-export type SandboxSlotStatus = {
+export type EnvironmentSlotStatus = {
   slot: string;
   tool: string;
   contract_applied: boolean;
   network: NetworkPolicy;
-  problems: SandboxProblem[];
+  problems: EnvironmentProblem[];
 };
 
-export type SandboxMemberStatus = {
+export type EnvironmentMemberStatus = {
   person_id: string;
-  slots: SandboxSlotStatus[];
+  slots: EnvironmentSlotStatus[];
 };
 
-export type SandboxStatusResponse = {
+export type AgentEnvironmentStatusResponse = {
   platform: string;
   working_directory: string;
-  access: SandboxAccessStatus;
-  members: SandboxMemberStatus[];
+  access: EnvironmentAccessStatus;
+  members: EnvironmentMemberStatus[];
 };
 
 export type BrainAssignment = {
@@ -1638,8 +1638,8 @@ export async function updateIntelligenceConfig(
   return request("/config/intelligences", { method: "PUT", body });
 }
 
-export async function getSandboxStatus(): Promise<SandboxStatusResponse> {
-  return request("/intelligences/sandbox");
+export async function getAgentEnvironmentStatus(): Promise<AgentEnvironmentStatusResponse> {
+  return request("/intelligences/agent-environment");
 }
 
 export async function evaluateGrant(query: {

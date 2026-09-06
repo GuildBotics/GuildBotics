@@ -22,7 +22,7 @@ import {
   getConfigStatus,
   getIntelligenceConfig,
   evaluateGrant,
-  getSandboxStatus,
+  getAgentEnvironmentStatus,
   getMemoryEvents,
   getMemberConfig,
   getRuntimeDebug,
@@ -385,9 +385,9 @@ describe("GET query parameter encoding", () => {
 
   it("fetches the sandbox status of this device", async () => {
     const { calls } = captureFetch(jsonResponse({ platform: "darwin", members: [] }));
-    await getSandboxStatus();
+    await getAgentEnvironmentStatus();
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/sandbox");
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/agent-environment");
   });
 
   it("encodes grant evaluations", async () => {

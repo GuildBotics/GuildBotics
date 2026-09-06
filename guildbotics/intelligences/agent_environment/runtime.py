@@ -1,13 +1,13 @@
 """One microVM per turn, driven through the microsandbox SDK.
 
-This is the only module that talks to the runtime. A :class:`Boundary` is
+This is the only module that talks to the runtime. A :class:`AgentEnvironment` is
 created from a snapshot for one turn -- boot from a snapshot takes a fraction
-of a second -- with the mounts and network policy a :class:`BoundarySpec`
+of a second -- with the mounts and network policy a :class:`AgentEnvironmentSpec`
 states, runs the provider CLI inside with its stdio bridged to the host, and
 is discarded when the turn ends. Cancelling a turn stops the microVM, so no
 process survives it.
 
-The SDK is imported when a boundary is needed rather than when this module
+The SDK is imported when an environment is needed rather than when this module
 is: a device without a wheel for its platform must still start GuildBotics
 and be told, through :func:`doctor`, why no agent can run there.
 """
@@ -20,7 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-from guildbotics.intelligences.boundary.spec import BoundarySpec
+from guildbotics.intelligences.agent_environment.spec import AgentEnvironmentSpec
 
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
 _NAME_PREFIX = "guildbotics-"
@@ -32,20 +32,20 @@ _KILLED = -1
 _STOP_TIMEOUT = 5.0
 
 
-class BoundaryError(RuntimeError):
-    """The boundary could not be created or the runtime refused a step."""
+class AgentEnvironmentError(RuntimeError):
+    """The environment could not be created or the runtime refused a step."""
 
 
 @dataclass(frozen=True, slots=True)
-class BoundaryHealth:
-    """Whether this device can create a boundary, and if not, why."""
+class AgentEnvironmentHealth:
+    """Whether this device can create an environment, and if not, why."""
 
     available: bool
     reason: str = ""
     runtime_version: str = ""
 
 
-def doctor() -> BoundaryHealth:
+def doctor() -> AgentEnvironmentHealth:
     """Check that the SDK and its runtime are present on this device.
 
     Absent either, no agent may start here (fail-closed), and the reason is
@@ -54,17 +54,17 @@ def doctor() -> BoundaryHealth:
     try:
         import microsandbox
     except ImportError:
-        return BoundaryHealth(
+        return AgentEnvironmentHealth(
             False, "The microsandbox SDK is not installed for this platform."
         )
     if not microsandbox.is_installed():
-        return BoundaryHealth(
+        return AgentEnvironmentHealth(
             False, "The microsandbox runtime (msb and libkrunfw) is not installed."
         )
-    return BoundaryHealth(True, runtime_version=microsandbox.version())
+    return AgentEnvironmentHealth(True, runtime_version=microsandbox.version())
 
 
-class BoundaryStdin:
+class EnvironmentStdin:
     """The guest process' stdin, with the surface of an asyncio stream writer."""
 
     def __init__(self, sink: Any) -> None:
@@ -83,7 +83,7 @@ class BoundaryStdin:
         try:
             await self._sink.write(data)
         except Exception as exc:
-            raise ConnectionError(f"boundary stdin closed: {exc}") from exc
+            raise ConnectionError(f"environment stdin closed: {exc}") from exc
 
     def close(self) -> None:
         if self._closed:
@@ -99,8 +99,8 @@ class BoundaryStdin:
             await self._sink.close()
 
 
-class BoundaryProcess:
-    """A process inside the boundary, with the surface of an asyncio subprocess.
+class EnvironmentProcess:
+    """A process inside the environment, with the surface of an asyncio subprocess.
 
     ``stdout`` and ``stderr`` are stream readers fed from the runtime's event
     stream, so the line-oriented transports the adapters already use read
@@ -110,7 +110,7 @@ class BoundaryProcess:
 
     def __init__(self, handle: Any, *, limit: int) -> None:
         self._handle = handle
-        self.stdin = BoundaryStdin(handle.take_stdin())
+        self.stdin = EnvironmentStdin(handle.take_stdin())
         self.stdout = asyncio.StreamReader(limit=limit)
         self.stderr = asyncio.StreamReader(limit=limit)
         self.pid: int | None = None
@@ -160,16 +160,18 @@ class BoundaryProcess:
             self.returncode = int(event.code or 1)
 
 
-class Boundary:
+class AgentEnvironment:
     """One turn's microVM."""
 
-    def __init__(self, sandbox: Any, spec: BoundarySpec) -> None:
+    def __init__(self, sandbox: Any, spec: AgentEnvironmentSpec) -> None:
         self._sandbox = sandbox
         self._closed = False
         self.spec = spec
 
     @classmethod
-    async def start(cls, spec: BoundarySpec, *, snapshot: str) -> Boundary:
+    async def start(
+        cls, spec: AgentEnvironmentSpec, *, snapshot: str
+    ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
         The sandbox is ephemeral: stopping it removes it, so nothing of a
@@ -188,11 +190,13 @@ class Boundary:
                 network=_network(spec),
             )
         except Exception as exc:
-            raise BoundaryError(f"Could not start the boundary: {exc}") from exc
+            raise AgentEnvironmentError(
+                f"Could not start the environment: {exc}"
+            ) from exc
         return cls(sandbox, spec)
 
-    async def run(self, command: str, *args: str, limit: int) -> BoundaryProcess:
-        """Start ``command`` inside the boundary with its stdio bridged.
+    async def run(self, command: str, *args: str, limit: int) -> EnvironmentProcess:
+        """Start ``command`` inside the environment with its stdio bridged.
 
         Args:
             command: The program, resolved on the guest's PATH.
@@ -211,10 +215,10 @@ class Boundary:
                 env={"HOME": self.spec.home, **self.spec.env},
             )
         except Exception as exc:
-            raise BoundaryError(
-                f"Could not start '{command}' in the boundary: {exc}"
+            raise AgentEnvironmentError(
+                f"Could not start '{command}' in the environment: {exc}"
             ) from exc
-        return BoundaryProcess(handle, limit=limit)
+        return EnvironmentProcess(handle, limit=limit)
 
     async def close(self) -> None:
         """Stop the microVM; every process inside it ends with it."""
@@ -228,7 +232,7 @@ class Boundary:
                 await self._sandbox.destroy(force=True)
 
 
-def _volumes(spec: BoundarySpec) -> dict[str, Any]:
+def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     from microsandbox import Volume
 
     return {
@@ -241,7 +245,7 @@ def _volumes(spec: BoundarySpec) -> dict[str, Any]:
     }
 
 
-def _network(spec: BoundarySpec) -> Any:
+def _network(spec: AgentEnvironmentSpec) -> Any:
     from microsandbox import (
         Action,
         DestGroup,

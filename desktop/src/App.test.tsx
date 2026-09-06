@@ -285,8 +285,8 @@ describe("App", () => {
 
   it("links a sandbox alert to the setting it is about", () => {
     const base = {
-      id: "sandbox:aiko:default",
-      code: "sandbox_unenforceable" as const,
+      id: "agent-environment:aiko:default",
+      code: "agent_environment_unavailable" as const,
       severity: "warning" as const,
       opened_at: "",
       updated_at: "",

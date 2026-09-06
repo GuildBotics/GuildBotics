@@ -29,6 +29,9 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from guildbotics.app_api.agent_environment_status import (
+    evaluate_grant,
+)
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.config_revisions import (
     apply_config_write,
@@ -43,6 +46,7 @@ from guildbotics.app_api.intelligences import (
 )
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
+    AgentEnvironmentStatusResponse,
     AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
@@ -92,7 +96,6 @@ from guildbotics.app_api.models import (
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
-    SandboxStatusResponse,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SchedulerStopRequest,
@@ -122,9 +125,6 @@ from guildbotics.app_api.models import (
     WorkspaceSyncStatus,
 )
 from guildbotics.app_api.runtime import AppRuntime
-from guildbotics.app_api.sandbox_status import (
-    evaluate_grant,
-)
 from guildbotics.app_api.workspace_secrets import WorkspaceSecretService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.editions.simple import slack_app_setup
@@ -1003,15 +1003,15 @@ def create_app(
         return await app_runtime.get_cli_agent_usage(refresh=refresh)
 
     @app.get(
-        "/intelligences/sandbox",
-        response_model=SandboxStatusResponse,
+        "/intelligences/agent-environment",
+        response_model=AgentEnvironmentStatusResponse,
         responses=error_responses,
     )
-    def sandbox_status_view(
+    def agent_environment_status_view(
         _: None = Depends(require_token),
-    ) -> SandboxStatusResponse:
+    ) -> AgentEnvironmentStatusResponse:
         """What every active member's AI CLI slots may reach on this device."""
-        return app_runtime.get_sandbox_status()
+        return app_runtime.get_agent_environment_status()
 
     @app.get(
         "/intelligences/grant-evaluation",

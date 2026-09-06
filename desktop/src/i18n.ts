@@ -378,7 +378,7 @@ const resources = {
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
-          sandbox_unenforceable:
+          agent_environment_unavailable:
             "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
         },
         actions: {
@@ -2288,7 +2288,7 @@ const resources = {
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
-          sandbox_unenforceable:
+          agent_environment_unavailable:
             "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
         },
         actions: {

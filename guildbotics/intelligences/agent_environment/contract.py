@@ -1,13 +1,12 @@
-"""Provider-neutral sandbox contract for native AI CLI turns.
+"""The access contract: what one AI CLI turn may reach.
 
 Every turn an AI CLI tool runs for GuildBotics is confined the same way,
 whatever the turn is for: the agent may read and write its working directory,
 read the trees the commands on this device's PATH live in, plus the
 directories the user granted under their home; it reaches the network only as
 the selected tool definition allows, whether through a command it runs or the
-provider's built-in web tools. The contract is what GuildBotics asks for; each adapter
-translates it into its provider's own sandbox settings, and refuses to start
-when the provider cannot enforce it on the current OS.
+provider's built-in web tools. The contract is what GuildBotics asks for, as data; the isolated
+agent environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
 """
 
 from __future__ import annotations
@@ -51,7 +50,7 @@ _HOME_TOKEN = "$HOME"
 _WORKSPACE_TOKEN = "<workspace>"
 
 
-class SandboxContractError(ValueError):
+class AccessContractError(ValueError):
     """Raised when a sandbox setting is malformed or cannot be honoured."""
 
 
@@ -59,7 +58,7 @@ class NetworkPolicy(BaseModel):
     """The ``network`` block of an AI CLI tool definition: what a turn may reach.
 
     One rule covers the provider's own web tools and every command it runs,
-    because the boundary that enforces it cannot tell the two apart. ``mode``
+    because the environment that enforces it cannot tell the two apart. ``mode``
     is a plain string, never a YAML boolean: ``off`` / ``on`` read as booleans
     under YAML 1.1, which is why the closed value is spelled ``deny``.
     ``allow_local_network`` opens the host and its private networks as well.
@@ -100,12 +99,12 @@ def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
     if raw is None:
         return NetworkPolicy()
     if not isinstance(raw, dict):
-        raise SandboxContractError(f"{where}: 'network' must be a mapping")
+        raise AccessContractError(f"{where}: 'network' must be a mapping")
     try:
         policy = NetworkPolicy.model_validate(raw)
         policy.check()
     except (ValidationError, ValueError) as exc:
-        raise SandboxContractError(f"{where}: invalid 'network': {exc}") from exc
+        raise AccessContractError(f"{where}: invalid 'network': {exc}") from exc
     return policy
 
 
@@ -206,11 +205,11 @@ def _parse[T: BaseModel](model: type[T], raw: Any, where: str) -> T:
     if raw is None:
         return model()
     if not isinstance(raw, dict):
-        raise SandboxContractError(f"{where}: must be a mapping")
+        raise AccessContractError(f"{where}: must be a mapping")
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
-        raise SandboxContractError(f"{where}: invalid grants: {exc}") from exc
+        raise AccessContractError(f"{where}: invalid grants: {exc}") from exc
 
 
 def load_shared_grants() -> SharedGrants:
@@ -359,18 +358,18 @@ def _resolve_document(
         try:
             target.mkdir(parents=True, exist_ok=True)
         except FileExistsError as exc:
-            raise SandboxContractError(
+            raise AccessContractError(
                 f"document grant '{grant.path}' exists but is not a directory"
             ) from exc
     elif not target.exists():
         return ResolvedGrant(target, grant.access, grant.path, present=False)
     real = target.resolve()
     if not real.is_dir():
-        raise SandboxContractError(
+        raise AccessContractError(
             f"document grant '{grant.path}' exists but is not a directory"
         )
     if real == home_root or not real.is_relative_to(home_root):
-        raise SandboxContractError(
+        raise AccessContractError(
             f"document grant '{grant.path}' must stay below the home directory"
         )
     return ResolvedGrant(real, grant.access, grant.path)
@@ -389,10 +388,10 @@ def _resolve_local(
     real = target.resolve()
     if not real.is_dir():
         if strict:
-            raise SandboxContractError(local_path_missing(grant.path))
+            raise AccessContractError(local_path_missing(grant.path))
         return ResolvedGrant(real, grant.access, grant.path, present=False)
     if real == home_root or real == Path(real.anchor):
-        raise SandboxContractError(
+        raise AccessContractError(
             f"local path '{grant.path}' would grant the whole home directory or root"
         )
     return ResolvedGrant(real, grant.access, grant.path)
@@ -402,7 +401,7 @@ def _resolve_deny(path: str, home_root: Path) -> Path:
     absolute = PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
     target = (Path(path) if absolute else home_root / path).resolve()
     if target == home_root or target == Path(target.anchor):
-        raise SandboxContractError(
+        raise AccessContractError(
             f"deny '{path}' would close the whole home directory or root"
         )
     return target
@@ -505,7 +504,7 @@ def _inside_sensitive(path: Path, home_root: Path) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class SandboxContract:
+class AccessContract:
     """What GuildBotics asks a provider to enforce for one turn.
 
     The working directory is not part of the contract because it is the

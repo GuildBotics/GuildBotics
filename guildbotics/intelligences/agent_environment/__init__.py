@@ -1,7 +1,7 @@
-"""The boundary GuildBotics puts around every AI CLI turn.
+"""The isolated agent environment GuildBotics runs every AI CLI turn in.
 
-The sandbox contract (:mod:`guildbotics.intelligences.sandbox`) says what a
-turn may reach; this package enforces it, the same way on every OS and for
+The access contract (:mod:`.contract`) says what a turn may reach; the
+environment enforces it, the same way on every OS and for
 every provider, by running the provider CLI inside a microVM that GuildBotics
 creates for the turn and discards afterwards. :mod:`.spec` turns the contract
 into the microVM's mounts, network policy, working directory, and environment

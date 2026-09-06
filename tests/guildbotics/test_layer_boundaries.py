@@ -208,14 +208,14 @@ def test_every_declared_sync_composition_root_installs_the_queue() -> None:
 #: The one module that drives the sandbox runtime. The contract is enforced by
 #: exactly one layer, so an adapter that imported the SDK itself would be a
 #: second one, translating the contract its own way.
-BOUNDARY_RUNTIME = Path("intelligences/boundary/runtime.py")
+AGENT_ENVIRONMENT_RUNTIME = Path("intelligences/agent_environment/runtime.py")
 
 
-def test_only_the_boundary_runtime_drives_the_sandbox_sdk() -> None:
+def test_only_the_agent_environment_runtime_drives_the_sandbox_sdk() -> None:
     offenders: list[str] = []
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         relative = path.relative_to(PACKAGE_ROOT)
-        if relative == BOUNDARY_RUNTIME:
+        if relative == AGENT_ENVIRONMENT_RUNTIME:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             names = (

@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
+from guildbotics.app_api.agent_environment_status import (
+    EnvironmentProblemEntry,
+    agent_environment_problems,
+    agent_environment_status,
+)
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.command_files import CommandFileService, file_revision
 from guildbotics.app_api.config_revisions import apply_config_write
@@ -25,6 +30,7 @@ from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
+    AgentEnvironmentStatusResponse,
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
@@ -59,7 +65,6 @@ from guildbotics.app_api.models import (
     RuntimeDebugStatus,
     RuntimeDebugUpdateRequest,
     RuntimeStatus,
-    SandboxStatusResponse,
     ScenarioDiagnosticsResponse,
     SchedulerStartRequest,
     SystemAlertsResponse,
@@ -76,11 +81,6 @@ from guildbotics.app_api.models import (
     VerifyResponse,
     to_command_arguments,
     to_command_inputs,
-)
-from guildbotics.app_api.sandbox_status import (
-    SandboxProblemEntry,
-    sandbox_problems,
-    sandbox_status,
 )
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
@@ -1025,7 +1025,7 @@ class AppRuntime:
 
     def get_system_alerts(self) -> SystemAlertsResponse:
         return self._system_alerts.list_alerts(
-            self.get_scheduler_status(), self._sandbox_problems()
+            self.get_scheduler_status(), self._agent_environment_problems()
         )
 
     def _active_agent_ids(self) -> list[str]:
@@ -1039,17 +1039,17 @@ class AppRuntime:
             if member.is_active and member.person_type != "human"
         )
 
-    def _sandbox_problems(self) -> list[SandboxProblemEntry]:
+    def _agent_environment_problems(self) -> list[EnvironmentProblemEntry]:
         try:
-            return sandbox_problems(self._active_agent_ids())
+            return agent_environment_problems(self._active_agent_ids())
         except Exception:  # pylint: disable=broad-exception-caught
             # A broken definition is reported where it is edited; the alert
             # band is not the place to fail.
             return []
 
-    def get_sandbox_status(self) -> SandboxStatusResponse:
+    def get_agent_environment_status(self) -> AgentEnvironmentStatusResponse:
         """Every active member's AI CLI slots, resolved against this device."""
-        return sandbox_status(self._active_agent_ids())
+        return agent_environment_status(self._active_agent_ids())
 
     def dismiss_system_alert(self, alert_id: str) -> SystemAlertsResponse:
         active_ids = {alert.id for alert in self.get_system_alerts().alerts}

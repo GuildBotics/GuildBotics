@@ -16,18 +16,18 @@ import microsandbox
 import pytest
 from microsandbox import Action, DestGroup, MountKind, NetworkDestinationKind, Protocol
 
-from guildbotics.intelligences.boundary import runtime
-from guildbotics.intelligences.boundary.runtime import (
-    Boundary,
-    BoundaryError,
-    BoundaryHealth,
-    BoundaryProcess,
+from guildbotics.intelligences.agent_environment import runtime
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+    AgentEnvironmentHealth,
+    EnvironmentProcess,
     doctor,
 )
-from guildbotics.intelligences.boundary.spec import (
-    BoundaryMount,
-    BoundaryNetwork,
-    BoundarySpec,
+from guildbotics.intelligences.agent_environment.spec import (
+    EnvironmentMount,
+    EnvironmentNetwork,
+    AgentEnvironmentSpec,
 )
 
 
@@ -131,8 +131,8 @@ def sandbox(monkeypatch) -> type[_Sandbox]:
     return _Sandbox
 
 
-def _spec(**overrides: Any) -> BoundarySpec:
-    network = BoundaryNetwork(
+def _spec(**overrides: Any) -> AgentEnvironmentSpec:
+    network = EnvironmentNetwork(
         unrestricted=False,
         domains=("api.openai.com", "*.example.com"),
         host_ports=(43123,),
@@ -143,17 +143,17 @@ def _spec(**overrides: Any) -> BoundarySpec:
         "cwd": "/work/repo",
         "home": "/home/u",
         "mounts": (
-            BoundaryMount("/work/repo", Path("/work/repo"), readonly=False),
-            BoundaryMount(
+            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
+            EnvironmentMount(
                 "/home/u/Documents", Path("/home/u/Documents"), readonly=True
             ),
-            BoundaryMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/work/repo/private", None, readonly=True),
         ),
         "network": network,
         "env": {"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"},
     }
     fields.update(overrides)
-    return BoundarySpec(**fields)
+    return AgentEnvironmentSpec(**fields)
 
 
 # --- doctor ---------------------------------------------------------------------
@@ -161,13 +161,13 @@ def _spec(**overrides: Any) -> BoundarySpec:
 
 def test_doctor_reports_a_missing_sdk_or_runtime_as_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(microsandbox, "is_installed", lambda: False)
-    assert doctor() == BoundaryHealth(
+    assert doctor() == AgentEnvironmentHealth(
         False, "The microsandbox runtime (msb and libkrunfw) is not installed."
     )
 
     monkeypatch.setattr(microsandbox, "is_installed", lambda: True)
     monkeypatch.setattr(microsandbox, "version", lambda: "0.6.17")
-    assert doctor() == BoundaryHealth(True, runtime_version="0.6.17")
+    assert doctor() == AgentEnvironmentHealth(True, runtime_version="0.6.17")
 
 
 def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:
@@ -182,7 +182,7 @@ def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", refuse)
 
-    assert doctor() == BoundaryHealth(
+    assert doctor() == AgentEnvironmentHealth(
         False, "The microsandbox SDK is not installed for this platform."
     )
 
@@ -194,7 +194,7 @@ def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:
 async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await Boundary.start(_spec(), snapshot="guildbotics-toolchain")
+    boundary = await AgentEnvironment.start(_spec(), snapshot="guildbotics-toolchain")
 
     created = sandbox.created
     assert created["name"].startswith("guildbotics-")
@@ -218,7 +218,7 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
 async def test_a_closed_network_allows_only_dns_domains_and_host_ports(
     sandbox: type[_Sandbox],
 ) -> None:
-    await Boundary.start(_spec(), snapshot="s")
+    await AgentEnvironment.start(_spec(), snapshot="s")
 
     network = sandbox.created["network"]
     policy = network.policy
@@ -241,8 +241,8 @@ async def test_a_closed_network_allows_only_dns_domains_and_host_ports(
 async def test_local_network_opens_the_host_and_private_ranges(
     sandbox: type[_Sandbox],
 ) -> None:
-    network = BoundaryNetwork(False, (), (), local_network=True, nameservers=())
-    await Boundary.start(_spec(network=network), snapshot="s")
+    network = EnvironmentNetwork(False, (), (), local_network=True, nameservers=())
+    await AgentEnvironment.start(_spec(network=network), snapshot="s")
 
     groups = [
         r.destination.value
@@ -256,8 +256,10 @@ async def test_local_network_opens_the_host_and_private_ranges(
 async def test_an_unrestricted_network_allows_all_egress_and_no_ingress(
     sandbox: type[_Sandbox],
 ) -> None:
-    network = BoundaryNetwork(True, (), (43123,), local_network=False, nameservers=())
-    await Boundary.start(_spec(network=network), snapshot="s")
+    network = EnvironmentNetwork(
+        True, (), (43123,), local_network=False, nameservers=()
+    )
+    await AgentEnvironment.start(_spec(network=network), snapshot="s")
 
     policy = sandbox.created["network"].policy
     assert (policy.default_egress, policy.default_ingress) == (
@@ -274,8 +276,8 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
     monkeypatch.setattr(runtime.secrets, "token_hex", lambda n: "x")
     monkeypatch.setattr(runtime, "_NAME_PREFIX", "fail-")
 
-    with pytest.raises(BoundaryError, match="no hypervisor"):
-        await Boundary.start(_spec(), snapshot="s")
+    with pytest.raises(AgentEnvironmentError, match="no hypervisor"):
+        await AgentEnvironment.start(_spec(), snapshot="s")
 
 
 # --- run ------------------------------------------------------------------------
@@ -285,7 +287,7 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
 async def test_run_starts_the_command_in_the_cwd_with_the_spec_environment(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await Boundary.start(_spec(), snapshot="s")
+    boundary = await AgentEnvironment.start(_spec(), snapshot="s")
 
     await boundary.run("codex", "app-server", "-c", "x=1", limit=1024)
 
@@ -297,7 +299,7 @@ async def test_run_starts_the_command_in_the_cwd_with_the_spec_environment(
     assert call["env"] == {"HOME": "/home/u", "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
     assert call["stdin"] == microsandbox.Stdin.pipe()
 
-    with pytest.raises(BoundaryError, match="agent unreachable"):
+    with pytest.raises(AgentEnvironmentError, match="agent unreachable"):
         await boundary.run("explode", limit=1024)
 
 
@@ -313,7 +315,7 @@ async def test_a_process_bridges_stdio_and_reports_the_exit_code() -> None:
             _event("exited", code=3),
         ]
     )
-    process = BoundaryProcess(handle, limit=1 << 16)
+    process = EnvironmentProcess(handle, limit=1 << 16)
 
     process.stdin.write(b'{"method":"initialize"}\n')
     await process.stdin.drain()
@@ -333,7 +335,7 @@ async def test_a_process_bridges_stdio_and_reports_the_exit_code() -> None:
 @pytest.mark.asyncio
 async def test_a_process_the_runtime_could_not_spawn_fails_with_the_reason() -> None:
     handle = _Handle([_event("failed", data=b'spawn "codex": No such file', code=2)])
-    process = BoundaryProcess(handle, limit=1 << 16)
+    process = EnvironmentProcess(handle, limit=1 << 16)
 
     assert await process.wait() == 2
     assert await process.stderr.read() == b'spawn "codex": No such file\n'
@@ -342,7 +344,7 @@ async def test_a_process_the_runtime_could_not_spawn_fails_with_the_reason() -> 
 @pytest.mark.asyncio
 async def test_a_broken_exec_session_ends_the_process_as_killed() -> None:
     handle = _Handle([_event("stdout", data=b"partial"), RuntimeError("session lost")])
-    process = BoundaryProcess(handle, limit=1 << 16)
+    process = EnvironmentProcess(handle, limit=1 << 16)
 
     assert await process.wait() == -1
     assert await process.stdout.read() == b"partial"
@@ -352,7 +354,7 @@ async def test_a_broken_exec_session_ends_the_process_as_killed() -> None:
 @pytest.mark.asyncio
 async def test_kill_ends_a_running_process_and_a_closed_stdin_raises() -> None:
     handle = _Handle([_event("started", pid=1)], gate=asyncio.Event())
-    process = BoundaryProcess(handle, limit=1 << 16)
+    process = EnvironmentProcess(handle, limit=1 << 16)
     await asyncio.sleep(0)
     assert process.returncode is None
 
@@ -373,7 +375,7 @@ async def test_kill_ends_a_running_process_and_a_closed_stdin_raises() -> None:
 async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await Boundary.start(_spec(), snapshot="s")
+    boundary = await AgentEnvironment.start(_spec(), snapshot="s")
     instance = sandbox.instance
     assert instance is not None
 
@@ -381,7 +383,7 @@ async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     await boundary.close()
     assert instance.stopped and not instance.destroyed
 
-    stuck = await Boundary.start(_spec(), snapshot="s")
+    stuck = await AgentEnvironment.start(_spec(), snapshot="s")
     assert sandbox.instance is not None
     sandbox.instance.stop_error = microsandbox.MicrosandboxError("stuck")
     await stuck.close()

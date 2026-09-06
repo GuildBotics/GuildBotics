@@ -834,8 +834,9 @@ Two Person distinctions matter architecturally:
   its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
   `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
   a tool without an adapter cannot run. Declare which network modes the tool can
-  enforce in its catalog entry, and translate the sandbox contract
-  (`intelligences/sandbox.py`) in the adapter.
+  enforce in its catalog entry; the access contract
+  (`intelligences/agent_environment/contract.py`) is enforced by the isolated agent
+  environment (`intelligences/agent_environment/`), not translated per adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the

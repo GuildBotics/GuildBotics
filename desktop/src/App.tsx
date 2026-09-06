@@ -373,7 +373,7 @@ function systemAlertMessage(t: TFunction, alert: SystemAlert) {
 }
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
-  if (alert.code === "sandbox_unenforceable") {
+  if (alert.code === "agent_environment_unavailable") {
     // A network problem sits in the member's own slot; a grant problem in the
     // workspace's directory cards under the advanced intelligence settings.
     const search =

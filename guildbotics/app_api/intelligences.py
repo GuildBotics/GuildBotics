@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
+from guildbotics.app_api.agent_environment_status import network_support
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
@@ -13,11 +14,21 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.app_api.sandbox_status import network_support
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import (
     CreatedFile,
     SetupServiceError,
+)
+from guildbotics.intelligences.agent_environment.contract import (
+    FILESYSTEM_GRANTS_PATH,
+    LOCAL_GRANTS_FILENAME,
+    AccessContractError,
+    LocalGrants,
+    NetworkPolicy,
+    SharedGrants,
+    parse_local_grants,
+    parse_network_policy,
+    parse_shared_grants,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
@@ -33,17 +44,6 @@ from guildbotics.intelligences.effort import (
     validate_effort_fields,
 )
 from guildbotics.intelligences.llm_providers import PROVIDER_DEFAULT_FILENAME
-from guildbotics.intelligences.sandbox import (
-    FILESYSTEM_GRANTS_PATH,
-    LOCAL_GRANTS_FILENAME,
-    LocalGrants,
-    NetworkPolicy,
-    SandboxContractError,
-    SharedGrants,
-    parse_local_grants,
-    parse_network_policy,
-    parse_shared_grants,
-)
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
@@ -456,7 +456,7 @@ class IntelligenceConfigService:
             return None
         try:
             return parse_network_policy(data.get("network"), where=where)
-        except SandboxContractError as exc:
+        except AccessContractError as exc:
             raise SetupServiceError("invalid_network_settings", str(exc)) from exc
 
     def _model_def_yaml(
@@ -751,7 +751,7 @@ class IntelligenceConfigService:
         data = self._read_optional_yaml(config_dir / FILESYSTEM_GRANTS_PATH)
         try:
             return parse_shared_grants(data or None, where=FILESYSTEM_GRANTS_PATH)
-        except SandboxContractError as exc:
+        except AccessContractError as exc:
             raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
 
     def _read_local_grants(self, config_dir: Path) -> LocalGrants:
@@ -761,7 +761,7 @@ class IntelligenceConfigService:
             return parse_local_grants(
                 data or None, where=f"local/{LOCAL_GRANTS_FILENAME}"
             )
-        except SandboxContractError as exc:
+        except AccessContractError as exc:
             raise SetupServiceError("invalid_filesystem_grants", str(exc)) from exc
 
     @staticmethod

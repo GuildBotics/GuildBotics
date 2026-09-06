@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from guildbotics.intelligences.sandbox import SandboxContract
+from guildbotics.intelligences.agent_environment.contract import AccessContract
 
 
 class ResumePolicy(StrEnum):
@@ -98,12 +98,12 @@ class AgentExecutionContext:
     continuation_input: str = ""
     participant_labels: str = ""
     # A read-only turn only inspects recorded state, so it holds no execution
-    # lease and may run while the member is busy. It is not a weaker sandbox:
-    # every turn reads untrusted material, and every turn is confined by the
-    # same ``sandbox`` contract.
+    # lease and may run while the member is busy. It is not a weaker
+    # confinement: every turn reads untrusted material, and every turn runs
+    # under the same ``contract``.
     read_only: bool = False
-    #: What the provider must enforce around ``cwd`` for this turn.
-    sandbox: SandboxContract = field(default_factory=SandboxContract)
+    #: What the turn may reach beyond ``cwd``.
+    contract: AccessContract = field(default_factory=AccessContract)
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:

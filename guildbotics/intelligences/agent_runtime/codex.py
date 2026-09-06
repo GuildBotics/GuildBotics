@@ -11,6 +11,11 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    executable_read_roots,
+    redact_path,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
@@ -44,11 +49,6 @@ from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limit
 from guildbotics.intelligences.cli_agents import (
     resolve_cli_agent_path,
     unsupported_network_reason,
-)
-from guildbotics.intelligences.sandbox import (
-    SandboxContract,
-    executable_read_roots,
-    redact_path,
 )
 
 _MODERN_APPROVAL_METHODS = frozenset(
@@ -173,7 +173,7 @@ class CodexAppServerAdapter:
             "policy",
             approval=_APPROVAL_POLICY,
             details={
-                "requested_policy": context.sandbox.requested_policy(
+                "requested_policy": context.contract.requested_policy(
                     context.cwd, workspace_root=context.workspace_data_root
                 ),
                 "adapter_settings": _redacted_overrides(
@@ -354,12 +354,12 @@ class CodexAppServerAdapter:
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
         reason = unsupported_network_reason(
-            "codex", context.sandbox.network, sys.platform
+            "codex", context.contract.network, sys.platform
         )
         if reason:
             raise AgentRuntimeError(AgentRuntimeErrorCategory.CONFIGURATION, reason)
         overrides = _codex_sandbox_overrides(
-            context.sandbox,
+            context.contract,
             Path(resolve_cli_agent_path(self._executable) or self._executable),
             _codex_skill_roots(),
         )
@@ -659,9 +659,9 @@ def _codex_skill_roots(home: Path | None = None) -> tuple[Path, ...]:
 
 
 def _codex_sandbox_overrides(
-    contract: SandboxContract, executable: Path, skill_roots: tuple[Path, ...] = ()
+    contract: AccessContract, executable: Path, skill_roots: tuple[Path, ...] = ()
 ) -> dict[str, Any]:
-    """Translate the sandbox contract into Codex configuration overrides.
+    """Translate the access contract into Codex configuration overrides.
 
     The profile is built from Codex's platform paths (`:minimal`) rather than
     its `:workspace` baseline, whose system-wide read would expose `~/.ssh` and

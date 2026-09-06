@@ -559,7 +559,7 @@ def test_a_sandbox_setting_this_device_cannot_enforce_stays_visible(
         for a in alerts
     ] == [
         (
-            "sandbox_unenforceable",
+            "agent_environment_unavailable",
             "warning",
             "aiko",
             "default",
@@ -571,7 +571,7 @@ def test_a_sandbox_setting_this_device_cannot_enforce_stays_visible(
     # Closing the band does not settle it: the setting is still unenforceable.
     service.dismiss(alerts[0].id)
     assert [a.code for a in service.list_alerts(_runtime(), [problem]).alerts] == [
-        "sandbox_unenforceable"
+        "agent_environment_unavailable"
     ]
     # Changing the setting does.
     assert service.list_alerts(_runtime(), []).alerts == []

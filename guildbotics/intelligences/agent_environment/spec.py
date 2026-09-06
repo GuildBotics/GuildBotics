@@ -3,7 +3,7 @@
 The contract names host directories and a network mode; the microVM needs
 mounts, a network policy, a working directory, and an environment. This module
 is the single translation, and it knows no provider and no runtime: an adapter
-hands over the contract and gets back a :class:`BoundarySpec` it cannot loosen.
+hands over the contract and gets back a :class:`AgentEnvironmentSpec` it cannot loosen.
 
 Filesystem: every granted directory -- the working directory, the documents,
 the device-local paths -- is mounted at the same path it has on the host, and
@@ -15,7 +15,7 @@ mounted, so credentials, the workspace configuration, and other members'
 clones are unreachable rather than forbidden. A deny inside an opened tree is
 covered with an empty read-only mount; a deny outside one closes nothing that
 was open. The trees a device's PATH derives are not mounted at all: the
-agent's tools live inside the boundary.
+agent's tools live inside the environment.
 
 Network: the microVM's gateway enforces the one rule the contract states.
 Unrestricted opens all egress; otherwise egress is closed except DNS, the
@@ -29,25 +29,25 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath
 
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
     NetworkPolicy,
     ResolvedAccess,
-    SandboxContract,
 )
 
-#: Upstream resolvers the boundary's DNS gateway forwards to. Without an
+#: Upstream resolvers the environment's DNS gateway forwards to. Without an
 #: explicit upstream, Codex's built-in resolver gets no answer from the
 #: gateway's default in time and its login fails; naming one is what makes
 #: domain rules resolvable at all.
 DEFAULT_NAMESERVERS: tuple[str, ...] = ("1.1.1.1", "1.0.0.1")
 
 
-class BoundarySpecError(ValueError):
-    """Raised when the contract names something the boundary cannot mount."""
+class AgentEnvironmentSpecError(ValueError):
+    """Raised when the contract names something the environment cannot mount."""
 
 
 @dataclass(frozen=True, slots=True)
-class BoundaryMount:
+class EnvironmentMount:
     """One mount inside the microVM.
 
     ``host`` is the host directory bound at ``guest``, or None for an empty
@@ -60,7 +60,7 @@ class BoundaryMount:
 
 
 @dataclass(frozen=True, slots=True)
-class BoundaryNetwork:
+class EnvironmentNetwork:
     """What the microVM's gateway lets out.
 
     ``unrestricted`` opens all egress; otherwise egress is closed except DNS,
@@ -77,7 +77,7 @@ class BoundaryNetwork:
 
 
 @dataclass(frozen=True, slots=True)
-class BoundarySpec:
+class AgentEnvironmentSpec:
     """Everything the runtime needs to build one turn's microVM.
 
     ``home`` is the guest's home directory: the host's, as the guest spells
@@ -87,13 +87,13 @@ class BoundarySpec:
 
     cwd: str
     home: str
-    mounts: tuple[BoundaryMount, ...]
-    network: BoundaryNetwork
+    mounts: tuple[EnvironmentMount, ...]
+    network: EnvironmentNetwork
     env: Mapping[str, str]
 
 
-def build_boundary_spec(
-    contract: SandboxContract,
+def build_environment_spec(
+    contract: AccessContract,
     cwd: Path,
     *,
     host_ports: Iterable[int] = (),
@@ -101,7 +101,7 @@ def build_boundary_spec(
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
     nameservers: Iterable[str] = DEFAULT_NAMESERVERS,
-) -> BoundarySpec:
+) -> AgentEnvironmentSpec:
     """Translate the contract for a turn run in ``cwd``.
 
     Args:
@@ -112,11 +112,11 @@ def build_boundary_spec(
         provider_domains: The provider's own API domains, allowed whenever
             egress is restricted; they are GuildBotics' choice, not the user's.
         env: The environment the provider process starts with. The host's
-            environment is never inherited: the boundary is another machine.
+            environment is never inherited: the environment is another machine.
         home: The host home directory, which is the guest's home too.
-        nameservers: Upstream DNS resolvers for the boundary's gateway.
+        nameservers: Upstream DNS resolvers for the environment's gateway.
     """
-    return BoundarySpec(
+    return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
         home=guest_path((home or Path.home()).resolve()),
         mounts=_mounts(contract.access, cwd),
@@ -128,7 +128,7 @@ def build_boundary_spec(
 
 
 def guest_path(path: PurePath) -> str:
-    """Where a host path appears inside the boundary.
+    """Where a host path appears inside the environment.
 
     A POSIX path keeps its spelling. A Windows drive becomes a top-level
     directory named after its letter (``C:\\work`` is ``/c/work``); the
@@ -136,26 +136,28 @@ def guest_path(path: PurePath) -> str:
     convention GuildBotics uses.
     """
     if not path.is_absolute():
-        raise BoundarySpecError(f"'{path}' is not an absolute path")
+        raise AgentEnvironmentSpecError(f"'{path}' is not an absolute path")
     drive = path.drive
     if not drive:
         return path.as_posix()
     if not drive.endswith(":"):
-        raise BoundarySpecError(f"'{path}' is a network path and cannot be mounted")
+        raise AgentEnvironmentSpecError(
+            f"'{path}' is a network path and cannot be mounted"
+        )
     return "/".join(("", drive[0].lower(), *path.parts[1:]))
 
 
-def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[BoundaryMount, ...]:
+def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[EnvironmentMount, ...]:
     """The host-backed mounts, outermost first, then the denies they cover."""
-    opened: dict[str, BoundaryMount] = {
-        guest_path(cwd): BoundaryMount(guest_path(cwd), cwd, readonly=False)
+    opened: dict[str, EnvironmentMount] = {
+        guest_path(cwd): EnvironmentMount(guest_path(cwd), cwd, readonly=False)
     }
     for grant in (*access.documents, *access.paths):
         denied = any(grant.path.is_relative_to(d.path) for d in access.denied)
         if grant.present and not denied:
             opened.setdefault(
                 guest_path(grant.path),
-                BoundaryMount(
+                EnvironmentMount(
                     guest_path(grant.path), grant.path, grant.access == "read"
                 ),
             )
@@ -168,7 +170,7 @@ def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[BoundaryMount, ...]:
         and denied.path != mount.host
         and denied.path.is_relative_to(mount.host)
     }
-    mounts = [*opened.values(), *(BoundaryMount(g, None, True) for g in covers)]
+    mounts = [*opened.values(), *(EnvironmentMount(g, None, True) for g in covers)]
     return tuple(
         sorted(mounts, key=lambda m: (len(PurePosixPath(m.guest).parts), m.guest))
     )
@@ -179,10 +181,10 @@ def _network(
     host_ports: tuple[int, ...],
     provider_domains: tuple[str, ...],
     nameservers: Iterable[str],
-) -> BoundaryNetwork:
+) -> EnvironmentNetwork:
     unrestricted = policy.mode == "unrestricted"
     domains = () if unrestricted else (*provider_domains, *policy.allowed_domains)
-    return BoundaryNetwork(
+    return EnvironmentNetwork(
         unrestricted=unrestricted,
         domains=tuple(dict.fromkeys(domains)),
         host_ports=tuple(dict.fromkeys(host_ports)),

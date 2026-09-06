@@ -13,9 +13,13 @@ from guildbotics.commands.metadata import (
 )
 from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationInfo
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.intelligences.agent_environment.contract import (
+    LocalGrants,
+    NetworkPolicy,
+    SharedGrants,
+)
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
-from guildbotics.intelligences.sandbox import LocalGrants, NetworkPolicy, SharedGrants
 from guildbotics.runtime.live_state import LivePresentation
 
 
@@ -947,7 +951,7 @@ SystemAlertCode = Literal[
     "rate_limited",
     "scheduler_failed",
     "worker_stopped",
-    "sandbox_unenforceable",
+    "agent_environment_unavailable",
 ]
 SystemAlertSeverity = Literal["critical", "warning"]
 SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
@@ -1113,7 +1117,7 @@ class GrantEvaluation(BaseModel):
     sensitive: str = ""
 
 
-class SandboxGrantStatus(BaseModel):
+class EnvironmentGrantStatus(BaseModel):
     """A document or local path grant as it resolves on this device.
 
     ``path`` is for display; ``grant`` is the entry as the grant file spells
@@ -1126,7 +1130,7 @@ class SandboxGrantStatus(BaseModel):
     present: bool
 
 
-class SandboxTreeStatus(BaseModel):
+class EnvironmentTreeStatus(BaseModel):
     """A tree read because commands on this device's PATH live in it.
 
     ``grant`` is how the local grant file names the tree to close it.
@@ -1137,7 +1141,7 @@ class SandboxTreeStatus(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
-class SandboxExcludedStatus(BaseModel):
+class EnvironmentExcludedStatus(BaseModel):
     """A tree the PATH led to that stays closed, and why."""
 
     path: str
@@ -1145,52 +1149,52 @@ class SandboxExcludedStatus(BaseModel):
     reason: str
 
 
-class SandboxDenyStatus(BaseModel):
+class EnvironmentDenyStatus(BaseModel):
     path: str
     builtin: bool
 
 
-class SandboxAccessStatus(BaseModel):
+class EnvironmentAccessStatus(BaseModel):
     """The shared and local grants as they resolve on this device."""
 
-    documents: list[SandboxGrantStatus] = Field(default_factory=list)
-    paths: list[SandboxGrantStatus] = Field(default_factory=list)
-    trees: list[SandboxTreeStatus] = Field(default_factory=list)
-    excluded: list[SandboxExcludedStatus] = Field(default_factory=list)
-    denied: list[SandboxDenyStatus] = Field(default_factory=list)
+    documents: list[EnvironmentGrantStatus] = Field(default_factory=list)
+    paths: list[EnvironmentGrantStatus] = Field(default_factory=list)
+    trees: list[EnvironmentTreeStatus] = Field(default_factory=list)
+    excluded: list[EnvironmentExcludedStatus] = Field(default_factory=list)
+    denied: list[EnvironmentDenyStatus] = Field(default_factory=list)
     #: Why the grants could not be resolved at all, or "".
     problem: str = ""
 
 
 #: Which setting a sandbox problem is about, so the Desktop can open it: the
 #: slot's network block, or the directory grants.
-SandboxSetting = Literal["network", "grants"]
+EnvironmentSetting = Literal["network", "grants"]
 
 
-class SandboxProblem(BaseModel):
-    setting: SandboxSetting
+class EnvironmentProblem(BaseModel):
+    setting: EnvironmentSetting
     reason: str
 
 
-class SandboxSlotStatus(BaseModel):
+class EnvironmentSlotStatus(BaseModel):
     slot: str
     tool: str
     contract_applied: bool
     network: NetworkPolicy
     #: Everything that keeps this slot from starting on this device.
-    problems: list[SandboxProblem] = Field(default_factory=list)
+    problems: list[EnvironmentProblem] = Field(default_factory=list)
 
 
-class SandboxMemberStatus(BaseModel):
+class EnvironmentMemberStatus(BaseModel):
     person_id: str
-    slots: list[SandboxSlotStatus] = Field(default_factory=list)
+    slots: list[EnvironmentSlotStatus] = Field(default_factory=list)
 
 
-class SandboxStatusResponse(BaseModel):
+class AgentEnvironmentStatusResponse(BaseModel):
     platform: str
     working_directory: str
-    access: SandboxAccessStatus = Field(default_factory=SandboxAccessStatus)
-    members: list[SandboxMemberStatus] = Field(default_factory=list)
+    access: EnvironmentAccessStatus = Field(default_factory=EnvironmentAccessStatus)
+    members: list[EnvironmentMemberStatus] = Field(default_factory=list)
 
 
 class BrainAssignment(BaseModel):

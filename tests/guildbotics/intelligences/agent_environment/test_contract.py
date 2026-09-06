@@ -6,15 +6,15 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import pytest
 import yaml
 
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
     FILESYSTEM_GRANTS_PATH,
     LOCAL_GRANTS_FILENAME,
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
-    SandboxContract,
-    SandboxContractError,
+    AccessContract,
+    AccessContractError,
     SharedGrants,
     executable_read_roots,
     load_local_grants,
@@ -68,7 +68,7 @@ def test_a_full_network_block_round_trips() -> None:
     ],
 )
 def test_inconsistent_network_blocks_are_rejected(raw: object, message: str) -> None:
-    with pytest.raises(SandboxContractError, match=message) as excinfo:
+    with pytest.raises(AccessContractError, match=message) as excinfo:
         parse_network_policy(raw, where="AI CLI tool 'x'")
 
     assert "AI CLI tool 'x'" in str(excinfo.value)
@@ -79,7 +79,7 @@ def test_a_yaml_boolean_mode_is_rejected_rather_than_read_as_a_mode() -> None:
     raw = yaml.safe_load("mode: off\nallowed_domains: []\nallow_local_network: false\n")
     assert raw["mode"] is False
 
-    with pytest.raises(SandboxContractError):
+    with pytest.raises(AccessContractError):
         parse_network_policy(raw, where="x")
 
 
@@ -103,7 +103,7 @@ def test_shared_grants_parse_documents() -> None:
     ]
     assert parse_shared_grants(None, where="grants") == SharedGrants()
     # Nothing machine-shaped is shared: a device's paths do not belong here.
-    with pytest.raises(SandboxContractError):
+    with pytest.raises(AccessContractError):
         parse_shared_grants({"paths": []}, where="grants")
 
 
@@ -113,7 +113,7 @@ def test_shared_grants_parse_documents() -> None:
 )
 def test_a_document_grant_must_name_a_directory_below_the_home(path: str) -> None:
     """Documents are the workspace's: shared, so never a device's absolute path."""
-    with pytest.raises(SandboxContractError):
+    with pytest.raises(AccessContractError):
         parse_shared_grants(
             {"documents": [{"path": path, "access": "read"}]}, where="grants"
         )
@@ -134,9 +134,9 @@ def test_local_grants_parse_paths_and_denies_that_may_be_absolute() -> None:
     assert grants.paths[0].absolute is False
     assert grants.paths[1].absolute is True
     assert grants.deny == ["/opt/homebrew/etc", ".local/share/some-app"]
-    with pytest.raises(SandboxContractError):
+    with pytest.raises(AccessContractError):
         parse_local_grants({"paths": [{"path": "..", "access": "read"}]}, where="local")
-    with pytest.raises(SandboxContractError):
+    with pytest.raises(AccessContractError):
         parse_local_grants({"deny": ["a/../b"]}, where="local")
 
 
@@ -146,7 +146,7 @@ def test_the_grant_files_are_optional(monkeypatch, tmp_path: Path) -> None:
     config.mkdir(parents=True)
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(config))
     monkeypatch.setattr(
-        "guildbotics.intelligences.sandbox.get_workspace_local_path",
+        "guildbotics.intelligences.agent_environment.contract.get_workspace_local_path",
         lambda *parts: workspace.joinpath(".guildbotics", "local", *parts),
     )
 
@@ -217,14 +217,14 @@ def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
     outside.mkdir()
     (home / "link").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(SandboxContractError, match="is not a directory"):
+    with pytest.raises(AccessContractError, match="is not a directory"):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
             LocalGrants(),
             "",
             home,
         )
-    with pytest.raises(SandboxContractError, match="below the home directory"):
+    with pytest.raises(AccessContractError, match="below the home directory"):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="link", access="read")]),
             LocalGrants(),
@@ -269,7 +269,7 @@ def test_a_link_and_package_too_far_apart_are_granted_separately(
     (tmp_path / "a/bin/x").symlink_to(real)
     # tmp_path itself is deep enough to be a tree; pretend it is not by
     # checking the rule directly on shallow paths.
-    from guildbotics.intelligences.sandbox import _is_grantable_tree
+    from guildbotics.intelligences.agent_environment.contract import _is_grantable_tree
 
     assert _is_grantable_tree(Path("/opt/homebrew"), home) is True
     assert _is_grantable_tree(Path("/opt"), home) is False
@@ -354,7 +354,7 @@ def test_the_builtin_denies_are_the_credential_directories_that_exist(
         (Path("/opt/homebrew/etc").resolve(), False),
         ((home / ".local/share/some-app").resolve(), False),
     ]
-    with pytest.raises(SandboxContractError, match="whole home directory"):
+    with pytest.raises(AccessContractError, match="whole home directory"):
         resolve_access(SharedGrants(), LocalGrants(deny=[str(home)]), "", home)
 
 
@@ -401,7 +401,7 @@ def test_a_local_path_must_exist_on_this_device(tmp_path: Path) -> None:
     ]
 
     missing = LocalGrants(paths=[LocalPathGrant(path="/opt/nowhere", access="read")])
-    with pytest.raises(SandboxContractError, match="does not exist on this device"):
+    with pytest.raises(AccessContractError, match="does not exist on this device"):
         resolve_access(SharedGrants(), missing, "", home)
     # A preview points at the row instead of failing as a whole.
     preview = resolve_access(SharedGrants(), missing, "", home, create=False)
@@ -409,7 +409,7 @@ def test_a_local_path_must_exist_on_this_device(tmp_path: Path) -> None:
         (Path("/opt/nowhere").resolve(), False)
     ]
     assert preview.entries() == ()
-    with pytest.raises(SandboxContractError, match="whole home directory"):
+    with pytest.raises(AccessContractError, match="whole home directory"):
         resolve_access(
             SharedGrants(),
             LocalGrants(paths=[LocalPathGrant(path=str(home), access="read")]),
@@ -492,7 +492,7 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
     (home / "Documents/shared").mkdir(parents=True)
     uv = _executable(home / ".local/bin/uv")
     (home / ".ssh").mkdir()
-    contract = SandboxContract(
+    contract = AccessContract(
         access=resolve_access(
             SharedGrants(
                 documents=[DocumentGrant(path="Documents/shared", access="read")],

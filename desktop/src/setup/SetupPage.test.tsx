@@ -19,7 +19,7 @@ import {
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
-  getSandboxStatus,
+  getAgentEnvironmentStatus,
   getProjectConfig,
   getProjectStatusOptions,
   getRoleOptions,
@@ -40,7 +40,7 @@ import {
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
 } from "../api/client";
-import { CLOSED_NETWORK_POLICY, type SandboxStatusResponse } from "../api/client";
+import { CLOSED_NETWORK_POLICY, type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
 import {
@@ -238,7 +238,7 @@ vi.mock("../api/client", async (importOriginal) => {
       brain_mapping: [],
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
-    getSandboxStatus: vi.fn(async () => sandboxStatus()),
+    getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
     getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
     getAgentFieldState: vi.fn(async () => ({
       available: false,
@@ -1298,7 +1298,9 @@ function renderSetupPage(path: string) {
   );
 }
 
-function sandboxStatus(overrides: Partial<SandboxStatusResponse> = {}): SandboxStatusResponse {
+function environmentStatus(
+  overrides: Partial<AgentEnvironmentStatusResponse> = {},
+): AgentEnvironmentStatusResponse {
   return {
     platform: "darwin",
     working_directory: "<workspace>",
@@ -2356,8 +2358,8 @@ describe("MembersSection", () => {
         { person_id: "kenji", name: "Kenji", person_type: "agent", is_active: true, roles: [] },
       ],
     });
-    vi.mocked(getSandboxStatus).mockResolvedValue(
-      sandboxStatus({
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
         members: [
           {
             person_id: "alice",

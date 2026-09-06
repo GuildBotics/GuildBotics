@@ -110,7 +110,7 @@ import {
   updateDefaultPerson,
   updateMemberConfig,
   updateIntelligenceConfig,
-  getSandboxStatus,
+  getAgentEnvironmentStatus,
   updateProjectConfig,
   memberAvatarUrl,
   uploadMemberAvatar,
@@ -257,9 +257,13 @@ function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled:
  * reasons name the setting (a network mode the tool cannot enforce here, a
  * local path that does not exist), and the tooltip lists them per slot.
  */
-function MemberSandboxBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
+function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const { t } = useTranslation();
-  const status = useQuery({ queryKey: ["sandbox-status"], queryFn: getSandboxStatus, enabled });
+  const status = useQuery({
+    queryKey: ["agent-environment-status"],
+    queryFn: getAgentEnvironmentStatus,
+    enabled,
+  });
   const slots = status.data?.members.find((m) => m.person_id === personId)?.slots ?? [];
   const reasons = slots.flatMap((slot) =>
     slot.problems.map(({ reason }) => (slots.length > 1 ? `${slot.slot}: ${reason}` : reason)),
@@ -1802,14 +1806,14 @@ function IntelligenceEditor({
       queryClient.invalidateQueries({ queryKey: ["project-config"] });
       // The saved settings resolve differently now: the preview and the
       // status band both read them back.
-      queryClient.invalidateQueries({ queryKey: ["sandbox-status"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-environment-status"] });
       queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
     },
   });
-  const sandboxRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
-  const sandboxStatus = useQuery({
-    queryKey: ["sandbox-status", sandboxRefreshKey],
-    queryFn: getSandboxStatus,
+  const environmentRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
+  const environmentStatus = useQuery({
+    queryKey: ["agent-environment-status", environmentRefreshKey],
+    queryFn: getAgentEnvironmentStatus,
     enabled: enabled && Boolean(query.data),
   });
   const querySerializedPayload = query.data
@@ -2630,7 +2634,7 @@ function IntelligenceEditor({
               <GrantsCards
                 shared={draft.filesystem_grants ?? { documents: [] }}
                 local={draft.local_grants ?? { paths: [], deny: [] }}
-                status={sandboxStatus.data?.access}
+                status={environmentStatus.data?.access}
                 onSharedChange={(filesystem_grants) =>
                   updateDraft((current) => ({ ...current, filesystem_grants }))
                 }
@@ -3756,7 +3760,10 @@ function MembersSection({
                     {member.name} ({member.person_id})
                   </Text>
                   {member.person_type !== "human" ? (
-                    <MemberSandboxBadge personId={member.person_id} enabled={hasPersistedProject} />
+                    <MemberEnvironmentBadge
+                      personId={member.person_id}
+                      enabled={hasPersistedProject}
+                    />
                   ) : null}
                 </Group>
                 <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>

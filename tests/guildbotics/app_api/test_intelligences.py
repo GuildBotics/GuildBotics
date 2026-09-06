@@ -20,7 +20,7 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,

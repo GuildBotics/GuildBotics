@@ -9,7 +9,7 @@ import {
   evaluateGrant,
   type GrantEvaluation,
   type LocalGrants,
-  type SandboxAccessStatus,
+  type EnvironmentAccessStatus,
   type SharedGrants,
 } from "../api/client";
 import i18n from "../i18n";
@@ -26,7 +26,7 @@ vi.mock("../api/client", async (importOriginal) => ({
 const t = i18n.getFixedT("en");
 
 /** How the device reports the saved grants: display form beside the grant file's spelling. */
-const macStatus: SandboxAccessStatus = {
+const macStatus: EnvironmentAccessStatus = {
   documents: [{ path: "$HOME/Documents", grant: "Documents", access: "read", present: true }],
   paths: [{ path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false }],
   trees: [
@@ -49,7 +49,7 @@ const macStatus: SandboxAccessStatus = {
 };
 
 /** A Windows device spells the same rows with backslashes after `$HOME`. */
-const windowsStatus: SandboxAccessStatus = {
+const windowsStatus: EnvironmentAccessStatus = {
   documents: [],
   paths: [
     {
@@ -80,7 +80,7 @@ function Harness({
 }: {
   shared?: SharedGrants;
   local?: LocalGrants;
-  status?: SandboxAccessStatus;
+  status?: EnvironmentAccessStatus;
   onShared?: (shared: SharedGrants) => void;
   onLocal?: (local: LocalGrants) => void;
 }) {

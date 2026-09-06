@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.app_api import sandbox_status as module
-from guildbotics.app_api.sandbox_status import (
+from guildbotics.app_api import agent_environment_status as module
+from guildbotics.app_api.agent_environment_status import (
     evaluate_grant,
     network_support,
-    sandbox_problems,
-    sandbox_status,
+    agent_environment_problems,
+    agent_environment_status,
 )
 from guildbotics.intelligences.brains.cli_agent import ExecutableInfo
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
@@ -89,7 +89,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
         module, "get_cli_agent_mapping", lambda person: mappings[person]
     )
 
-    status = sandbox_status(["aiko", "kenji"], platform="darwin")
+    status = agent_environment_status(["aiko", "kenji"], platform="darwin")
 
     # A preview creates nothing: the missing document directory is shown absent.
     # Each row carries the spelling the grant file uses beside its display
@@ -120,7 +120,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     assert kenji.contract_applied is False
     assert kenji.problems == []
 
-    assert sandbox_problems(["aiko", "kenji"]) == [
+    assert agent_environment_problems(["aiko", "kenji"]) == [
         ("aiko", "default", "network", aiko.problems[0].reason)
     ]
 
@@ -161,7 +161,7 @@ def test_a_grant_a_tool_cannot_hold_is_a_problem_for_that_slot(
         },
     )
 
-    slot = sandbox_status(["x"], platform="darwin").members[0].slots[0]
+    slot = agent_environment_status(["x"], platform="darwin").members[0].slots[0]
 
     assert [(p.setting, p.reason) for p in slot.problems] == [
         ("grants", "Antigravity cannot grant 'read' access to a directory.")
@@ -184,7 +184,7 @@ def test_an_unresolvable_local_path_is_reported_on_every_applied_slot(
         },
     )
 
-    status = sandbox_status(["aiko"], platform="darwin")
+    status = agent_environment_status(["aiko"], platform="darwin")
 
     # The row is shown absent, and every applied slot names it as the reason.
     assert status.access.problem == ""
@@ -202,7 +202,7 @@ def test_an_excluded_tree_is_reported_with_its_source_and_reason(
     secret = _executable(home / ".ssh/bin/leak")
     monkeypatch.setattr(module, "get_cli_agent_search_path", lambda: str(secret.parent))
 
-    status = sandbox_status(["aiko"], platform="darwin")
+    status = agent_environment_status(["aiko"], platform="darwin")
 
     assert status.access.trees == []
     # `bin` and its package collapse to `~/.ssh` itself, which stays closed.
@@ -264,14 +264,17 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     from guildbotics.app_api import api as api_module
     from guildbotics.app_api.api import create_app
     from guildbotics.app_api.events import EventBus
-    from guildbotics.app_api.models import GrantEvaluation, SandboxStatusResponse
+    from guildbotics.app_api.models import (
+        GrantEvaluation,
+        AgentEnvironmentStatusResponse,
+    )
     from guildbotics.app_api.runtime import AppRuntime
 
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
         runtime,
-        "get_sandbox_status",
-        lambda: SandboxStatusResponse(
+        "get_agent_environment_status",
+        lambda: AgentEnvironmentStatusResponse(
             platform="darwin", working_directory="<workspace>"
         ),
     )
@@ -285,7 +288,7 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     headers = {"X-GuildBotics-Session-Token": "secret"}
 
     with TestClient(create_app(session_token="secret", runtime=runtime)) as client:
-        status = client.get("/intelligences/sandbox", headers=headers)
+        status = client.get("/intelligences/agent-environment", headers=headers)
         evaluation = client.get(
             "/intelligences/grant-evaluation",
             params={"scope": "deny", "path": "/opt/x"},
@@ -296,7 +299,7 @@ def test_the_sandbox_endpoints_answer_from_this_device(
             params={"scope": "other", "path": "x"},
             headers=headers,
         )
-        unauthorized = client.get("/intelligences/sandbox")
+        unauthorized = client.get("/intelligences/agent-environment")
 
     assert status.json()["platform"] == "darwin"
     assert evaluation.json()["scope"] == "deny"

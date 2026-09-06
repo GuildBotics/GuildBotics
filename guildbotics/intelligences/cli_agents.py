@@ -7,7 +7,10 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from guildbotics.intelligences.sandbox import NETWORK_MODES, NetworkPolicy
+from guildbotics.intelligences.agent_environment.contract import (
+    NETWORK_MODES,
+    NetworkPolicy,
+)
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 #: Every AI CLI tool lives at ``cli_agents/<tool>/default.yml`` and a slot may
@@ -42,7 +45,7 @@ class CliAgentNetworkSupport(BaseModel):
     local_network_modes: frozenset[str] = frozenset()
     #: Grant accesses the tool can hold commands and its file tools to.
     grant_accesses: frozenset[str] = frozenset({"read", "read_write"})
-    #: Whether the adapter translates the sandbox contract at all. Until it
+    #: Whether the adapter translates the access contract at all. Until it
     #: does, the tool runs under its previous fixed settings and the contract
     #: is neither validated nor reported for it.
     contract_applied: bool = False

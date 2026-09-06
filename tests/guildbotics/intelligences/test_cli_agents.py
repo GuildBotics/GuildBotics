@@ -15,7 +15,10 @@ from guildbotics.intelligences.cli_agents import (
     resolve_default_cli_executable,
     unsupported_network_reason,
 )
-from guildbotics.intelligences.sandbox import NetworkPolicy, parse_network_policy
+from guildbotics.intelligences.agent_environment.contract import (
+    NetworkPolicy,
+    parse_network_policy,
+)
 
 
 def test_cli_agent_search_path_preserves_explicit_empty_path() -> None:

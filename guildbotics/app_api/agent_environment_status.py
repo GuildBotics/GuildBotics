@@ -15,34 +15,27 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from guildbotics.app_api.models import (
+    AgentEnvironmentStatusResponse,
     CliAgentNetworkSupportInfo,
+    EnvironmentAccessStatus,
+    EnvironmentDenyStatus,
+    EnvironmentExcludedStatus,
+    EnvironmentGrantStatus,
+    EnvironmentMemberStatus,
+    EnvironmentProblem,
+    EnvironmentSetting,
+    EnvironmentSlotStatus,
+    EnvironmentTreeStatus,
     GrantEvaluation,
     GrantScope,
-    SandboxAccessStatus,
-    SandboxDenyStatus,
-    SandboxExcludedStatus,
-    SandboxGrantStatus,
-    SandboxMemberStatus,
-    SandboxProblem,
-    SandboxSetting,
-    SandboxSlotStatus,
-    SandboxStatusResponse,
-    SandboxTreeStatus,
 )
-from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
-from guildbotics.intelligences.cli_agents import (
-    CLI_AGENTS,
-    get_cli_agent_search_path,
-    unsupported_grant_reason,
-    unsupported_network_reason,
-)
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
     DocumentGrant,
     LocalGrants,
     NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
-    SandboxContractError,
     SharedGrants,
     load_local_grants,
     load_shared_grants,
@@ -50,6 +43,13 @@ from guildbotics.intelligences.sandbox import (
     redact_path,
     resolve_access,
     sensitive_grant_reason,
+)
+from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
+from guildbotics.intelligences.cli_agents import (
+    CLI_AGENTS,
+    get_cli_agent_search_path,
+    unsupported_grant_reason,
+    unsupported_network_reason,
 )
 
 
@@ -69,9 +69,9 @@ def network_support(
     }
 
 
-def sandbox_status(
+def agent_environment_status(
     person_ids: list[str], *, platform: str = sys.platform
-) -> SandboxStatusResponse:
+) -> AgentEnvironmentStatusResponse:
     """Resolve the grants and every slot of the given members against this device.
 
     Nothing is created here: a document directory that does not exist yet is
@@ -86,7 +86,7 @@ def sandbox_status(
             create=False,
         )
         problem = ""
-    except SandboxContractError as exc:
+    except AccessContractError as exc:
         access = ResolvedAccess()
         problem = str(exc)
     # What a turn would refuse to start over: the resolution failing as a
@@ -98,7 +98,7 @@ def sandbox_status(
         if not g.present
     ]
     members = [
-        SandboxMemberStatus(
+        EnvironmentMemberStatus(
             person_id=person_id,
             slots=[
                 _slot_status(
@@ -109,7 +109,7 @@ def sandbox_status(
         )
         for person_id in person_ids
     ]
-    return SandboxStatusResponse(
+    return AgentEnvironmentStatusResponse(
         platform=platform,
         working_directory="<workspace>/.guildbotics/local/...",
         access=_access_status(access, problem, home),
@@ -119,20 +119,20 @@ def sandbox_status(
 
 def _access_status(
     access: ResolvedAccess, problem: str, home: Path
-) -> SandboxAccessStatus:
-    def grant(g: ResolvedGrant) -> SandboxGrantStatus:
-        return SandboxGrantStatus(
+) -> EnvironmentAccessStatus:
+    def grant(g: ResolvedGrant) -> EnvironmentGrantStatus:
+        return EnvironmentGrantStatus(
             path=redact_path(g.path, home),
             grant=g.grant,
             access=g.access,
             present=g.present,
         )
 
-    return SandboxAccessStatus(
+    return EnvironmentAccessStatus(
         documents=[grant(g) for g in access.documents],
         paths=[grant(g) for g in access.paths],
         trees=[
-            SandboxTreeStatus(
+            EnvironmentTreeStatus(
                 path=redact_path(t.path, home),
                 grant=t.grant,
                 sources=[redact_path(s, home) for s in t.sources],
@@ -140,7 +140,7 @@ def _access_status(
             for t in access.trees
         ],
         excluded=[
-            SandboxExcludedStatus(
+            EnvironmentExcludedStatus(
                 path=redact_path(t.path, home),
                 source=redact_path(t.source, home),
                 reason=t.reason,
@@ -148,7 +148,7 @@ def _access_status(
             for t in access.excluded
         ],
         denied=[
-            SandboxDenyStatus(path=redact_path(d.path, home), builtin=d.builtin)
+            EnvironmentDenyStatus(path=redact_path(d.path, home), builtin=d.builtin)
             for d in access.denied
         ],
         problem=problem,
@@ -162,15 +162,15 @@ def _slot_status(
     access: ResolvedAccess,
     access_problems: list[str],
     platform: str,
-) -> SandboxSlotStatus:
+) -> EnvironmentSlotStatus:
     applied = next(
         agent.network.contract_applied for agent in CLI_AGENTS if agent.name == tool
     )
-    problems: list[SandboxProblem] = []
+    problems: list[EnvironmentProblem] = []
 
-    def add(setting: SandboxSetting, reason: str) -> None:
+    def add(setting: EnvironmentSetting, reason: str) -> None:
         if reason and all(p.reason != reason for p in problems):
-            problems.append(SandboxProblem(setting=setting, reason=reason))
+            problems.append(EnvironmentProblem(setting=setting, reason=reason))
 
     if applied:
         add("network", unsupported_network_reason(tool, network, platform))
@@ -178,7 +178,7 @@ def _slot_status(
             add("grants", reason)
         for grant in access.entries():
             add("grants", unsupported_grant_reason(tool, grant.access))
-    return SandboxSlotStatus(
+    return EnvironmentSlotStatus(
         slot=slot,
         tool=tool,
         contract_applied=applied,
@@ -188,14 +188,14 @@ def _slot_status(
 
 
 #: ``(person_id, slot, setting, reason)`` for one slot that cannot start here.
-SandboxProblemEntry = tuple[str, str, str, str]
+EnvironmentProblemEntry = tuple[str, str, str, str]
 
 
-def sandbox_problems(person_ids: list[str]) -> list[SandboxProblemEntry]:
+def agent_environment_problems(person_ids: list[str]) -> list[EnvironmentProblemEntry]:
     """Every slot that cannot start on this device, with the setting to open."""
     return [
         (member.person_id, slot.slot, problem.setting, problem.reason)
-        for member in sandbox_status(person_ids).members
+        for member in agent_environment_status(person_ids).members
         for slot in member.slots
         for problem in slot.problems
     ]
@@ -215,7 +215,7 @@ def evaluate_grant(
             resolved = resolve_access(
                 SharedGrants(documents=[grant]), LocalGrants(), "", home, create=False
             )
-        except SandboxContractError as exc:
+        except AccessContractError as exc:
             return _invalid(scope, path, access, str(exc))
         return GrantEvaluation(
             scope="document",
@@ -232,7 +232,7 @@ def evaluate_grant(
             return _invalid(scope, path, "", _reason(exc))
         try:
             resolve_access(SharedGrants(), local, "", home)
-        except SandboxContractError as exc:
+        except AccessContractError as exc:
             return _invalid(scope, path, "", str(exc))
         return GrantEvaluation(scope="deny", path=path, valid=True, present=True)
     try:
@@ -243,7 +243,7 @@ def evaluate_grant(
         return _invalid("local", path, access, _reason(exc))
     try:
         resolve_access(SharedGrants(), local, "", home)
-    except SandboxContractError as exc:
+    except AccessContractError as exc:
         return _invalid("local", path, access, str(exc))
     return GrantEvaluation(
         scope="local",

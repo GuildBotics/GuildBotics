@@ -6,14 +6,14 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
-from guildbotics.intelligences.boundary.spec import (
+from guildbotics.intelligences.agent_environment.spec import (
     DEFAULT_NAMESERVERS,
-    BoundaryMount,
-    BoundarySpecError,
-    build_boundary_spec,
+    EnvironmentMount,
+    AgentEnvironmentSpecError,
+    build_environment_spec,
     guest_path,
 )
-from guildbotics.intelligences.sandbox import (
+from guildbotics.intelligences.agent_environment.contract import (
     DeniedPath,
     DerivedTree,
     DocumentGrant,
@@ -22,7 +22,7 @@ from guildbotics.intelligences.sandbox import (
     NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
-    SandboxContract,
+    AccessContract,
     SharedGrants,
     resolve_access,
 )
@@ -30,8 +30,8 @@ from guildbotics.intelligences.sandbox import (
 
 def _contract(
     access: ResolvedAccess | None = None, **network: object
-) -> SandboxContract:
-    return SandboxContract(
+) -> AccessContract:
+    return AccessContract(
         network=NetworkPolicy(**network) if network else NetworkPolicy(),
         access=access or ResolvedAccess(),
     )
@@ -46,11 +46,11 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
     cwd = tmp_path / "repo"
     cwd.mkdir()
 
-    spec = build_boundary_spec(_contract(), cwd, home=tmp_path)
+    spec = build_environment_spec(_contract(), cwd, home=tmp_path)
 
     assert spec.cwd == cwd.as_posix()
     assert spec.home == tmp_path.resolve().as_posix()
-    assert spec.mounts == (BoundaryMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
     assert spec.env == {}
 
 
@@ -74,18 +74,18 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
         home=home,
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=home)
+    spec = build_environment_spec(_contract(access), cwd, home=home)
 
     assert spec.home == home.as_posix()
     assert set(spec.mounts) == {
-        BoundaryMount(cwd.as_posix(), cwd, readonly=False),
-        BoundaryMount((home / "out").as_posix(), home / "out", readonly=False),
-        BoundaryMount(
+        EnvironmentMount(cwd.as_posix(), cwd, readonly=False),
+        EnvironmentMount((home / "out").as_posix(), home / "out", readonly=False),
+        EnvironmentMount(
             (home / "Documents" / "notes").as_posix(),
             home / "Documents" / "notes",
             readonly=True,
         ),
-        BoundaryMount(cache.as_posix(), cache, readonly=True),
+        EnvironmentMount(cache.as_posix(), cache, readonly=True),
     }
 
 
@@ -101,13 +101,13 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
         home=home,
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=home)
+    spec = build_environment_spec(_contract(access), cwd, home=home)
 
     depths = [len(PurePosixPath(m.guest).parts) for m in spec.mounts]
     assert depths == sorted(depths)
     # The working directory is read-write even where a grant names it read.
     assert [m for m in spec.mounts if m.guest == cwd.as_posix()] == [
-        BoundaryMount(cwd.as_posix(), cwd, readonly=False)
+        EnvironmentMount(cwd.as_posix(), cwd, readonly=False)
     ]
 
 
@@ -126,10 +126,12 @@ def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
         home=home,
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=home)
+    spec = build_environment_spec(_contract(access), cwd, home=home)
 
     covers = [m for m in spec.mounts if m.host is None]
-    assert covers == [BoundaryMount(f"{cwd.as_posix()}/private", None, readonly=True)]
+    assert covers == [
+        EnvironmentMount(f"{cwd.as_posix()}/private", None, readonly=True)
+    ]
     guests = [m.guest for m in spec.mounts]
     assert guests.index(f"{cwd.as_posix()}/private") > guests.index(cwd.as_posix())
 
@@ -149,9 +151,9 @@ def test_a_deny_outside_every_mount_or_absent_on_disk_covers_nothing(
         )
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=tmp_path)
+    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
 
-    assert spec.mounts == (BoundaryMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
 
 
 def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None:
@@ -169,9 +171,9 @@ def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None
         denied=(DeniedPath(closed, builtin=False),),
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=home)
+    spec = build_environment_spec(_contract(access), cwd, home=home)
 
-    assert spec.mounts == (BoundaryMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
 
 
 def test_the_trees_a_path_derives_are_not_mounted(tmp_path: Path) -> None:
@@ -182,9 +184,9 @@ def test_the_trees_a_path_derives_are_not_mounted(tmp_path: Path) -> None:
         trees=(DerivedTree(Path("/opt/homebrew"), (Path("/opt/homebrew/bin"),), "x"),)
     )
 
-    spec = build_boundary_spec(_contract(access), cwd, home=tmp_path)
+    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
 
-    assert spec.mounts == (BoundaryMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
 
 
 # --- guest paths ----------------------------------------------------------------
@@ -215,7 +217,7 @@ def test_guest_paths_keep_posix_spelling_and_map_windows_drives(
 def test_relative_and_network_paths_have_no_guest_path(
     path: PurePosixPath | PureWindowsPath,
 ) -> None:
-    with pytest.raises(BoundarySpecError):
+    with pytest.raises(AgentEnvironmentSpecError):
         guest_path(path)
 
 
@@ -225,7 +227,7 @@ def test_relative_and_network_paths_have_no_guest_path(
 def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
     tmp_path: Path,
 ) -> None:
-    spec = build_boundary_spec(
+    spec = build_environment_spec(
         _contract(),
         tmp_path,
         host_ports=[43123, 43123],
@@ -242,7 +244,7 @@ def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
 
 
 def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> None:
-    spec = build_boundary_spec(
+    spec = build_environment_spec(
         _contract(
             mode="allowlist",
             allowed_domains=["pypi.org", "files.pythonhosted.org", "api.openai.com"],
@@ -261,7 +263,7 @@ def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> No
 
 
 def test_unrestricted_opens_all_egress(tmp_path: Path) -> None:
-    spec = build_boundary_spec(
+    spec = build_environment_spec(
         _contract(mode="unrestricted"),
         tmp_path,
         provider_domains=["api.openai.com"],
@@ -278,7 +280,7 @@ def test_the_environment_is_exactly_what_the_caller_states(
     """The boundary is another machine: the host environment is not inherited."""
     monkeypatch.setenv("OPENAI_API_KEY", "not-for-the-guest")
 
-    spec = build_boundary_spec(
+    spec = build_environment_spec(
         _contract(),
         tmp_path,
         env={"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"},

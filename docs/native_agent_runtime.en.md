@@ -44,7 +44,7 @@ provider-neutral `low` / `high` levels become provider settings, plus the
 `network:` block described below. The shipped defaults also declare
 `effort_fields:`, the descriptors the settings editor uses for typed editing.
 
-## Sandbox contract
+## Isolated agent environment: access permissions
 
 Every AI CLI turn is confined by the same contract, whatever it is for (a
 ticket, a chat, the Desktop troubleshooter, command authoring). GuildBotics asks
