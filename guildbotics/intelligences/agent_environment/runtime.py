@@ -15,21 +15,32 @@ and be told, through :func:`doctor`, why no agent can run there.
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
-from contextlib import suppress
+import tempfile
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.spec import AgentEnvironmentSpec
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    EnvironmentNetwork,
+)
 
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
 _NAME_PREFIX = "guildbotics-"
+#: The one sandbox a snapshot is built in; a device builds one at a time.
+_BUILD_NAME = _NAME_PREFIX + "build"
 #: Size of the empty mount that covers a denied directory.
 _COVER_MIB = 1
 #: The exit code reported when the guest process ended without one: the
 #: runtime killed it, or its exec session broke.
 _KILLED = -1
 _STOP_TIMEOUT = 5.0
+#: Longest output line a build step may print before its reader gives up.
+_BUILD_LINE_LIMIT = 1 << 20
 
 
 class AgentEnvironmentError(RuntimeError):
@@ -232,6 +243,131 @@ class AgentEnvironment:
                 await self._sandbox.destroy(force=True)
 
 
+@dataclass(frozen=True, slots=True)
+class BuildStep:
+    """One shell script of a snapshot build, named for the build log."""
+
+    label: str
+    script: str
+
+
+async def build_snapshot(
+    name: str,
+    *,
+    dest_dir: Path,
+    image: str,
+    home: str,
+    steps: Sequence[BuildStep],
+    nameservers: Iterable[str],
+    on_line: Callable[[str], None],
+) -> Path:
+    """Run ``steps`` on ``image`` and keep the result as the snapshot ``name``.
+
+    The build sandbox has all egress open: it fetches packages from wherever
+    they live, and nothing of the user's is mounted into it. Every line the
+    steps print goes to ``on_line``. The sandbox is removed whether the
+    build succeeds or not; only the snapshot under ``dest_dir`` remains.
+
+    Raises:
+        AgentEnvironmentError: When the sandbox cannot start, a step exits
+            non-zero, or the snapshot cannot be written.
+    """
+    from microsandbox import Sandbox, Snapshot
+
+    network = EnvironmentNetwork(
+        unrestricted=True,
+        domains=(),
+        host_ports=(),
+        local_network=False,
+        nameservers=tuple(nameservers),
+    )
+    try:
+        with _anonymous_registry():
+            sandbox = await Sandbox.create(
+                _BUILD_NAME,
+                image=image,
+                replace=True,
+                workdir="/",
+                network=_network_of(network),
+            )
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            f"Could not start the build environment: {exc}"
+        ) from exc
+    try:
+        for step in steps:
+            on_line(f"[{step.label}]")
+            handle = await sandbox.exec_stream(
+                "sh",
+                ["-ec", step.script],
+                env={"HOME": home, "DEBIAN_FRONTEND": "noninteractive"},
+            )
+            process = EnvironmentProcess(handle, limit=_BUILD_LINE_LIMIT)
+            await _relay_lines(process, on_line)
+            code = await process.wait()
+            if code != 0:
+                raise AgentEnvironmentError(
+                    f"Build step '{step.label}' failed with exit code {code}."
+                )
+        await sandbox.stop(timeout=_STOP_TIMEOUT)
+        snapshot = await Snapshot.create(
+            name, from_sandbox=_BUILD_NAME, dest_dir=str(dest_dir), force=True
+        )
+        return Path(snapshot.path)
+    except AgentEnvironmentError:
+        raise
+    except Exception as exc:
+        raise AgentEnvironmentError(f"Could not build the snapshot: {exc}") from exc
+    finally:
+        with suppress(Exception):
+            await (await Sandbox.get(_BUILD_NAME)).destroy(force=True)
+
+
+@contextmanager
+def _anonymous_registry() -> Iterator[None]:
+    """Pull the base image without the Docker client's configuration.
+
+    The runtime reads ``~/.docker/config.json`` the way the Docker client
+    does and runs the credential helper it names. Docker Desktop's helper
+    blocks for as long as Desktop is unwell, and a build with it, silently.
+    The base image needs no credentials, and Docker Desktop's state is no
+    setting of GuildBotics', so the pull sees an empty configuration
+    directory instead of the user's.
+    """
+    previous = os.environ.get("DOCKER_CONFIG")
+    with tempfile.TemporaryDirectory(prefix="guildbotics-registry-") as empty:
+        os.environ["DOCKER_CONFIG"] = empty
+        try:
+            yield
+        finally:
+            if previous is None:
+                del os.environ["DOCKER_CONFIG"]
+            else:
+                os.environ["DOCKER_CONFIG"] = previous
+
+
+async def remove_snapshot(path: Path) -> None:
+    """Delete the snapshot at ``path`` and forget it."""
+    from microsandbox import Snapshot
+
+    try:
+        await Snapshot.remove(str(path), force=True)
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            f"Could not remove the snapshot at {path}: {exc}"
+        ) from exc
+
+
+async def _relay_lines(
+    process: EnvironmentProcess, on_line: Callable[[str], None]
+) -> None:
+    async def pump(reader: asyncio.StreamReader) -> None:
+        while line := await reader.readline():
+            on_line(line.decode(errors="replace").rstrip("\r\n"))
+
+    await asyncio.gather(pump(process.stdout), pump(process.stderr))
+
+
 def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     from microsandbox import Volume
 
@@ -246,6 +382,10 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
 
 
 def _network(spec: AgentEnvironmentSpec) -> Any:
+    return _network_of(spec.network)
+
+
+def _network_of(network: EnvironmentNetwork) -> Any:
     from microsandbox import (
         Action,
         DestGroup,
@@ -257,7 +397,6 @@ def _network(spec: AgentEnvironmentSpec) -> Any:
     )
     from microsandbox.types import DnsConfig
 
-    network = spec.network
     rules: list[Any] = []
     if not network.unrestricted:
         rules.extend(Rule.allow_dns())

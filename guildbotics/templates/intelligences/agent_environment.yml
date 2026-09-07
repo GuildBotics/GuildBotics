@@ -1,0 +1,22 @@
+# The isolated agent environment every AI CLI turn of this workspace runs in.
+#
+# This file is shared between the devices of the workspace, and each device
+# builds the same environment from it. GuildBotics provides the base image
+# (Debian with Node.js, npm, git and uv) and installs the AI CLI tools at the
+# versions it was verified with; what is declared here is added on top.
+#
+# Every entry is one argument to its package manager, so pin versions the way
+# that manager spells them. An unpinned entry changes with every rebuild
+# without the environment noticing.
+packages:
+  # Debian packages: `ripgrep=14.1.0-1`
+  apt: []
+  # npm packages, installed globally: `typescript@5.6.3`
+  npm: []
+  # Python tools, installed with `uv tool install`: `ruff==0.6.9`
+  uv: []
+
+# The upstream DNS resolvers the environment forwards queries to. IPv4
+# addresses; they are shared, so name ones every device can reach.
+dns:
+  nameservers: [1.1.1.1, 1.0.0.1]

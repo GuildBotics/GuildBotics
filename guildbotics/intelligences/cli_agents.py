@@ -57,6 +57,41 @@ class CliAgentNetworkSupport(BaseModel):
         return self.modes.get(platform, self.modes.get(ANY_PLATFORM, frozenset()))
 
 
+class CliAgentProvision(BaseModel):
+    """How a tool is put into the agent environment, and what of it persists.
+
+    ``package`` is the npm package the environment's snapshot installs, at
+    the version this adapter was verified with: the CLI and the adapter that
+    speaks to it are tested together and shipped together, so the version is
+    GuildBotics' to pin. A tool without a package is not provisioned yet.
+
+    The tool keeps its state under ``state_root`` in the home directory (the
+    directory ``state_root_env`` points it at). Only the entries in
+    ``persisted`` outlive a turn, bound from this device's own store:
+    ``auth`` and the session directories (spelled with a trailing slash).
+    Everything else under the root -- settings, skills, plugins -- is the
+    snapshot's and returns to it every turn, so nothing an agent changes
+    there reaches the next turn or another member.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    package: str = ""
+    state_root: str = ""
+    state_root_env: str = ""
+    #: The persisted file whose presence means the tool is logged in.
+    auth: str = ""
+    persisted: tuple[str, ...] = ()
+    #: The login command, run interactively inside the environment.
+    login: tuple[str, ...] = ()
+
+    def environment(self, home: str) -> dict[str, str]:
+        """The variables that point the tool at its state root under ``home``."""
+        if not self.state_root_env:
+            return {}
+        return {self.state_root_env: f"{home}/{self.state_root}"}
+
+
 class CliAgentInfo(BaseModel):
     """A selectable AI CLI tool."""
 
@@ -66,6 +101,7 @@ class CliAgentInfo(BaseModel):
     executable: str = ""
     config_reference: str = ""
     network: CliAgentNetworkSupport = CliAgentNetworkSupport()
+    provision: CliAgentProvision = CliAgentProvision()
 
 
 #: The complete catalog of selectable AI CLI tools, in display order. Every tool
@@ -89,6 +125,17 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             local_network_modes=frozenset({"allowlist"}),
             contract_applied=True,
         ),
+        # auth.json is rewritten in place (truncated, never renamed), so a
+        # file bound over it keeps every refresh. Device auth prints a URL
+        # and a code instead of opening a browser the environment has not.
+        provision=CliAgentProvision(
+            package="@openai/codex@0.153.4",
+            state_root=".codex",
+            state_root_env="CODEX_HOME",
+            auth="auth.json",
+            persisted=("auth.json", "sessions/"),
+            login=("codex", "login", "--device-auth"),
+        ),
     ),
     CliAgentInfo(
         name="claude",
@@ -101,6 +148,16 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # that restricts anything.
         network=CliAgentNetworkSupport(
             local_network_modes=frozenset({"deny", "allowlist"})
+        ),
+        # With CLAUDE_CONFIG_DIR set, the account file `.claude.json` moves
+        # under it beside the credentials, so the whole state sits in one root.
+        provision=CliAgentProvision(
+            package="@anthropic-ai/claude-code@2.1.263",
+            state_root=".claude",
+            state_root_env="CLAUDE_CONFIG_DIR",
+            auth=".credentials.json",
+            persisted=(".credentials.json", ".claude.json", "projects/"),
+            login=("claude", "auth", "login"),
         ),
     ),
     CliAgentInfo(

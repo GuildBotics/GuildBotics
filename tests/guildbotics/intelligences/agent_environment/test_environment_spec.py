@@ -7,10 +7,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import pytest
 
 from guildbotics.intelligences.agent_environment.spec import (
-    DEFAULT_NAMESERVERS,
     EnvironmentMount,
     AgentEnvironmentSpecError,
-    build_environment_spec,
+    build_environment_spec as _build_environment_spec,
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.contract import (
@@ -26,6 +25,15 @@ from guildbotics.intelligences.agent_environment.contract import (
     SharedGrants,
     resolve_access,
 )
+
+
+_NAMESERVERS = ("10.0.0.53",)
+
+
+def build_environment_spec(*args: object, **kwargs: object) -> object:
+    """The translation with the declaration's resolvers already supplied."""
+    kwargs.setdefault("nameservers", _NAMESERVERS)
+    return _build_environment_spec(*args, **kwargs)
 
 
 def _contract(
@@ -240,7 +248,7 @@ def test_a_closed_contract_still_reaches_dns_the_provider_and_the_host_ports(
     assert network.domains == ("api.openai.com", "*.openai.com")
     assert network.host_ports == (43123,)
     assert not network.local_network
-    assert network.nameservers == DEFAULT_NAMESERVERS
+    assert network.nameservers == _NAMESERVERS
 
 
 def test_an_allowlist_adds_its_domains_after_the_providers(tmp_path: Path) -> None:

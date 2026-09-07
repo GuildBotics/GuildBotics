@@ -35,12 +35,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     ResolvedAccess,
 )
 
-#: Upstream resolvers the environment's DNS gateway forwards to. Without an
-#: explicit upstream, Codex's built-in resolver gets no answer from the
-#: gateway's default in time and its login fails; naming one is what makes
-#: domain rules resolvable at all.
-DEFAULT_NAMESERVERS: tuple[str, ...] = ("1.1.1.1", "1.0.0.1")
-
 
 class AgentEnvironmentSpecError(ValueError):
     """Raised when the contract names something the environment cannot mount."""
@@ -100,7 +94,7 @@ def build_environment_spec(
     provider_domains: Iterable[str] = (),
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
-    nameservers: Iterable[str] = DEFAULT_NAMESERVERS,
+    nameservers: Iterable[str],
 ) -> AgentEnvironmentSpec:
     """Translate the contract for a turn run in ``cwd``.
 
@@ -114,17 +108,30 @@ def build_environment_spec(
         env: The environment the provider process starts with. The host's
             environment is never inherited: the environment is another machine.
         home: The host home directory, which is the guest's home too.
-        nameservers: Upstream DNS resolvers for the environment's gateway.
+        nameservers: Upstream DNS resolvers for the environment's gateway,
+            from the toolchain declaration. Without an explicit upstream,
+            Codex's built-in resolver gets no answer from the gateway's
+            default in time; naming one is what makes domain rules
+            resolvable at all.
     """
     return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
-        home=guest_path((home or Path.home()).resolve()),
+        home=guest_home(home),
         mounts=_mounts(contract.access, cwd),
         network=_network(
             contract.network, tuple(host_ports), tuple(provider_domains), nameservers
         ),
         env=dict(env or {}),
     )
+
+
+def guest_home(home: Path | None = None) -> str:
+    """The guest's home directory: the host's, as the guest spells it.
+
+    The snapshot is built with this home and every turn runs with it, so
+    both derive it here and cannot disagree.
+    """
+    return guest_path((home or Path.home()).resolve())
 
 
 def guest_path(path: PurePath) -> str:

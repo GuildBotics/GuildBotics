@@ -16,6 +16,7 @@ from guildbotics.drivers.execution import (
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotUpkeep
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
@@ -83,7 +84,12 @@ class TaskScheduler:
     def start(self):
         """
         Start the task scheduler.
+
+        The agent environment's upkeep runs beside the member workers for as
+        long as they do: a changed declaration is rebuilt here, so the next
+        turn on this device boots from it without anyone asking.
         """
+        SnapshotUpkeep(self._stop_event, self.context.logger).start()
         threads: list[threading.Thread] = []
         for p, scheduled_tasks in self.scheduled_tasks_list.items():
             if not p.is_active:
