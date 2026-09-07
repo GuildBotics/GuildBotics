@@ -13,7 +13,10 @@ not what the user wants inside.
 from __future__ import annotations
 
 import ipaddress
-from typing import Any
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -54,28 +57,92 @@ class Packages(BaseModel):
     _specs = field_validator("apt", "npm", "uv")(_package_specs)
 
 
+#: The declaration's word for "the resolvers this device uses".
+HOST_NAMESERVERS = "host"
+_RESOLV_CONF = Path("/etc/resolv.conf")
+
+
 class DnsSettings(BaseModel):
     """Where the environment's DNS gateway forwards queries.
 
-    The gateway's own default upstream does not answer Codex's built-in
-    resolver in time, so the upstreams are always named. They are a property
-    of the environment, shared like the rest of it: a device on another
-    network must be able to reach them too.
+    The gateway's own default forwarding does not answer Codex's built-in
+    resolver in time, so the upstreams are always named. ``host`` names the
+    IPv4 resolvers of whichever device runs the turn, read when it starts:
+    a shared list of one network's resolvers would strand a device on
+    another. An explicit list is for a resolver every device can reach.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    nameservers: list[str] = Field(min_length=1)
+    nameservers: Literal["host"] | list[str]
 
     @field_validator("nameservers")
     @classmethod
-    def _ipv4_addresses(cls, nameservers: list[str]) -> list[str]:
+    def _ipv4_addresses(cls, nameservers: str | list[str]) -> str | list[str]:
+        if isinstance(nameservers, str):
+            return nameservers
+        if not nameservers:
+            raise ValueError("name at least one nameserver, or 'host'")
         for nameserver in nameservers:
             try:
                 ipaddress.IPv4Address(nameserver)
             except ValueError as exc:
                 raise ValueError(f"'{nameserver}' is not an IPv4 address") from exc
         return nameservers
+
+
+def upstream_nameservers(dns: DnsSettings) -> tuple[str, ...]:
+    """The resolvers an environment started now forwards to.
+
+    Raises:
+        ToolchainError: When the declaration says ``host`` and this device
+            has no IPv4 resolver to read; the gateway speaks IPv4 only.
+    """
+    if dns.nameservers != HOST_NAMESERVERS:
+        return tuple(dns.nameservers)
+    resolvers = device_nameservers()
+    if not resolvers:
+        raise ToolchainError(
+            f"{TOOLCHAIN_PATH}: dns.nameservers is '{HOST_NAMESERVERS}' but this "
+            "device has no IPv4 resolver; name the nameservers explicitly"
+        )
+    return resolvers
+
+
+def device_nameservers() -> tuple[str, ...]:
+    """This device's IPv4 resolvers, in the order it consults them."""
+    if sys.platform == "win32":
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(Get-DnsClientServerAddress -AddressFamily IPv4).ServerAddresses",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        candidates = completed.stdout.split()
+    else:
+        try:
+            lines = _RESOLV_CONF.read_text().splitlines()
+        except OSError:
+            lines = []
+        candidates = [
+            line.split()[1]
+            for line in lines
+            if line.startswith("nameserver") and len(line.split()) > 1
+        ]
+    resolvers: list[str] = []
+    for candidate in candidates:
+        try:
+            ipaddress.IPv4Address(candidate)
+        except ValueError:
+            continue
+        if candidate not in resolvers:
+            resolvers.append(candidate)
+    return tuple(resolvers)
 
 
 class ToolchainDeclaration(BaseModel):

@@ -22,9 +22,11 @@ from typing import Any
 from mcp.server import MCPServer
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
 from uvicorn import Config, Server
 
+from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     create_agent_subprocess,
@@ -73,10 +75,16 @@ class MemberCommandResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class MemberBrokerEndpoint:
-    """Provider-neutral connection details for the trusted MCP endpoint."""
+    """Provider-neutral connection details for the trusted MCP endpoint.
+
+    ``url`` reaches the broker from the host; ``guest_url`` reaches it from
+    inside the agent environment, whose policy opens ``port`` to the guest.
+    """
 
     name: str
     url: str
+    guest_url: str
+    port: int
     authorization: str
 
 
@@ -118,6 +126,7 @@ class MemberCapabilityBroker:
         self._server: _EmbeddedServer | None = None
         self._serve_task: asyncio.Task[None] | None = None
         self._url = ""
+        self._port = 0
 
     @property
     def name(self) -> str:
@@ -132,6 +141,8 @@ class MemberCapabilityBroker:
         return MemberBrokerEndpoint(
             name=self._name,
             url=self._url,
+            guest_url=self._url.replace(_HOST, GUEST_HOST_ALIAS, 1),
+            port=self._port,
             authorization=f"Bearer {self._token}",
         )
 
@@ -276,6 +287,7 @@ class MemberCapabilityBroker:
         self._server = None
         self._serve_task = None
         self._url = ""
+        self._port = 0
         self._token = secrets.token_urlsafe(32)
         if server is None or task is None:
             return
@@ -326,6 +338,17 @@ class MemberCapabilityBroker:
         app = mcp.streamable_http_app(
             stateless_http=True,
             max_request_body_size=_MAX_REQUEST_BYTES,
+            # The Host check keeps a rebinding page from reaching a loopback
+            # server; a turn inside the agent environment names this host by
+            # the gateway's alias, which is as much ours as loopback is.
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=[
+                    f"{_HOST}:*",
+                    "localhost:*",
+                    "[::1]:*",
+                    f"{GUEST_HOST_ALIAS}:*",
+                ]
+            ),
         )
         server = _EmbeddedServer(
             Config(
@@ -357,6 +380,7 @@ class MemberCapabilityBroker:
         self._server = server
         self._serve_task = task
         self._url = url
+        self._port = port
 
 
 def _member_cli_command() -> tuple[str, ...]:

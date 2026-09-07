@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
+environment_cli = importlib.import_module("guildbotics.cli.environment")
 from guildbotics.cli.environment import environment as environment_group
 from guildbotics.cli import main
 from guildbotics.intelligences.agent_environment import (
@@ -41,6 +43,9 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         runtime, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
     )
+    monkeypatch.setattr(
+        environment_cli, "upstream_nameservers", lambda dns: ("192.168.3.1",)
+    )
     return root
 
 
@@ -56,6 +61,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "runtime: available 0.6.17" in result.output
     assert f"snapshot: missing {snapshot_name(load_toolchain())}" in result.output
+    assert "dns: host -> 192.168.3.1" in result.output
     assert (
         "codex: not logged in (run `guildbotics environment login codex`)"
         in result.output
@@ -69,6 +75,11 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
     payload = json.loads(result.output)
     assert payload["runtime"] == {"available": True, "reason": "", "version": "0.6.17"}
     assert payload["snapshot"]["state"] == "missing"
+    assert payload["dns"] == {
+        "declared": "host",
+        "nameservers": ["192.168.3.1"],
+        "problem": "",
+    }
     tools = {tool["name"]: tool for tool in payload["tools"]}
     assert tools["codex"] == {
         "name": "codex",

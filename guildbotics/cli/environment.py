@@ -31,6 +31,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
+    upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, cli_agent_info
 
@@ -67,7 +68,7 @@ def build_command(force: bool) -> None:
         raise click.ClickException("A build of this environment is already running.")
     try:
         built = asyncio.run(snapshot.build_snapshot(declaration, on_line=click.echo))
-    except AgentEnvironmentError as exc:
+    except (AgentEnvironmentError, ToolchainError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"The environment {built.name} is ready.")
 
@@ -100,7 +101,7 @@ def login_command(tool: str) -> None:
                 write_line=click.echo,
             )
         )
-    except AgentEnvironmentError as exc:
+    except (AgentEnvironmentError, ToolchainError) as exc:
         raise click.ClickException(str(exc)) from exc
     if code != 0:
         raise click.ClickException(f"{info.label} login exited with code {code}.")
@@ -131,6 +132,10 @@ def status_command(output_format: str) -> None:
     detail = f" ({state['detail']})" if state["detail"] else ""
     click.echo(f"snapshot: {state['state']} {state['name']}{detail}")
     click.echo(f"location: {state['path']}")
+    dns = payload["dns"]
+    click.echo(
+        f"dns: {dns['declared']} -> {', '.join(dns['nameservers']) or dns['problem']}"
+    )
     for tool in payload["tools"]:
         if not tool["provisioned"]:
             login = "not provisioned"
@@ -145,14 +150,24 @@ def status_command(output_format: str) -> None:
 
 def _status_payload() -> dict[str, Any]:
     health = runtime.doctor()
+    dns_payload: dict[str, Any] = {"declared": "", "nameservers": [], "problem": ""}
     try:
-        state = snapshot.snapshot_status(_declaration())
+        declaration = _declaration()
+        state = snapshot.snapshot_status(declaration)
         snapshot_payload = {
             "state": state.state,
             "name": state.name,
             "path": str(state.path),
             "detail": state.detail,
         }
+        declared = declaration.dns.nameservers
+        dns_payload["declared"] = (
+            declared if isinstance(declared, str) else ", ".join(declared)
+        )
+        try:
+            dns_payload["nameservers"] = list(upstream_nameservers(declaration.dns))
+        except ToolchainError as exc:
+            dns_payload["problem"] = str(exc)
     except click.ClickException as exc:
         snapshot_payload = {
             "state": "missing",
@@ -167,6 +182,7 @@ def _status_payload() -> dict[str, Any]:
             "version": health.runtime_version,
         },
         "snapshot": snapshot_payload,
+        "dns": dns_payload,
         "tools": [
             {
                 "name": agent.name,

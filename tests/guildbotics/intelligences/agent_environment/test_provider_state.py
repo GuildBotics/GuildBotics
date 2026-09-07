@@ -101,6 +101,19 @@ def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
     assert spec.env == {"CLAUDE_CONFIG_DIR": f"{guest}/.claude"}
 
 
+def test_the_login_environment_forwards_to_the_devices_resolvers_for_host(
+    machine: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        provider_state, "upstream_nameservers", lambda dns: ("192.168.3.1",)
+    )
+    declaration = parse_toolchain({"dns": {"nameservers": "host"}}, where="t")
+
+    spec = login_spec(cli_agent_info("codex"), declaration, tmp_path / "home")
+
+    assert spec.network.nameservers == ("192.168.3.1",)
+
+
 class _Process:
     def __init__(self) -> None:
         self.stdout = asyncio.StreamReader()

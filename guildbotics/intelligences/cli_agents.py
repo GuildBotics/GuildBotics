@@ -84,6 +84,10 @@ class CliAgentProvision(BaseModel):
     persisted: tuple[str, ...] = ()
     #: The login command, run interactively inside the environment.
     login: tuple[str, ...] = ()
+    #: The provider's own domains, which every turn may reach whatever its
+    #: network mode: the tool is nothing without its API. ``*.example.com``
+    #: is a suffix. GuildBotics' list, not the user's.
+    api_domains: tuple[str, ...] = ()
 
     def environment(self, home: str) -> dict[str, str]:
         """The variables that point the tool at its state root under ``home``."""
@@ -135,6 +139,15 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             auth="auth.json",
             persisted=("auth.json", "sessions/"),
             login=("codex", "login", "--device-auth"),
+            # A ChatGPT login talks to chatgpt.com, an API key to
+            # api.openai.com, and both refresh through auth.openai.com.
+            api_domains=(
+                "chatgpt.com",
+                "*.chatgpt.com",
+                "api.openai.com",
+                "auth.openai.com",
+                "*.openai.com",
+            ),
         ),
     ),
     CliAgentInfo(
@@ -158,6 +171,9 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             auth=".credentials.json",
             persisted=(".credentials.json", ".claude.json", "projects/"),
             login=("claude", "auth", "login"),
+            # To be confirmed against a real turn when the adapter moves
+            # into the environment.
+            api_domains=("api.anthropic.com", "*.anthropic.com", "claude.ai"),
         ),
     ),
     CliAgentInfo(

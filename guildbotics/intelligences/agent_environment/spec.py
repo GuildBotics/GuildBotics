@@ -35,6 +35,11 @@ from guildbotics.intelligences.agent_environment.contract import (
     ResolvedAccess,
 )
 
+#: How the guest names the host: the address at which a host port the policy
+#: opens (the member broker's) is reached from inside. The broker accepts it
+#: as a Host header, and a turn is told the broker's URL with it.
+GUEST_HOST_ALIAS = "host.microsandbox.internal"
+
 
 class AgentEnvironmentSpecError(ValueError):
     """Raised when the contract names something the environment cannot mount."""

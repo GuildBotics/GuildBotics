@@ -37,6 +37,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
+    upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
 from guildbotics.utils.advisory_lock import (
@@ -222,7 +223,10 @@ async def build_snapshot(
             the lock, or the build itself fails. A failed build leaves its
             reason beside the snapshots, where :func:`snapshot_status`
             reports it until the declaration changes.
+        ToolchainError: When the declaration's resolvers cannot be read
+            on this device.
     """
+    nameservers = upstream_nameservers(declaration.dns)
     name = snapshot_name(declaration)
     directory = snapshots_dir(workspace_root)
     directory.mkdir(parents=True, exist_ok=True)
@@ -238,7 +242,7 @@ async def build_snapshot(
                         image=IMAGE,
                         home=guest_home(home),
                         steps=build_steps(declaration),
-                        nameservers=declaration.dns.nameservers,
+                        nameservers=nameservers,
                         on_line=on_line,
                     ),
                     BUILD_TIMEOUT_SECONDS,

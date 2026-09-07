@@ -207,7 +207,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert call["dest_dir"] == directory
     assert call["image"] == snapshot.IMAGE
     assert call["home"] == home.resolve().as_posix()
-    assert call["nameservers"] == ["10.0.0.53"]
+    assert call["nameservers"] == ("10.0.0.53",)
     assert [s.label for s in call["steps"]] == ["home", "uv", "npm"]
     assert status.state == "ready"
     assert status.path.is_dir()
@@ -215,6 +215,20 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert sorted(p.name for p in directory.iterdir()) == ["build.lock", status.name]
     assert lines == ["Get:1 http://deb.debian.org bookworm InRelease"]
     assert snapshot_status(declaration, workspace).state == "ready"
+
+
+def test_a_build_reads_the_devices_resolvers_when_the_declaration_says_host(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeBuild(monkeypatch)
+    monkeypatch.setattr(snapshot, "upstream_nameservers", lambda dns: ("192.168.3.1",))
+    declaration = parse_toolchain({"dns": {"nameservers": "host"}}, where="t")
+
+    asyncio.run(
+        build_snapshot(declaration, on_line=lambda _: None, workspace_root=workspace)
+    )
+
+    assert fake.calls[0]["nameservers"] == ("192.168.3.1",)
 
 
 def test_a_failed_build_leaves_its_reason_and_the_older_snapshot(

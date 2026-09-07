@@ -294,3 +294,21 @@ def test_local_network_is_a_separate_switch_only_where_the_tool_has_one() -> Non
 def test_an_unknown_tool_has_no_catalog_entry() -> None:
     with pytest.raises(ValueError, match="not a supported AI CLI tool"):
         unsupported_network_reason("gemini", _network(), None)
+
+
+def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
+    """A turn with closed egress still reaches the provider; the tool is
+    nothing without its API, and a login that cannot be run cannot persist."""
+    from guildbotics.intelligences.cli_agents import CLI_AGENTS
+
+    for agent in CLI_AGENTS:
+        provision = agent.provision
+        if not provision.package:
+            assert provision == type(provision)(), agent.name
+            continue
+        assert provision.api_domains, agent.name
+        assert provision.login and provision.auth and provision.state_root, agent.name
+        assert provision.auth in provision.persisted, agent.name
+        assert provision.environment("/h") == {
+            provision.state_root_env: f"/h/{provision.state_root}"
+        }

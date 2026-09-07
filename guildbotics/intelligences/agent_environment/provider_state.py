@@ -31,6 +31,7 @@ from guildbotics.intelligences.agent_environment.spec import (
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
+    upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.utils.fileio import get_machine_state_path
@@ -108,7 +109,7 @@ def login_spec(
             domains=(),
             host_ports=(),
             local_network=False,
-            nameservers=tuple(declaration.dns.nameservers),
+            nameservers=upstream_nameservers(declaration.dns),
         ),
         env=tool.provision.environment(guest),
     )
