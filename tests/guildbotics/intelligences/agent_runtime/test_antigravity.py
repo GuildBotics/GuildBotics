@@ -194,7 +194,6 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     assert "never run those commands" in prompt
     assert prompt.endswith("\n\ngo")
     assert kwargs_log[-1]["limit"] == STREAM_READ_LIMIT
-    assert kwargs_log[-1]["stdin"] is asyncio.subprocess.DEVNULL
     env = kwargs_log[-1]["env"]
     for key in (
         RUN_ENV,
@@ -214,7 +213,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     mcp_config = json.loads(mcp_path.read_text())
     server_name, server = next(iter(mcp_config["mcpServers"].items()))
     assert server_name.startswith("guildbotics-member-")
-    assert server["serverUrl"] == "http://127.0.0.1:43123/mcp"
+    assert server["serverUrl"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"]["Authorization"].startswith("Bearer ")
 
     deltas = [event for event in events if event.name == "delta"]
@@ -346,29 +345,6 @@ async def test_unreadable_model_catalog_skips_validation(monkeypatch, tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_probe_subprocesses_use_devnull_stdin(monkeypatch, tmp_path) -> None:
-    kwargs_log: list[dict[str, Any]] = []
-    calls: list[tuple[Any, ...]] = []
-    _install(
-        monkeypatch,
-        _StreamProcess(_fixture_lines()),
-        calls=calls,
-        kwargs_log=kwargs_log,
-    )
-    adapter = AntigravityStreamJsonAdapter()
-
-    await _run(adapter, _context(tmp_path, provider_options={"model": "any"}), [])
-
-    probes = [
-        kwargs
-        for args, kwargs in zip(calls, kwargs_log)
-        if args[-1] in {"--help", "models"}
-    ]
-    assert {"--help", "models"} <= {args[-1] for args in calls}
-    assert all(kwargs["stdin"] is asyncio.subprocess.DEVNULL for kwargs in probes)
-
-
-@pytest.mark.asyncio
 async def test_model_catalog_is_read_once_per_adapter(monkeypatch, tmp_path) -> None:
     calls: list[tuple[Any, ...]] = []
 
@@ -388,32 +364,6 @@ async def test_model_catalog_is_read_once_per_adapter(monkeypatch, tmp_path) -> 
     await _run(adapter, context, [])
 
     assert [args[-1] for args in calls].count("models") == 1
-    assert [args[-1] for args in calls].count("--help") == 1
-
-
-@pytest.mark.asyncio
-async def test_environment_is_isolated_from_write_credentials(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.setenv("GH_TOKEN", "secret")
-    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-    kwargs_log: list[dict[str, Any]] = []
-    calls: list[tuple[Any, ...]] = []
-    _install(
-        monkeypatch,
-        _StreamProcess(_fixture_lines()),
-        calls=calls,
-        kwargs_log=kwargs_log,
-    )
-    adapter = AntigravityStreamJsonAdapter()
-
-    await _run(adapter, _context(tmp_path), [])
-
-    env = kwargs_log[-1]["env"]
-    assert "GH_TOKEN" not in env
-    assert "SSH_AUTH_SOCK" not in env
-    assert env["GH_CONFIG_DIR"] != ""
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
 @pytest.mark.asyncio
@@ -596,8 +546,10 @@ async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> Non
         0.01,
     )
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.antigravity.terminate_process_tree",
-        lambda process, **_: terminated.append(process) or asyncio.sleep(0),
+        _HangingProcess,
+        "kill",
+        lambda self: terminated.append(self) or asyncio.sleep(0),
+        raising=False,
     )
     adapter = AntigravityStreamJsonAdapter(timeout=0.01)
 
@@ -626,24 +578,7 @@ async def test_oversized_prompt_is_refused_before_launching(
     # The guard must stay under Linux's per-argv-string cap (MAX_ARG_STRLEN,
     # 128 KiB), or oversized prompts would pass it and die in execve instead.
     assert _MAX_PROMPT_BYTES < 128 * 1024
-    assert all(args[-1] == "--help" for args in launched)
-
-
-@pytest.mark.asyncio
-async def test_missing_capabilities_report_unsupported_version(
-    monkeypatch, tmp_path
-) -> None:
-    async def create_process(*args, **kwargs):
-        return _CompletedProcess(stderr=b"--print --output-format")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = AntigravityStreamJsonAdapter()
-
-    with pytest.raises(AgentRuntimeError) as excinfo:
-        await _run(adapter, _context(tmp_path), [])
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
-    assert "--conversation" in excinfo.value.details["missing_capabilities"]
+    assert launched == []
 
 
 def test_log_tail_reads_only_the_end_of_a_large_log(tmp_path: Path) -> None:

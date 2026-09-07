@@ -2612,8 +2612,6 @@ function IntelligenceEditor({
                               value={agentDef.network ?? null}
                               inherited={agentDef.inherited_network ?? CLOSED_NETWORK_POLICY}
                               tool={agentDef.name}
-                              toolLabel={detection?.label ?? agentDef.name}
-                              support={draft.network_support?.[agentDef.name]}
                               isToolDefault={agentDef.path === cliToolDefaultPath(agentDef.path)}
                               onChange={(network) =>
                                 handleUpdateCliAgentDef(agentDef.path, { network })

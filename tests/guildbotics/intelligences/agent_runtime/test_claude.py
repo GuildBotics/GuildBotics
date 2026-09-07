@@ -200,7 +200,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     assert result.output == "final"
     assert result.provider_session_id == "session-1"
     assert result.usage == {"input_tokens": 4, "output_tokens": 3}
-    run_args = calls[1]
+    run_args = calls[0]
     assert run_args[run_args.index("--resume") + 1] == "session-1"
     assert "--continue" not in run_args
     assert run_args[run_args.index("--permission-mode") + 1] == "bypassPermissions"
@@ -215,7 +215,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     mcp_config = json.loads(run_args[run_args.index("--mcp-config") + 1])
     server_name, server = next(iter(mcp_config["mcpServers"].items()))
     assert server_name.startswith("guildbotics-member-")
-    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["url"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"]["Authorization"] == (
         "Bearer ${GUILDBOTICS_MEMBER_BROKER_TOKEN}"
     )
@@ -734,10 +734,7 @@ async def test_claude_terminal_result_does_not_wait_for_inherited_pipes(
         stream.stderr.feed_eof()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.claude.terminate_process_tree",
-        terminate,
-    )
+    stream.kill = lambda: terminate(stream)
 
     result = await asyncio.wait_for(
         ClaudeStreamJsonAdapter().run_turn(
@@ -785,10 +782,7 @@ async def test_claude_success_result_survives_cleanup_sigterm(
         "guildbotics.intelligences.agent_runtime.claude._PROCESS_EXIT_GRACE_SECONDS",
         0.01,
     )
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.claude.terminate_process_tree",
-        terminate,
-    )
+    stream.kill = lambda: terminate(stream)
 
     result = await ClaudeStreamJsonAdapter().run_turn(
         "hello",
@@ -801,93 +795,6 @@ async def test_claude_success_result_survives_cleanup_sigterm(
     assert result.output == "valid response"
     assert result.provider_session_id == "session-1"
     assert result.returncode == 0
-
-
-@pytest.mark.asyncio
-async def test_claude_rejects_versions_without_stream_json(
-    monkeypatch, tmp_path
-) -> None:
-    class OldHelp(_HelpProcess):
-        async def communicate(self):
-            return b"--resume", b""
-
-    async def create_process(*args, **kwargs):
-        return OldHelp()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(AgentRuntimeError) as excinfo:
-        await ClaudeStreamJsonAdapter().run_turn(
-            "hello",
-            _context(tmp_path),
-            ConversationRecord(key=_context(tmp_path).conversation_key),
-            lambda _event: None,
-        )
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
-
-
-@pytest.mark.asyncio
-async def test_claude_rejects_old_strict_mode_when_project_mcp_exists(
-    monkeypatch, tmp_path
-) -> None:
-    (tmp_path / ".mcp.json").write_text('{"mcpServers":{}}\n')
-    calls: list[tuple[Any, ...]] = []
-
-    async def create_process(*args, **_kwargs):
-        calls.append(args)
-        if args[-1] == "--help":
-            return _HelpProcess()
-        assert args[-1] == "--version"
-        return _CompletedProcess(stdout=b"2.1.224 (Claude Code)\n")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(AgentRuntimeError) as excinfo:
-        await ClaudeStreamJsonAdapter().run_turn(
-            "hello",
-            _context(tmp_path),
-            ConversationRecord(key=_context(tmp_path).conversation_key),
-            lambda _event: None,
-        )
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
-    assert excinfo.value.details == {
-        "installed_version": "2.1.224",
-        "minimum_version": "2.1.246",
-    }
-    assert [args[-1] for args in calls] == ["--help", "--version"]
-
-
-@pytest.mark.asyncio
-async def test_claude_reevaluates_the_project_mcp_gate_on_every_turn(
-    monkeypatch, tmp_path
-) -> None:
-    """The agent itself can write `.mcp.json` between turns of one run."""
-    calls: list[str] = []
-
-    async def create_process(*args, **_kwargs):
-        calls.append(args[-1])
-        if args[-1] == "--help":
-            return _HelpProcess()
-        assert args[-1] == "--version"
-        return _CompletedProcess(stdout=b"2.1.224 (Claude Code)\n")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = ClaudeStreamJsonAdapter()
-    context = _context(tmp_path)
-
-    await adapter._ensure_supported(context)
-    (tmp_path / ".mcp.json").write_text('{"mcpServers":{}}\n')
-
-    for _ in range(2):
-        with pytest.raises(AgentRuntimeError) as excinfo:
-            await adapter._ensure_supported(context)
-        assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
-
-    # The CLI's capabilities and version are cached; only the tree-dependent
-    # gate runs again.
-    assert calls == ["--help", "--version"]
 
 
 @pytest.mark.asyncio
@@ -1011,7 +918,7 @@ async def test_claude_read_only_turn_is_confined_by_the_provider(
 
     await adapter_run(monkeypatch, context, events)
 
-    run_args = calls[1]
+    run_args = calls[0]
     # Diagnostics an assistant reads are untrusted input, so the limit has to be
     # the provider's, not the prompt's.
     assert run_args[run_args.index("--permission-mode") + 1] == "default"
@@ -1069,7 +976,7 @@ async def _run_turn_with(monkeypatch, tmp_path, **context_overrides):
         ConversationRecord(key=context.conversation_key),
         lambda _event: None,
     )
-    return launches[1]
+    return launches[0]
 
 
 async def _terminal_of(

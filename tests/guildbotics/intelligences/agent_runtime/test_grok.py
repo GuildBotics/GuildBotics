@@ -1202,26 +1202,6 @@ async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("GH_TOKEN", "ghp-secret")
-    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-    # Set, not deleted: the parent of a workflow run really does carry these,
-    # so asserting their absence only proves isolation when they start present.
-    for key in _AMBIENT_EXECUTION_ENV:
-        monkeypatch.setenv(key, "stale-parent-value")
-    peer = _Peer()
-    launched = install(monkeypatch, peer)
-
-    await _run(GrokAcpAdapter(), tmp_path)
-
-    env = launched[0][1]["env"]
-    assert "GH_TOKEN" not in env
-    assert "SSH_AUTH_SOCK" not in env
-    assert all(key not in env for key in _AMBIENT_EXECUTION_ENV)
-    assert launched[0][1]["start_new_session"] is True
-
-
-@pytest.mark.asyncio
 async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) -> None:
     peer = _Peer()
     install(monkeypatch, peer)
@@ -1232,10 +1212,7 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter._transport._process = peer  # type: ignore[assignment]
     adapter._active_session_id = _Peer.SESSION_ID
 
@@ -1569,10 +1546,7 @@ async def test_the_turn_timeout_bounds_a_stalled_prompt(monkeypatch, tmp_path) -
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter = GrokAcpAdapter(timeout=0.15)
 
     with pytest.raises(AgentRuntimeError) as excinfo:

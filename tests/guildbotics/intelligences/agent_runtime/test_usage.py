@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
-from datetime import UTC, datetime
 
 from guildbotics.intelligences.agent_runtime import usage as usage_module
 from guildbotics.intelligences.agent_runtime.usage import (
@@ -328,7 +327,7 @@ def test_parse_claude_usage_tolerates_empty_and_malformed_input() -> None:
 
 
 class _Writer:
-    def __init__(self, process: "_Process") -> None:
+    def __init__(self, process: _Process) -> None:
         self.process = process
 
     def write(self, data: bytes) -> None:
@@ -374,31 +373,21 @@ class _Process:
         self.stdout.feed_data(json.dumps(message).encode() + b"\n")
 
 
-@pytest.fixture
-def fake_terminate(monkeypatch) -> list[Any]:
-    terminated: list[Any] = []
-
-    async def terminate(process, **_kwargs) -> None:
-        terminated.append(process)
-        process.returncode = 0
-
-    monkeypatch.setattr(usage_module, "terminate_process_tree", terminate)
-    return terminated
-
-
 @pytest.mark.asyncio
-async def test_read_codex_usage_probes_app_server(monkeypatch, fake_terminate) -> None:
+async def test_read_codex_usage_probes_app_server(
+    monkeypatch, fake_environment
+) -> None:
     process = _Process(
         rate_limits={"primary": {"usedPercent": 12.0, "resetsAt": 2_000_000_000}}
     )
 
     async def create_process(*args, **_kwargs):
-        assert args[:2] == ("codex-bin", "app-server")
+        assert args[:2] == ("codex", "app-server")
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
-    snapshot = await read_codex_usage("codex-bin")
+    snapshot = await read_codex_usage()
 
     assert [message.get("method") for message in process.messages] == [
         "initialize",
@@ -407,12 +396,12 @@ async def test_read_codex_usage_probes_app_server(monkeypatch, fake_terminate) -
     ]
     assert snapshot.windows[0].used_percent == 12.0
     assert not snapshot.limit_reached
-    assert fake_terminate == [process]
+    assert fake_environment.started[-1].closed
 
 
 @pytest.mark.asyncio
 async def test_read_codex_usage_raises_on_rpc_error(
-    monkeypatch, fake_terminate
+    monkeypatch, fake_environment
 ) -> None:
     process = _Process(error={"code": -32601, "message": "method not found"})
 
@@ -422,13 +411,13 @@ async def test_read_codex_usage_raises_on_rpc_error(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
     with pytest.raises(CliAgentUsageError):
-        await read_codex_usage("codex-bin")
-    assert fake_terminate == [process]
+        await read_codex_usage()
+    assert fake_environment.started[-1].closed
 
 
 @pytest.mark.asyncio
 async def test_read_codex_usage_raises_when_stream_closes(
-    monkeypatch, fake_terminate
+    monkeypatch, fake_environment
 ) -> None:
     process = _Process()
     process.stdout.feed_eof()
@@ -440,7 +429,7 @@ async def test_read_codex_usage_raises_when_stream_closes(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
     with pytest.raises(CliAgentUsageError):
-        await read_codex_usage("codex-bin")
+        await read_codex_usage()
 
 
 @pytest.mark.asyncio
@@ -451,7 +440,7 @@ async def test_read_codex_usage_raises_when_start_fails(monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
     with pytest.raises(CliAgentUsageError):
-        await read_codex_usage("codex-bin")
+        await read_codex_usage()
 
 
 class _GrokProcess:
@@ -502,16 +491,18 @@ class _GrokProcess:
 
 
 @pytest.mark.asyncio
-async def test_read_grok_usage_probes_agent_stdio(monkeypatch, fake_terminate) -> None:
+async def test_read_grok_usage_probes_agent_stdio(
+    monkeypatch, fake_environment
+) -> None:
     process = _GrokProcess()
 
     async def create_process(*args, **_kwargs):
-        assert args == ("grok-bin", "--no-auto-update", "agent", "stdio")
+        assert args == ("grok", "--no-auto-update", "agent", "stdio")
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
-    snapshot = await read_grok_usage("grok-bin")
+    snapshot = await read_grok_usage()
 
     assert [message.get("method") for message in process.messages] == [
         "initialize",
@@ -524,12 +515,12 @@ async def test_read_grok_usage_probes_agent_stdio(monkeypatch, fake_terminate) -
     assert snapshot.windows[0].used_percent is None
     assert snapshot.windows[0].resets_at == "2026-08-14T07:37:18.756767+00:00"
     assert not snapshot.limit_reached
-    assert fake_terminate == [process]
+    assert fake_environment.started[-1].closed
 
 
 @pytest.mark.asyncio
 async def test_read_grok_usage_raises_without_saved_login(
-    monkeypatch, fake_terminate
+    monkeypatch, fake_environment
 ) -> None:
     process = _GrokProcess(auth_error={"code": -32000, "message": "not logged in"})
 
@@ -539,8 +530,8 @@ async def test_read_grok_usage_raises_without_saved_login(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
     with pytest.raises(CliAgentUsageError):
-        await read_grok_usage("grok-bin")
-    assert fake_terminate == [process]
+        await read_grok_usage()
+    assert fake_environment.started[-1].closed
 
 
 class _ClaudeProcess:
@@ -561,14 +552,16 @@ class _ClaudeProcess:
 
 
 @pytest.mark.asyncio
-async def test_read_claude_usage_probes_print_mode(monkeypatch, fake_terminate) -> None:
+async def test_read_claude_usage_probes_print_mode(
+    monkeypatch, fake_environment
+) -> None:
     process = _ClaudeProcess(
         {"is_error": False, "num_turns": 0, "result": _CLAUDE_USAGE_TEXT}
     )
 
     async def create_process(*args, **_kwargs):
         assert args == (
-            "claude-bin",
+            "claude",
             "-p",
             "/usage",
             "--output-format",
@@ -579,17 +572,17 @@ async def test_read_claude_usage_probes_print_mode(monkeypatch, fake_terminate) 
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
-    snapshot = await read_claude_usage("claude-bin")
+    snapshot = await read_claude_usage()
 
     assert snapshot.agent == "claude"
     assert snapshot.windows[0].used_percent == 24.0
     assert [window.detail for window in snapshot.windows] == [False, False, True]
-    assert fake_terminate == [process]
+    assert fake_environment.started[-1].closed
 
 
 @pytest.mark.asyncio
 async def test_read_claude_usage_raises_on_error_or_empty_panel(
-    monkeypatch, fake_terminate
+    monkeypatch, fake_environment
 ) -> None:
     # An error result, a panel without usage lines (e.g. API-key auth), and
     # non-JSON output must all surface as CliAgentUsageError.
@@ -606,13 +599,13 @@ async def test_read_claude_usage_raises_on_error_or_empty_panel(
         monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
 
         with pytest.raises(CliAgentUsageError):
-            await read_claude_usage("claude-bin")
-        assert fake_terminate[-1] is process
+            await read_claude_usage()
+        assert fake_environment.started[-1].closed
 
 
 def test_usage_reader_registry_covers_supported_tools() -> None:
-    assert CLI_AGENT_USAGE_READERS == {
+    assert {
         "claude": read_claude_usage,
         "codex": read_codex_usage,
         "grok": read_grok_usage,
-    }
+    } == CLI_AGENT_USAGE_READERS

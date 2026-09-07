@@ -16,12 +16,13 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    isolated_agent_environment,
-    remove_isolated_config,
-    terminate_process_tree,
+    start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
@@ -129,6 +130,8 @@ class AcpAdapterBase:
     #: Provider error identifiers, added to the shared sets above.
     rate_limit_codes: frozenset[str] = frozenset()
     auth_codes: frozenset[str] = frozenset()
+    #: The catalog name of the tool, which names its provisioning and state.
+    tool_name: str = ""
 
     def __init__(
         self,
@@ -144,7 +147,7 @@ class AcpAdapterBase:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_agent_request,
         )
-        self._gh_config_dir = ""
+        self._environment: AgentEnvironment | None = None
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""
         #: The running process's full `initialize` response. Some providers
@@ -153,9 +156,6 @@ class AcpAdapterBase:
         self._initialize_result: dict[str, Any] = {}
         self._auth_method = ""
         self._active_session_id = ""
-        #: The command the running process was started with. A turn whose launch
-        #: command differs cannot reuse it: the boundary is fixed at startup.
-        self._launched_argv: tuple[str, ...] = ()
         #: Sessions the running process already holds open. Reloading one of
         #: them is at best a wasted replay and at worst an error, so the load
         #: only happens when this process does not have the session yet.
@@ -204,6 +204,9 @@ class AcpAdapterBase:
                 return await self._run_active_turn(prompt, context, conversation, emit)
             finally:
                 await self._finish_turn(context)
+                # The environment is the turn's: nothing of it outlives the
+                # turn, and the next one boots its own.
+                await self._close_provider()
         finally:
             await self._member_broker.deactivate(context)
 
@@ -326,7 +329,7 @@ class AcpAdapterBase:
                 )
         process = self._transport.process
         if process is not None and process.returncode is None:
-            await terminate_process_tree(process)
+            await process.kill()
 
     async def close(self) -> None:
         try:
@@ -335,53 +338,41 @@ class AcpAdapterBase:
             await self._member_broker.close()
 
     async def _close_provider(self) -> None:
-        """Stop only the ACP provider while preserving the active broker."""
+        """Stop the ACP provider and its environment, preserving the broker."""
         process = self._transport.process
         if process is not None and process.returncode is None:
-            if process.stdin is not None:
-                with suppress(BrokenPipeError, ConnectionError, OSError):
-                    process.stdin.close()
+            with suppress(BrokenPipeError, ConnectionError, OSError):
+                process.stdin.close()
             try:
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except TimeoutError:
-                await terminate_process_tree(process)
+                await process.kill()
         await self._transport.aclose()
-        remove_isolated_config(self._gh_config_dir)
+        environment, self._environment = self._environment, None
+        if environment is not None:
+            await environment.close()
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
         argv = self._launch_argv(context)
-        # The launch command carries the boundary the provider can only be given
-        # at startup -- the sandbox profile, the allowed paths, the model a
-        # session-scoped provider is fixed to. A running process was given the
-        # previous turn's, so reusing it for a turn that asks for a narrower one
-        # would enforce the wider boundary while reporting the narrower.
-        if self._transport.running and argv == self._launched_argv:
-            return
         if self._transport.process is not None:
             await self._close_provider()
-        cwd = context.cwd
-        env, self._gh_config_dir = isolated_agent_environment()
+        self._environment = await start_turn_environment(
+            context,
+            self.tool_name,
+            host_ports=(self._member_broker.endpoint.port,),
+            env={},
+        )
         try:
-            process = await create_agent_subprocess(
-                *argv,
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-                limit=STREAM_READ_LIMIT,
-            )
-        except OSError as exc:
-            remove_isolated_config(self._gh_config_dir)
+            process = await self._environment.run(*argv, limit=STREAM_READ_LIMIT)
+        except AgentEnvironmentError as exc:
+            await self._close_provider()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start {self.product_label}: {exc}",
             ) from exc
         self._transport.start(process)
-        self._launched_argv = argv
         # A fresh process holds nothing, whatever the previous one held. A
         # session the conversation still names is reloaded on the way in.
         self._open_sessions = set()

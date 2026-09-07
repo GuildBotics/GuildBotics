@@ -1091,16 +1091,6 @@ class CliAgentDefinition(BaseModel):
     inherited_network: NetworkPolicy = Field(default_factory=NetworkPolicy)
 
 
-class CliAgentNetworkSupportInfo(BaseModel):
-    """What one tool can enforce, on this device and on any supported OS."""
-
-    modes: list[str] = Field(default_factory=list)
-    modes_anywhere: list[str] = Field(default_factory=list)
-    local_network_modes: list[str] = Field(default_factory=list)
-    grant_accesses: list[str] = Field(default_factory=list)
-    contract_applied: bool = False
-
-
 GrantScope = Literal["document", "local", "deny"]
 
 
@@ -1130,25 +1120,6 @@ class EnvironmentGrantStatus(BaseModel):
     present: bool
 
 
-class EnvironmentTreeStatus(BaseModel):
-    """A tree read because commands on this device's PATH live in it.
-
-    ``grant`` is how the local grant file names the tree to close it.
-    """
-
-    path: str
-    grant: str
-    sources: list[str] = Field(default_factory=list)
-
-
-class EnvironmentExcludedStatus(BaseModel):
-    """A tree the PATH led to that stays closed, and why."""
-
-    path: str
-    source: str
-    reason: str
-
-
 class EnvironmentDenyStatus(BaseModel):
     path: str
     builtin: bool
@@ -1159,8 +1130,6 @@ class EnvironmentAccessStatus(BaseModel):
 
     documents: list[EnvironmentGrantStatus] = Field(default_factory=list)
     paths: list[EnvironmentGrantStatus] = Field(default_factory=list)
-    trees: list[EnvironmentTreeStatus] = Field(default_factory=list)
-    excluded: list[EnvironmentExcludedStatus] = Field(default_factory=list)
     denied: list[EnvironmentDenyStatus] = Field(default_factory=list)
     #: Why the grants could not be resolved at all, or "".
     problem: str = ""
@@ -1179,7 +1148,6 @@ class EnvironmentProblem(BaseModel):
 class EnvironmentSlotStatus(BaseModel):
     slot: str
     tool: str
-    contract_applied: bool
     network: NetworkPolicy
     #: Everything that keeps this slot from starting on this device.
     problems: list[EnvironmentProblem] = Field(default_factory=list)
@@ -1224,7 +1192,6 @@ class IntelligenceConfigResponse(BaseModel):
     #: This device's own extra paths and denies, never synchronized.
     local_grants: LocalGrants = Field(default_factory=LocalGrants)
     #: Per tool, what this device and any supported OS can enforce.
-    network_support: dict[str, CliAgentNetworkSupportInfo] = Field(default_factory=dict)
     platform: str = ""
     # Slot/feature names the team owns. A member may override their value but
     # cannot delete or rename them (the runtime merge would only revive them),

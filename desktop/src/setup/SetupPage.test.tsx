@@ -1304,7 +1304,7 @@ function environmentStatus(
   return {
     platform: "darwin",
     working_directory: "<workspace>",
-    access: { documents: [], paths: [], trees: [], excluded: [], denied: [], problem: "" },
+    access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
     ...overrides,
   };
@@ -2367,7 +2367,6 @@ describe("MembersSection", () => {
               {
                 slot: "default",
                 tool: "codex",
-                contract_applied: true,
                 network: CLOSED_NETWORK_POLICY,
                 problems: [],
               },
@@ -2379,7 +2378,6 @@ describe("MembersSection", () => {
               {
                 slot: "default",
                 tool: "grok",
-                contract_applied: true,
                 network: CLOSED_NETWORK_POLICY,
                 problems: [
                   {

@@ -5,16 +5,16 @@ import logging
 import pytest
 
 from guildbotics.intelligences.effort import (
-    describe_overlay_problems,
-    validate_effort_fields,
     EFFORT_LEVELS,
     EffortError,
     ResolvedEffort,
+    describe_overlay_problems,
     effort_diagnostics,
     effort_settings,
     normalize_effort,
     promote_effort,
     resolve_effort,
+    validate_effort_fields,
     validate_effort_overlay,
 )
 

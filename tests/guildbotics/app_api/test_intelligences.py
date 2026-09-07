@@ -1254,31 +1254,10 @@ def test_a_save_writes_the_network_block_it_was_given(tmp_path: Path) -> None:
     assert stored["network"] == _NETWORK
 
 
-def test_a_save_rejects_a_mode_the_tool_cannot_enforce_anywhere(tmp_path: Path) -> None:
-    request = _team_update_request(tmp_path).model_copy(
-        update={
-            "cli_agent_mapping": {"default": "cli_agents/copilot/default.yml"},
-            "cli_agents": [
-                CliAgentDefinition(
-                    path="cli_agents/copilot/default.yml",
-                    name="copilot",
-                    network=NetworkPolicy.model_validate(_NETWORK),
-                )
-            ],
-        }
-    )
-
-    with pytest.raises(SetupServiceError) as excinfo:
-        IntelligenceConfigService().update_config(request)
-
-    assert excinfo.value.code == "invalid_network_settings"
-    assert "allowlist" in str(excinfo.value)
+# --- shared filesystem grants -----------------------------
 
 
-# --- shared filesystem grants and network support -----------------------------
-
-
-def test_read_config_returns_the_grants_and_what_this_device_can_enforce(
+def test_read_config_returns_the_grants(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
@@ -1305,8 +1284,6 @@ def test_read_config_returns_the_grants_and_what_this_device_can_enforce(
         "deny": ["/opt/homebrew/etc"],
     }
     assert response.platform
-    assert response.network_support["codex"].contract_applied is True
-    assert "allowlist" not in response.network_support["copilot"].modes_anywhere
     # A member scope reads the same grants: they are the workspace's.
     member = IntelligenceConfigService().read_config(
         config_dir=config_dir, person_id="alice"

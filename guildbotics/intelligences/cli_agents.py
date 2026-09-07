@@ -7,10 +7,6 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from guildbotics.intelligences.agent_environment.contract import (
-    NETWORK_MODES,
-    NetworkPolicy,
-)
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
 #: Every AI CLI tool lives at ``cli_agents/<tool>/default.yml`` and a slot may
@@ -21,40 +17,6 @@ CLI_AGENT_ROOT = "cli_agents"
 #: ``cli_agents/<tool>/<slot>.yml``
 _CLI_AGENT_PATH_PARTS = 3
 _CLI_AGENT_TOOL_INDEX = 1
-
-
-#: The platform key that stands for every OS in a per-OS mode table.
-ANY_PLATFORM = "*"
-_ALL_MODES = frozenset(NETWORK_MODES)
-
-
-class CliAgentNetworkSupport(BaseModel):
-    """Which parts of the network contract a tool can enforce natively.
-
-    Enforcement is what the provider's own sandbox does, not what its prompt
-    or permission rules ask for. A mode that is missing here is one the
-    adapter refuses to start with, never one it quietly widens.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    #: Modes per ``sys.platform`` value; ``ANY_PLATFORM`` is the default.
-    modes: dict[str, frozenset[str]] = {ANY_PLATFORM: _ALL_MODES}
-    #: Modes under which local network reachability is a separate switch
-    #: (``allow_local_network``); elsewhere it follows the mode itself.
-    local_network_modes: frozenset[str] = frozenset()
-    #: Grant accesses the tool can hold commands and its file tools to.
-    grant_accesses: frozenset[str] = frozenset({"read", "read_write"})
-    #: Whether the adapter translates the access contract at all. Until it
-    #: does, the tool runs under its previous fixed settings and the contract
-    #: is neither validated nor reported for it.
-    contract_applied: bool = False
-
-    def modes_on(self, platform: str | None) -> frozenset[str]:
-        """Modes enforceable on one platform, or on any platform when None."""
-        if platform is None:
-            return frozenset().union(*self.modes.values())
-        return self.modes.get(platform, self.modes.get(ANY_PLATFORM, frozenset()))
 
 
 class CliAgentProvision(BaseModel):
@@ -104,7 +66,6 @@ class CliAgentInfo(BaseModel):
     order: int = 1000
     executable: str = ""
     config_reference: str = ""
-    network: CliAgentNetworkSupport = CliAgentNetworkSupport()
     provision: CliAgentProvision = CliAgentProvision()
 
 
@@ -118,17 +79,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=10,
         executable="codex",
         config_reference=f"{CLI_AGENT_ROOT}/codex/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Permission profile + network proxy, with the same rule handed to
-        # web search's domain filter. Local reachability is a proxy switch,
-        # so it only exists once the proxy (allowlist) is on. The native Windows sandbox
-        # reads only fixed machine-wide roots (openai/codex#27171) and has not
-        # been verified to honour the profile's read paths or the proxy, so
-        # nothing is claimed there until it is.
-        network=CliAgentNetworkSupport(
-            modes={"darwin": _ALL_MODES, "linux": _ALL_MODES},
-            local_network_modes=frozenset({"allowlist"}),
-            contract_applied=True,
-        ),
         # auth.json is rewritten in place (truncated, never renamed), so a
         # file bound over it keeps every refresh. Device auth prints a URL
         # and a code instead of opening a browser the environment has not.
@@ -156,12 +106,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=20,
         executable="claude",
         config_reference=f"{CLI_AGENT_ROOT}/claude/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Bash sandbox with a strict domain allowlist; WebFetch by permission
-        # rule. The sandbox proxy separates local addresses in every mode
-        # that restricts anything.
-        network=CliAgentNetworkSupport(
-            local_network_modes=frozenset({"deny", "allowlist"})
-        ),
         # With CLAUDE_CONFIG_DIR set, the account file `.claude.json` moves
         # under it beside the credentials, so the whole state sits in one root.
         provision=CliAgentProvision(
@@ -182,15 +126,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=30,
         executable="grok",
         config_reference=f"{CLI_AGENT_ROOT}/grok/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Child-process network is a seccomp filter, so only Linux can close
-        # it; macOS commands always reach the network. WebFetch takes a
-        # domain rule, and WebSearch is switched off under a web allowlist.
-        network=CliAgentNetworkSupport(
-            modes={
-                "linux": frozenset({"deny", "unrestricted"}),
-                ANY_PLATFORM: frozenset({"unrestricted"}),
-            }
-        ),
     ),
     CliAgentInfo(
         name="copilot",
@@ -198,12 +133,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=40,
         executable="copilot",
         config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
-        # The local sandbox switches outbound and local network on or off; its
-        # URL rules decide prompts, not what the sandbox lets through.
-        network=CliAgentNetworkSupport(
-            modes={ANY_PLATFORM: frozenset({"deny", "unrestricted"})},
-            local_network_modes=frozenset({"deny"}),
-        ),
     ),
     CliAgentInfo(
         name="antigravity",
@@ -211,15 +140,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=50,
         executable="agy",
         config_reference=f"{CLI_AGENT_ROOT}/antigravity/{CLI_AGENT_DEFAULT_FILENAME}",
-        # The terminal sandbox has no command domain list, and how far it
-        # closes the network is unconfirmed, so only `unrestricted` is claimed
-        # for commands until that is measured. URL tools take domain rules.
-        # Its terminal sandbox takes extra directories only as read/write
-        # workspace roots, so a read-only grant has no spelling.
-        network=CliAgentNetworkSupport(
-            modes={ANY_PLATFORM: frozenset({"unrestricted"})},
-            grant_accesses=frozenset({"read_write"}),
-        ),
     ),
 )
 
@@ -242,38 +162,6 @@ def cli_agent_info(name: str) -> CliAgentInfo:
         if agent.name == name:
             return agent
     raise ValueError(f"'{name}' is not a supported AI CLI tool")
-
-
-def unsupported_grant_reason(tool: str, access: str) -> str:
-    """Why a tool could not hold commands to a grant, or "" when it can."""
-    info = cli_agent_info(tool)
-    if access in info.network.grant_accesses:
-        return ""
-    return f"{info.label} cannot grant '{access}' access to a directory."
-
-
-def unsupported_network_reason(
-    tool: str, network: NetworkPolicy, platform: str | None
-) -> str:
-    """Why a tool could not enforce a network policy, or "" when it can.
-
-    ``platform`` is a ``sys.platform`` value for the device about to run the
-    agent, or None to ask whether any supported OS could enforce it -- the
-    question a shared definition is validated against when it is saved.
-    """
-    info = cli_agent_info(tool)
-    where = "on this OS" if platform else "on any OS"
-    support = info.network
-    if platform and not support.modes_on(platform):
-        return f"{info.label} has not been verified to enforce the sandbox on this OS."
-    if network.mode not in support.modes_on(platform):
-        return f"{info.label} cannot enforce network mode '{network.mode}' {where}."
-    if network.allow_local_network and network.mode not in support.local_network_modes:
-        return (
-            f"{info.label} cannot open the local network separately under "
-            f"network mode '{network.mode}'."
-        )
-    return ""
 
 
 def get_cli_agent_search_path(path: str | None = None) -> str:

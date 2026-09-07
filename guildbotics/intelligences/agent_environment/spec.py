@@ -100,6 +100,7 @@ def build_environment_spec(
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
     nameservers: Iterable[str],
+    mounts: Iterable[EnvironmentMount] = (),
 ) -> AgentEnvironmentSpec:
     """Translate the contract for a turn run in ``cwd``.
 
@@ -118,11 +119,15 @@ def build_environment_spec(
             Codex's built-in resolver gets no answer from the gateway's
             default in time; naming one is what makes domain rules
             resolvable at all.
+        mounts: What GuildBotics itself binds beyond the contract: the
+            provider's persisted state, the cache turns share, an adapter's
+            own scratch directory. They are the provider's business, not the
+            user's grants, so the contract never lists them.
     """
     return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
         home=guest_home(home),
-        mounts=_mounts(contract.access, cwd),
+        mounts=(*_mounts(contract.access, cwd), *mounts),
         network=_network(
             contract.network, tuple(host_ports), tuple(provider_domains), nameservers
         ),

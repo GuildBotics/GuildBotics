@@ -6,26 +6,26 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.spec import (
-    EnvironmentMount,
-    AgentEnvironmentSpecError,
-    build_environment_spec as _build_environment_spec,
-    guest_path,
-)
 from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
     DeniedPath,
-    DerivedTree,
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
-    AccessContract,
     SharedGrants,
     resolve_access,
 )
-
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpecError,
+    EnvironmentMount,
+    guest_path,
+)
+from guildbotics.intelligences.agent_environment.spec import (
+    build_environment_spec as _build_environment_spec,
+)
 
 _NAMESERVERS = ("10.0.0.53",)
 
@@ -78,7 +78,6 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
             ]
         ),
         LocalGrants(paths=[LocalPathGrant(path=str(cache), access="read")]),
-        search_path="",
         home=home,
     )
 
@@ -105,7 +104,6 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     access = resolve_access(
         SharedGrants(documents=[DocumentGrant(path="Projects", access="read_write")]),
         LocalGrants(paths=[LocalPathGrant(path=str(cwd), access="read")]),
-        search_path="",
         home=home,
     )
 
@@ -130,7 +128,6 @@ def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
     access = resolve_access(
         SharedGrants(documents=[DocumentGrant(path="Documents", access="read")]),
         LocalGrants(deny=[str(secret)]),
-        search_path="",
         home=home,
     )
 
@@ -180,19 +177,6 @@ def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None
     )
 
     spec = build_environment_spec(_contract(access), cwd, home=home)
-
-    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
-
-
-def test_the_trees_a_path_derives_are_not_mounted(tmp_path: Path) -> None:
-    """The agent's tools live inside the boundary, not on the host."""
-    cwd = tmp_path / "repo"
-    cwd.mkdir()
-    access = ResolvedAccess(
-        trees=(DerivedTree(Path("/opt/homebrew"), (Path("/opt/homebrew/bin"),), "x"),)
-    )
-
-    spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
 
     assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
 

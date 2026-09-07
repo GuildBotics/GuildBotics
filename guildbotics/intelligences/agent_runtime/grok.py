@@ -72,6 +72,7 @@ class GrokAcpAdapter(AcpAdapterBase):
     name = "grok-acp"
     agent_label = "Grok"
     product_label = "Grok Build"
+    tool_name = "grok"
     # `grok agent stdio` takes the model and reasoning effort as launch options,
     # so they are fixed for the life of the process: changing them needs a fresh
     # session rather than a mid-conversation adjustment.

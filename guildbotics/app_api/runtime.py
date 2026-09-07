@@ -132,6 +132,7 @@ from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
@@ -1687,12 +1688,12 @@ class AppRuntime:
             ):
                 return cached[1]
             usages: list[CliAgentUsage] = []
-            for agent in self.detect_cli_agents().agents:
+            for agent in CLI_AGENTS:
                 reader = CLI_AGENT_USAGE_READERS.get(agent.name)
-                if reader is None or not agent.detected:
+                if reader is None or not is_logged_in(agent):
                     continue
                 try:
-                    snapshot = await reader(agent.path or agent.executable)
+                    snapshot = await reader()
                 except CliAgentUsageError as exc:
                     logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
                         "Could not read %s usage: %s", agent.name, exc

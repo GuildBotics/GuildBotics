@@ -320,30 +320,28 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
                 assert response.status_code == expected, host
 
         authorization = descriptor["headers"][0]["value"]
-        async with httpx2.AsyncClient(
-            headers={"Authorization": authorization}
-        ) as client:
-            async with streamable_http_client(
-                descriptor["url"], http_client=client
-            ) as streams:
-                async with ClientSession(*streams) as session:
-                    await session.initialize()
-                    result = await session.call_tool(
-                        "guildbotics_member",
-                        {
-                            "turn_grant": broker.turn_grant,
-                            "arguments": ["help"],
-                        },
-                    )
-                    # A refused request must stay a structured result: an MCP
-                    # tool error here fails the entire Antigravity run status.
-                    rejected = await session.call_tool(
-                        "guildbotics_member",
-                        {
-                            "turn_grant": "stale-grant",
-                            "arguments": ["help"],
-                        },
-                    )
+        async with (
+            httpx2.AsyncClient(headers={"Authorization": authorization}) as client,
+            streamable_http_client(descriptor["url"], http_client=client) as streams,
+            ClientSession(*streams) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(
+                "guildbotics_member",
+                {
+                    "turn_grant": broker.turn_grant,
+                    "arguments": ["help"],
+                },
+            )
+            # A refused request must stay a structured result: an MCP
+            # tool error here fails the entire Antigravity run status.
+            rejected = await session.call_tool(
+                "guildbotics_member",
+                {
+                    "turn_grant": "stale-grant",
+                    "arguments": ["help"],
+                },
+            )
     finally:
         await broker.close()
 

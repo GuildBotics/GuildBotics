@@ -24,11 +24,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+    EnvironmentProcess,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    terminate_process_tree,
+    start_probe_environment,
 )
+from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
 
 LIMIT_REACHED_PERCENT = 100.0
 
@@ -366,27 +371,30 @@ def _parse_claude_reset(raw: str, now: datetime | None = None) -> str:
     return reset.isoformat()
 
 
-async def read_codex_usage(
-    executable: str = "codex", timeout: float = 20.0
-) -> CliAgentUsageSnapshot:
+async def _probe(
+    tool: str, *command: str
+) -> tuple[AgentEnvironment, EnvironmentProcess]:
+    """Start ``command`` in the tool's probe environment, or say why not."""
+    try:
+        environment = await start_probe_environment(tool)
+    except AgentRuntimeError as exc:
+        raise CliAgentUsageError(str(exc)) from exc
+    try:
+        process = await environment.run(*command, limit=STREAM_READ_LIMIT)
+    except AgentEnvironmentError as exc:
+        await environment.close()
+        raise CliAgentUsageError(f"Could not start {command[0]}: {exc}") from exc
+    return environment, process
+
+
+async def read_codex_usage(timeout: float = 20.0) -> CliAgentUsageSnapshot:
     """Probe ``codex app-server`` for the current account usage.
 
     Raises :class:`CliAgentUsageError` when the tool cannot be started, does
     not answer in time, or does not expose the rate-limit capability (e.g.
     API-key providers).
     """
-    try:
-        process = await create_agent_subprocess(
-            executable,
-            "app-server",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-            limit=STREAM_READ_LIMIT,
-        )
-    except OSError as exc:
-        raise CliAgentUsageError(f"Could not start Codex App Server: {exc}") from exc
+    environment, process = await _probe("codex", "codex", "app-server")
     try:
         async with asyncio.timeout(timeout):
             await _probe_request(
@@ -401,20 +409,19 @@ async def read_codex_usage(
                     }
                 },
             )
-            _probe_send(
+            await _probe_send(
                 process, {"jsonrpc": "2.0", "method": "initialized", "params": {}}
             )
             result = await _probe_request(process, 2, "account/rateLimits/read", {})
     except TimeoutError as exc:
         raise CliAgentUsageError("Codex App Server did not answer in time.") from exc
     finally:
-        await terminate_process_tree(process)
+        await process.kill()
+        await environment.close()
     return parse_codex_rate_limits(result)
 
 
-async def read_grok_usage(
-    executable: str = "grok", timeout: float = 20.0
-) -> CliAgentUsageSnapshot:
+async def read_grok_usage(timeout: float = 20.0) -> CliAgentUsageSnapshot:
     """Probe ``grok agent stdio`` for the current account usage.
 
     Speaks the ACP handshake with the saved login, then reads the billing
@@ -422,21 +429,10 @@ async def read_grok_usage(
     :class:`CliAgentUsageError` when the tool cannot be started, has no saved
     login, or does not answer in time.
     """
-    try:
-        process = await create_agent_subprocess(
-            executable,
-            # The probe must never let the CLI update itself.
-            "--no-auto-update",
-            "agent",
-            "stdio",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-            limit=STREAM_READ_LIMIT,
-        )
-    except OSError as exc:
-        raise CliAgentUsageError(f"Could not start Grok: {exc}") from exc
+    # The probe must never let the CLI update itself.
+    environment, process = await _probe(
+        "grok", "grok", "--no-auto-update", "agent", "stdio"
+    )
     try:
         async with asyncio.timeout(timeout):
             await _probe_request(
@@ -468,13 +464,12 @@ async def read_grok_usage(
     except TimeoutError as exc:
         raise CliAgentUsageError("Grok did not answer in time.") from exc
     finally:
-        await terminate_process_tree(process)
+        await process.kill()
+        await environment.close()
     return parse_grok_billing(billing, subscription)
 
 
-async def read_claude_usage(
-    executable: str = "claude", timeout: float = 30.0
-) -> CliAgentUsageSnapshot:
+async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
     """Probe ``claude -p /usage`` for the current account usage.
 
     The ``/usage`` slash command runs headlessly without an LLM turn, so the
@@ -482,30 +477,24 @@ async def read_claude_usage(
     tool cannot be started, does not answer in time, or reports no usage
     lines (e.g. API-key auth, where the plan panel does not exist).
     """
-    try:
-        process = await create_agent_subprocess(
-            executable,
-            "-p",
-            "/usage",
-            "--output-format",
-            "json",
-            # The probe must not pile a resumable session onto disk per poll.
-            "--no-session-persistence",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-            limit=STREAM_READ_LIMIT,
-        )
-    except OSError as exc:
-        raise CliAgentUsageError(f"Could not start Claude Code: {exc}") from exc
+    environment, process = await _probe(
+        "claude",
+        "claude",
+        "-p",
+        "/usage",
+        "--output-format",
+        "json",
+        # The probe must not pile a resumable session onto disk per poll.
+        "--no-session-persistence",
+    )
     try:
         async with asyncio.timeout(timeout):
             stdout, _ = await process.communicate()
     except TimeoutError as exc:
         raise CliAgentUsageError("Claude Code did not answer in time.") from exc
     finally:
-        await terminate_process_tree(process)
+        await process.kill()
+        await environment.close()
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
@@ -520,14 +509,13 @@ async def read_claude_usage(
 
 
 async def _probe_request(
-    process: asyncio.subprocess.Process,
+    process: EnvironmentProcess,
     request_id: int,
     method: str,
     params: dict[str, Any],
     label: str = "Codex App Server",
 ) -> Any:
-    assert process.stdout is not None
-    _probe_send(
+    await _probe_send(
         process,
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
     )
@@ -550,17 +538,15 @@ async def _probe_request(
         return message.get("result")
 
 
-def _probe_send(process: asyncio.subprocess.Process, message: dict[str, Any]) -> None:
-    assert process.stdin is not None
+async def _probe_send(process: EnvironmentProcess, message: dict[str, Any]) -> None:
     process.stdin.write(json.dumps(message).encode() + b"\n")
+    await process.stdin.drain()
 
 
 #: The AI CLI tools with a structured account-usage interface, keyed by their
 #: catalog name (:mod:`guildbotics.intelligences.cli_agents`).  Tools absent
 #: here have no snapshot and never appear in the usage response.
-CLI_AGENT_USAGE_READERS: dict[
-    str, Callable[[str], Awaitable[CliAgentUsageSnapshot]]
-] = {
+CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]]] = {
     "claude": read_claude_usage,
     "codex": read_codex_usage,
     "grok": read_grok_usage,

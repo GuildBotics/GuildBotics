@@ -153,13 +153,9 @@ function DeviceAccessCard({
   onChange: (local: LocalGrants) => void;
 }) {
   const { t } = useTranslation();
-  const trees = status?.trees ?? [];
-  const treeGrants = new Set(trees.map((tree) => tree.grant));
   const own: { path: string; access: Access }[] = [
     ...local.paths,
-    ...local.deny
-      .filter((entry) => !treeGrants.has(entry))
-      .map((entry) => ({ path: entry, access: "deny" as const })),
+    ...local.deny.map((entry) => ({ path: entry, access: "deny" as const })),
   ];
   const setOwn = (target: string, access: Access | null) =>
     onChange({
@@ -172,18 +168,10 @@ function DeviceAccessCard({
         ...(access === "deny" ? [target] : []),
       ],
     });
-  const setTree = (grant: string, deny: boolean) =>
-    onChange({
-      ...local,
-      deny: deny ? [...local.deny, grant] : local.deny.filter((entry) => entry !== grant),
-    });
-  const closed = [
-    ...(status?.denied.filter((d) => d.builtin) ?? []).map((d) => ({
-      path: d.path,
-      note: t("setup.intelligence.deviceAccess.builtin"),
-    })),
-    ...(status?.excluded ?? []).map((tree) => ({ path: tree.path, note: tree.reason })),
-  ];
+  const closed = (status?.denied.filter((d) => d.builtin) ?? []).map((d) => ({
+    path: d.path,
+    note: t("setup.intelligence.deviceAccess.builtin"),
+  }));
   const mono = (text: string, dimmed = false) => (
     <Text size="sm" ff="monospace" c={dimmed ? "dimmed" : undefined}>
       {text}
@@ -225,26 +213,6 @@ function DeviceAccessCard({
             />
           ),
           onRemove: () => setOwn(row.path, null),
-        })),
-        ...trees.map((tree) => ({
-          key: `tree:${tree.path}`,
-          name: tree.path,
-          path: (
-            <>
-              {mono(tree.path)}
-              <Text size="xs" c="dimmed" ff="monospace">
-                {t("setup.intelligence.deviceAccess.source", { sources: tree.sources.join(", ") })}
-              </Text>
-            </>
-          ),
-          access: (
-            <AccessSelect
-              path={tree.path}
-              accesses={["read", "deny"]}
-              value={local.deny.includes(tree.grant) ? "deny" : "read"}
-              onChange={(access) => setTree(tree.grant, access === "deny")}
-            />
-          ),
         })),
         ...closed.map((row) => ({
           key: `closed:${row.path}`,

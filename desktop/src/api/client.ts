@@ -925,17 +925,8 @@ export type LocalPathGrant = {
 
 export type LocalGrants = {
   paths: LocalPathGrant[];
-  // Directories this device closes: a tree its PATH derived, or a corner of one.
+  // Corners of what is open that this device closes.
   deny: string[];
-};
-
-// What one tool can enforce natively, on this device and on any supported OS.
-export type CliAgentNetworkSupport = {
-  modes: NetworkMode[];
-  modes_anywhere: NetworkMode[];
-  local_network_modes: NetworkMode[];
-  grant_accesses: GrantAccess[];
-  contract_applied: boolean;
 };
 
 export type GrantScope = "document" | "local" | "deny";
@@ -961,21 +952,6 @@ export type EnvironmentGrantStatus = {
   present: boolean;
 };
 
-// A tree read because commands on this device's PATH live in it. `grant` is
-// how the local grant file names the tree to close it.
-export type EnvironmentTreeStatus = {
-  path: string;
-  grant: string;
-  sources: string[];
-};
-
-// A tree the PATH led to that stays closed, and why.
-export type EnvironmentExcludedStatus = {
-  path: string;
-  source: string;
-  reason: string;
-};
-
 export type EnvironmentDenyStatus = {
   path: string;
   builtin: boolean;
@@ -984,8 +960,6 @@ export type EnvironmentDenyStatus = {
 export type EnvironmentAccessStatus = {
   documents: EnvironmentGrantStatus[];
   paths: EnvironmentGrantStatus[];
-  trees: EnvironmentTreeStatus[];
-  excluded: EnvironmentExcludedStatus[];
   denied: EnvironmentDenyStatus[];
   problem: string;
 };
@@ -1002,7 +976,6 @@ export type EnvironmentProblem = {
 export type EnvironmentSlotStatus = {
   slot: string;
   tool: string;
-  contract_applied: boolean;
   network: NetworkPolicy;
   problems: EnvironmentProblem[];
 };
@@ -1056,7 +1029,6 @@ export type IntelligenceConfig = {
   // this device's own extra paths.
   filesystem_grants?: SharedGrants;
   local_grants?: LocalGrants;
-  network_support?: Record<string, CliAgentNetworkSupport>;
   platform?: string;
   // Team-owned slot/feature names. A member may override their value but cannot
   // delete or rename them. Empty for the team scope.

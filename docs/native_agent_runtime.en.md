@@ -46,39 +46,33 @@ provider-neutral `low` / `high` levels become provider settings, plus the
 
 ## Isolated agent environment: access permissions
 
-Every AI CLI turn is confined by the same contract, whatever it is for (a
-ticket, a chat, the Desktop troubleshooter, command authoring). GuildBotics asks
-for three things and each adapter translates them into its provider's own
-sandbox settings. A request the provider cannot enforce on the current OS stops
-the agent from starting; it is never widened into something the provider can do.
-Codex's native Windows sandbox reads a fixed set of machine-wide roots and has
-not been verified to honour the profile's read paths or the network proxy, so
-Codex does not start on Windows until that check is done (it does under WSL,
-as Linux).
+Every AI CLI turn runs inside an isolated agent environment: a microVM
+GuildBotics boots for the one turn from a snapshot it built on this device,
+and discards when the turn ends. What the turn may reach is the access
+contract below, and the environment is what enforces it -- the same way on
+every OS and for every provider, because the provider CLI runs inside and
+sees nothing else. There is no per-provider translation and no list of what
+a provider can or cannot enforce: a setting the environment cannot honour on
+this device (no runtime, no snapshot, no login) stops the agent from
+starting, and is never widened.
 
 - **Working directory**: the turn's `cwd` (the member's clone for ticket work,
-  `<workspace>/.guildbotics/local/work/...` for internal turns) is always
-  readable and writable. The workspace's `.guildbotics/config` and `state` are
-  not part of it.
-- **Beyond the working directory** there are three things. **Trees derived
-  from the PATH**: what you can run, agents can run. For each directory on
-  the PATH this device gives agents, the smallest tree holding it and the
-  packages its executables link into (`/opt/homebrew` for Homebrew's
-  `/opt/homebrew/bin`, `~/.local` for `~/.local/bin`) opens for reading.
-  There is no setting; every device derives this for every turn. The whole
-  tree opens, so every other command in it becomes runnable too: the sandbox
-  guards credentials, network and write locations, not the list of programs
-  that may start. A tree inside a credential directory (`~/.ssh`, a provider's
-  own directory) stays closed and is shown with the reason. **documents**:
+  `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
+  read/write at the same path it has on the host. The workspace's
+  `.guildbotics/config` and `state` are not part of it.
+- **Beyond the working directory** there are two things, both bound at their
+  host paths under a home directory that is the host's own. **documents**:
   directories under the home directory the work reads from or writes to
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
-  **This device's own settings**: extra paths the derivation cannot cover (a
-  cache a tool writes, data it keeps outside its install tree; absolute paths
-  allowed, must exist) and `deny` entries that close a tree or a corner of
-  one, in `local/cli_agent_filesystem_grants.yml`, never synchronized. The
-  credential directories are always closed by a built-in deny, so a tree that
-  contains one (`~/.local` around `~/.local/share/keyrings`) can open around it.
+  **This device's own settings**: extra paths (absolute paths allowed, must
+  exist) and `deny` entries that close a corner of what is open, in
+  `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential
+  directories (`~/.ssh`, a provider's own directory) are always closed by a
+  built-in deny. Nothing else of the host exists inside: not its PATH, not
+  its other clones, not its keychain. The agent's tools are the environment's
+  own, declared in `config/intelligences/agent_environment.yml` (see
+  [`guildbotics environment`](cli_reference.md#guildbotics-environment)).
 
   ```yaml
   # config/intelligences/cli_agent_filesystem_grants.yml (shared)
@@ -95,19 +89,21 @@ as Linux).
     - path: .cache/uv
       access: read_write
   deny:
-    - /opt/homebrew/etc
+    - Documents/shared-documents/private
   ```
 
 - **Network**: the `network:` block of the selected tool definition
   (`cli_agents/<tool>/<slot>.yml`) states what the turn may reach, whether
   through a shell command and its child processes or through the tool's
-  built-in web search / URL fetch: one rule, because the boundary enforcing
-  it cannot tell the two apart. `mode` is one of `deny` / `allowlist` /
+  built-in web search / URL fetch: one rule, because the environment's
+  gateway cannot tell the two apart. `mode` is one of `deny` / `allowlist` /
   `unrestricted` (`off` would read as a YAML boolean), `allowed_domains` is
   used only with `allowlist`, and `allow_local_network` opens localhost and the
   LAN as well. The shipped default is closed. A slot that omits `network:`
   inherits the whole block from its tool's `default.yml`; a slot that states
-  it states all of it.
+  it states all of it. The provider's own API domains and the localhost member
+  broker are always reachable, whatever the mode; they are GuildBotics'
+  choice, not a setting.
 
   ```yaml
   network:
@@ -117,125 +113,44 @@ as Linux).
   ```
 
 All of this is edited in Desktop under **LLM / AI CLI tools → Advanced settings**.
-The Network fields of each tool definition disable the modes the tool cannot
-enforce on this OS and say why. The "Directories shared by the workspace" card
-holds the documents; the "Directories on this device" card lists what this
-device's PATH makes readable (each row can be denied), the paths and denies
-added here, and what stays closed with its reason; both judge a typed or picked
-path before it is added (whether it exists here, whether it holds credentials).
-Every member's slots are resolved the way a turn is started: a member whose
-slot cannot start on this device is marked in the member list with the reasons,
-and the status band at the top says so until the setting is changed. The band's
-link opens the setting it is about: the member's slot for a network problem,
-the device's directory card for a grant problem.
+The "Directories shared by the workspace" card holds the documents; the
+"Directories on this device" card holds the paths and denies added here; both
+judge a typed or picked path before it is added (whether it exists here,
+whether it holds credentials). Every member's slots are resolved the way a
+turn is started: a member whose slot cannot start on this device is marked in
+the member list with the reason, and the status band at the top says so until
+the setting is changed.
 
-The provider's own model traffic and login, and the localhost member broker,
-are outside this setting. Which modes a provider can enforce is declared in the
-catalog in `guildbotics/intelligences/cli_agents.py`; saving a definition checks
-that some supported OS can enforce it, and starting an agent checks the current
-OS, both against the same catalog. Only Codex translates the contract so far;
-the other adapters keep the fixed behaviour described below.
+Inside the environment each provider's own sandbox stays on, at a fixed
+setting that owes nothing to the contract: everything the microVM holds is
+already allowed, so what the inner sandbox adds is hiding the provider's own
+credentials from the agent's commands and keeping provider settings from
+changing between turns. Codex runs under a permission profile that reads the
+whole environment except `~/.codex`, writes the working directory (its `.git`
+included) and the temporary directories, and has the network on; the profile
+never names `/` as writable, because Codex 0.153 then loses `/dev/null`.
+Codex always uses the non-interactive `never` approval policy, and any
+unexpected approval request is declined. Claude Code runs with
+`bypassPermissions` and `sandbox.enabled=false`. Grok Build launches with
+`--sandbox workspace` and `--always-approve`, GitHub Copilot with
+`--no-remote-export` and `allow_all: on` (`off` on a read-only turn, where every
+request is declined), Antigravity with `--dangerously-skip-permissions`; none of
+them takes a flag from configuration. Which providers' inner sandboxes run on
+the microVM's kernel is confirmed per provider as each is provisioned; Codex
+(Landlock and bubblewrap) is.
 
-Codex receives the contract as configuration overrides at launch: a permission
-profile named `guildbotics`, selected through `default_permissions`. The profile
-is built from Codex's platform paths (`:minimal`) rather than its `:workspace`
-baseline, whose system-wide read would expose `~/.ssh` and `~/.codex/auth.json`:
-writes inside the workspace roots and temp, reads on the directories Codex's own
-binary is run through (the invoked link and its real location, never `~/.codex`
-itself), reads on the skill roots Codex scans (`~/.agents/skills`,
-`~/.codex/skills`, `~/.codex/_skills`, whichever exist, because the agent reads a
-skill's body from inside the sandbox), and each filesystem grant as `read` or
-`write`.
-`deny` becomes `network.enabled=false` and `web_search="disabled"`; `allowlist`
-becomes `network.enabled=true` with `features.network_proxy=true`, the domain
-rules, and the same domains in `tools.web_search.allowed_domains`;
-`unrestricted` becomes `network.enabled=true`. Neither `thread/start` nor `turn/start`
-carries a sandbox of its own, because either would override the profile. Codex
-always uses the non-interactive `never` approval policy, and any unexpected
-approval request is declined.
-
-Grok Build always launches with `--sandbox workspace`. The launch command is fixed as
-`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`; no arbitrary
-CLI flag can be injected from configuration. `--always-approve` is always paired with a
-sandbox, and an unexpected ACP `session/request_permission` is declined and recorded.
-The decline uses the option id the agent supplied for its `reject_once` option (falling
-back to `reject_always`); option ids are chosen per request, so the option kind is never
-sent back as an id. When no rejecting option is offered, the request is answered with
-`cancelled` rather than reinterpreted as an allow.
-`--no-auto-update` keeps a headless run from updating the CLI mid-session, and
-GuildBotics never rewrites the user's `config.toml`.
-
-GitHub Copilot runs with its own default boundary (file access confined to the
-working directory and the system temp directories). The launch command is fixed as
-`copilot --acp --no-auto-update --no-remote-export`; no arbitrary CLI flag can be
-injected from configuration. `--no-remote-export` keeps a member's
-session from being exported to, or steered from, GitHub web and mobile: it carries
-workspace contents and must take its instructions from GuildBotics alone.
-
-Copilot's approval policy is a session configuration option rather than a launch flag,
-so it is set per turn. A normal turn runs with `allow_all: on` and never asks. A
-read-only turn runs with `allow_all: off`, which makes Copilot ask before every write,
-shell command, and URL fetch -- and every one of those requests is declined and
-recorded, while reads inside the allowed paths still run automatically. The decline
-follows the same rule as Grok's: the option id Copilot supplied for `reject_once`
-(falling back to `reject_always`), and `cancelled` when no rejecting option is offered.
-
-The turn's model and reasoning effort are session configuration options too, applied
-with `session/set_config_option` after the session is created or reloaded. Copilot
-acknowledges an unknown option id with an empty result instead of an error, so the
-adapter reads the option list Copilot returns and reports the values the session
-actually ended up with as an `agent_runtime` settings event -- never the requested ones.
-An option Copilot did not apply is listed as rejected and logged as a warning. Because
-these options can be set on any live session, changing effort or model never rotates
-the session.
-
-Antigravity takes its model and effort as command-line flags on every turn, and a
-resumed conversation honors a changed `--model`, so a settings change never rotates
-the session there either. `--model` and `--effort` are mutually exclusive: every id
-`agy models` offers either carries its tier in the id (`gemini-3.6-flash-low`) or
-rejects `--effort` outright (`claude-sonnet-4-6`), and `agy` refuses the turn when
-both are given. A slot that sets both keeps the model and drops the effort, which is
-recorded on the settings event. A model that `agy models` does not list is dropped
-with a warning; when the catalog cannot be read, validation is skipped rather than
-blocking the turn. Because `agy` reports a model back only when one was named on the
-command line, a turn without `--model` records an empty model rather than guessing
-which account default it ran on.
-
-The contract is not translated for Antigravity yet. `agy --sandbox` restricts
-terminal commands only; its own file-writing tools still reach outside the
-working directory.
-
-Antigravity runs every turn with `--dangerously-skip-permissions` and with
-`--add-dir <cwd>`. That second flag is not optional: without it `agy` resolves every tool, including `run_command`,
-against its own scratch directory instead of the member's workspace.
-
-**Antigravity cannot enforce a read-only turn at the provider.** None of the
-three mechanisms `agy` 1.1.10 offers works: `--mode plan` still writes while
-`--dangerously-skip-permissions` is in effect, `--sandbox` confines shell
-commands but not the agent's own file tools, and dropping the permission skip
-makes headless mode auto-deny every command and return an empty response, which
-leaves a read-only turn unable to inspect anything. A read-only turn therefore
-runs with the same arguments as a normal one, and every such turn records
-`read_only_enforced: false` on its approval event so the gap stays visible in
-diagnostics. The other layers still apply: a read-only turn holds no person
-lease, so write-side `guildbotics member` commands fail `validate_delegation`,
-and the credential isolation below removes the tokens a direct `git push` or
-`gh` call would need. What is not blocked is local file modification and
-arbitrary shell execution inside the workspace. This is tracked for the day
-`agy` grows a real read-only mode.
-
-Claude Code always runs non-interactively with `bypassPermissions`, preserving the
-previous `--dangerously-skip-permissions` behavior. GuildBotics also passes a
-session-level `sandbox.enabled=false` override because the Bash sandbox is not
-compatible with the full range of ticket and chat workflow commands. A higher-priority
-Claude managed policy remains authoritative. Claude permission and sandbox settings
-are not stored in the workspace policy or exposed in Desktop.
+Only the provider's persisted state -- its credentials and its sessions --
+survives a turn, bound from this device's store
+(`~/.guildbotics/data/agent_environment/<provider>/`) and shared by every
+member. The provider's settings and skills are the snapshot's and return to it
+every turn. Read-only turns are enforced by the member broker, which holds no
+person lease for them and refuses every write-capable member command; what a
+provider does with its own file tools on such a turn is recorded on the
+turn's approval event and is not a boundary.
 
 The effective policy and every approval decision are written as provider-neutral
-diagnostics events. Claude `bypassPermissions` can modify files
-outside the workspace. Use them only with the documented credential isolation and in
-an environment whose host access is acceptable. Invalid types, removed keys, and
-unknown values fail validation instead of silently changing the effective boundary.
+diagnostics events. Invalid types, removed keys, and unknown values fail
+validation instead of silently changing the effective boundary.
 
 ## Authentication
 

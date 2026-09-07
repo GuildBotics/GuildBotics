@@ -18,12 +18,19 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+    EnvironmentProcess,
+)
+from guildbotics.intelligences.agent_environment.spec import (
+    EnvironmentMount,
+    guest_path,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    isolated_agent_environment,
-    remove_isolated_config,
-    terminate_process_tree,
+    start_probe_environment,
+    start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
@@ -118,8 +125,8 @@ class AntigravityStreamJsonAdapter:
     ) -> None:
         self._executable = executable
         self._timeout = timeout
-        self._process: asyncio.subprocess.Process | None = None
-        self._capabilities_checked = False
+        self._process: EnvironmentProcess | None = None
+        self._environment: AgentEnvironment | None = None
         self._model_catalog: frozenset[str] = frozenset()
         self._model_catalog_read = False
         self._member_broker = MemberCapabilityBroker()
@@ -140,7 +147,6 @@ class AntigravityStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_supported(context)
         try:
             await self._member_broker.activate(context)
         except MemberCapabilityBrokerError as exc:
@@ -170,11 +176,13 @@ class AntigravityStreamJsonAdapter:
                 details={"prompt_bytes": prompt_bytes, "limit": _MAX_PROMPT_BYTES},
             )
         settings, rejected = await self._turn_settings(context)
-        env, gh_config_dir = isolated_agent_environment()
         mcp_workspace = self._ensure_mcp_workspace()
-        log_fd, log_path = tempfile.mkstemp(prefix="guildbotics-agy-log-")
-        os.close(log_fd)
-        log_file = Path(log_path)
+        # The log lands in the auxiliary workspace, the one host directory of
+        # this adapter's own that the environment binds, so it can be read
+        # back here once the turn is over.
+        log_file = mcp_workspace / "agy.log"
+        log_file.unlink(missing_ok=True)
+        guest_workspace = guest_path(mcp_workspace)
         args = [
             self._executable,
             "--print",
@@ -187,7 +195,7 @@ class AntigravityStreamJsonAdapter:
             "--print-timeout",
             f"{int(self._timeout)}s",
             "--log-file",
-            str(log_file),
+            f"{guest_workspace}/agy.log",
         ]
         if conversation.provider_session_id:
             args.extend(("--conversation", conversation.provider_session_id))
@@ -195,36 +203,33 @@ class AntigravityStreamJsonAdapter:
             args.extend(("--model", model))
         elif effort := str(settings.get("effort", "")):
             args.extend(("--effort", effort))
+        self._environment = await start_turn_environment(
+            context,
+            "antigravity",
+            host_ports=(self._member_broker.endpoint.port,),
+            env={},
+            mounts=(EnvironmentMount(guest_workspace, mcp_workspace, False),),
+        )
         try:
-            self._process = await create_agent_subprocess(
+            self._process = await self._environment.run(
                 *args,
                 # The repository remains the primary workspace and relative
                 # path base. The private root exists only to contribute this
                 # process's short-lived MCP configuration.
                 _WORKSPACE_FLAG,
-                str(mcp_workspace),
-                cwd=str(context.cwd),
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                guest_workspace,
                 limit=STREAM_READ_LIMIT,
             )
-        except OSError as exc:
-            remove_isolated_config(gh_config_dir)
-            log_file.unlink(missing_ok=True)
+        except AgentEnvironmentError as exc:
+            await self._close_environment()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Antigravity: {exc}",
             ) from exc
         process = self._process
-        assert process.stdout is not None
-        stderr_task = (
-            asyncio.create_task(process.stderr.read())
-            if process.stderr is not None
-            else None
-        )
+        # `agy` takes the prompt on its command line and reads nothing.
+        process.stdin.close()
+        stderr_task = asyncio.create_task(process.stderr.read())
         events: list[AgentEvent] = []
         conversation_id = conversation.provider_session_id
         terminal_output = ""
@@ -291,21 +296,20 @@ class AntigravityStreamJsonAdapter:
                         process.wait(), timeout=_PROCESS_EXIT_GRACE_SECONDS
                     )
             observed_returncode = process.returncode
-            await terminate_process_tree(process)
-            if stderr_task is not None:
-                try:
-                    stderr = (
-                        await asyncio.wait_for(
-                            stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
-                        )
-                    ).decode(errors="replace")
-                except TimeoutError:
-                    stderr_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await stderr_task
+            await process.kill()
+            try:
+                stderr = (
+                    await asyncio.wait_for(
+                        stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
+                    )
+                ).decode(errors="replace")
+            except TimeoutError:
+                stderr_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stderr_task
+            await self._close_environment()
             log_tail = _read_log_tail(log_file)
             log_file.unlink(missing_ok=True)
-            remove_isolated_config(gh_config_dir)
             self._process = None
         if terminal_error is not None:
             terminal_error.details["log_tail"] = log_tail
@@ -369,16 +373,22 @@ class AntigravityStreamJsonAdapter:
     async def interrupt(self) -> None:
         await self._member_broker.deactivate()
         if self._process is not None and self._process.returncode is None:
-            await terminate_process_tree(self._process)
+            await self._process.kill()
 
     async def close(self) -> None:
         try:
             await self.interrupt()
+            await self._close_environment()
         finally:
             await self._member_broker.close()
             if self._mcp_workspace is not None:
                 shutil.rmtree(self._mcp_workspace, ignore_errors=True)
                 self._mcp_workspace = None
+
+    async def _close_environment(self) -> None:
+        environment, self._environment = self._environment, None
+        if environment is not None:
+            await environment.close()
 
     def _ensure_mcp_workspace(self) -> Path:
         """Create a private Antigravity workspace containing only broker MCP."""
@@ -393,7 +403,7 @@ class AntigravityStreamJsonAdapter:
                 {
                     "mcpServers": {
                         endpoint.name: {
-                            "serverUrl": endpoint.url,
+                            "serverUrl": endpoint.guest_url,
                             "headers": {"Authorization": endpoint.authorization},
                         }
                     }
@@ -453,27 +463,25 @@ class AntigravityStreamJsonAdapter:
         if self._model_catalog_read:
             return self._model_catalog
         self._model_catalog_read = True
-        process: asyncio.subprocess.Process | None = None
         try:
-            process = await create_agent_subprocess(
-                self._executable,
-                "models",
-                # `agy models` blocks forever on an attached terminal.
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
+            environment = await start_probe_environment("antigravity")
+        except AgentRuntimeError as exc:
+            _LOGGER.warning("Could not read the Antigravity model catalog: %s", exc)
+            return self._model_catalog
+        try:
+            process = await environment.run(
+                self._executable, "models", limit=STREAM_READ_LIMIT
             )
             stdout, _ = await asyncio.wait_for(
                 process.communicate(), timeout=_MODELS_TIMEOUT_SECONDS
             )
-        except (OSError, TimeoutError) as exc:
-            if process is not None and process.returncode is None:
-                await terminate_process_tree(process)
+        except (AgentEnvironmentError, TimeoutError) as exc:
             # Validation is a convenience; a catalog we cannot read must not
             # stop the turn.
             _LOGGER.warning("Could not read the Antigravity model catalog: %s", exc)
             return self._model_catalog
+        finally:
+            await environment.close()
         if process.returncode != 0:
             return self._model_catalog
         self._model_catalog = frozenset(
@@ -482,55 +490,6 @@ class AntigravityStreamJsonAdapter:
             if (identifier := line.strip())
         )
         return self._model_catalog
-
-    async def _ensure_supported(self, context: AgentExecutionContext) -> None:
-        if self._capabilities_checked:
-            return
-        env, gh_config_dir = isolated_agent_environment()
-        process: asyncio.subprocess.Process | None = None
-        try:
-            process = await create_agent_subprocess(
-                self._executable,
-                "--help",
-                cwd=str(context.cwd),
-                env=env,
-                # `agy` subcommands block forever on an attached terminal.
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=_HELP_TIMEOUT_SECONDS
-            )
-        except (OSError, TimeoutError) as exc:
-            if process is not None and process.returncode is None:
-                await terminate_process_tree(process)
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                f"Could not inspect Antigravity stream-json capabilities: {exc}",
-            ) from exc
-        finally:
-            remove_isolated_config(gh_config_dir)
-        # `agy --help` prints to stderr and exits 0, so both pipes are read.
-        help_text = (stdout + stderr).decode(errors="replace")
-        required = (
-            "--print",
-            "--output-format",
-            "--conversation",
-            "--model",
-            "--effort",
-            _WORKSPACE_FLAG,
-        )
-        missing = [flag for flag in required if flag not in help_text]
-        if process.returncode != 0 or missing:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                "The installed Antigravity version does not expose the required "
-                "stream-json and exact-resume capabilities.",
-                details={"missing_capabilities": missing},
-            )
-        self._capabilities_checked = True
 
 
 def _requested_settings(context: AgentExecutionContext) -> dict[str, Any]:

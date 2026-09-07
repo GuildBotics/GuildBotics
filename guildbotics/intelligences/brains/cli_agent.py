@@ -36,7 +36,6 @@ from guildbotics.intelligences.brains.util import (
     to_plain_text,
     to_response_class,
 )
-from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -762,11 +761,7 @@ class CliAgentBrain(Brain):
             try:
                 contract = AccessContract(
                     network=self.executable_info.network,
-                    access=resolve_access(
-                        load_shared_grants(),
-                        load_local_grants(),
-                        get_cli_agent_search_path(),
-                    ),
+                    access=resolve_access(load_shared_grants(), load_local_grants()),
                 )
             except AccessContractError as exc:
                 return CliAgentExecutionResult(

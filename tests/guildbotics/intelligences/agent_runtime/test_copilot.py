@@ -647,43 +647,11 @@ async def test_a_session_copilot_no_longer_has_is_rotated(
 
 
 @pytest.mark.asyncio
-async def test_a_session_this_process_still_holds_is_never_reloaded(
-    monkeypatch, tmp_path
+async def test_every_turn_boots_its_own_environment_and_reloads_the_session(
+    monkeypatch, tmp_path, fake_environment
 ) -> None:
-    """Copilot answers a second load with "already loaded", and it is right to.
-
-    The conversation never left the process, so there is nothing to rehydrate.
-    """
-    peer = _Peer(updates=[text_chunk("first")])
-    install(monkeypatch, peer)
-    adapter = CopilotAcpAdapter()
-    context = _context(tmp_path, provider_options={"reasoning_effort": "high"})
-    conversation = ConversationRecord(key=context.conversation_key)
-    events: list[AgentEvent] = []
-
-    first = await adapter.run_turn("one", context, conversation, events.append)
-    conversation.provider_session_id = first.provider_session_id
-    peer.updates = [text_chunk("second")]
-    second_events: list[AgentEvent] = []
-    second = await adapter.run_turn("two", context, conversation, second_events.append)
-    await adapter.close()
-
-    assert second.output == "second"
-    assert "session/load" not in peer.methods()
-    assert not [event for event in second_events if event.name == "history_rehydrated"]
-    # Settings are still imposed on the turn, from no assumed current state.
-    assert (
-        _named(second_events, AgentEventKind.PROCESS, "settings").details[
-            "reasoning_effort"
-        ]
-        == "high"
-    )
-
-
-@pytest.mark.asyncio
-async def test_an_unchanged_launch_command_keeps_the_running_process(
-    monkeypatch, tmp_path
-) -> None:
+    """Nothing of a turn outlives it: the next turn boots a fresh environment
+    and a fresh process, and rehydrates the session it names by id."""
     peer = _Peer(updates=[text_chunk("first")])
     launched = install(monkeypatch, peer)
     adapter = CopilotAcpAdapter()
@@ -691,12 +659,19 @@ async def test_an_unchanged_launch_command_keeps_the_running_process(
         key=ConversationKey("aiko", "copilot", "ticket", "issue-364")
     )
 
-    await adapter.run_turn("one", _context(tmp_path), conversation, lambda _e: None)
-    peer.updates = [text_chunk("second")]
+    first = await adapter.run_turn(
+        "one", _context(tmp_path), conversation, lambda _e: None
+    )
+    conversation.provider_session_id = first.provider_session_id
+    second_peer = _Peer(updates=[text_chunk("second")])
+    launched_again = install(monkeypatch, second_peer)
     await adapter.run_turn("two", _context(tmp_path), conversation, lambda _e: None)
     await adapter.close()
 
-    assert len(launched) == 1
+    assert len(launched) == 1 and len(launched_again) == 1
+    assert [env.tool for env in fake_environment.started] == ["copilot", "copilot"]
+    assert all(env.closed for env in fake_environment.started)
+    assert "session/load" in second_peer.methods()
 
 
 @pytest.mark.asyncio
@@ -977,10 +952,7 @@ async def test_a_stalled_turn_is_bounded_by_the_turn_deadline(
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter = CopilotAcpAdapter(timeout=0.05)
 
     with pytest.raises(AgentRuntimeError) as error:

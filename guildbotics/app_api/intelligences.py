@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.agent_environment_status import network_support
 from guildbotics.app_api.models import (
     BrainAssignment,
     CliAgentDefinition,
@@ -37,7 +36,6 @@ from guildbotics.intelligences.cli_agents import (
     cli_agent_name_from_path,
     require_cli_agent_path,
     resolve_cli_agent_path,
-    unsupported_network_reason,
 )
 from guildbotics.intelligences.effort import (
     describe_overlay_problems,
@@ -111,7 +109,6 @@ class IntelligenceConfigService:
             brain_mapping=self._read_brain_assignments(brain_mapping),
             filesystem_grants=self._read_shared_grants(config_dir),
             local_grants=self._read_local_grants(config_dir),
-            network_support=network_support(),
             platform=sys.platform,
             inherited_model_slots=inherited_model_slots,
             inherited_cli_slots=inherited_cli_slots,
@@ -418,14 +415,6 @@ class IntelligenceConfigService:
         network = agent.network
         if network is None:
             network = self._network_of(existing, where=f"AI CLI tool '{agent.path}'")
-        if network is not None:
-            # A shared definition must be enforceable somewhere; which device
-            # can run it is decided when a turn starts there.
-            reason = unsupported_network_reason(agent.name, network, None)
-            if reason:
-                raise SetupServiceError(
-                    "invalid_network_settings", f"AI CLI tool '{agent.path}': {reason}"
-                )
         # The file is written even for an empty mapping, as an explicit
         # `effort: {}`. Deleting it instead would fall through to the packaged
         # template, whose mapping would silently take effect again -- so

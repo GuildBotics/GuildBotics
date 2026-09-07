@@ -8,11 +8,17 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    DeniedPath,
+    NetworkPolicy,
+    ResolvedAccess,
+    ResolvedGrant,
+    parse_network_policy,
+)
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
-    _codex_sandbox_overrides,
-    _codex_skill_roots,
     _config_arguments,
     _decode_notification,
 )
@@ -31,16 +37,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.agent_environment.contract import (
-    DeniedPath,
-    DerivedTree,
-    ExcludedTree,
-    NetworkPolicy,
-    ResolvedAccess,
-    ResolvedGrant,
-    AccessContract,
-    parse_network_policy,
-)
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -50,7 +46,7 @@ from guildbotics.runtime.person_lease import (
 
 
 class _Writer:
-    def __init__(self, process: "_Process") -> None:
+    def __init__(self, process: _Process) -> None:
         self.process = process
 
     def write(self, data: bytes) -> None:
@@ -247,7 +243,7 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
     )
 
 
-def _turn_start(process: "_Process") -> dict[str, Any]:
+def _turn_start(process: _Process) -> dict[str, Any]:
     return next(
         message["params"]
         for message in process.messages
@@ -266,7 +262,8 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert all(args[index] == "-c" for index in range(2, len(args), 2))
         config = args[3::2]
         assert any(
-            value.endswith('.url="http://127.0.0.1:43123/mcp"') for value in config
+            value.endswith('.url="http://host.microsandbox.internal:43123/mcp"')
+            for value in config
         )
         assert any(
             value.endswith('.bearer_token_env_var="GUILDBOTICS_MEMBER_BROKER_TOKEN"')
@@ -275,7 +272,6 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert not any(".env_http_headers=" in value for value in config)
         assert any(value.endswith(".required=true") for value in config)
         assert any('enabled_tools=["guildbotics_member"]' in value for value in config)
-        assert kwargs["start_new_session"] is True
         assert kwargs["env"][MEMBER_BROKER_TOKEN_ENV]
         for key in (
             RUN_ENV,
@@ -361,50 +357,6 @@ async def test_codex_provider_never_inherits_the_parent_execution_grant(
     assert env[MEMBER_BROKER_TOKEN_ENV]
     for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
         assert key not in env
-
-
-@pytest.mark.asyncio
-async def test_codex_reuses_process_for_multiple_exact_turns(
-    monkeypatch, tmp_path
-) -> None:
-    process = _Process()
-    starts = 0
-
-    async def create_process(*_args, **_kwargs):
-        nonlocal starts
-        starts += 1
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
-
-    first = await adapter.run_turn(
-        "first", _context(tmp_path), conversation, lambda _event: None
-    )
-    conversation.provider_session_id = first.provider_session_id
-    second = await adapter.run_turn(
-        "second", _context(tmp_path), conversation, lambda _event: None
-    )
-    await adapter.close()
-
-    assert starts == 1
-    assert first.output == second.output == "hello world"
-    assert process.resume_thread == "thread-1"
-    thread_start = next(
-        message
-        for message in process.messages
-        if message.get("method") == "thread/start"
-    )
-    assert thread_start["params"]["approvalPolicy"] == "never"
-    # The permission profile is configured at launch, so neither request
-    # carries a sandbox of its own (they would override the profile).
-    assert "sandbox" not in thread_start["params"]
-    turn_start = next(
-        message for message in process.messages if message.get("method") == "turn/start"
-    )
-    assert turn_start["params"]["approvalPolicy"] == "never"
-    assert "sandboxPolicy" not in turn_start["params"]
 
 
 @pytest.mark.asyncio
@@ -792,10 +744,7 @@ async def test_codex_interrupt_still_terminates_after_rpc_is_cancelled(
         process.returncode = -15
 
     monkeypatch.setattr(adapter, "_request", cancelled_request)
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.codex.terminate_process_tree",
-        terminate,
-    )
+    process.kill = lambda: terminate(process)
 
     await adapter.interrupt()
 
@@ -904,7 +853,7 @@ async def _run_turn_returning(
     return process, terminal
 
 
-async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Process":
+async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> _Process:
     process, _ = await _run_turn_returning(monkeypatch, tmp_path, **context_overrides)
     return process
 
@@ -1114,100 +1063,6 @@ def _codex_binary(tmp_path: Path) -> Path:
     return binary
 
 
-def test_the_closed_contract_becomes_a_minimal_profile_with_no_network(
-    tmp_path: Path,
-) -> None:
-    binary = _codex_binary(tmp_path)
-
-    overrides = _codex_sandbox_overrides(AccessContract(), binary)
-
-    assert overrides == {
-        "default_permissions": "guildbotics",
-        "permissions.guildbotics.filesystem": {
-            ":minimal": "read",
-            ":workspace_roots": {".": "write", ".git": "write"},
-            ":tmpdir": "write",
-            ":slash_tmp": "write",
-            # The package the binary belongs to: the parent of its `bin`.
-            str(binary.parent.parent.resolve()): "read",
-        },
-        "permissions.guildbotics.network.enabled": False,
-        "web_search": "disabled",
-    }
-    # No baseline with a system-wide read: credentials stay unreadable.
-    assert "permissions.guildbotics.extends" not in overrides
-
-
-def test_grants_and_allowlists_are_translated_without_widening(tmp_path: Path) -> None:
-    contract = AccessContract(
-        network=_network("allowlist", "registry.npmjs.org", local=True),
-        access=ResolvedAccess(
-            documents=(ResolvedGrant(tmp_path / "shared", "read", grant="shared"),),
-            paths=(
-                ResolvedGrant(
-                    tmp_path / "out", "read_write", grant=str(tmp_path / "out")
-                ),
-            ),
-            trees=(
-                DerivedTree(
-                    tmp_path / "opt/node",
-                    (tmp_path / "opt/node/bin",),
-                    grant=str(tmp_path / "opt/node"),
-                ),
-            ),
-            excluded=(
-                ExcludedTree(
-                    tmp_path / "home/.codex/x", tmp_path / "bin", "it is under ~/.codex"
-                ),
-            ),
-            denied=(
-                DeniedPath(tmp_path / "home/.ssh", builtin=True),
-                DeniedPath(tmp_path / "opt/node/etc", builtin=False),
-                # Holds the binary Codex runs through (as `~/.codex` does):
-                # not written, `:minimal` keeps the rest of it closed anyway.
-                DeniedPath(tmp_path / "opt/codex", builtin=True),
-            ),
-        ),
-    )
-
-    overrides = _codex_sandbox_overrides(contract, _codex_binary(tmp_path))
-
-    filesystem = overrides["permissions.guildbotics.filesystem"]
-    assert filesystem[str(tmp_path / "shared")] == "read"
-    assert filesystem[str(tmp_path / "out")] == "write"
-    assert filesystem[str(tmp_path / "opt/node")] == "read"
-    assert filesystem[str(tmp_path / "home/.ssh")] == "deny"
-    assert filesystem[str(tmp_path / "opt/node/etc")] == "deny"
-    assert filesystem[str(tmp_path / "opt/codex")] == "read"
-    # An excluded tree is neither granted nor denied: it was never opened.
-    assert str(tmp_path / "home/.codex/x") not in filesystem
-    assert len([k for k in filesystem if k.startswith("/")]) == 5 + 1  # + the binary
-    assert overrides["permissions.guildbotics.network.enabled"] is True
-    # Domain rules only bind through the proxy; without it the flag alone
-    # would open every host.
-    assert overrides["features.network_proxy"] is True
-    assert overrides["permissions.guildbotics.network.domains"] == {
-        "registry.npmjs.org": "allow"
-    }
-    assert overrides["permissions.guildbotics.network.allow_local_binding"] is True
-    # Web search follows the same rule through its own filter.
-    assert overrides["tools.web_search.allowed_domains"] == ["registry.npmjs.org"]
-    assert "web_search" not in overrides
-
-
-def test_an_unrestricted_policy_opens_the_network_without_a_proxy(
-    tmp_path: Path,
-) -> None:
-    contract = AccessContract(network=_network("unrestricted"))
-
-    overrides = _codex_sandbox_overrides(contract, _codex_binary(tmp_path))
-
-    assert overrides["permissions.guildbotics.network.enabled"] is True
-    assert "features.network_proxy" not in overrides
-    assert "web_search" not in overrides
-    assert "tools.web_search.allowed_domains" not in overrides
-
-
 def test_overrides_are_spelled_as_toml_values() -> None:
     arguments = _config_arguments(
         {
@@ -1228,133 +1083,3 @@ def test_overrides_are_spelled_as_toml_values() -> None:
         "-c",
         'tools.web_search.allowed_domains=["docs.npmjs.com"]',
     )
-
-
-@pytest.mark.asyncio
-async def test_the_profile_is_configured_at_launch_and_reported(
-    monkeypatch, tmp_path
-) -> None:
-    process = _Process()
-    launched: list[tuple[str, ...]] = []
-
-    async def create_process(*args, **_kwargs):
-        launched.append(args)
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    events: list[AgentEvent] = []
-
-    await adapter.run_turn(
-        "hello",
-        _context(tmp_path),
-        ConversationRecord(key=_context(tmp_path).conversation_key),
-        events.append,
-    )
-    await adapter.close()
-
-    config = dict(zip(launched[0][3::2], launched[0][3::2]))
-    assert 'default_permissions="guildbotics"' in launched[0]
-    assert "permissions.guildbotics.network.enabled=false" in launched[0]
-    policy = next(
-        e for e in events if e.kind is AgentEventKind.APPROVAL and e.name == "policy"
-    )
-    assert (
-        policy.details["requested_policy"]["filesystem"]["working_directory"]
-        == "<workspace>"
-    )
-    assert policy.details["requested_policy"]["network"]["mode"] == "deny"
-    assert policy.details["adapter_settings"]["default_permissions"] == "guildbotics"
-    assert config
-
-
-@pytest.mark.asyncio
-async def test_a_contract_codex_cannot_enforce_never_starts_the_process(
-    monkeypatch, tmp_path
-) -> None:
-    launched: list[tuple[str, ...]] = []
-
-    async def create_process(*args, **_kwargs):
-        launched.append(args)
-        return _Process()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    contract = AccessContract(network=_network("deny", local=True))
-    context = _context(tmp_path, contract=contract)
-
-    with pytest.raises(AgentRuntimeError) as excinfo:
-        await CodexAppServerAdapter().run_turn(
-            "hello",
-            context,
-            ConversationRecord(key=context.conversation_key),
-            lambda _e: None,
-        )
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.CONFIGURATION
-    assert "local network" in str(excinfo.value)
-    assert launched == []
-
-
-@pytest.mark.asyncio
-async def test_a_turn_under_a_different_contract_gets_its_own_process(
-    monkeypatch, tmp_path
-) -> None:
-    """The profile is fixed at launch, so the running process cannot be reused."""
-    processes = [_Process(), _Process()]
-    launched: list[tuple[str, ...]] = []
-
-    async def create_process(*args, **_kwargs):
-        launched.append(args)
-        return processes[len(launched) - 1]
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    closed = _context(tmp_path)
-    opened = _context(
-        tmp_path,
-        contract=AccessContract(network=_network("unrestricted")),
-    )
-    record = ConversationRecord(key=closed.conversation_key)
-
-    await adapter.run_turn("one", closed, record, lambda _e: None)
-    await adapter.run_turn("two", opened, record, lambda _e: None)
-    await adapter.run_turn("three", opened, record, lambda _e: None)
-    await adapter.close()
-
-    assert len(launched) == 2
-    assert "permissions.guildbotics.network.enabled=false" in launched[0]
-    assert "permissions.guildbotics.network.enabled=true" in launched[1]
-
-
-def test_the_skill_roots_codex_scans_are_readable_when_they_exist(
-    monkeypatch, tmp_path: Path
-) -> None:
-    home = tmp_path / "home"
-    (home / ".agents/skills/guildbotics").mkdir(parents=True)
-    (home / ".codex/_skills/mine").mkdir(parents=True)
-    (home / ".codex/auth.json").write_text("{}", encoding="utf-8")
-    monkeypatch.delenv("CODEX_HOME", raising=False)
-
-    roots = _codex_skill_roots(home)
-
-    # Only the roots that exist; `~/.codex/skills` is absent here.
-    assert roots == (
-        (home / ".agents/skills").resolve(),
-        (home / ".codex/_skills").resolve(),
-    )
-    overrides = _codex_sandbox_overrides(
-        AccessContract(), _codex_binary(tmp_path), roots
-    )
-    filesystem = overrides["permissions.guildbotics.filesystem"]
-    assert filesystem[str((home / ".agents/skills").resolve())] == "read"
-    # The provider's config folder itself, where auth.json lives, is not granted.
-    assert str(home / ".codex") not in filesystem
-
-
-def test_codex_home_moves_the_config_skill_roots(monkeypatch, tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    config = tmp_path / "codex-home"
-    (config / "skills").mkdir(parents=True)
-    monkeypatch.setenv("CODEX_HOME", str(config))
-
-    assert _codex_skill_roots(home) == ((config / "skills").resolve(),)

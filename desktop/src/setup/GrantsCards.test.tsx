@@ -29,21 +29,6 @@ const t = i18n.getFixedT("en");
 const macStatus: EnvironmentAccessStatus = {
   documents: [{ path: "$HOME/Documents", grant: "Documents", access: "read", present: true }],
   paths: [{ path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false }],
-  trees: [
-    { path: "$HOME/.local", grant: ".local", sources: ["$HOME/.local/bin"] },
-    {
-      path: "/opt/homebrew",
-      grant: "/opt/homebrew",
-      sources: ["/opt/homebrew/bin", "/opt/homebrew/sbin"],
-    },
-  ],
-  excluded: [
-    {
-      path: "$HOME/.codex/packages/standalone",
-      source: "$HOME/.local/bin",
-      reason: "it is under ~/.codex",
-    },
-  ],
   denied: [{ path: "$HOME/.ssh", builtin: true }],
   problem: "",
 };
@@ -51,22 +36,7 @@ const macStatus: EnvironmentAccessStatus = {
 /** A Windows device spells the same rows with backslashes after `$HOME`. */
 const windowsStatus: EnvironmentAccessStatus = {
   documents: [],
-  paths: [
-    {
-      path: "$HOME\\AppData\\Local\\uv\\cache",
-      grant: "AppData/Local/uv/cache",
-      access: "read_write",
-      present: false,
-    },
-  ],
-  trees: [
-    {
-      path: "$HOME\\AppData\\Local\\Programs\\Python",
-      grant: "AppData\\Local\\Programs\\Python",
-      sources: ["$HOME\\AppData\\Local\\Programs\\Python\\Scripts"],
-    },
-  ],
-  excluded: [],
+  paths: [],
   denied: [{ path: "$HOME\\.ssh", builtin: true }],
   problem: "",
 };
@@ -169,85 +139,11 @@ describe("GrantsCards", () => {
       }),
     ).toHaveValue(t("setup.intelligence.grants.accessLabels.read"));
     const device = screen.getByTestId("grants:device");
-    expect(device).toHaveTextContent("PATH: /opt/homebrew/bin, /opt/homebrew/sbin");
     expect(device).toHaveTextContent(".cache/uv");
     // A path this device lacks is marked on its row, where it can be fixed.
     expect(device).toHaveTextContent(`/opt/nowhere${t("setup.intelligence.grants.absentHere")}`);
     expect(device).toHaveTextContent("/opt/homebrew/etc");
-    expect(device).toHaveTextContent("$HOME/.codex/packages/standalone");
-    expect(device).toHaveTextContent("it is under ~/.codex");
     expect(device).toHaveTextContent(`$HOME/.ssh${t("setup.intelligence.deviceAccess.builtin")}`);
-  });
-
-  it("denies and reopens a PATH directory from its access select, saved relative to the home", async () => {
-    const user = userEvent.setup();
-    const onLocal = vi.fn();
-    render(<Harness onLocal={onLocal} />);
-    const device = within(screen.getByTestId("grants:device"));
-    const access = device.getByRole("combobox", {
-      name: t("setup.intelligence.grants.accessFor", { path: "$HOME/.local" }),
-    });
-    expect(access).toHaveValue(t("setup.intelligence.grants.accessLabels.read"));
-
-    await user.click(access);
-    await user.click(
-      await screen.findByRole("option", { name: t("setup.intelligence.deviceAccess.deny") }),
-    );
-    expect(onLocal).toHaveBeenLastCalledWith({ paths: [], deny: [".local"] });
-    expect(access).toHaveValue(t("setup.intelligence.deviceAccess.deny"));
-
-    await user.click(access);
-    await user.click(
-      await screen.findByRole("option", { name: t("setup.intelligence.grants.accessLabels.read") }),
-    );
-    expect(onLocal).toHaveBeenLastCalledWith({ paths: [], deny: [] });
-  });
-
-  it("denies a PATH directory in place on a device that spells paths with backslashes", async () => {
-    const user = userEvent.setup();
-    const onLocal = vi.fn();
-    render(
-      <Harness
-        status={windowsStatus}
-        local={{ paths: [{ path: "AppData/Local/uv/cache", access: "read_write" }], deny: [] }}
-        onLocal={onLocal}
-      />,
-    );
-    const device = within(screen.getByTestId("grants:device"));
-    const python = "$HOME\\AppData\\Local\\Programs\\Python";
-    const access = device.getByRole("combobox", {
-      name: t("setup.intelligence.grants.accessFor", { path: python }),
-    });
-    // The added path is matched to its row by the file's spelling, whatever
-    // separators the device shows it with.
-    expect(device.getByText("AppData/Local/uv/cache").parentElement).toHaveTextContent(
-      t("setup.intelligence.grants.absentHere"),
-    );
-
-    await user.click(access);
-    await user.click(
-      await screen.findByRole("option", { name: t("setup.intelligence.deviceAccess.deny") }),
-    );
-
-    // The deny is written as the device spells the tree, so the row it
-    // closes is the one that changes: no second row for the same directory.
-    expect(onLocal).toHaveBeenLastCalledWith({
-      paths: [{ path: "AppData/Local/uv/cache", access: "read_write" }],
-      deny: ["AppData\\Local\\Programs\\Python"],
-    });
-    expect(access).toHaveValue(t("setup.intelligence.deviceAccess.deny"));
-    expect(
-      device.getAllByRole("combobox", {
-        name: t("setup.intelligence.grants.accessFor", { path: python }),
-      }),
-    ).toHaveLength(1);
-    expect(
-      device.queryByRole("combobox", {
-        name: t("setup.intelligence.grants.accessFor", {
-          path: "AppData\\Local\\Programs\\Python",
-        }),
-      }),
-    ).not.toBeInTheDocument();
   });
 
   it("adds a typed path as read/write or as a deny once the keystrokes settle, and removes them", async () => {

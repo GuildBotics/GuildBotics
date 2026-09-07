@@ -1,10 +1,12 @@
 """What each member's AI CLI slots may reach on this device, and why not.
 
 The same resolution decides three things the Desktop shows: the effective
-permission preview, the status band that says a setting cannot be enforced
+permission preview, the status band that says a grant cannot be resolved
 here, and the judgement offered while a grant is being added. It reads the
 runtime's own view of the configuration (the per-member slot mapping and the
-shared and local grants), so what it shows is what a turn would get.
+shared and local grants), so what it shows is what a turn would get. The
+environment enforces every setting the same way on every device, so what
+can keep a slot from starting here is a grant this device cannot resolve.
 """
 
 from __future__ import annotations
@@ -16,16 +18,12 @@ from pydantic import ValidationError
 
 from guildbotics.app_api.models import (
     AgentEnvironmentStatusResponse,
-    CliAgentNetworkSupportInfo,
     EnvironmentAccessStatus,
     EnvironmentDenyStatus,
-    EnvironmentExcludedStatus,
     EnvironmentGrantStatus,
     EnvironmentMemberStatus,
     EnvironmentProblem,
-    EnvironmentSetting,
     EnvironmentSlotStatus,
-    EnvironmentTreeStatus,
     GrantEvaluation,
     GrantScope,
 )
@@ -45,28 +43,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     sensitive_grant_reason,
 )
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
-from guildbotics.intelligences.cli_agents import (
-    CLI_AGENTS,
-    get_cli_agent_search_path,
-    unsupported_grant_reason,
-    unsupported_network_reason,
-)
-
-
-def network_support(
-    platform: str = sys.platform,
-) -> dict[str, CliAgentNetworkSupportInfo]:
-    """The catalog's enforcement claims, for the editor's controls."""
-    return {
-        agent.name: CliAgentNetworkSupportInfo(
-            modes=sorted(agent.network.modes_on(platform)),
-            modes_anywhere=sorted(agent.network.modes_on(None)),
-            local_network_modes=sorted(agent.network.local_network_modes),
-            grant_accesses=sorted(agent.network.grant_accesses),
-            contract_applied=agent.network.contract_applied,
-        )
-        for agent in CLI_AGENTS
-    }
 
 
 def agent_environment_status(
@@ -79,12 +55,7 @@ def agent_environment_status(
     """
     home = Path.home()
     try:
-        access = resolve_access(
-            load_shared_grants(),
-            load_local_grants(),
-            get_cli_agent_search_path(),
-            create=False,
-        )
+        access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
         problem = ""
     except AccessContractError as exc:
         access = ResolvedAccess()
@@ -101,9 +72,7 @@ def agent_environment_status(
         EnvironmentMemberStatus(
             person_id=person_id,
             slots=[
-                _slot_status(
-                    slot, info.adapter, info.network, access, problems, platform
-                )
+                _slot_status(slot, info.adapter, info.network, problems)
                 for slot, info in sorted(get_cli_agent_mapping(person_id).items())
             ],
         )
@@ -131,22 +100,6 @@ def _access_status(
     return EnvironmentAccessStatus(
         documents=[grant(g) for g in access.documents],
         paths=[grant(g) for g in access.paths],
-        trees=[
-            EnvironmentTreeStatus(
-                path=redact_path(t.path, home),
-                grant=t.grant,
-                sources=[redact_path(s, home) for s in t.sources],
-            )
-            for t in access.trees
-        ],
-        excluded=[
-            EnvironmentExcludedStatus(
-                path=redact_path(t.path, home),
-                source=redact_path(t.source, home),
-                reason=t.reason,
-            )
-            for t in access.excluded
-        ],
         denied=[
             EnvironmentDenyStatus(path=redact_path(d.path, home), builtin=d.builtin)
             for d in access.denied
@@ -156,34 +109,16 @@ def _access_status(
 
 
 def _slot_status(
-    slot: str,
-    tool: str,
-    network: NetworkPolicy,
-    access: ResolvedAccess,
-    access_problems: list[str],
-    platform: str,
+    slot: str, tool: str, network: NetworkPolicy, access_problems: list[str]
 ) -> EnvironmentSlotStatus:
-    applied = next(
-        agent.network.contract_applied for agent in CLI_AGENTS if agent.name == tool
-    )
-    problems: list[EnvironmentProblem] = []
-
-    def add(setting: EnvironmentSetting, reason: str) -> None:
-        if reason and all(p.reason != reason for p in problems):
-            problems.append(EnvironmentProblem(setting=setting, reason=reason))
-
-    if applied:
-        add("network", unsupported_network_reason(tool, network, platform))
-        for reason in access_problems:
-            add("grants", reason)
-        for grant in access.entries():
-            add("grants", unsupported_grant_reason(tool, grant.access))
     return EnvironmentSlotStatus(
         slot=slot,
         tool=tool,
-        contract_applied=applied,
         network=network,
-        problems=problems,
+        problems=[
+            EnvironmentProblem(setting="grants", reason=reason)
+            for reason in dict.fromkeys(access_problems)
+        ],
     )
 
 
@@ -213,7 +148,7 @@ def evaluate_grant(
             return _invalid(scope, path, access, _reason(exc))
         try:
             resolved = resolve_access(
-                SharedGrants(documents=[grant]), LocalGrants(), "", home, create=False
+                SharedGrants(documents=[grant]), LocalGrants(), home, create=False
             )
         except AccessContractError as exc:
             return _invalid(scope, path, access, str(exc))
@@ -231,7 +166,7 @@ def evaluate_grant(
         except ValidationError as exc:
             return _invalid(scope, path, "", _reason(exc))
         try:
-            resolve_access(SharedGrants(), local, "", home)
+            resolve_access(SharedGrants(), local, home)
         except AccessContractError as exc:
             return _invalid(scope, path, "", str(exc))
         return GrantEvaluation(scope="deny", path=path, valid=True, present=True)
@@ -242,7 +177,7 @@ def evaluate_grant(
     except ValidationError as exc:
         return _invalid("local", path, access, _reason(exc))
     try:
-        resolve_access(SharedGrants(), local, "", home)
+        resolve_access(SharedGrants(), local, home)
     except AccessContractError as exc:
         return _invalid("local", path, access, str(exc))
     return GrantEvaluation(

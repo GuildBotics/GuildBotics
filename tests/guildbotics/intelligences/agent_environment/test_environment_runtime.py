@@ -25,9 +25,9 @@ from guildbotics.intelligences.agent_environment.runtime import (
     doctor,
 )
 from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
     EnvironmentMount,
     EnvironmentNetwork,
-    AgentEnvironmentSpec,
 )
 
 

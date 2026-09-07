@@ -1,22 +1,7 @@
-import {
-  Alert,
-  Button,
-  Fieldset,
-  Group,
-  Select,
-  Stack,
-  Switch,
-  TagsInput,
-  Text,
-} from "@mantine/core";
+import { Button, Fieldset, Group, Select, Stack, Switch, TagsInput, Text } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 
-import {
-  CLOSED_NETWORK_POLICY,
-  type CliAgentNetworkSupport,
-  type NetworkMode,
-  type NetworkPolicy,
-} from "../api/client";
+import { CLOSED_NETWORK_POLICY, type NetworkMode, type NetworkPolicy } from "../api/client";
 
 const MODES: NetworkMode[] = ["deny", "allowlist", "unrestricted"];
 
@@ -27,8 +12,6 @@ type Props = {
   value: NetworkPolicy | null;
   inherited: NetworkPolicy;
   tool: string;
-  toolLabel: string;
-  support: CliAgentNetworkSupport | undefined;
   /**
    * Whether this is the tool's own default definition. It has nothing to
    * inherit from but the packaged defaults, so it is always edited directly;
@@ -43,40 +26,16 @@ type Props = {
  * commands the tool runs and its own web tools alike.
  *
  * A slot either inherits its tool's block whole or states its own whole:
- * there is no per-field merge, so the editor works on a complete copy. Modes
- * the tool cannot enforce anywhere are disabled with the reason, so a saved
- * definition is one the backend accepts; modes it cannot enforce on this
- * device stay selectable (the definition is shared) but say so.
+ * there is no per-field merge, so the editor works on a complete copy. The
+ * isolated agent environment enforces every mode the same way on every
+ * device, so nothing here depends on the tool or the OS.
  */
-export function NetworkPolicyField({
-  id,
-  value,
-  inherited,
-  tool,
-  toolLabel,
-  support,
-  isToolDefault,
-  onChange,
-}: Props) {
+export function NetworkPolicyField({ id, value, inherited, tool, isToolDefault, onChange }: Props) {
   const { t } = useTranslation();
   const policy = value ?? inherited ?? CLOSED_NETWORK_POLICY;
   const editable = isToolDefault || value !== null;
-  const modesHere = support?.modes ?? MODES;
-  const modesAnywhere = support?.modes_anywhere ?? MODES;
-  const localNetworkModes = support?.local_network_modes ?? [];
 
   const setPolicy = (patch: Partial<NetworkPolicy>) => onChange({ ...policy, ...patch });
-  const modeDescription = (mode: NetworkMode) => {
-    if (!modesAnywhere.includes(mode)) {
-      return t("setup.intelligence.network.unsupportedAnywhere", { tool: toolLabel });
-    }
-    if (!modesHere.includes(mode)) {
-      return t("setup.intelligence.network.unsupportedHere", { tool: toolLabel });
-    }
-    return "";
-  };
-  const selectedDescription = modeDescription(policy.mode);
-  const localAllowed = localNetworkModes.includes(policy.mode);
 
   return (
     <Fieldset
@@ -88,11 +47,6 @@ export function NetworkPolicyField({
         <Text size="xs" c="dimmed">
           {t("setup.intelligence.network.description")}
         </Text>
-        {support && !support.contract_applied ? (
-          <Alert color="warning" variant="light">
-            {t("setup.intelligence.network.contractPending", { tool: toolLabel })}
-          </Alert>
-        ) : null}
         <Group gap="xs" align="center">
           {isToolDefault ? (
             <Button
@@ -124,23 +78,15 @@ export function NetworkPolicyField({
           data={MODES.map((mode) => ({
             value: mode,
             label: t(`setup.intelligence.network.modes.${mode}`),
-            disabled: !modesAnywhere.includes(mode),
           }))}
           value={policy.mode}
           disabled={!editable}
-          description={selectedDescription || undefined}
-          error={
-            selectedDescription && !modesHere.includes(policy.mode)
-              ? selectedDescription
-              : undefined
-          }
           onChange={(mode) => {
             if (!mode) return;
             const next = mode as NetworkMode;
             setPolicy({
               mode: next,
               allowed_domains: next === "allowlist" ? policy.allowed_domains : [],
-              ...(localNetworkModes.includes(next) ? {} : { allow_local_network: false }),
             });
           }}
         />
@@ -158,12 +104,7 @@ export function NetworkPolicyField({
           label={t("setup.intelligence.network.allowLocalNetwork")}
           size="xs"
           checked={policy.allow_local_network}
-          disabled={!editable || !localAllowed}
-          description={
-            !localAllowed
-              ? t("setup.intelligence.network.allowLocalNetworkUnsupported", { tool: toolLabel })
-              : undefined
-          }
+          disabled={!editable}
           onChange={(event) => setPolicy({ allow_local_network: event.currentTarget.checked })}
         />
       </Stack>

@@ -19,7 +19,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 
 
 class _Writer:
-    def __init__(self, process: "_Process") -> None:
+    def __init__(self, process: _Process) -> None:
         self.process = process
 
     def write(self, data: bytes) -> None:

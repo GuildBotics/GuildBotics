@@ -140,6 +140,13 @@ class EnvironmentProcess:
                 await self._handle.kill()
         await self.wait()
 
+    async def communicate(self) -> tuple[bytes, bytes]:
+        """Close stdin, read both streams to their end, and wait; as asyncio does."""
+        self.stdin.close()
+        stdout, stderr = await asyncio.gather(self.stdout.read(), self.stderr.read())
+        await self.wait()
+        return stdout, stderr
+
     async def _pump_events(self) -> None:
         try:
             async for event in self._handle:

@@ -1143,8 +1143,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
     probed: list[str] = []
 
-    async def fake_read_claude(executable: str, timeout: float = 30.0):
-        probed.append(executable)
+    async def fake_read_claude(timeout: float = 30.0):
+        probed.append("claude")
         return CliAgentUsageSnapshot(
             agent="claude",
             windows=[
@@ -1161,8 +1161,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    async def fake_read_codex(executable: str, timeout: float = 20.0):
-        probed.append(executable)
+    async def fake_read_codex(timeout: float = 20.0):
+        probed.append("codex")
         return CliAgentUsageSnapshot(
             agent="codex",
             windows=[UsageWindow(window="primary", used_percent=12.0)],
@@ -1170,8 +1170,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    async def fake_read_grok(executable: str, timeout: float = 20.0):
-        probed.append(executable)
+    async def fake_read_grok(timeout: float = 20.0):
+        probed.append("grok")
         return CliAgentUsageSnapshot(
             agent="grok",
             windows=[
@@ -1190,23 +1190,23 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.is_logged_in",
+        lambda agent: agent.name in {"claude", "codex", "grok", "copilot"},
+    )
 
     first = await runtime.get_cli_agent_usage()
     second = await runtime.get_cli_agent_usage()
 
     # Copilot has no structured usage interface, so only the registry's tools
-    # are probed, and the second call is served from the TTL cache without a
-    # new probe.
-    assert probed == [
-        "/usr/local/bin/claude",
-        "/usr/local/bin/codex",
-        "/usr/local/bin/grok",
-    ]
-    assert first.usages[0].agent == "claude"
-    assert first.usages[0].windows[1].label == "Fable"
-    assert first.usages[0].windows[1].detail is True
-    assert first.usages[1].agent == "codex"
-    assert first.usages[1].windows[0].used_percent == 12.0
+    # that are logged in here are probed, in catalog order, and the second
+    # call is served from the TTL cache without a new probe.
+    assert probed == ["codex", "claude", "grok"]
+    assert first.usages[0].agent == "codex"
+    assert first.usages[0].windows[0].used_percent == 12.0
+    assert first.usages[1].agent == "claude"
+    assert first.usages[1].windows[1].label == "Fable"
+    assert first.usages[1].windows[1].detail is True
     assert first.usages[2].agent == "grok"
     assert first.usages[2].windows[0].used_percent is None
     assert first.usages[2].windows[0].resets_at == "2026-07-24T00:00:00+00:00"

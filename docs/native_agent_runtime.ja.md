@@ -40,30 +40,27 @@ AI CLIツールごとの設定へ翻訳するためのもの。書式は[カス�
 
 ## エージェント隔離環境のアクセス許可
 
-AI CLIツールのターンは、種別（チケット、チャット、Desktopの診断、コマンド作成）によらず同じ
-契約で封じ込めます。GuildBoticsが要求するのは次の3つで、各アダプタがそれをプロバイダ自身の
-sandbox設定へ変換します。プロバイダが現在のOSで強制できない要求は、より広い権限へ置き換えずに
-エージェントを起動しません。Codexのnative Windows sandboxは読める場所が固定で、profileのread指定と
-network proxyを反映するか未検証のため、Windowsでは実機確認が済むまでCodexを起動しません
-（WSL上のLinuxとしては起動します）。
+AI CLIツールのターンはすべてエージェント隔離環境の中で実行します。この端末でビルドした
+snapshotからターンごとにGuildBoticsが起動するmicroVMで、ターンが終わると破棄します。
+ターンが到達できる範囲は以下のアクセス契約で、それを強制するのは隔離環境です。プロバイダの
+CLIは中で動き、それ以外を見ないので、OSやプロバイダによらず同じ形で強制されます。
+プロバイダごとの変換や「どのプロバイダが何を強制できるか」の表はありません。この端末で
+隔離環境が用意できない場合（runtimeが無い、snapshotが無い、ログインしていない）は、より広い
+権限へ置き換えずにエージェントを起動しません。
 
 - **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
-  `<workspace>/.guildbotics/local/work/...`）は常に読み書きできます。ワークスペースの
-  `.guildbotics/config`や`state`は含みません
-- **作業ディレクトリの外**は3つあります。**PATH から導く木**: あなたが実行できるものは
-  エージェントも実行できます。この端末がエージェントに渡すPATHの各ディレクトリについて、そこにある
-  実行ファイルのlink先まで含む最小の木（Homebrewの`/opt/homebrew/bin`なら`/opt/homebrew`、
-  `~/.local/bin`なら`~/.local`）を読み取りで開きます。設定はなく、端末ごとに毎ターン導出します。
-  開くのは木全体なので、同じ木にある他のコマンドも実行できます。sandboxが守るのはcredentialと
-  networkと書き込み先であって、起動できるプログラムの一覧ではありません。credentialの置き場
-  （`~/.ssh`、各providerの認証ディレクトリなど）の内側に落ちる木は開かず、実効権限に理由付きで出します。
-  **documents**: 作業の入出力に使うホームディレクトリ配下のディレクトリ（`read` / `read_write`、
-  相対パスのみ）で、無ければ起動前に作成します。ワークスペース共通の
-  `intelligences/cli_agent_filesystem_grants.yml`で共有します。**この端末だけの設定**: 導出で足りない
-  追加パス（ツールが書くキャッシュ、インストール先の外に置くデータ。絶対パス可、存在必須）と、開けたくない
-  木やその一部を閉じる`deny`を`local/cli_agent_filesystem_grants.yml`に置き、同期しません。
-  credentialの置き場は同梱の一覧として常に`deny`で閉じ、`~/.local`のようにそれを含む木も、その隅だけ
-  読めないまま開けます
+  `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
+  ワークスペースの`.guildbotics/config`や`state`は含みません
+- **作業ディレクトリの外**は2つあり、どちらもhostと同じパスに、hostのホームディレクトリと同じ
+  パスのホームの下でbindします。**documents**: 作業で読み書きするホームディレクトリ配下の
+  ディレクトリ（`read` / `read_write`、相対パスのみ）。無ければターン開始時に作成し、
+  `intelligences/cli_agent_filesystem_grants.yml`で共有します。**この端末の設定**: 追加パス
+  （絶対パス可、存在が必要）と、開いている場所の一部を閉じる`deny`。
+  `local/cli_agent_filesystem_grants.yml`に置き、同期しません。認証情報のディレクトリ
+  （`~/.ssh`、プロバイダ自身のディレクトリ）は同梱のdenyで常に閉じます。それ以外のhostのもの
+  （PATH、他のclone、キーチェーン）は中に存在しません。エージェントの道具は隔離環境自身のもので、
+  `config/intelligences/agent_environment.yml`に宣言します
+  （[`guildbotics environment`](cli_reference.md#guildbotics-environment)を参照）。
 
   ```yaml
   # config/intelligences/cli_agent_filesystem_grants.yml（共有）
@@ -80,16 +77,17 @@ network proxyを反映するか未検証のため、Windowsでは実機確認が
     - path: .cache/uv
       access: read_write
   deny:
-    - /opt/homebrew/etc
+    - Documents/shared-documents/private
   ```
 
-- **network**: 選択中のAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`ブロックで、
-  シェルコマンド・子プロセスからの接続も、ツール組み込みのWeb検索・URL取得も、まとめて1つの規則で
-  指定します（強制する境界が両者を区別できないため）。`mode`は`deny` / `allowlist` / `unrestricted`の
-  いずれかで（`off`はYAMLでは真偽値になるため使いません）、`allowlist`のときだけ`allowed_domains`を
-  使います。`allow_local_network`はlocalhostとLANへの接続も許可する設定です。同梱の既定値は`deny`です。
-  slotが`network:`を省略すると同じツールの`default.yml`からブロック全体を継承し、記述する場合は
-  ブロック全体を書きます
+- **ネットワーク**: 選択したAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`
+  ブロックで、シェルコマンドとその子プロセス、ツール組み込みのweb検索・URL取得のどちらで
+  到達するかによらず1つの規則です（隔離環境のgatewayは両者を区別できません）。`mode`は
+  `deny` / `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため
+  使いません）、`allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostと
+  LANも開きます。同梱の既定は閉じています。`network:`を省いたスロットはツールの`default.yml`
+  からブロック全体を継承し、書いたスロットは全体を書きます。プロバイダ自身のAPIドメインと
+  localhostのmember brokerはモードによらず常に到達でき、設定ではなくGuildBoticsが決めます。
 
   ```yaml
   network:
@@ -98,106 +96,34 @@ network proxyを反映するか未検証のため、Windowsでは実機確認が
     allow_local_network: false
   ```
 
-これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。各AI CLIツール定義の「ネットワーク」欄は
-プロバイダと現在のOSで強制できない選択肢を無効にして理由を出します。「ワークスペース共通のディレクトリ」カードが
-documentsを、「この端末のディレクトリ」カードがこの端末のPATHから読み取り可能になる場所（行ごとに禁止できる）、
-ここで足した追加パスと禁止、開かない場所とその理由を持ち、どちらも入力または選択したパスを保存前に判定します
-（存在有無、認証情報を含む場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、
-この端末で起動できないメンバーはメンバー一覧に理由付きで示され、設定を直すまで画面上部に状態異常が出ます。
-状態異常のリンクは原因の設定を直接開きます（networkの問題ならそのメンバーのスロット、ディレクトリの問題なら
-「この端末のディレクトリ」カード）。
+これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。「ワークスペース共通の
+ディレクトリ」カードがdocumentsを、「この端末のディレクトリ」カードがここで足した追加パスと
+禁止を持ち、どちらも入力または選択したパスを保存前に判定します（存在有無、認証情報を含む
+場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、この端末で
+起動できないメンバーはメンバー一覧に理由付きで示され、設定を直すまで画面上部に状態異常が出ます。
 
-プロバイダ自身のモデル通信・認証と、localhostのmember brokerは、この設定の対象外です。
-プロバイダごとに強制できる`mode`は`guildbotics/intelligences/cli_agents.py`のカタログが正本で、
-定義の保存時は「いずれかのOSで強制できるか」、エージェント起動時は「現在のOSで強制できるか」を
-同じカタログで検証します。Codex以外のアダプタはまだこの契約を変換しておらず、次のとおり従来の
-固定動作で実行します。
+隔離環境の中では各プロバイダ自身のsandboxも有効のままで、契約とは無関係な固定値にします。
+microVMの中にあるものはすべて許可済みなので、内側のsandboxが足すのは、エージェントのコマンドから
+プロバイダ自身の認証情報を隠すことと、プロバイダ設定の変更をターンをまたいで残さないことです。
+Codexは、`~/.codex`を除く環境全体を読み、作業ディレクトリ（`.git`を含む）と一時ディレクトリに
+書き、ネットワークを有効にするpermission profileで動きます。profileで`/`を書き込み可能に
+すると、Codex 0.153では`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
+非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
+`bypassPermissions`と`sandbox.enabled=false`で動きます。Grok Buildは`--sandbox workspace`と
+`--always-approve`、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
+`off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
+フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
+provisionするたびに実機で確認し、Codex（Landlockとbubblewrap）は確認済みです。
 
-Codexは、起動時の設定オーバーライドで`guildbotics`という名前のpermission profileを定義し、
-`default_permissions`でそれを選択します。profileはCodexのplatform path（`:minimal`）のreadから
-組み立て、ワークスペースrootと一時ディレクトリのwrite、Codex自身のbinaryを実行するのに要する
-ディレクトリ（起動したlinkとその実体を置く場所。`~/.codex`直下は含みません）のread、Codexがskillを走査する
-場所（`~/.agents/skills`、`~/.codex/skills`、`~/.codex/_skills`のうち存在するもの。skillの本文はagentが
-sandbox内で読むため）のread、filesystem grantを`read` / `write`として追加します。`:workspace`は継承しません。システム全体のreadになり、`~/.ssh`や
-`~/.codex/auth.json`が読めてしまうためです。`deny`はprofileの`network.enabled=false`と
-`web_search="disabled"`、`allowlist`は`network.enabled=true` + `features.network_proxy=true` + domain規則
-（同じdomainを`tools.web_search.allowed_domains`にも渡します）、`unrestricted`は
-`network.enabled=true`に対応します。`thread/start`と`turn/start`にはsandboxを渡しません
-（渡すとprofileを上書きするため）。Codexには操作の確認を求めない`never`を常に指定し、Codexから
-予期しない確認要求が届いた場合は拒否します。
+ターンをまたいで残るのはプロバイダの永続状態（認証情報とセッション）だけで、この端末の
+store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
+プロバイダの設定やskillはsnapshot側のもので、ターンごとに元へ戻ります。読み取り専用ターンは
+member brokerが強制します（person leaseを持たず、書き込み系のmemberコマンドをすべて拒否
+します）。そのターンでプロバイダが自身のファイル操作ツールで何をしたかは承認イベントに
+記録されますが、境界ではありません。
 
-Grok Buildは常に`--sandbox workspace`で起動します。
-起動時のコマンドは`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`で
-固定し、任意のCLIオプションを設定から注入することはできません。`--always-approve`は必ず
-sandboxと併用し、ACPの`session/request_permission`で予期しない確認要求が届いた場合は拒否して
-診断記録へ残します。拒否の際は、要求に含まれる`options`から`reject_once`（無ければ
-`reject_always`）のoption IDを選んで返します。option IDは要求ごとにGrokが決める識別子であり、
-種別名をIDとして送り返しません。拒否用のoptionが提示されない場合は、許可用のoptionへ
-読み替えず`cancelled`を返します。headless実行中にCLIが自動更新されないよう`--no-auto-update`を常に渡し、
-ユーザーの`config.toml`は書き換えません。
-
-GitHub CopilotはCopilot自身の既定動作（作業ディレクトリとシステムの一時ディレクトリにファイル
-アクセスを制限）で実行します。起動時のコマンドは
-`copilot --acp --no-auto-update --no-remote-export`で固定し、任意のCLIオプションを設定から
-注入することはできません。`--no-remote-export`は、メンバーのセッションが
-GitHubのWebやモバイルへ書き出されたり、そこから操作されたりすることを防ぎます。セッションには
-ワークスペースの内容が含まれ、指示はGuildBoticsからのみ受け取るべきだからです。
-
-Copilotの承認方針は起動オプションではなくセッション設定項目のため、ターンごとに指定します。
-通常のターンは`allow_all: on`で実行し、確認要求は発生しません。読み取り専用のターンは
-`allow_all: off`で実行するため、ファイル書き込み・シェル実行・URL取得のたびにCopilotが確認を
-求め、GuildBoticsはそのすべてを拒否して診断記録へ残します。許可されたパス内の読み取りは確認なしで
-実行できるため、読み取り専用のターンは通常どおり調査を行えます。拒否の方法はGrok Buildと同じで、
-要求に含まれる`reject_once`（無ければ`reject_always`）のoption IDを返し、拒否用のoptionが
-提示されない場合は`cancelled`を返します。
-
-モデルと推論の深さ（reasoning effort）もセッション設定項目であり、セッションの作成または再開後に
-`session/set_config_option`で適用します。Copilotは未知の設定項目IDに対してエラーではなく空の
-応答を返すため、Copilotが返す設定項目一覧を読み取り、実際に適用された値を診断記録の設定イベントと
-して残します。要求した値をそのまま記録することはありません。適用されなかった項目は`rejected`として
-記録し、警告を出力します。これらの設定は実行中のセッションへいつでも適用できるため、効きの強さや
-モデルを変更してもセッションを切り替えません。
-
-Antigravityのモデルと効きの強さは毎ターンのコマンドラインで渡り、再開した会話でも
-`--model`の変更が反映されるため、設定を変えてもセッションを切り替えません。`--model`と
-`--effort`は併用できません。`agy models`が提示するモデルIDは、いずれも効きの強さをID自体に
-含む（`gemini-3.6-flash-low`）か、`--effort`自体を受け付けない（`claude-sonnet-4-6`）ため、
-両方を渡すと`agy`がターンを拒否します。両方を設定したスロットではモデルを採用して効きの強さを
-落とし、その事実を設定イベントへ記録します。`agy models`に無いモデルは警告のうえ落とし、
-カタログを取得できない場合は検証を省略してそのまま実行します。`agy`がモデル名を報告するのは
-コマンドラインで明示した場合だけなので、`--model`を渡さないターンではアカウント既定の
-モデル名を推測せず、空のモデル名を記録します。
-
-Antigravityへはアクセス契約をまだ変換していません。`agy --sandbox`が制限するのはターミナル
-実行だけで、`agy`自身のファイル書き込みツールは作業ディレクトリの外へ到達できます。
-
-Antigravityは毎ターン`--dangerously-skip-permissions`を
-指定し、あわせて`--add-dir <cwd>`を渡します。後者は省略できません。これが無いと`agy`は
-`run_command`を含むすべてのツールを、メンバーのワークスペースではなく`agy`自身の作業用
-ディレクトリに対して解決します。
-
-**Antigravityでは、読み取り専用のターンをプロバイダ側で担保できません。** `agy` 1.1.10が
-提供する3つの手段はいずれも成立しませんでした。`--mode plan`は
-`--dangerously-skip-permissions`と併用しても書き込みが通り、`--sandbox`はシェル実行しか
-制限せず`agy`自身のファイルツールには及ばず、権限スキップを外すとheadlessモードがコマンドを
-すべて自動拒否して応答が空になるため、読み取り専用のターンが調査そのものを行えなくなります。
-そのため読み取り専用のターンも通常のターンと同じ引数で実行し、承認イベントに必ず
-`read_only_enforced: false`を記録して、担保していないことを診断記録から確認できるようにします。
-他の層の防御はそのまま効きます。読み取り専用のターンはperson leaseを取得しないため、
-書き込み系の`guildbotics member`コマンドは`validate_delegation`で失敗し、後述の認証情報の分離に
-より直接の`git push`や`gh`も認証できません。塞げていないのはワークスペース内のローカル
-ファイル書き換えと任意のシェル実行です。`agy`が本物の読み取り専用モードを備えた時点で見直します。
-
-Claude Codeは、操作ごとの確認を省略する`bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
-幅広いコマンドと互換性がないため、`sandbox.enabled=false`も明示します。ただし、これらより
-優先されるClaude Codeの管理ポリシーがある場合は、その設定に従います。Claude Codeの
-確認方法とsandboxはワークスペース設定に保存せず、Desktopにも設定項目を表示しません。
-
-実際に適用した設定と操作ごとの承認判断は、AI CLIツールに依存しない共通形式の診断記録へ
-保存します。Claude Codeを`bypassPermissions`で実行する場合は、ワークスペース外のファイルも
-変更できます。認証情報の分離を維持し、ワークスペース外の
-アクセスを許容できる環境で使用してください。不正な型、廃止された設定項目、未知の値が指定された
-場合は、別の権限へ暗黙に置き換えず、設定エラーとして停止します。
+有効になったpolicyと承認の判断は、プロバイダ非依存の診断イベントとして記録します。型の誤り、
+廃止したキー、未知の値は検証で失敗し、有効な境界が黙って変わることはありません。
 
 ## 認証
 

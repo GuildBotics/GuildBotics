@@ -901,15 +901,9 @@ const resources = {
               allowlist: "Allowed domains only",
               unrestricted: "Unrestricted",
             },
-            unsupportedHere: "{{tool}} cannot enforce this on this device.",
-            unsupportedAnywhere: "{{tool}} cannot enforce this on any OS.",
             allowedDomains: "Allowed domains",
             allowedDomainsPlaceholder: "registry.npmjs.org",
             allowLocalNetwork: "Allow localhost and LAN",
-            allowLocalNetworkUnsupported:
-              "{{tool}} cannot open the local network separately under this mode.",
-            contractPending:
-              "{{tool}} does not apply these settings yet and keeps its previous fixed behaviour.",
           },
           documents: {
             title: "Directories shared by the workspace",
@@ -923,7 +917,6 @@ const resources = {
             description:
               "Access to any directory. So that commands can run, the directories on the PATH environment variable are readable by default. Kept on this device and never synchronized.",
             empty: "Nothing beyond the OS directories.",
-            source: "PATH: {{sources}}",
             deny: "Denied",
             builtin: "built in",
             pathPlaceholder: ".cache/uv or /opt/homebrew/etc",
@@ -2505,14 +2498,9 @@ const resources = {
               allowlist: "許可ドメインのみ",
               unrestricted: "制限なし",
             },
-            unsupportedHere: "{{tool}} はこの端末ではこの設定を強制できません。",
-            unsupportedAnywhere: "{{tool}} はどの OS でもこの設定を強制できません。",
             allowedDomains: "許可ドメイン",
             allowedDomainsPlaceholder: "registry.npmjs.org",
             allowLocalNetwork: "localhost と LAN への接続を許可",
-            allowLocalNetworkUnsupported:
-              "{{tool}} はこのモードでは local network を個別に開けません。",
-            contractPending: "{{tool}} はまだこの設定を適用せず、従来の固定動作で実行します。",
           },
           documents: {
             title: "ワークスペース共通のディレクトリ",
@@ -2526,7 +2514,6 @@ const resources = {
             description:
               "任意のディレクトリに対するアクセス設定を行います。コマンド実行を可能にするため、PATH 環境変数に指定されているディレクトリはデフォルトで読み取り可能になっています。この設定はこの端末にだけ保存され、同期されません。",
             empty: "OS 標準のディレクトリ以外はありません。",
-            source: "PATH: {{sources}}",
             deny: "禁止",
             builtin: "同梱",
             pathPlaceholder: ".cache/uv や /opt/homebrew/etc",

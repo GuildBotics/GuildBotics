@@ -50,6 +50,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
     name = "copilot-acp"
     agent_label = "Copilot"
     product_label = "GitHub Copilot CLI"
+    tool_name = "copilot"
     # Copilot accepts `session/set_config_option` on any live session, including
     # one that was just reloaded, so changing the model or the effort costs a
     # request rather than a fresh session.

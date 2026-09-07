@@ -4,24 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import sys
 from contextlib import suppress
 from logging import getLogger
-from pathlib import Path
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.contract import (
-    AccessContract,
-    executable_read_roots,
-    redact_path,
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_home
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    isolated_agent_environment,
-    remove_isolated_config,
-    terminate_process_tree,
+    start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
@@ -46,10 +40,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     EventSink,
 )
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
-from guildbotics.intelligences.cli_agents import (
-    resolve_cli_agent_path,
-    unsupported_network_reason,
-)
 
 _MODERN_APPROVAL_METHODS = frozenset(
     {
@@ -69,8 +59,6 @@ _PERMISSION_PROFILE = "guildbotics"
 #: skill index into the prompt; the agent reads a skill's body itself, from
 #: inside the sandbox, so these must be readable or every skill outside the
 #: working directory is listed but unusable.
-_HOME_SKILL_ROOTS = (".agents/skills",)
-_CONFIG_SKILL_ROOTS = ("skills", "_skills")
 #: The only effort-mapping keys ``turn/start`` accepts. Anything else is a
 #: configuration mistake and is reported rather than silently dropped.
 _TURN_SETTING_KEYS = frozenset({"model", "effort"})
@@ -133,10 +121,9 @@ class CodexAppServerAdapter:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_server_request,
         )
-        self._gh_config_dir = ""
+        self._environment: AgentEnvironment | None = None
         self._active_thread_id = ""
         self._active_turn_id = ""
-        self._sandbox_overrides: dict[str, Any] = {}
         self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
@@ -156,6 +143,9 @@ class CodexAppServerAdapter:
         try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
+            # The environment is the turn's: nothing of it outlives the turn,
+            # and the next one boots its own and resumes the thread by id.
+            await self._close_provider()
             await self._member_broker.deactivate(context)
 
     async def _run_active_turn(
@@ -176,9 +166,7 @@ class CodexAppServerAdapter:
                 "requested_policy": context.contract.requested_policy(
                     context.cwd, workspace_root=context.workspace_data_root
                 ),
-                "adapter_settings": _redacted_overrides(
-                    self._sandbox_overrides, context
-                ),
+                "adapter_settings": _sandbox_overrides(guest_home()),
             },
         )
         emitted = emit(policy_event)
@@ -328,7 +316,7 @@ class CodexAppServerAdapter:
                 )
         process = self._transport.process
         if process is not None and process.returncode is None:
-            await terminate_process_tree(process)
+            await process.kill()
 
     async def close(self) -> None:
         try:
@@ -337,58 +325,41 @@ class CodexAppServerAdapter:
             await self._member_broker.close()
 
     async def _close_provider(self) -> None:
-        """Stop only Codex App Server while preserving the active broker."""
+        """Stop Codex App Server and its environment, preserving the broker."""
         process = self._transport.process
         if process is not None and process.returncode is None:
-            if process.stdin is not None:
-                with suppress(BrokenPipeError, ConnectionError, OSError):
-                    process.stdin.close()
+            with suppress(BrokenPipeError, ConnectionError, OSError):
+                process.stdin.close()
             try:
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except TimeoutError:
-                await terminate_process_tree(process)
+                await process.kill()
         await self._transport.aclose()
-        remove_isolated_config(self._gh_config_dir)
+        environment, self._environment = self._environment, None
+        if environment is not None:
+            await environment.close()
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
-        reason = unsupported_network_reason(
-            "codex", context.contract.network, sys.platform
-        )
-        if reason:
-            raise AgentRuntimeError(AgentRuntimeErrorCategory.CONFIGURATION, reason)
-        overrides = _codex_sandbox_overrides(
-            context.contract,
-            Path(resolve_cli_agent_path(self._executable) or self._executable),
-            _codex_skill_roots(),
-        )
-        # The profile is fixed at launch, so a turn under a different contract
-        # needs a process of its own rather than the one still running.
-        if self._transport.running and overrides == self._sandbox_overrides:
-            return
         if self._transport.process is not None:
             await self._close_provider()
-        cwd = context.cwd
-        self._sandbox_overrides = overrides
-        env, self._gh_config_dir = isolated_agent_environment()
-        env.update(self._member_broker.provider_environment())
+        self._environment = await start_turn_environment(
+            context,
+            "codex",
+            host_ports=(self._member_broker.endpoint.port,),
+            env=self._member_broker.provider_environment(),
+        )
         try:
-            process = await create_agent_subprocess(
+            process = await self._environment.run(
                 self._executable,
                 "app-server",
                 *_codex_mcp_arguments(self._member_broker),
-                *_config_arguments(self._sandbox_overrides),
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                *_config_arguments(_sandbox_overrides(self._environment.spec.home)),
                 limit=STREAM_READ_LIMIT,
             )
-        except OSError as exc:
-            remove_isolated_config(self._gh_config_dir)
+        except AgentEnvironmentError as exc:
+            await self._close_provider()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Codex App Server: {exc}",
@@ -635,7 +606,7 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     prefix = f"mcp_servers.{endpoint.name}"
     return (
         "-c",
-        f"{prefix}.url={json.dumps(endpoint.url)}",
+        f"{prefix}.url={json.dumps(endpoint.guest_url)}",
         "-c",
         f'{prefix}.bearer_token_env_var="{MEMBER_BROKER_TOKEN_ENV}"',
         "-c",
@@ -647,75 +618,32 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     )
 
 
-def _codex_skill_roots(home: Path | None = None) -> tuple[Path, ...]:
-    """The skill directories Codex scans on this device, of those that exist."""
-    home_dir = home or Path.home()
-    config_folder = Path(os.environ.get("CODEX_HOME") or home_dir / ".codex")
-    candidates = [
-        *(home_dir / root for root in _HOME_SKILL_ROOTS),
-        *(config_folder / root for root in _CONFIG_SKILL_ROOTS),
-    ]
-    return tuple(root.resolve() for root in candidates if root.is_dir())
+def _sandbox_overrides(home: str) -> dict[str, Any]:
+    """Codex's own sandbox, as narrow as the environment lets it be.
 
-
-def _codex_sandbox_overrides(
-    contract: AccessContract, executable: Path, skill_roots: tuple[Path, ...] = ()
-) -> dict[str, Any]:
-    """Translate the access contract into Codex configuration overrides.
-
-    The profile is built from Codex's platform paths (`:minimal`) rather than
-    its `:workspace` baseline, whose system-wide read would expose `~/.ssh` and
-    `~/.codex/auth.json`. Reads are then the working directory, the directories
-    Codex's own binary is run through, Codex's skill roots, and the contract's
-    grants (the trees this device's PATH derives, the documents, the local
-    paths). The working directory needs no entry of its own: it is the thread's
-    workspace root. Its `.git` is granted explicitly because Codex otherwise
-    keeps repository metadata read-only under a writable root, and the agent
-    stages its own changes with plain git before the broker commits them.
-
-    The contract's denied paths close corners of what is open (`deny`), except
-    one that would swallow a directory Codex itself is run through: `~/.codex`
-    holds the binary and skills, and `:minimal` already keeps the rest of it,
-    `auth.json` included, unreadable.
+    The environment is the boundary; what Codex confines inside it is fixed
+    and owes nothing to the contract, because everything the microVM holds
+    is already allowed. The agent's commands may read all of it except
+    Codex's own state under ``~/.codex`` -- its credentials above all --
+    write the working directory (its ``.git`` included, since the agent
+    stages its own changes) and the temporary directories, and reach the
+    network; which hosts is the environment's gateway's to decide. Codex's
+    ``workspace-write`` default would instead close the network and ask
+    for approvals, which no headless turn can give, and a profile that
+    names ``/`` as writable loses ``/dev/null`` (measured on 0.153.4).
     """
     profile = f"permissions.{_PERMISSION_PROFILE}"
-    filesystem: dict[str, Any] = {
-        ":minimal": "read",
-        ":workspace_roots": {".": "write", ".git": "write"},
-        ":tmpdir": "write",
-        ":slash_tmp": "write",
-    }
-    own = (*executable_read_roots(executable), *skill_roots)
-    for root in own:
-        filesystem[str(root)] = "read"
-    for grant in contract.access.entries():
-        filesystem[str(grant.path)] = (
-            "write" if grant.access == "read_write" else "read"
-        )
-    for denied in contract.access.denied:
-        if not any(root.is_relative_to(denied.path) for root in own):
-            filesystem[str(denied.path)] = "deny"
-    overrides: dict[str, Any] = {
+    return {
         "default_permissions": _PERMISSION_PROFILE,
-        f"{profile}.filesystem": filesystem,
+        f"{profile}.filesystem": {
+            ":minimal": "read",
+            ":workspace_roots": {".": "write", ".git": "write"},
+            ":tmpdir": "write",
+            ":slash_tmp": "write",
+            f"{home}/.codex": "deny",
+        },
+        f"{profile}.network.enabled": True,
     }
-    network = contract.network
-    overrides[f"{profile}.network.enabled"] = network.mode != "deny"
-    if network.mode == "deny":
-        overrides["web_search"] = "disabled"
-    elif network.mode == "allowlist":
-        # Domain rules are enforced only through the network proxy; without
-        # it `enabled = true` would open every host. Web search takes the
-        # same rule through its own filter.
-        overrides["features.network_proxy"] = True
-        overrides[f"{profile}.network.domains"] = dict.fromkeys(
-            network.allowed_domains, "allow"
-        )
-        overrides[f"{profile}.network.allow_local_binding"] = (
-            network.allow_local_network
-        )
-        overrides["tools.web_search.allowed_domains"] = list(network.allowed_domains)
-    return overrides
 
 
 def _config_arguments(overrides: dict[str, Any]) -> tuple[str, ...]:
@@ -737,24 +665,6 @@ def _toml(value: Any) -> str:
         entries = ", ".join(f"{json.dumps(k)} = {_toml(v)}" for k, v in value.items())
         return "{" + entries + "}"
     raise TypeError(f"Unsupported override value: {value!r}")
-
-
-def _redacted_overrides(
-    overrides: dict[str, Any], context: AgentExecutionContext
-) -> dict[str, Any]:
-    """The overrides as recorded, with device paths masked."""
-
-    def mask(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {_mask_key(key): mask(item) for key, item in value.items()}
-        return value
-
-    def _mask_key(key: str) -> str:
-        if key.startswith("/") or (len(key) > 1 and key[1] == ":"):
-            return redact_path(Path(key), workspace_root=context.workspace_data_root)
-        return key
-
-    return mask(overrides)
 
 
 def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | None:
