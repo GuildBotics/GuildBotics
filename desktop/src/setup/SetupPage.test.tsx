@@ -11,7 +11,6 @@ import {
   ApiRequestError,
   cloneWorkspaceFromHub,
   deleteMemberConfig,
-  getCliAgentDetections,
   ensureAgentField,
   getAgentFieldState,
   getCommandOptions,
@@ -137,26 +136,6 @@ vi.mock("../api/client", async (importOriginal) => {
       devices: [],
     })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
-    getCliAgentDetections: vi.fn(async () => ({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          executable: "claude",
-          config_reference: "cli_agents/claude/default.yml",
-          detected: false,
-          path: "",
-        },
-      ],
-    })),
     getLlmProviders: vi.fn(async () => [
       {
         provider: "openai",
@@ -230,8 +209,6 @@ vi.mock("../api/client", async (importOriginal) => {
         {
           path: "cli_agents/codex/default.yml",
           name: "codex",
-          detected: true,
-          detected_path: "/usr/local/bin/codex",
           effort: {},
         },
       ],
@@ -376,26 +353,28 @@ beforeEach(() => {
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
   });
   vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
-  vi.mocked(getCliAgentDetections).mockResolvedValue({
-    agents: [
-      {
-        name: "codex",
-        label: "OpenAI Codex CLI",
-        executable: "codex",
-        config_reference: "cli_agents/codex/default.yml",
-        detected: true,
-        path: "/usr/local/bin/codex",
-      },
-      {
-        name: "claude",
-        label: "Claude Code",
-        executable: "claude",
-        config_reference: "cli_agents/claude/default.yml",
-        detected: false,
-        path: "",
-      },
-    ],
-  });
+  vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+    environmentStatus({
+      tools: [
+        {
+          name: "codex",
+          label: "OpenAI Codex CLI",
+          config_reference: "cli_agents/codex/default.yml",
+          provisioned: true,
+          logged_in: true,
+          problem: "",
+        },
+        {
+          name: "claude",
+          label: "Claude Code",
+          config_reference: "cli_agents/claude/default.yml",
+          provisioned: true,
+          logged_in: false,
+          problem: "",
+        },
+      ],
+    }),
+  );
 });
 
 afterEach(() => {
@@ -776,7 +755,52 @@ describe("SetupPage", () => {
     expect(keyInput).toHaveValue("sk-test");
 
     expect(screen.getByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
+    // Not logged in on this device is a warning on the card, not a block:
+    // which tools can be chosen is the catalog's and the same on every device.
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.toolNotLoggedIn")),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the tools the isolated agent environment provisions", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+          {
+            name: "grok",
+            label: "Grok Build",
+            config_reference: "cli_agents/grok/default.yml",
+            provisioned: false,
+            logged_in: false,
+            problem: "Grok Build is not provisioned in the agent environment yet.",
+          },
+        ],
+      }),
+    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+
+    expect(await screen.findByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Grok Build" })).toBeDisabled();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.toolNotProvisioned")),
+    ).toBeInTheDocument();
   });
 
   it("shows AI CLI tool skill status and allows an explicit overwrite", async () => {
@@ -1030,18 +1054,20 @@ describe("SetupPage", () => {
   it("creates the initial setup via initConfig and restartBackend", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
@@ -1303,7 +1329,28 @@ function environmentStatus(
 ): AgentEnvironmentStatusResponse {
   return {
     platform: "darwin",
-    working_directory: "<workspace>",
+    runtime: { available: true, reason: "", version: "0.6.17" },
+    snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+    dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
+    tools: [
+      {
+        name: "codex",
+        label: "OpenAI Codex CLI",
+        config_reference: "cli_agents/codex/default.yml",
+        provisioned: true,
+        logged_in: true,
+        problem: "",
+      },
+      {
+        name: "claude",
+        label: "Claude Code",
+        config_reference: "cli_agents/claude/default.yml",
+        provisioned: true,
+        logged_in: false,
+        problem: "Claude Code is not logged in on this device.",
+      },
+    ],
+    problem: "",
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
     ...overrides,
@@ -2079,8 +2126,6 @@ describe("toIntelligenceUpdatePayload", () => {
       {
         path: "cli_agents/codex/default.yml",
         name: "codex" as const,
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
     ],
@@ -2381,8 +2426,8 @@ describe("MembersSection", () => {
                 network: CLOSED_NETWORK_POLICY,
                 problems: [
                   {
-                    setting: "network",
-                    reason: "Grok Build cannot enforce network mode 'deny' on this OS.",
+                    setting: "grants",
+                    reason: "local path '/opt/nowhere' does not exist on this device",
                   },
                 ],
               },
@@ -2397,7 +2442,7 @@ describe("MembersSection", () => {
     expect(screen.getAllByText(t("setup.members.blockedHere"))).toHaveLength(1);
     await userEvent.hover(badge);
     expect(
-      await screen.findByText("Grok Build cannot enforce network mode 'deny' on this OS."),
+      await screen.findByText("local path '/opt/nowhere' does not exist on this device"),
     ).toBeInTheDocument();
   });
 
@@ -3558,8 +3603,6 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
     ],
@@ -3605,15 +3648,11 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
       {
         path: "cli_agents/claude/default.yml",
         name: "claude",
-        detected: true,
-        detected_path: "/usr/local/bin/claude",
         effort: {},
       },
     ],
@@ -3655,18 +3694,20 @@ async function openMemberIntelligenceAdvanced(user: ReturnType<typeof userEvent.
 describe("IntelligenceEditor (team default)", () => {
   beforeEach(() => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
   });
 
   it("renames an LLM slot on blur and sends it on save, without losing focus while typing", async () => {
@@ -3782,15 +3823,11 @@ describe("IntelligenceEditor (team default)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
           {
             path: "cli_agents/codex/custom_cli.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
         ],
@@ -4063,12 +4100,14 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.queryByText(/reasoning_effort = high/)).not.toBeInTheDocument();
   });
 
-  it("renders the AI CLI tool detection badge from detections", async () => {
+  it("shows each slot's tool as this device can run it", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     await screen.findByText(t("setup.intelligence.tabs.cli"));
-    expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(t("setup.intelligence.environment.toolLoggedIn")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {
@@ -4095,26 +4134,28 @@ describe("IntelligenceEditor (member override)", () => {
         provider_api_keys: { openai: true, gemini: true, anthropic: false },
       }),
     );
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          executable: "claude",
-          config_reference: "cli_agents/claude/default.yml",
-          detected: true,
-          path: "/usr/local/bin/claude",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+          {
+            name: "claude",
+            label: "Claude Code",
+            config_reference: "cli_agents/claude/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
   });
@@ -4213,8 +4254,6 @@ describe("IntelligenceEditor (member override)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
         ],

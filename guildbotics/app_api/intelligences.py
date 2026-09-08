@@ -29,13 +29,17 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_network_policy,
     parse_shared_grants,
 )
+from guildbotics.intelligences.agent_environment.toolchain import (
+    TOOLCHAIN_PATH,
+    ToolchainDeclaration,
+    ToolchainError,
+    parse_toolchain,
+)
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.cli_agents import (
-    CLI_AGENTS,
     cli_agent_default_path,
     cli_agent_name_from_path,
     require_cli_agent_path,
-    resolve_cli_agent_path,
 )
 from guildbotics.intelligences.effort import (
     describe_overlay_problems,
@@ -109,6 +113,7 @@ class IntelligenceConfigService:
             brain_mapping=self._read_brain_assignments(brain_mapping),
             filesystem_grants=self._read_shared_grants(config_dir),
             local_grants=self._read_local_grants(config_dir),
+            agent_environment=self._read_declaration(config_dir),
             platform=sys.platform,
             inherited_model_slots=inherited_model_slots,
             inherited_cli_slots=inherited_cli_slots,
@@ -171,6 +176,12 @@ class IntelligenceConfigService:
             local_file = self._local_grants_file(request.config_dir)
             save_yaml_file(local_file, request.local_grants.model_dump(mode="json"))
             files.append(CreatedFile(path=local_file, action="update"))
+        if request.agent_environment is not None:
+            declaration_file = request.config_dir / TOOLCHAIN_PATH
+            save_yaml_file(
+                declaration_file, request.agent_environment.model_dump(mode="json")
+            )
+            files.append(CreatedFile(path=declaration_file, action="update"))
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
@@ -675,9 +686,6 @@ class IntelligenceConfigService:
         person_id: str | None,
         cli_agent_mapping: dict[str, str],
     ) -> list[CliAgentDefinition]:
-        # The executable to look up on PATH may differ from the tool name
-        # (antigravity runs `agy`), so resolve it via the catalog.
-        executables = {agent.name: agent.executable for agent in CLI_AGENTS}
         agents: list[CliAgentDefinition] = []
         seen: set[str] = set()
         for agent_path in cli_agent_mapping.values():
@@ -701,13 +709,10 @@ class IntelligenceConfigService:
                 )
             )
             inherited_effort = self._cli_inherited_effort(config_dir, person_id, tool)
-            detected_path = resolve_cli_agent_path(executables[tool])
             agents.append(
                 CliAgentDefinition(
                     path=agent_path,
                     name=tool,
-                    detected=bool(detected_path),
-                    detected_path=detected_path,
                     effort=data.get("effort", {}) if data else {},
                     parameters=data.get("parameters", {}) if data else {},
                     inherited_effort=inherited_effort,
@@ -734,6 +739,16 @@ class IntelligenceConfigService:
             if network is not None:
                 return network
         return NetworkPolicy()
+
+    def _read_declaration(self, config_dir: Path) -> ToolchainDeclaration:
+        """The workspace's agent environment declaration; absent file, the template."""
+        data = self._read_optional_yaml(config_dir / TOOLCHAIN_PATH) or load_yaml_file(
+            get_template_path() / TOOLCHAIN_PATH
+        )
+        try:
+            return parse_toolchain(data, where=TOOLCHAIN_PATH)
+        except ToolchainError as exc:
+            raise SetupServiceError("invalid_agent_environment", str(exc)) from exc
 
     def _read_shared_grants(self, config_dir: Path) -> SharedGrants:
         """The workspace's shared grants; absent file, none."""

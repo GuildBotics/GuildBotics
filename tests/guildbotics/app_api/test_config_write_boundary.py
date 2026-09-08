@@ -67,6 +67,10 @@ ELSEWHERE = {
     ("POST", "/diagnostics/scenario"): "local/run diagnostics",
     ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
     ("POST", "/hub"): "~/.guildbotics/hub, outside any workspace",
+    (
+        "POST",
+        "/intelligences/agent-environment/build",
+    ): "local/agent_environment snapshots, device-local",
     ("POST", "/hub/inspect"): "reads a hub",
     ("POST", "/hub/ssh-key"): "~/.ssh",
     ("POST", "/hub/trust"): "~/.ssh/known_hosts",

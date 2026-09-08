@@ -60,6 +60,15 @@ _RELEVANT_EVENT_TYPES = frozenset(
 )
 _STATE_VERSION = 3
 _ALERT_ID_PARTS = 3
+#: Alert key template and code by the ``setting`` of an environment problem.
+_AGENT_ENVIRONMENT_ALERTS: dict[str, tuple[str, SystemAlertCode]] = {
+    "environment": ("agent-environment:device", "agent_environment_unavailable"),
+    "tool": ("agent-environment:tool:{slot}", "agent_environment_tool_unavailable"),
+    "grants": (
+        "agent-environment:{person_id}:{slot}",
+        "agent_environment_slot_blocked",
+    ),
+}
 
 
 class SystemAlertService:
@@ -81,7 +90,8 @@ class SystemAlertService:
         """Fold recorded diagnostics and current state into open alerts.
 
         ``agent_environment_problems`` are ``(person_id, slot, setting, reason)`` for
-        every AI CLI slot this device cannot enforce as configured; each stays
+        everything that keeps AI CLI work from starting on this device: the
+        device's environment, one tool on it, or one member's slot. Each stays
         open, and its dismissal is forgotten, until the setting changes.
         """
         with self._lock:
@@ -410,11 +420,13 @@ class SystemAlertService:
         agent_environment_problems: list[EnvironmentProblemEntry],
     ) -> None:
         for person_id, slot, setting, reason in agent_environment_problems:
+            # One alert per thing to fix: the device, a tool, a member's slot.
+            key, code = _AGENT_ENVIRONMENT_ALERTS[setting]
             self._open_runtime(
                 alerts,
                 dismissed,
-                key=f"agent-environment:{person_id}:{slot}",
-                code="agent_environment_unavailable",
+                key=key.format(person_id=person_id, slot=slot),
+                code=code,
                 severity="warning",
                 timestamp="",
                 person_id=person_id,

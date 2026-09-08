@@ -283,26 +283,49 @@ describe("App", () => {
     vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
   });
 
-  it("links a sandbox alert to the setting it is about", () => {
+  it("links an environment alert to the row that is the problem", () => {
     const base = {
-      id: "agent-environment:aiko:default",
-      code: "agent_environment_unavailable" as const,
       severity: "warning" as const,
       opened_at: "",
       updated_at: "",
       occurrence_count: 1,
-      person_id: "aiko",
-      command: "default",
       trace_id: "",
       reason: "x",
       actions: ["setup" as const],
     };
-    expect(systemAlertSetupTarget({ ...base, setting: "network" })).toBe(
-      "/setup?section=members&person_id=aiko&tab=intelligence&slot=default",
-    );
-    expect(systemAlertSetupTarget({ ...base, setting: "grants" })).toBe(
-      "/setup?section=intelligence&advanced=intelligence&focus=grants-device",
-    );
+    // The device as a whole: the snapshot row of the environment card.
+    expect(
+      systemAlertSetupTarget({
+        ...base,
+        id: "agent-environment:device",
+        code: "agent_environment_unavailable",
+        person_id: "",
+        command: "",
+        setting: "environment",
+      }),
+    ).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
+    // One tool: its own row in the card.
+    expect(
+      systemAlertSetupTarget({
+        ...base,
+        id: "agent-environment:tool:codex",
+        code: "agent_environment_tool_unavailable",
+        person_id: "",
+        command: "codex",
+        setting: "tool",
+      }),
+    ).toBe("/setup?section=intelligence&focus=agent-environment-tool-codex");
+    // A member's slot over a grant: the directory cards in the advanced settings.
+    expect(
+      systemAlertSetupTarget({
+        ...base,
+        id: "agent-environment:aiko:default",
+        code: "agent_environment_slot_blocked",
+        person_id: "aiko",
+        command: "default",
+        setting: "grants",
+      }),
+    ).toBe("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
   });
 
   it("links a GitHub credential alert to the affected member's GitHub settings", () => {

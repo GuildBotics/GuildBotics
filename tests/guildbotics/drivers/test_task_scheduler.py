@@ -17,6 +17,18 @@ def _isolated_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _environment_ready(monkeypatch):
+    """The device can run AI CLI turns unless a test says otherwise."""
+    _set_environment_refusal(monkeypatch, "")
+
+
+def _set_environment_refusal(monkeypatch, refusal: str) -> None:
+    monkeypatch.setattr(
+        task_scheduler, "device_status", lambda: SimpleNamespace(refusal=refusal)
+    )
+
+
 class _Logger:
     def info(self, message: str, *args: object) -> None:
         return None
@@ -189,6 +201,67 @@ def test_routine_ticket_workflow_runs_without_caller_trace(monkeypatch) -> None:
     # only when it actually dispatches work or fails.
     assert trace_id is None
     assert work_ids == [work_id]
+
+
+def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
+    monkeypatch,
+) -> None:
+    person = _Person(["workflows/ticket_driven_workflow"])
+    warnings: list[str] = []
+    context = _Context(person)
+    context.logger.warning = warnings.append  # type: ignore[method-assign]
+    scheduler = TaskScheduler(
+        context, routine_interval_minutes=3, consecutive_error_limit=1
+    )
+    dispatched: list[str] = []
+
+    async def fake_ticket_workflow(context, person, command, work_id) -> bool:
+        dispatched.append(command)
+        return True
+
+    monkeypatch.setattr(scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow)
+    reason = "The agent environment is being built on this device; try again when it is ready."
+    _set_environment_refusal(monkeypatch, reason)
+
+    index, errors, next_at, should_stop = scheduler._process_routine_tasks(
+        None, context, person, person.routine_commands, 0, None, dt.datetime.now(), 0
+    )
+    scheduler._process_routine_tasks(
+        None,
+        context,
+        person,
+        person.routine_commands,
+        index,
+        None,
+        dt.datetime.now(),
+        0,
+    )
+
+    # Nothing was dispatched, nothing failed: the worker stays up (the limit
+    # is 1) and the patrol is simply due again later.
+    assert dispatched == []
+    assert (errors, should_stop) == (0, False)
+    assert next_at is not None
+    # Said once, not once per patrol.
+    assert warnings == [f"AI CLI work is deferred on this device: {reason}"]
+
+
+@pytest.mark.asyncio
+async def test_pending_chat_is_deferred_while_the_environment_is_unavailable(
+    monkeypatch,
+) -> None:
+    scheduler = TaskScheduler(_Context(_Person()))
+    calls: list[str] = []
+
+    async def _fake_process(person, stop_event=None):
+        calls.append(person.person_id)
+        return 1
+
+    scheduler._chat_dispatcher.process_person = _fake_process  # type: ignore[assignment]
+    _set_environment_refusal(monkeypatch, "no runtime")
+
+    assert await scheduler._process_pending_chat(_Person()) is True
+    assert calls == []
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import os
 import shlex
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -34,8 +35,6 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentDetection,
-    CliAgentDetectionsResponse,
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
@@ -133,6 +132,16 @@ from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironmentError,
+    doctor,
+)
+from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
+from guildbotics.intelligences.agent_environment.toolchain import (
+    ToolchainDeclaration,
+    ToolchainError,
+    load_toolchain,
+)
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
@@ -200,6 +209,8 @@ class _UseProcessDataDir:
 _USE_PROCESS_DATA_DIR = _UseProcessDataDir()
 
 _CLI_AGENT_USAGE_TTL_SECONDS = 300.0
+#: Lines of build output the status card can show.
+ENVIRONMENT_BUILD_OUTPUT_LINES = 200
 
 
 def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
@@ -269,6 +280,12 @@ class AppRuntime:
         self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
+        self._environment_build_lock = threading.Lock()
+        self._environment_build: threading.Thread | None = None
+        #: The tail of the build this process last ran, for the status card.
+        self._environment_build_output: deque[str] = deque(
+            maxlen=ENVIRONMENT_BUILD_OUTPUT_LINES
+        )
         self._loaded_dotenv_keys: set[str] = set()
         self._workspace_sync = WorkspaceSyncService(
             on_live_publisher=self.set_live_state,
@@ -1049,8 +1066,69 @@ class AppRuntime:
             return []
 
     def get_agent_environment_status(self) -> AgentEnvironmentStatusResponse:
-        """Every active member's AI CLI slots, resolved against this device."""
-        return agent_environment_status(self._active_agent_ids())
+        """This device's agent environment, and every active member's slots on it."""
+        with self._environment_build_lock:
+            building = (
+                self._environment_build is not None
+                and self._environment_build.is_alive()
+            )
+            output = list(self._environment_build_output)
+        return agent_environment_status(
+            self._active_agent_ids(), build_output=output, building_here=building
+        )
+
+    def build_agent_environment(self) -> AgentEnvironmentStatusResponse:
+        """Build this device's snapshot in the background and report the status.
+
+        The build is what ``guildbotics environment build`` and the service's
+        upkeep run; a build already running here or elsewhere is left to
+        finish, and the status says so.
+
+        Raises:
+            AppApiError: ``agent_environment_unavailable`` when this device
+                cannot run the environment, ``agent_environment_declaration``
+                when the declaration cannot be read.
+        """
+        health = doctor()
+        if not health.available:
+            raise AppApiError(
+                "agent_environment_unavailable", reason=health.reason, status_code=409
+            )
+        try:
+            declaration = load_toolchain()
+        except ToolchainError as exc:
+            raise AppApiError(
+                "agent_environment_declaration", reason=str(exc), status_code=400
+            ) from exc
+        with self._environment_build_lock:
+            if (
+                self._environment_build is None
+                or not self._environment_build.is_alive()
+            ):
+                self._environment_build_output.clear()
+                self._environment_build = threading.Thread(
+                    target=self._run_environment_build,
+                    args=(declaration,),
+                    name="agent-environment-build",
+                    daemon=True,
+                )
+                self._environment_build.start()
+        return self.get_agent_environment_status()
+
+    def _run_environment_build(self, declaration: ToolchainDeclaration) -> None:
+        def on_line(line: str) -> None:
+            with self._environment_build_lock:
+                self._environment_build_output.append(line)
+
+        # The outcome needs no event of its own: the status reports a failed
+        # build with its reason, and the alert band opens on it.
+        try:
+            asyncio.run(build_snapshot(declaration, on_line=on_line))
+        except (AgentEnvironmentError, ToolchainError) as exc:
+            on_line(str(exc))
+            self._event_bus.publish_log(
+                "WARNING", f"The agent environment build failed: {exc}"
+            )
 
     def dismiss_system_alert(self, alert_id: str) -> SystemAlertsResponse:
         active_ids = {alert.id for alert in self.get_system_alerts().alerts}
@@ -1652,22 +1730,6 @@ class AppRuntime:
             return None
         finally:
             await context.aclose()
-
-    def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        agents: list[CliAgentDetection] = []
-        for info in CLI_AGENTS:
-            path = resolve_cli_agent_path(info.executable)
-            agents.append(
-                CliAgentDetection(
-                    name=info.name,
-                    label=info.label,
-                    executable=info.executable,
-                    config_reference=info.config_reference,
-                    detected=bool(path),
-                    path=path,
-                )
-            )
-        return CliAgentDetectionsResponse(agents=agents)
 
     async def get_cli_agent_usage(
         self, refresh: bool = False

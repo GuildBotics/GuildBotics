@@ -50,7 +50,6 @@ from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
-    CliAgentDetectionsResponse,
     CliAgentUsagesResponse,
     CommandAuthoringApplyRequest,
     CommandAuthoringApplyResponse,
@@ -982,16 +981,6 @@ def create_app(
         )
 
     @app.get(
-        "/intelligences/cli-agents/detection",
-        response_model=CliAgentDetectionsResponse,
-        responses=error_responses,
-    )
-    def detect_cli_agents(
-        _: None = Depends(require_token),
-    ) -> CliAgentDetectionsResponse:
-        return app_runtime.detect_cli_agents()
-
-    @app.get(
         "/intelligences/cli-agents/usage",
         response_model=CliAgentUsagesResponse,
         responses=error_responses,
@@ -1010,8 +999,19 @@ def create_app(
     def agent_environment_status_view(
         _: None = Depends(require_token),
     ) -> AgentEnvironmentStatusResponse:
-        """What every active member's AI CLI slots may reach on this device."""
+        """This device's agent environment, and every active member's slots on it."""
         return app_runtime.get_agent_environment_status()
+
+    @app.post(
+        "/intelligences/agent-environment/build",
+        response_model=AgentEnvironmentStatusResponse,
+        responses=error_responses,
+    )
+    def agent_environment_build(
+        _: None = Depends(require_token),
+    ) -> AgentEnvironmentStatusResponse:
+        """Start building this device's snapshot; the status reports its progress."""
+        return app_runtime.build_agent_environment()
 
     @app.get(
         "/intelligences/grant-evaluation",

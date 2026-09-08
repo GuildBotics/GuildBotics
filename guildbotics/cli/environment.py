@@ -27,11 +27,11 @@ from guildbotics.intelligences.agent_environment import (
     snapshot,
 )
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
+from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
-    upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, cli_agent_info
 
@@ -149,48 +149,33 @@ def status_command(output_format: str) -> None:
 
 
 def _status_payload() -> dict[str, Any]:
-    health = runtime.doctor()
-    dns_payload: dict[str, Any] = {"declared": "", "nameservers": [], "problem": ""}
-    try:
-        declaration = _declaration()
-        state = snapshot.snapshot_status(declaration)
-        snapshot_payload = {
-            "state": state.state,
-            "name": state.name,
-            "path": str(state.path),
-            "detail": state.detail,
-        }
-        declared = declaration.dns.nameservers
-        dns_payload["declared"] = (
-            declared if isinstance(declared, str) else ", ".join(declared)
-        )
-        try:
-            dns_payload["nameservers"] = list(upstream_nameservers(declaration.dns))
-        except ToolchainError as exc:
-            dns_payload["problem"] = str(exc)
-    except click.ClickException as exc:
-        snapshot_payload = {
-            "state": "missing",
-            "name": "",
-            "path": "",
-            "detail": exc.message,
-        }
+    status = device_status()
+    state = status.snapshot
     return {
         "runtime": {
-            "available": health.available,
-            "reason": health.reason,
-            "version": health.runtime_version,
+            "available": status.runtime.available,
+            "reason": status.runtime.reason,
+            "version": status.runtime.runtime_version,
         },
-        "snapshot": snapshot_payload,
-        "dns": dns_payload,
+        "snapshot": {
+            "state": state.state if state else "missing",
+            "name": state.name if state else "",
+            "path": str(state.path) if state else "",
+            "detail": state.detail if state else status.declaration_problem,
+        },
+        "dns": {
+            "declared": status.dns.declared,
+            "nameservers": list(status.dns.nameservers),
+            "problem": status.dns.problem,
+        },
         "tools": [
             {
-                "name": agent.name,
-                "label": agent.label,
-                "provisioned": bool(agent.provision.package),
-                "logged_in": provider_state.is_logged_in(agent),
+                "name": tool.name,
+                "label": tool.label,
+                "provisioned": tool.provisioned,
+                "logged_in": tool.logged_in,
             }
-            for agent in CLI_AGENTS
+            for tool in status.tools
         ],
     }
 

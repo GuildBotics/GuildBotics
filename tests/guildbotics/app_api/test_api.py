@@ -21,7 +21,6 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentDetectionsResponse,
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
@@ -377,26 +376,6 @@ class RuntimeStub:
                     message="No active members are configured.",
                 )
             ],
-        )
-
-    def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        return CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "claude",
-                    "executable": "claude",
-                    "config_reference": "claude",
-                    "detected": True,
-                    "path": "/usr/local/bin/claude",
-                },
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": False,
-                    "path": "",
-                },
-            ]
         )
 
     async def get_cli_agent_usage(
@@ -1059,23 +1038,6 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
     assert isinstance(payload["context"].get("errors"), list)
 
 
-def test_cli_agent_detection_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-
-    with TestClient(app) as client:
-        response = client.get(
-            "/intelligences/cli-agents/detection",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-        )
-
-    assert response.status_code == HTTP_OK
-    payload = response.json()
-    assert payload["agents"][0]["name"] == "claude"
-    assert payload["agents"][0]["detected"] is True
-    assert payload["agents"][1]["name"] == "codex"
-    assert payload["agents"][1]["detected"] is False
-
-
 def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
 
@@ -1105,42 +1067,6 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
 
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime,
-        "detect_cli_agents",
-        lambda: CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "copilot",
-                    "executable": "copilot",
-                    "config_reference": "copilot",
-                    "detected": True,
-                    "path": "/usr/local/bin/copilot",
-                },
-                {
-                    "name": "claude",
-                    "executable": "claude",
-                    "config_reference": "claude",
-                    "detected": True,
-                    "path": "/usr/local/bin/claude",
-                },
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": True,
-                    "path": "/usr/local/bin/codex",
-                },
-                {
-                    "name": "grok",
-                    "executable": "grok",
-                    "config_reference": "grok",
-                    "detected": True,
-                    "path": "/usr/local/bin/grok",
-                },
-            ]
-        ),
-    )
     probed: list[str] = []
 
     async def fake_read_claude(timeout: float = 30.0):
@@ -1220,21 +1146,6 @@ async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
     from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageError
 
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime,
-        "detect_cli_agents",
-        lambda: CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": True,
-                    "path": "/usr/local/bin/codex",
-                }
-            ]
-        ),
-    )
 
     async def failing_read(executable: str, timeout: float = 20.0):
         raise CliAgentUsageError("not logged in")
@@ -2344,7 +2255,6 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/system-alerts"),
     ("POST", "/system-alerts/dismiss"),
     ("POST", "/diagnostics/scenario"),
-    ("GET", "/intelligences/cli-agents/detection"),
     ("GET", "/config/intelligences"),
     ("PUT", "/config/intelligences"),
     ("POST", "/config/init"),

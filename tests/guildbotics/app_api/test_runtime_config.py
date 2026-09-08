@@ -1,5 +1,5 @@
 """Direct unit tests for the config / workspace / team / transcript /
-cli-agent-detection behaviors of :class:`guildbotics.app_api.runtime.AppRuntime`.
+workspace behaviors of :class:`guildbotics.app_api.runtime.AppRuntime`.
 
 These exercise finer branch granularity than the API-level tests in
 ``test_api.py``: each method is driven directly with ``tmp_path`` and
@@ -13,6 +13,7 @@ import logging
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -876,80 +877,6 @@ def test_update_runtime_debug_disables_both_debug_flags(
 # --- detect_cli_agents() ----------------------------------------------------
 
 
-def _cli_infos(*items: tuple[str, str, int, str]) -> tuple[CliAgentInfo, ...]:
-    return tuple(
-        CliAgentInfo(
-            name=name,
-            label=label,
-            order=order,
-            executable=executable,
-            config_reference=name if name in {"codex", "claude"} else f"{name}-cli.yml",
-        )
-        for name, label, order, executable in items
-    )
-
-
-def test_detect_cli_agents_resolves_executable_and_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.CLI_AGENTS",
-        _cli_infos(
-            ("codex", "OpenAI Codex CLI", 10, "codex"),
-            ("antigravity", "Antigravity CLI", 20, "agy"),
-        ),
-    )
-
-    def _resolve_path(executable: str) -> str:
-        return f"/usr/local/bin/{executable}" if executable == "codex" else ""
-
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_agent_path", _resolve_path
-    )
-    runtime = AppRuntime(EventBus())
-
-    agents = {agent.name: agent for agent in runtime.detect_cli_agents().agents}
-
-    assert agents["codex"].label == "OpenAI Codex CLI"
-    assert agents["codex"].executable == "codex"
-    assert agents["codex"].config_reference == "codex"
-    assert agents["codex"].detected is True
-    assert agents["codex"].path == "/usr/local/bin/codex"
-    # The agent name and binary differ for antigravity (agy); detection uses the
-    # declared executable.
-    assert agents["antigravity"].executable == "agy"
-    assert agents["antigravity"].config_reference == "antigravity-cli.yml"
-    assert agents["antigravity"].detected is False
-    assert agents["antigravity"].path == ""
-
-
-def test_detect_cli_agents_marks_undetected_when_executable_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.CLI_AGENTS",
-        _cli_infos(("codex", "OpenAI Codex CLI", 10, "codex")),
-    )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.resolve_cli_agent_path", lambda _executable: ""
-    )
-    runtime = AppRuntime(EventBus())
-
-    response = runtime.detect_cli_agents()
-
-    assert all(agent.detected is False for agent in response.agents)
-    assert all(agent.path == "" for agent in response.agents)
-
-
-def test_detect_cli_agents_returns_empty_for_empty_catalog(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("guildbotics.app_api.runtime.CLI_AGENTS", ())
-    runtime = AppRuntime(EventBus())
-
-    assert runtime.detect_cli_agents().agents == []
-
-
 def test_runtime_startup_never_adopts_cwd_as_workspace(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -974,3 +901,74 @@ def test_runtime_startup_keeps_explicit_workspace_root(
 
     assert os.environ["GUILDBOTICS_WORKSPACE_ROOT"] == str(explicit.resolve())
     assert runtime.get_config_status().workspace == explicit.resolve()
+
+
+def test_build_agent_environment_runs_in_the_background_and_reports_its_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from guildbotics.app_api import runtime as runtime_module
+    from guildbotics.intelligences.agent_environment.runtime import (
+        AgentEnvironmentHealth,
+    )
+    from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
+    from guildbotics.intelligences.agent_environment.toolchain import (
+        DnsSettings,
+        ToolchainDeclaration,
+    )
+
+    declaration = ToolchainDeclaration(dns=DnsSettings(nameservers="host"))
+    release = threading.Event()
+
+    async def fake_build(declaration, *, on_line, **_):
+        on_line("[npm]")
+        release.wait(timeout=5)
+        on_line("done")
+        return SnapshotStatus("ready", "guildbotics-abc", Path("/snap"))
+
+    monkeypatch.setattr(
+        runtime_module, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
+    )
+    monkeypatch.setattr(runtime_module, "load_toolchain", lambda: declaration)
+    monkeypatch.setattr(runtime_module, "build_snapshot", fake_build)
+    monkeypatch.setattr(
+        runtime_module,
+        "agent_environment_status",
+        lambda ids, *, build_output, building_here: SimpleNamespace(
+            output=list(build_output), building=building_here
+        ),
+    )
+    runtime = AppRuntime(EventBus())
+
+    started = runtime.build_agent_environment()
+    # A second click while it runs starts nothing new.
+    again = runtime.build_agent_environment()
+    release.set()
+    assert runtime._environment_build is not None
+    runtime._environment_build.join(timeout=5)
+    finished = runtime.get_agent_environment_status()
+
+    assert started.building is True and again.building is True
+    assert finished.building is False
+    assert finished.output == ["[npm]", "done"]
+
+
+def test_build_agent_environment_refuses_without_a_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from guildbotics.app_api import runtime as runtime_module
+    from guildbotics.app_api.errors import AppApiError
+    from guildbotics.intelligences.agent_environment.runtime import (
+        AgentEnvironmentHealth,
+    )
+
+    monkeypatch.setattr(
+        runtime_module, "doctor", lambda: AgentEnvironmentHealth(False, "no hypervisor")
+    )
+
+    with pytest.raises(AppApiError) as excinfo:
+        AppRuntime(EventBus()).build_agent_environment()
+
+    assert excinfo.value.status_code == 409
+    assert "no hypervisor" in str(excinfo.value.reason)

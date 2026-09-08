@@ -473,16 +473,24 @@ describe("Setup integration (real client + mock server)", () => {
       .json("GET", "/config/project", projectConfig())
       .json("GET", "/commands/options", { options: [] })
       .json("GET", "/commands/routine-options", { options: [] })
-      .json("GET", "/intelligences/cli-agents/detection", {
-        agents: [
+      .json("GET", "/intelligences/agent-environment", {
+        platform: "darwin",
+        runtime: { available: true, reason: "", version: "0.6.17" },
+        snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+        dns: { declared: "host", nameservers: [], problem: "" },
+        tools: [
           {
             name: "codex",
-            executable: "codex",
+            label: "Codex",
             config_reference: "cli_agents/codex/default.yml",
-            detected: true,
-            path: "/usr/bin/codex",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
           },
         ],
+        problem: "",
+        access: { documents: [], paths: [], denied: [], problem: "" },
+        members: [],
       })
       .json("GET", "/intelligences/model-providers", llmProviders())
       .json("GET", "/config/roles", {

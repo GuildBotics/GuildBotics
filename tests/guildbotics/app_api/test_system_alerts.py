@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from guildbotics.app_api.api import create_app
@@ -502,6 +504,15 @@ def test_worker_failure_persists_until_scheduler_restarts(tmp_path: Path) -> Non
     assert service.list_alerts(_runtime()).alerts == []
 
 
+@pytest.fixture
+def _environment_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The device can run AI CLI turns, so no environment alert joins the band."""
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.agent_environment_problems", lambda ids: []
+    )
+
+
+@pytest.mark.usefixtures("_environment_ready")
 def test_system_alerts_endpoint_reads_diagnostics(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     bus = EventBus(store=store)
@@ -520,6 +531,7 @@ def test_system_alerts_endpoint_reads_diagnostics(tmp_path: Path) -> None:
     assert response.json()["alerts"][0]["code"] == "command_failed"
 
 
+@pytest.mark.usefixtures("_environment_ready")
 def test_system_alerts_endpoint_dismisses_alert(tmp_path: Path) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
     bus = EventBus(store=store)
@@ -541,37 +553,72 @@ def test_system_alerts_endpoint_dismisses_alert(tmp_path: Path) -> None:
     assert response.json() == {"alerts": []}
 
 
-def test_a_sandbox_setting_this_device_cannot_enforce_stays_visible(
+def test_environment_problems_open_one_alert_per_thing_to_fix(
     tmp_path: Path,
 ) -> None:
     service = SystemAlertService(DiagnosticsStore(tmp_path / "diagnostics.jsonl"))
-    problem = (
-        "aiko",
-        "default",
-        "network",
-        "Grok Build cannot enforce command network mode 'deny' on this OS.",
-    )
+    problems = [
+        ("", "", "environment", "The agent environment is missing on this device."),
+        ("", "codex", "tool", "Codex is not logged in on this device."),
+        ("aiko", "default", "grants", "local path '/opt/x' does not exist here"),
+        ("kenji", "default", "grants", "local path '/opt/x' does not exist here"),
+    ]
 
-    alerts = service.list_alerts(_runtime(), [problem]).alerts
+    alerts = service.list_alerts(_runtime(), problems).alerts
+    by_key = {a.id: a for a in alerts}
 
+    # The device once, the tool once, and each member's slot on its own.
     assert [
-        (a.code, a.severity, a.person_id, a.command, a.setting, a.reason, a.actions)
-        for a in alerts
+        (a.id, a.code, a.severity, a.person_id, a.command, a.setting, a.actions)
+        for a in (
+            by_key["agent-environment:device"],
+            by_key["agent-environment:tool:codex"],
+            by_key["agent-environment:aiko:default"],
+            by_key["agent-environment:kenji:default"],
+        )
     ] == [
         (
+            "agent-environment:device",
             "agent_environment_unavailable",
+            "warning",
+            "",
+            "",
+            "environment",
+            ["setup"],
+        ),
+        (
+            "agent-environment:tool:codex",
+            "agent_environment_tool_unavailable",
+            "warning",
+            "",
+            "codex",
+            "tool",
+            ["setup"],
+        ),
+        (
+            "agent-environment:aiko:default",
+            "agent_environment_slot_blocked",
             "warning",
             "aiko",
             "default",
-            "network",
-            problem[3],
+            "grants",
             ["setup"],
-        )
+        ),
+        (
+            "agent-environment:kenji:default",
+            "agent_environment_slot_blocked",
+            "warning",
+            "kenji",
+            "default",
+            "grants",
+            ["setup"],
+        ),
     ]
-    # Closing the band does not settle it: the setting is still unenforceable.
-    service.dismiss(alerts[0].id)
-    assert [a.code for a in service.list_alerts(_runtime(), [problem]).alerts] == [
-        "agent_environment_unavailable"
-    ]
-    # Changing the setting does.
+    assert sorted(a.reason for a in alerts) == sorted(p[3] for p in problems)
+    # Closing the band does not settle it: the device is still not ready.
+    service.dismiss("agent-environment:device")
+    assert "agent-environment:device" in {
+        a.id for a in service.list_alerts(_runtime(), problems).alerts
+    }
+    # Fixing it does.
     assert service.list_alerts(_runtime(), []).alerts == []

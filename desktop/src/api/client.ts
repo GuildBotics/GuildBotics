@@ -207,7 +207,9 @@ export type SystemAlert = {
     | "rate_limited"
     | "scheduler_failed"
     | "worker_stopped"
-    | "agent_environment_unavailable";
+    | "agent_environment_unavailable"
+    | "agent_environment_tool_unavailable"
+    | "agent_environment_slot_blocked";
   severity: "critical" | "warning";
   opened_at: string;
   updated_at: string;
@@ -224,19 +226,6 @@ export type SystemAlert = {
 
 export type SystemAlertsResponse = {
   alerts: SystemAlert[];
-};
-
-export type CliAgentDetection = {
-  name: string;
-  label: string;
-  executable: string;
-  config_reference: string;
-  detected: boolean;
-  path: string;
-};
-
-export type CliAgentDetectionsResponse = {
-  agents: CliAgentDetection[];
 };
 
 export type CliAgentUsageWindow = {
@@ -872,8 +861,6 @@ export type ModelDefinition = {
 export type CliAgentDefinition = {
   path: string;
   name: string;
-  detected: boolean;
-  detected_path: string;
   // Settings that always apply, whatever effort was asked for.
   parameters?: Record<string, unknown>;
   effort: EffortOverlay;
@@ -964,13 +951,53 @@ export type EnvironmentAccessStatus = {
   problem: string;
 };
 
-// Which setting a sandbox problem is about: the slot's network block, or the
-// directory grants.
-export type EnvironmentSetting = "network" | "grants";
+// Which setting an environment problem is about: the device's environment
+// (runtime, snapshot, declaration), one tool's row in it, or the directory
+// grants.
+export type EnvironmentSetting = "environment" | "tool" | "grants";
 
 export type EnvironmentProblem = {
   setting: EnvironmentSetting;
   reason: string;
+};
+
+export type EnvironmentRuntimeStatus = {
+  available: boolean;
+  reason: string;
+  version: string;
+};
+
+export type SnapshotState = "missing" | "stale" | "building" | "failed" | "ready";
+
+export type EnvironmentSnapshotStatus = {
+  state: SnapshotState;
+  name: string;
+  detail: string;
+  // The tail of the build this backend last ran.
+  output: string[];
+};
+
+export type EnvironmentDnsStatus = {
+  declared: string;
+  nameservers: string[];
+  problem: string;
+};
+
+// One AI CLI tool of the catalog as this device can run it.
+export type EnvironmentToolStatus = {
+  name: string;
+  label: string;
+  config_reference: string;
+  provisioned: boolean;
+  logged_in: boolean;
+  // Why a turn of this tool cannot start here, or "" when it can.
+  problem: string;
+};
+
+// The shared declaration of the agent environment: what every device builds.
+export type AgentEnvironmentDeclaration = {
+  packages: { apt: string[]; npm: string[]; uv: string[] };
+  dns: { nameservers: "host" | string[] };
 };
 
 export type EnvironmentSlotStatus = {
@@ -987,7 +1014,12 @@ export type EnvironmentMemberStatus = {
 
 export type AgentEnvironmentStatusResponse = {
   platform: string;
-  working_directory: string;
+  runtime: EnvironmentRuntimeStatus;
+  snapshot: EnvironmentSnapshotStatus;
+  dns: EnvironmentDnsStatus;
+  tools: EnvironmentToolStatus[];
+  // Why no turn at all can start on this device, or "" when one can.
+  problem: string;
   access: EnvironmentAccessStatus;
   members: EnvironmentMemberStatus[];
 };
@@ -1029,6 +1061,9 @@ export type IntelligenceConfig = {
   // this device's own extra paths.
   filesystem_grants?: SharedGrants;
   local_grants?: LocalGrants;
+  // The workspace's agent environment declaration (the team's, whichever
+  // scope is read).
+  agent_environment?: AgentEnvironmentDeclaration | null;
   platform?: string;
   // Team-owned slot/feature names. A member may override their value but cannot
   // delete or rename them. Empty for the team scope.
@@ -1047,9 +1082,11 @@ export type IntelligenceConfigUpdateRequest = {
   cli_agent_mapping?: Record<string, string>;
   cli_agents?: CliAgentDefinition[];
   brain_mapping?: BrainAssignment[];
-  // Replace the shared grants / this device's paths when given; omitted keeps them.
+  // Replace the shared grants / this device's paths / the declaration when
+  // given; omitted keeps them.
   filesystem_grants?: SharedGrants;
   local_grants?: LocalGrants;
+  agent_environment?: AgentEnvironmentDeclaration;
 };
 
 export type ConfigWriteResponse = {
@@ -1584,10 +1621,6 @@ export async function getMemoryEvents(params?: {
   return request(`/diagnostics/memory-events${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {
-  return request("/intelligences/cli-agents/detection");
-}
-
 export async function getCliAgentUsage(): Promise<CliAgentUsagesResponse> {
   return request("/intelligences/cli-agents/usage");
 }
@@ -1612,6 +1645,11 @@ export async function updateIntelligenceConfig(
 
 export async function getAgentEnvironmentStatus(): Promise<AgentEnvironmentStatusResponse> {
   return request("/intelligences/agent-environment");
+}
+
+/** Start building this device's snapshot; the status reports its progress. */
+export async function buildAgentEnvironment(): Promise<AgentEnvironmentStatusResponse> {
+  return request("/intelligences/agent-environment/build", { method: "POST" });
 }
 
 export async function evaluateGrant(query: {

@@ -18,6 +18,8 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     SharedGrants,
 )
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
+from guildbotics.intelligences.agent_environment.toolchain import ToolchainDeclaration
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -951,7 +953,13 @@ SystemAlertCode = Literal[
     "rate_limited",
     "scheduler_failed",
     "worker_stopped",
+    #: This device cannot run any AI CLI turn: no runtime, no snapshot, or a
+    #: declaration it cannot read.
     "agent_environment_unavailable",
+    #: One AI CLI tool cannot run here: not provisioned, or not logged in.
+    "agent_environment_tool_unavailable",
+    #: One member's slot cannot start here over a grant this device lacks.
+    "agent_environment_slot_blocked",
 ]
 SystemAlertSeverity = Literal["critical", "warning"]
 SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
@@ -981,19 +989,6 @@ class SystemAlertsResponse(BaseModel):
 
 class SystemAlertDismissRequest(BaseModel):
     alert_id: str = Field(min_length=1)
-
-
-class CliAgentDetection(BaseModel):
-    name: str
-    label: str = ""
-    executable: str
-    config_reference: str
-    detected: bool
-    path: str = ""
-
-
-class CliAgentDetectionsResponse(BaseModel):
-    agents: list[CliAgentDetection]
 
 
 class CliAgentUsageWindow(BaseModel):
@@ -1061,8 +1056,6 @@ class ModelDefinition(BaseModel):
 class CliAgentDefinition(BaseModel):
     path: str
     name: str
-    detected: bool = False
-    detected_path: str = ""
     #: Settings that always apply, whatever effort was asked for. The effort
     #: overlay merges on top, mirroring a model definition's ``parameters``.
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -1135,14 +1128,54 @@ class EnvironmentAccessStatus(BaseModel):
     problem: str = ""
 
 
-#: Which setting a sandbox problem is about, so the Desktop can open it: the
-#: slot's network block, or the directory grants.
-EnvironmentSetting = Literal["network", "grants"]
+#: Which setting an environment problem is about, so the Desktop can open it:
+#: the device's environment (runtime, snapshot, declaration), one tool's row
+#: in it (provisioning, login), or the directory grants.
+EnvironmentSetting = Literal["environment", "tool", "grants"]
 
 
 class EnvironmentProblem(BaseModel):
     setting: EnvironmentSetting
     reason: str
+
+
+class EnvironmentRuntimeStatus(BaseModel):
+    """Whether this device can create an environment at all."""
+
+    available: bool
+    reason: str = ""
+    version: str = ""
+
+
+class EnvironmentSnapshotStatus(BaseModel):
+    """The snapshot the declaration asks for, as this device holds it.
+
+    ``output`` is the tail of the build this process last ran, so the screen
+    can show what a running or failed build printed.
+    """
+
+    state: SnapshotState
+    name: str = ""
+    detail: str = ""
+    output: list[str] = Field(default_factory=list)
+
+
+class EnvironmentDnsStatus(BaseModel):
+    declared: str = ""
+    nameservers: list[str] = Field(default_factory=list)
+    problem: str = ""
+
+
+class EnvironmentToolStatus(BaseModel):
+    """One AI CLI tool of the catalog as this device can run it."""
+
+    name: str
+    label: str
+    config_reference: str
+    provisioned: bool
+    logged_in: bool
+    #: Why a turn of this tool cannot start here, or "" when it can.
+    problem: str = ""
 
 
 class EnvironmentSlotStatus(BaseModel):
@@ -1159,8 +1192,15 @@ class EnvironmentMemberStatus(BaseModel):
 
 
 class AgentEnvironmentStatusResponse(BaseModel):
+    """This device's agent environment: what it holds and what cannot start here."""
+
     platform: str
-    working_directory: str
+    runtime: EnvironmentRuntimeStatus
+    snapshot: EnvironmentSnapshotStatus
+    dns: EnvironmentDnsStatus = Field(default_factory=EnvironmentDnsStatus)
+    tools: list[EnvironmentToolStatus] = Field(default_factory=list)
+    #: Why no turn at all can start on this device, or "" when one can.
+    problem: str = ""
     access: EnvironmentAccessStatus = Field(default_factory=EnvironmentAccessStatus)
     members: list[EnvironmentMemberStatus] = Field(default_factory=list)
 
@@ -1191,7 +1231,9 @@ class IntelligenceConfigResponse(BaseModel):
     filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
     #: This device's own extra paths and denies, never synchronized.
     local_grants: LocalGrants = Field(default_factory=LocalGrants)
-    #: Per tool, what this device and any supported OS can enforce.
+    #: The workspace's agent environment declaration (packages and DNS). The
+    #: team's, whichever scope is read; only the team scope writes it.
+    agent_environment: ToolchainDeclaration | None = None
     platform: str = ""
     # Slot/feature names the team owns. A member may override their value but
     # cannot delete or rename them (the runtime merge would only revive them),
@@ -1216,6 +1258,9 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     filesystem_grants: SharedGrants | None = None
     #: None keeps this device's paths as they are; a value replaces them.
     local_grants: LocalGrants | None = None
+    #: None keeps the declaration as it is; a value replaces it. Ignored for a
+    #: member scope, which has no declaration of its own.
+    agent_environment: ToolchainDeclaration | None = None
 
 
 class ProjectConfigResponse(BaseModel):

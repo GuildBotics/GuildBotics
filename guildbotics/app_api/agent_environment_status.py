@@ -1,12 +1,12 @@
-"""What each member's AI CLI slots may reach on this device, and why not.
+"""This device's agent environment as the Desktop shows it, and why turns may not start.
 
-The same resolution decides three things the Desktop shows: the effective
-permission preview, the status band that says a grant cannot be resolved
-here, and the judgement offered while a grant is being added. It reads the
-runtime's own view of the configuration (the per-member slot mapping and the
-shared and local grants), so what it shows is what a turn would get. The
-environment enforces every setting the same way on every device, so what
-can keep a slot from starting here is a grant this device cannot resolve.
+One reading answers the status card, the alert band, the permission preview,
+and the judgement offered while a grant is being added. The device's part --
+runtime, snapshot, DNS, logins -- comes from the environment's own status
+module, in the same words a refused turn is given; the grants are resolved
+the way a turn resolves them. What keeps work from starting here is one of
+three things, and each is reported where it is fixed: the device's
+environment as a whole, one AI CLI tool on it, or one slot's grants.
 """
 
 from __future__ import annotations
@@ -20,10 +20,14 @@ from guildbotics.app_api.models import (
     AgentEnvironmentStatusResponse,
     EnvironmentAccessStatus,
     EnvironmentDenyStatus,
+    EnvironmentDnsStatus,
     EnvironmentGrantStatus,
     EnvironmentMemberStatus,
     EnvironmentProblem,
+    EnvironmentRuntimeStatus,
     EnvironmentSlotStatus,
+    EnvironmentSnapshotStatus,
+    EnvironmentToolStatus,
     GrantEvaluation,
     GrantScope,
 )
@@ -42,18 +46,32 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
     sensitive_grant_reason,
 )
+from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
+from guildbotics.intelligences.cli_agents import cli_agent_info
 
 
 def agent_environment_status(
-    person_ids: list[str], *, platform: str = sys.platform
+    person_ids: list[str],
+    *,
+    platform: str = sys.platform,
+    build_output: list[str] | None = None,
+    building_here: bool = False,
 ) -> AgentEnvironmentStatusResponse:
-    """Resolve the grants and every slot of the given members against this device.
+    """Read the device and resolve every slot of the given members against it.
 
     Nothing is created here: a document directory that does not exist yet is
     reported absent, exactly what the turn would create when it starts.
+
+    Args:
+        person_ids: The active agent members whose slots to resolve.
+        platform: This device's platform.
+        build_output: The tail of the build this process last ran.
+        building_here: This process has just started a build.
     """
     home = Path.home()
+    device = device_status(building_here=building_here)
+    snapshot = device.snapshot
     try:
         access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
         problem = ""
@@ -80,7 +98,34 @@ def agent_environment_status(
     ]
     return AgentEnvironmentStatusResponse(
         platform=platform,
-        working_directory="<workspace>/.guildbotics/local/...",
+        runtime=EnvironmentRuntimeStatus(
+            available=device.runtime.available,
+            reason=device.runtime.reason,
+            version=device.runtime.runtime_version,
+        ),
+        snapshot=EnvironmentSnapshotStatus(
+            state=snapshot.state if snapshot else "missing",
+            name=snapshot.name if snapshot else "",
+            detail=snapshot.detail if snapshot else device.declaration_problem,
+            output=list(build_output or []),
+        ),
+        dns=EnvironmentDnsStatus(
+            declared=device.dns.declared,
+            nameservers=list(device.dns.nameservers),
+            problem=device.dns.problem,
+        ),
+        tools=[
+            EnvironmentToolStatus(
+                name=tool.name,
+                label=tool.label,
+                config_reference=cli_agent_info(tool.name).config_reference,
+                provisioned=tool.provisioned,
+                logged_in=tool.logged_in,
+                problem=tool.refusal,
+            )
+            for tool in device.tools
+        ],
+        problem=device.refusal,
         access=_access_status(access, problem, home),
         members=members,
     )
@@ -122,18 +167,36 @@ def _slot_status(
     )
 
 
-#: ``(person_id, slot, setting, reason)`` for one slot that cannot start here.
+#: ``(person_id, slot, setting, reason)``: one thing that keeps work from
+#: starting here. ``setting`` says whose it is: ``environment`` (the device;
+#: person and slot empty), ``tool`` (one AI CLI tool, named in the slot field;
+#: person empty), or ``grants`` (one member's slot).
 EnvironmentProblemEntry = tuple[str, str, str, str]
 
 
 def agent_environment_problems(person_ids: list[str]) -> list[EnvironmentProblemEntry]:
-    """Every slot that cannot start on this device, with the setting to open."""
-    return [
+    """Everything that keeps work from starting on this device, by what to open.
+
+    A tool is reported only when an active member's slot uses it: a login the
+    workspace never needs is not a problem.
+    """
+    status = agent_environment_status(person_ids)
+    entries: list[EnvironmentProblemEntry] = []
+    if status.problem:
+        entries.append(("", "", "environment", status.problem))
+    used = {slot.tool for member in status.members for slot in member.slots}
+    entries += [
+        ("", tool.name, "tool", tool.problem)
+        for tool in status.tools
+        if tool.name in used and tool.problem
+    ]
+    entries += [
         (member.person_id, slot.slot, problem.setting, problem.reason)
-        for member in agent_environment_status(person_ids).members
+        for member in status.members
         for slot in member.slots
         for problem in slot.problems
     ]
+    return entries
 
 
 def evaluate_grant(

@@ -64,7 +64,6 @@ import { useSearchParams } from "react-router";
 import {
   type CommandOption,
   type DiagnosticCheck,
-  type CliAgentDetection,
   CLOSED_NETWORK_POLICY,
   type CliAgentDefinition,
   type EffortFieldSpec,
@@ -90,7 +89,6 @@ import {
   deleteMemberConfig,
   ensureAgentField,
   getAgentFieldState,
-  getCliAgentDetections,
   getCommandOptions,
   getRoutineCommandOptions,
   getConfigStatus,
@@ -111,6 +109,7 @@ import {
   updateMemberConfig,
   updateIntelligenceConfig,
   getAgentEnvironmentStatus,
+  type EnvironmentToolStatus,
   updateProjectConfig,
   memberAvatarUrl,
   uploadMemberAvatar,
@@ -136,6 +135,8 @@ import { SecretStatusHint } from "../sync/SecretStatusHint";
 import { SyncSettings } from "../sync/SyncSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
+import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
+import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
 import { GrantsCards } from "./GrantsCards";
 import { NetworkPolicyField } from "./NetworkPolicyField";
 import { normalizeLanguage } from "../i18n";
@@ -379,11 +380,14 @@ export function SetupPage() {
     queryFn: getTeam,
     retry: false,
   });
-  const cliDetections = useQuery({
-    queryKey: ["cli-agent-detections"],
-    queryFn: getCliAgentDetections,
+  // The AI CLI tool catalog as this device can run it: which tools the
+  // environment provisions decides what the default-tool cards offer.
+  const environmentStatus = useQuery({
+    queryKey: ["agent-environment-status"],
+    queryFn: getAgentEnvironmentStatus,
     retry: false,
   });
+  const cliTools = useMemo(() => environmentStatus.data?.tools ?? [], [environmentStatus.data]);
   const llmProviders = useQuery({
     queryKey: ["llm-providers"],
     queryFn: getLlmProviders,
@@ -427,14 +431,9 @@ export function SetupPage() {
   const activeMemberCount = (persistedTeam?.members ?? []).filter(
     (member) => member.is_active,
   ).length;
-  const detectedCliAgentNames = useMemo(
-    () =>
-      new Set(
-        (cliDetections.data?.agents ?? [])
-          .filter((agent) => agent.detected)
-          .map((agent) => agent.name),
-      ),
-    [cliDetections.data?.agents],
+  const provisionedCliAgentNames = useMemo(
+    () => new Set(cliTools.filter((tool) => tool.provisioned).map((tool) => tool.name)),
+    [cliTools],
   );
   const validationSchema = useMemo(() => createProjectSchema(t), [t]);
   const initialValues = useMemo(
@@ -453,9 +452,9 @@ export function SetupPage() {
   });
   const appliedInitialValues = useRef("");
   const serializedInitialValues = useMemo(() => JSON.stringify(initialValues), [initialValues]);
-  const selectedCliAgentDetected = cliDetections.isLoading
+  const selectedCliAgentProvisioned = environmentStatus.isLoading
     ? true
-    : detectedCliAgentNames.has(form.values.cliAgent);
+    : provisionedCliAgentNames.has(form.values.cliAgent);
   // The URL is the single source of truth for which section is open. Holding
   // it in state instead would go stale: reaching Settings again through a link
   // (the sidebar's "Sync settings", a hash URL) changes only the search params
@@ -518,10 +517,10 @@ export function SetupPage() {
       getInitialCoreStatus(
         form.values,
         effectiveActiveMemberCount,
-        selectedCliAgentDetected,
+        selectedCliAgentProvisioned,
         storedProviderKeys,
       ),
-    [effectiveActiveMemberCount, form.values, selectedCliAgentDetected, storedProviderKeys],
+    [effectiveActiveMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys],
   );
   const activeSection = coreSections.includes(section) ? section : coreSections[0];
   const currentCoreSectionIndex = coreSections.indexOf(activeSection);
@@ -795,8 +794,7 @@ export function SetupPage() {
               persisted={canSaveProject && !workspaceSwitching}
               saving={saveMutation.isPending}
               onSave={saveNow}
-              detections={cliDetections.data?.agents ?? []}
-              detectionLoading={cliDetections.isLoading}
+              tools={cliTools}
               storedProviderKeys={storedProviderKeys}
               providers={llmProviders.data ?? []}
             />
@@ -824,7 +822,7 @@ export function SetupPage() {
               agentFieldTarget={
                 form.values.githubDecision === "enabled" ? buildLaneFetchTarget(form.values) : null
               }
-              cliDetections={cliDetections.data?.agents ?? []}
+              cliTools={cliTools}
               llmProviderAvailability={llmProviderAvailability}
               providers={llmProviders.data ?? []}
               initialTab={focusMemberTab}
@@ -1126,8 +1124,7 @@ function IntelligenceSection({
   persisted,
   saving,
   onSave,
-  detections,
-  detectionLoading,
+  tools,
   storedProviderKeys,
   providers,
 }: {
@@ -1139,8 +1136,7 @@ function IntelligenceSection({
   persisted: boolean;
   saving: boolean;
   onSave: () => Promise<ConfigRevisions | null>;
-  detections: CliAgentDetection[];
-  detectionLoading: boolean;
+  tools: EnvironmentToolStatus[];
   storedProviderKeys: Record<string, boolean> | undefined;
   providers: LlmProviderInfo[];
 }) {
@@ -1172,10 +1168,6 @@ function IntelligenceSection({
     }
   };
 
-  const detectedCliAgents = useMemo(
-    () => new Set(detections.filter((agent) => agent.detected).map((agent) => agent.name)),
-    [detections],
-  );
   const skillStatuses = useQuery({
     queryKey: ["cli-agent-skill-statuses"],
     queryFn: getCliAgentSkillStatuses,
@@ -1205,21 +1197,6 @@ function IntelligenceSection({
       });
     },
   });
-  useEffect(() => {
-    if (detectionLoading) {
-      return;
-    }
-    if (detectedCliAgents.size === 0) {
-      return;
-    }
-    if (detectedCliAgents.has(form.values.cliAgent)) {
-      return;
-    }
-    const fallback = detections.find((agent) => agent.detected);
-    if (fallback) {
-      form.setFieldValue("cliAgent", fallback.name);
-    }
-  }, [detectionLoading, detectedCliAgents, detections, form]);
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader
@@ -1317,19 +1294,10 @@ function IntelligenceSection({
               {t("setup.intelligence.cliHint")}
             </Text>
             <DefaultCliAgentCards
-              detections={detections}
-              isActive={(agent) => form.values.cliAgent === agent.name}
-              isDetected={(agent) =>
-                detectionLoading ? form.values.cliAgent === agent.name : agent.detected
-              }
-              onSelect={(agent) => form.setFieldValue("cliAgent", agent.name)}
+              tools={tools}
+              isActive={(tool) => form.values.cliAgent === tool.name}
+              onSelect={(tool) => form.setFieldValue("cliAgent", tool.name)}
               renderExtra={(agent) => {
-                const detected = detectionLoading
-                  ? form.values.cliAgent === agent.name
-                  : agent.detected;
-                if (!detected) {
-                  return null;
-                }
                 const status = (skillStatuses.data?.agents ?? []).find(
                   (s) => s.agent === agent.name,
                 );
@@ -1410,6 +1378,8 @@ function IntelligenceSection({
           </Stack>
         </Card>
 
+        {persisted ? <AgentEnvironmentCard focusElement={focusElement} /> : null}
+
         {persisted ? (
           <Accordion
             variant="contained"
@@ -1428,7 +1398,7 @@ function IntelligenceSection({
                   onRegisterSave={(save) => {
                     saveAdvanced.current = save;
                   }}
-                  detections={detections}
+                  tools={tools}
                   providers={providers}
                   teamLlmApiType={form.values.llmApiType}
                   teamCliAgent={form.values.cliAgent}
@@ -1566,8 +1536,6 @@ function withSlotCliAgent(
     agents.push({
       path,
       name: tool,
-      detected: toolDefault?.detected ?? false,
-      detected_path: toolDefault?.detected_path ?? "",
       effort: {},
       inherited_effort: toolDefault?.inherited_effort ?? {},
       effort_fields: toolDefault?.effort_fields ?? [],
@@ -1695,41 +1663,45 @@ function DefaultProviderCards({
   );
 }
 
+/**
+ * Which tool a card is, on two layers that must not be confused: whether it can
+ * be chosen at all is the catalog's and the same on every device (the
+ * environment provisions it or does not); whether it is logged in is this
+ * device's, and the badge says so.
+ */
+function cliToolStatusKey(tool: EnvironmentToolStatus): string {
+  if (!tool.provisioned) return "toolNotProvisioned";
+  return tool.logged_in ? "toolLoggedIn" : "toolNotLoggedIn";
+}
+
 // The "default AI CLI tool" card grid, shared by the team and member scopes.
 function DefaultCliAgentCards({
-  detections,
+  tools,
   isActive,
-  isDetected,
   onSelect,
   renderExtra,
 }: {
-  detections: CliAgentDetection[];
-  isActive: (agent: CliAgentDetection) => boolean;
-  isDetected: (agent: CliAgentDetection) => boolean;
-  onSelect: (agent: CliAgentDetection) => void;
-  renderExtra?: (agent: CliAgentDetection) => ReactNode;
+  tools: EnvironmentToolStatus[];
+  isActive: (tool: EnvironmentToolStatus) => boolean;
+  onSelect: (tool: EnvironmentToolStatus) => void;
+  renderExtra?: (tool: EnvironmentToolStatus) => ReactNode;
 }) {
   const { t } = useTranslation();
   return (
     <div className="option-card-grid">
-      {detections.map((agent) => {
-        const detected = isDetected(agent);
-        return (
-          <OptionCard
-            key={agent.name}
-            label={agent.label}
-            active={isActive(agent)}
-            enabled={detected}
-            statusOk={detected}
-            statusText={
-              detected ? t("setup.intelligence.detected") : t("setup.intelligence.notDetected")
-            }
-            disabledTooltip={t("setup.intelligence.notDetectedOnPath")}
-            onSelect={() => onSelect(agent)}
-            extra={renderExtra?.(agent)}
-          />
-        );
-      })}
+      {tools.map((tool) => (
+        <OptionCard
+          key={tool.name}
+          label={tool.label}
+          active={isActive(tool)}
+          enabled={tool.provisioned}
+          statusOk={tool.provisioned && tool.logged_in}
+          statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+          disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
+          onSelect={() => onSelect(tool)}
+          extra={renderExtra?.(tool)}
+        />
+      ))}
     </div>
   );
 }
@@ -1741,7 +1713,7 @@ function IntelligenceEditor({
   focusSlot,
   openAdvanced = false,
   focusElement,
-  detections,
+  tools,
   llmProviderAvailability,
   providers,
   onRegisterSave,
@@ -1758,7 +1730,7 @@ function IntelligenceEditor({
   /** A system alert asked for the advanced settings, and for one card in them. */
   openAdvanced?: boolean;
   focusElement?: string;
-  detections: CliAgentDetection[];
+  tools: EnvironmentToolStatus[];
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
   /** The enclosing section's save button drives this editor too. */
@@ -1903,8 +1875,8 @@ function IntelligenceEditor({
 
     const currentPath = draft.cli_agent_mapping.default;
     const matchedAgent = draft.cli_agents.find((a) => a.name === teamCliAgent);
-    const matchedDetection = detections.find((agent) => agent.name === teamCliAgent);
-    const expectedPath = matchedAgent?.path ?? matchedDetection?.config_reference ?? teamCliAgent;
+    const matchedTool = tools.find((tool) => tool.name === teamCliAgent);
+    const expectedPath = matchedAgent?.path ?? matchedTool?.config_reference ?? teamCliAgent;
 
     if (currentPath !== expectedPath) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- guarded prop→draft sync
@@ -1915,8 +1887,6 @@ function IntelligenceEditor({
           nextCliAgents.push({
             path: expectedPath,
             name: teamCliAgent,
-            detected: false,
-            detected_path: "",
             effort: {},
           });
         }
@@ -1931,7 +1901,7 @@ function IntelligenceEditor({
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the basic setting only; a draft dep would clobber advanced edits before the draft->prop sync runs
-  }, [teamCliAgent, personId, detections]);
+  }, [teamCliAgent, personId, tools]);
 
   // Sync advanced settings (draftState) -> basic settings (props callback)
   const prevDefaultModelPathRef = useRef<string | null>(null);
@@ -1967,9 +1937,9 @@ function IntelligenceEditor({
       prevDefaultCliPathRef.current = currentPath;
 
       const matchedAgent = draft.cli_agents.find((agent) => agent.path === currentPath);
-      const matchedDetection = detections.find((agent) => agent.config_reference === currentPath);
+      const matchedTool = tools.find((tool) => tool.config_reference === currentPath);
       const agentName =
-        matchedDetection?.name ??
+        matchedTool?.name ??
         matchedAgent?.name ??
         currentPath.replace("-cli.yml", "").replace(".yml", "");
       if (agentName && agentName !== teamCliAgent) {
@@ -1977,7 +1947,7 @@ function IntelligenceEditor({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the default slot path only; the ref guard makes broader deps pure re-run noise
-  }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId, detections]);
+  }, [draft?.cli_agent_mapping?.default, teamCliAgent, onTeamCliAgentChange, personId, tools]);
 
   if (!enabled) {
     return (
@@ -2021,21 +1991,22 @@ function IntelligenceEditor({
   // only from currently-mapped paths) would otherwise leave a single option once
   // the other slots are deleted.
   const cliFileOptions = [
-    ...detections.map((agent) => ({
-      value: agent.config_reference,
-      label: agent.name,
+    ...tools.map((tool) => ({
+      value: tool.config_reference,
+      label: tool.name,
     })),
     ...draft.cli_agents
       .filter(
         (agent) =>
           agent.path === cliToolDefaultPath(agent.path) &&
-          !detections.some((d) => d.config_reference === agent.path),
+          !tools.some((tool) => tool.config_reference === agent.path),
       )
       .map((agent) => ({ value: agent.path, label: agent.name })),
   ];
-  const detectedByPath = Object.fromEntries(
-    detections.map((entry) => [entry.config_reference, entry]),
-  ) as Record<string, CliAgentDetection>;
+  const toolsByName = Object.fromEntries(tools.map((tool) => [tool.name, tool])) as Record<
+    string,
+    EnvironmentToolStatus
+  >;
 
   // --- LLM Slot Helpers ---
   const handleAddLlmSlot = () => {
@@ -2524,8 +2495,7 @@ function IntelligenceEditor({
                     const agentDef = draft.cli_agents.find((a) => a.path === path);
                     if (!agentDef) return null;
 
-                    const detection = detectedByPath[cliToolDefaultPath(agentDef.path)];
-                    const isDetected = detection?.detected || agentDef.detected;
+                    const tool = toolsByName[agentDef.name];
 
                     return (
                       <Accordion.Item key={slotKey} value={slotKey}>
@@ -2540,11 +2510,20 @@ function IntelligenceEditor({
                               </Text>
                             </Group>
                             <Group gap="xs" wrap="nowrap">
-                              <Badge color={isDetected ? "success" : "danger"} variant="light">
-                                {isDetected
-                                  ? t("setup.intelligence.detected")
-                                  : t("setup.intelligence.notDetected")}
-                              </Badge>
+                              {tool ? (
+                                <Badge
+                                  color={
+                                    !tool.provisioned
+                                      ? "gray"
+                                      : tool.logged_in
+                                        ? "success"
+                                        : "warning"
+                                  }
+                                  variant="light"
+                                >
+                                  {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
+                                </Badge>
+                              ) : null}
                               {!isCliSlotLocked(slotKey) ? (
                                 <ActionIcon
                                   color="danger"
@@ -2626,8 +2605,18 @@ function IntelligenceEditor({
               </Stack>
             </Card>
 
-            {/* Section 4: what agents may reach beyond their working directory
-                (the workspace's and this device's, so team scope only) */}
+            {/* Section 4: the environment every turn runs in (the workspace's
+                declaration) and what agents may reach beyond their working
+                directory (the workspace's and this device's), so team scope only */}
+            {!personId && draft.agent_environment ? (
+              <AgentEnvironmentDeclarationCard
+                value={draft.agent_environment}
+                onChange={(agent_environment) =>
+                  updateDraft((current) => ({ ...current, agent_environment }))
+                }
+                onValidityChange={(valid) => setJsonValidity("agent-environment", valid)}
+              />
+            ) : null}
             {!personId ? (
               <GrantsCards
                 shared={draft.filesystem_grants ?? { documents: [] }}
@@ -2683,9 +2672,8 @@ function IntelligenceEditor({
                   {t("setup.intelligence.cliHint")}
                 </Text>
                 <DefaultCliAgentCards
-                  detections={detections}
-                  isActive={(agent) => draft.cli_agent_mapping.default === agent.config_reference}
-                  isDetected={(agent) => agent.detected}
+                  tools={tools}
+                  isActive={(tool) => draft.cli_agent_mapping.default === tool.config_reference}
                   // Reuse the advanced-slot handler so the picked tool is also
                   // registered in draft.cli_agents; otherwise the default slot
                   // would vanish when the 詳細設定 accordion is opened.
@@ -2728,7 +2716,7 @@ function MembersSection({
   projectGithubEnabled,
   githubOrganizationDefault,
   agentFieldTarget,
-  cliDetections,
+  cliTools,
   llmProviderAvailability,
   providers,
   initialTab,
@@ -2750,7 +2738,7 @@ function MembersSection({
   projectGithubEnabled: boolean;
   githubOrganizationDefault: string;
   agentFieldTarget: ProjectStatusOptionsRequest | null;
-  cliDetections: CliAgentDetection[];
+  cliTools: EnvironmentToolStatus[];
   llmProviderAvailability: LlmProviderAvailability;
   providers: LlmProviderInfo[];
   initialTab?: MemberEditorTab;
@@ -2841,8 +2829,8 @@ function MembersSection({
     enabled: hasPersistedProject && !isHumanMember,
   });
   const cliAgentLabel = useMemo(
-    () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data, cliDetections),
-    [cliAgentBadgeQuery.data, cliDetections],
+    () => cliAgentLabelFromConfig(cliAgentBadgeQuery.data, cliTools),
+    [cliAgentBadgeQuery.data, cliTools],
   );
 
   const getAvatarErrorMessage = (err: unknown, defaultMsg: string): string => {
@@ -4248,7 +4236,7 @@ function MembersSection({
                       savePersonId={personId.trim()}
                       enabled={Boolean(configDir)}
                       focusSlot={editingPersonId === initialMemberId ? initialSlot : undefined}
-                      detections={cliDetections}
+                      tools={cliTools}
                       llmProviderAvailability={llmProviderAvailability}
                       providers={providers}
                       onRegisterSave={(save) => {
@@ -5921,7 +5909,7 @@ function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialP
 function getInitialCoreStatus(
   values: ProjectFormValues,
   activeMemberCount: number,
-  selectedCliAgentDetected: boolean,
+  selectedCliAgentProvisioned: boolean,
   storedProviderKeys: Record<string, boolean> | undefined,
 ): InitialProgress {
   const projectReady =
@@ -5931,7 +5919,7 @@ function getInitialCoreStatus(
   const intelligenceReady =
     Boolean(values.llmApiType) &&
     Boolean(values.cliAgent) &&
-    selectedCliAgentDetected &&
+    selectedCliAgentProvisioned &&
     isProviderKeyAvailable(values.llmApiType, values, storedProviderKeys);
   const githubReady = isGitHubDecisionComplete(values);
   const membersReady = activeMemberCount > 0;
@@ -6673,6 +6661,7 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
       : {
           filesystem_grants: config.filesystem_grants ?? { documents: [] },
           local_grants: config.local_grants ?? { paths: [], deny: [] },
+          ...(config.agent_environment ? { agent_environment: config.agent_environment } : {}),
         }),
   };
 }

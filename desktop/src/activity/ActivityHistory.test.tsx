@@ -21,7 +21,7 @@ import {
 } from "./ActivityHistory";
 import {
   getActivityHistory,
-  getCliAgentDetections,
+  getAgentEnvironmentStatus,
   getCliAgentUsage,
   getIntelligenceConfig,
   getSchedulerStatus,
@@ -44,7 +44,7 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     getActivityHistory: vi.fn(),
-    getCliAgentDetections: vi.fn(),
+    getAgentEnvironmentStatus: vi.fn(),
     getCliAgentUsage: vi.fn(),
     getIntelligenceConfig: vi.fn(),
     getSchedulerStatus: vi.fn(),
@@ -243,17 +243,24 @@ beforeEach(() => {
     cli_agents: [],
     brain_mapping: [],
   });
-  vi.mocked(getCliAgentDetections).mockResolvedValue({
-    agents: [
+  vi.mocked(getAgentEnvironmentStatus).mockResolvedValue({
+    platform: "darwin",
+    runtime: { available: true, reason: "", version: "0.6.17" },
+    snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+    dns: { declared: "host", nameservers: [], problem: "" },
+    tools: [
       {
         name: "claude",
         label: "Claude Code",
-        executable: "claude",
         config_reference: "cli_agents/claude/default.yml",
-        detected: true,
-        path: "",
+        provisioned: true,
+        logged_in: true,
+        problem: "",
       },
     ],
+    problem: "",
+    access: { documents: [], paths: [], denied: [], problem: "" },
+    members: [],
   });
   vi.mocked(getCliAgentUsage).mockResolvedValue({ usages: [] });
   vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([]));

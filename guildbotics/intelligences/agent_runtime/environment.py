@@ -22,19 +22,12 @@ from contextlib import suppress
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-from guildbotics.intelligences.agent_environment.provider_state import (
-    is_logged_in,
-    state_mounts,
-)
+from guildbotics.intelligences.agent_environment.provider_state import state_mounts
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
-    doctor,
 )
-from guildbotics.intelligences.agent_environment.snapshot import (
-    SnapshotStatus,
-    snapshot_status,
-)
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentMount,
@@ -42,11 +35,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec,
     guest_home,
 )
-from guildbotics.intelligences.agent_environment.toolchain import (
-    ToolchainError,
-    load_toolchain,
-    upstream_nameservers,
-)
+from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -136,48 +125,31 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
 
 
 def _ready(tool_name: str) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...]]:
-    """Everything a start needs from this device, or the reason it cannot start."""
+    """Everything a start needs from this device, or the reason it cannot start.
+
+    The reasons are the device's own words (:mod:`..agent_environment.status`),
+    the same ones the CLI and the Desktop show, so a refused turn and the
+    status beside it never disagree.
+    """
     tool = cli_agent_info(tool_name)
-    health = doctor()
-    if not health.available:
-        raise AgentRuntimeError(AgentRuntimeErrorCategory.CONFIGURATION, health.reason)
-    if not tool.provision.package:
+    status = device_status()
+    if status.snapshot is None or status.refusal:
         raise AgentRuntimeError(
             AgentRuntimeErrorCategory.CONFIGURATION,
-            f"{tool.label} is not provisioned in the agent environment yet.",
+            status.refusal,
+            details={"snapshot": status.snapshot.state} if status.snapshot else {},
         )
-    try:
-        declaration = load_toolchain()
-        nameservers = upstream_nameservers(declaration.dns)
-    except ToolchainError as exc:
+    tool_status = status.tool(tool_name)
+    if tool_status.refusal:
         raise AgentRuntimeError(
-            AgentRuntimeErrorCategory.CONFIGURATION, str(exc)
-        ) from exc
-    status = snapshot_status(declaration)
-    if status.state != "ready":
-        raise AgentRuntimeError(
-            AgentRuntimeErrorCategory.CONFIGURATION,
-            _not_ready(status),
-            details={"snapshot": status.state},
+            (
+                AgentRuntimeErrorCategory.AUTHENTICATION
+                if tool_status.provisioned
+                else AgentRuntimeErrorCategory.CONFIGURATION
+            ),
+            tool_status.refusal,
         )
-    if not is_logged_in(tool):
-        raise AgentRuntimeError(
-            AgentRuntimeErrorCategory.AUTHENTICATION,
-            f"{tool.label} is not logged in on this device; run "
-            f"`guildbotics environment login {tool.name}`.",
-        )
-    return tool, status, nameservers
-
-
-def _not_ready(status: SnapshotStatus) -> str:
-    if status.state == "building":
-        return "The agent environment is being built on this device; try again when it is ready."
-    if status.state == "failed":
-        return f"The agent environment failed to build on this device: {status.detail}"
-    return (
-        f"The agent environment is {status.state} on this device; build it with "
-        "`guildbotics environment build`."
-    )
+    return tool, status.snapshot, status.dns.nameservers
 
 
 async def _start(

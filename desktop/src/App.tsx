@@ -373,22 +373,26 @@ function systemAlertMessage(t: TFunction, alert: SystemAlert) {
 }
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
-  if (alert.code === "agent_environment_unavailable") {
-    // A network problem sits in the member's own slot; a grant problem in the
-    // workspace's directory cards under the advanced intelligence settings.
-    const search =
-      alert.setting === "network" && alert.person_id
-        ? new URLSearchParams({
-            section: "members",
-            person_id: alert.person_id,
-            tab: "intelligence",
-            slot: alert.command,
-          })
-        : new URLSearchParams({
-            section: "intelligence",
-            advanced: "intelligence",
-            focus: "grants-device",
-          });
+  if (
+    alert.code === "agent_environment_unavailable" ||
+    alert.code === "agent_environment_tool_unavailable"
+  ) {
+    // The device's environment card, at the row that is the problem: the
+    // snapshot for the device as a whole, the tool's own row for a tool.
+    const focus =
+      alert.code === "agent_environment_tool_unavailable" && alert.command
+        ? `agent-environment-tool-${alert.command}`
+        : "agent-environment-snapshot";
+    return `/setup?${new URLSearchParams({ section: "intelligence", focus }).toString()}`;
+  }
+  if (alert.code === "agent_environment_slot_blocked") {
+    // A grant problem sits in the workspace's directory cards under the
+    // advanced intelligence settings.
+    const search = new URLSearchParams({
+      section: "intelligence",
+      advanced: "intelligence",
+      focus: "grants-device",
+    });
     return `/setup?${search.toString()}`;
   }
   if (alert.code !== "credential_github" || !alert.person_id) {

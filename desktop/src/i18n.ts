@@ -378,7 +378,10 @@ const resources = {
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
-          agent_environment_unavailable:
+          agent_environment_unavailable: "This device cannot run AI CLI turns: {{reason}}",
+          agent_environment_tool_unavailable:
+            "An AI CLI tool cannot run on this device: {{reason}}",
+          agent_environment_slot_blocked:
             "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
         },
         actions: {
@@ -854,10 +857,10 @@ const resources = {
           apiKeyRequiredTitle: "API key required",
           apiKeyRequiredBody:
             "Set the API key of the selected LLM provider with its key button. This section stays incomplete until the key is set.",
-          detected: "Detected",
-          notDetected: "Not detected",
-          notDetectedOnPath: "This agent was not detected on your PATH.",
-          cliHint: "AI CLI tools are not bundled. You can only select tools detected on PATH.",
+          toolNotProvisionedTooltip:
+            "This tool is not available in the isolated agent environment yet.",
+          cliHint:
+            "AI CLI tools run inside the isolated agent environment. Log in to the selected tool on every device that runs turns.",
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
             "Shows whether each AI CLI tool has the bundled GuildBotics skill installed.",
@@ -905,6 +908,54 @@ const resources = {
             allowedDomainsPlaceholder: "registry.npmjs.org",
             allowLocalNetwork: "Allow localhost and LAN",
           },
+          environment: {
+            title: "Isolated agent environment",
+            description:
+              "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it here; logging in to a tool is done from a terminal.",
+            runtime: "Runtime",
+            runtimeAvailable: "Available ({{version}})",
+            runtimeUnavailable: "Unavailable",
+            snapshot: "Environment",
+            snapshotStates: {
+              missing: "Not built",
+              stale: "Older than the declaration",
+              building: "Building",
+              failed: "Build failed",
+              ready: "Ready",
+            },
+            build: "Build",
+            buildOutput: "Build output",
+            buildError: "The build could not be started.",
+            dns: "DNS resolvers",
+            dnsHost: "This device's resolvers",
+            toolNotProvisioned: "Not available in the environment yet",
+            toolLoggedIn: "Logged in on this device",
+            toolNotLoggedIn: "Not logged in on this device",
+            loginHint: "Run this in a terminal to log in:",
+            copy: "Copy",
+            copied: "Copied",
+            loadError: "The environment status could not be loaded.",
+            declaration: {
+              title: "Environment declaration",
+              description:
+                "What every device adds to its environment on top of the base image (Debian, Node.js, git, uv) and the AI CLI tools GuildBotics installs, and the DNS resolvers the environment uses. Shared by the workspace; changing the packages rebuilds the environment on every device.",
+              apt: "Debian packages (apt)",
+              npm: "npm packages",
+              uv: "Python tools (uv)",
+              aptPlaceholder: "ripgrep=14.1.0-1",
+              npmPlaceholder: "typescript@5.6.3",
+              uvPlaceholder: "ruff==0.6.9",
+              pinHint: "One entry per package. Pin the version the way that manager spells it.",
+              invalidPackage:
+                "A package is one argument to its manager: no spaces, and it cannot start with '-'.",
+              nameservers: "DNS resolvers",
+              nameserversHost: "This device's resolvers, read when a turn starts",
+              nameserversList: "Fixed IPv4 addresses, shared as written",
+              nameserversPlaceholder: "10.0.0.53",
+              invalidNameserver: "Enter IPv4 addresses.",
+              emptyNameservers: "Name at least one resolver.",
+            },
+          },
           documents: {
             title: "Directories shared by the workspace",
             description:
@@ -915,8 +966,8 @@ const resources = {
           deviceAccess: {
             title: "Directories on this device",
             description:
-              "Access to any directory. So that commands can run, the directories on the PATH environment variable are readable by default. Kept on this device and never synchronized.",
-            empty: "Nothing beyond the OS directories.",
+              "Access to any directory on this device beyond the working directory and the shared directories. Kept on this device and never synchronized.",
+            empty: "No additional directories.",
             deny: "Denied",
             builtin: "built in",
             pathPlaceholder: ".cache/uv or /opt/homebrew/etc",
@@ -2281,7 +2332,9 @@ const resources = {
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
-          agent_environment_unavailable:
+          agent_environment_unavailable: "この端末では AI CLI の turn を実行できません: {{reason}}",
+          agent_environment_tool_unavailable: "AI CLIツールがこの端末で使えません: {{reason}}",
+          agent_environment_slot_blocked:
             "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
         },
         actions: {
@@ -2450,10 +2503,9 @@ const resources = {
           apiKeyRequiredTitle: "APIキーが必要です",
           apiKeyRequiredBody:
             "選択中の LLM プロバイダのAPIキーを、キーのボタンから設定してください。設定するまでこのセクションは未完了のままです。",
-          detected: "検出済み",
-          notDetected: "未検出",
-          notDetectedOnPath: "このエージェントは PATH 上に検出されていません。",
-          cliHint: "AI CLIツールは同梱しません。PATHで検出できたものだけ選択できます。",
+          toolNotProvisionedTooltip: "このツールはまだエージェント隔離環境に導入できません。",
+          cliHint:
+            "AI CLIツールはエージェント隔離環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
             "各AI CLIツールに同梱版のGuildBoticsスキルが適用されているかを表示します。",
@@ -2502,6 +2554,55 @@ const resources = {
             allowedDomainsPlaceholder: "registry.npmjs.org",
             allowLocalNetwork: "localhost と LAN への接続を許可",
           },
+          environment: {
+            title: "エージェント隔離環境",
+            description:
+              "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドはここから行い、ツールへのログインはターミナルで行います。",
+            runtime: "ランタイム",
+            runtimeAvailable: "利用可（{{version}}）",
+            runtimeUnavailable: "利用不可",
+            snapshot: "環境",
+            snapshotStates: {
+              missing: "未ビルド",
+              stale: "宣言より古い",
+              building: "ビルド中",
+              failed: "ビルド失敗",
+              ready: "準備完了",
+            },
+            build: "ビルド",
+            buildOutput: "ビルド出力",
+            buildError: "ビルドを開始できませんでした。",
+            dns: "DNS リゾルバ",
+            dnsHost: "この端末のリゾルバ",
+            toolNotProvisioned: "環境への導入は未対応",
+            toolLoggedIn: "この端末ではログイン済み",
+            toolNotLoggedIn: "この端末では未ログイン",
+            loginHint: "ターミナルで次を実行してログインします:",
+            copy: "コピー",
+            copied: "コピーしました",
+            loadError: "環境の状態を読み込めませんでした。",
+            declaration: {
+              title: "環境の宣言",
+              description:
+                "ベースイメージ（Debian、Node.js、git、uv）と GuildBotics が導入する AI CLIツールに加えて、各端末の環境に入れるパッケージと、環境が使う DNS リゾルバです。ワークスペースで共有され、パッケージを変えると全端末で環境が再ビルドされます。",
+              apt: "Debian パッケージ（apt）",
+              npm: "npm パッケージ",
+              uv: "Python ツール（uv）",
+              aptPlaceholder: "ripgrep=14.1.0-1",
+              npmPlaceholder: "typescript@5.6.3",
+              uvPlaceholder: "ruff==0.6.9",
+              pinHint:
+                "1 項目に 1 パッケージ。版はそのパッケージマネージャの書き方で固定してください。",
+              invalidPackage:
+                "パッケージはマネージャへの 1 引数です。空白を含めず、'-' で始めないでください。",
+              nameservers: "DNS リゾルバ",
+              nameserversHost: "この端末のリゾルバ（turn 開始時に読む）",
+              nameserversList: "固定の IPv4 アドレス（書いたまま共有）",
+              nameserversPlaceholder: "10.0.0.53",
+              invalidNameserver: "IPv4 アドレスを入力してください。",
+              emptyNameservers: "リゾルバを 1 つ以上指定してください。",
+            },
+          },
           documents: {
             title: "ワークスペース共通のディレクトリ",
             description:
@@ -2512,8 +2613,8 @@ const resources = {
           deviceAccess: {
             title: "この端末のディレクトリ",
             description:
-              "任意のディレクトリに対するアクセス設定を行います。コマンド実行を可能にするため、PATH 環境変数に指定されているディレクトリはデフォルトで読み取り可能になっています。この設定はこの端末にだけ保存され、同期されません。",
-            empty: "OS 標準のディレクトリ以外はありません。",
+              "作業ディレクトリと共有ディレクトリ以外に、この端末の任意のディレクトリへのアクセスを設定します。この設定はこの端末にだけ保存され、同期されません。",
+            empty: "追加のディレクトリはありません。",
             deny: "禁止",
             builtin: "同梱",
             pathPlaceholder: ".cache/uv や /opt/homebrew/etc",

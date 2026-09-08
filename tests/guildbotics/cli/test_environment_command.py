@@ -18,6 +18,7 @@ from guildbotics.intelligences.agent_environment import (
     runtime,
     snapshot,
 )
+from guildbotics.intelligences.agent_environment import status as status_module
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
@@ -44,7 +45,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         runtime, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
     )
     monkeypatch.setattr(
-        environment_cli, "upstream_nameservers", lambda dns: ("192.168.3.1",)
+        status_module, "upstream_nameservers", lambda dns: ("192.168.3.1",)
     )
     return root
 

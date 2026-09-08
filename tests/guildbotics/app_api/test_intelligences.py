@@ -20,6 +20,11 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
+from guildbotics.intelligences.agent_environment.toolchain import (
+    DnsSettings,
+    Packages,
+    ToolchainDeclaration,
+)
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
@@ -292,31 +297,6 @@ def test_read_config_cli_agent_malformed_definition_falls_back(tmp_path: Path) -
     # A malformed file yields no settings at all, rather than a broken overlay.
     assert agent.effort == {}
     assert agent.parameters == {}
-
-
-def test_read_config_cli_agent_detected_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    base = _team_intelligences(tmp_path)
-    _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(
-        base / "cli_agent_mapping.yml", {"default": "cli_agents/codex/default.yml"}
-    )
-    _write_yaml(base / "brain_mapping.yml", {})
-
-    def fake_resolve_cli_agent_path(executable: str) -> str:
-        # The tool is the directory in the definition path.
-        return "/usr/local/bin/codex" if executable == "codex" else ""
-
-    monkeypatch.setattr(
-        intelligences_module, "resolve_cli_agent_path", fake_resolve_cli_agent_path
-    )
-
-    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
-
-    agent = response.cli_agents[0]
-    assert agent.detected is True
-    assert agent.detected_path == "/usr/local/bin/codex"
 
 
 def test_read_config_brain_mapping_engine_classification(tmp_path: Path) -> None:
@@ -1289,6 +1269,90 @@ def test_read_config_returns_the_grants(
         config_dir=config_dir, person_id="alice"
     )
     assert member.filesystem_grants == response.filesystem_grants
+
+
+def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+    # Without a file of its own the workspace inherits the packaged declaration.
+    assert response.agent_environment is not None
+    assert response.agent_environment.dns.nameservers == "host"
+    assert response.agent_environment.packages.npm == []
+
+    _write_yaml(
+        _team_intelligences(config_dir) / "agent_environment.yml",
+        {
+            "packages": {"npm": ["typescript@5.6.3"]},
+            "dns": {"nameservers": ["1.1.1.1"]},
+        },
+    )
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+    assert response.agent_environment is not None
+    assert response.agent_environment.packages.npm == ["typescript@5.6.3"]
+    assert response.agent_environment.dns.nameservers == ["1.1.1.1"]
+    # A member scope reads the same declaration: it is the workspace's.
+    member = IntelligenceConfigService().read_config(
+        config_dir=config_dir, person_id="alice"
+    )
+    assert member.agent_environment == response.agent_environment
+
+
+def test_a_malformed_declaration_is_reported_where_it_is_edited(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+    _write_yaml(
+        _team_intelligences(config_dir) / "agent_environment.yml",
+        {"packages": {"npm": ["--bad"]}, "dns": {"nameservers": "host"}},
+    )
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().read_config(config_dir=config_dir)
+
+    assert excinfo.value.code == "invalid_agent_environment"
+
+
+def test_a_team_save_replaces_the_declaration_and_an_omitted_value_keeps_it(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    declaration_file = _team_intelligences(config_dir) / "agent_environment.yml"
+
+    IntelligenceConfigService().update_config(_team_update_request(config_dir))
+    assert not declaration_file.exists()
+
+    request = _team_update_request(config_dir).model_copy(
+        update={
+            "agent_environment": ToolchainDeclaration(
+                packages=Packages(apt=["ripgrep=14.1.0-1"]),
+                dns=DnsSettings(nameservers=["10.0.0.53"]),
+            )
+        }
+    )
+    result = IntelligenceConfigService().update_config(request)
+
+    assert declaration_file in {item.path for item in result.files}
+    assert load_yaml_file(declaration_file) == {
+        "packages": {"apt": ["ripgrep=14.1.0-1"], "npm": [], "uv": []},
+        "dns": {"nameservers": ["10.0.0.53"]},
+    }
+    # A member scope never writes it, even when the payload carries one.
+    member = _team_update_request(config_dir).model_copy(
+        update={"person_id": "alice", "agent_environment": request.agent_environment}
+    )
+    IntelligenceConfigService().update_config(
+        member.model_copy(
+            update={
+                "agent_environment": ToolchainDeclaration(
+                    dns=DnsSettings(nameservers="host")
+                )
+            }
+        )
+    )
+    assert load_yaml_file(declaration_file)["dns"] == {"nameservers": ["10.0.0.53"]}
 
 
 def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
