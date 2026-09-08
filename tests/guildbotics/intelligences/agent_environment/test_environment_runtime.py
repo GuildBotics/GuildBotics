@@ -8,6 +8,7 @@ microVM and how it turns the runtime's events into a process.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -159,15 +160,111 @@ def _spec(**overrides: Any) -> AgentEnvironmentSpec:
 # --- doctor ---------------------------------------------------------------------
 
 
-def test_doctor_reports_a_missing_sdk_or_runtime_as_unavailable(monkeypatch) -> None:
+@pytest.fixture
+def bundled(monkeypatch, tmp_path: Path) -> Path:
+    """A stand-in for the wheel's ``microsandbox/_bundled``: msb and libkrunfw."""
+    root = tmp_path / "wheel" / "_bundled"
+    (root / "bin").mkdir(parents=True)
+    (root / "lib").mkdir()
+    (root / "bin" / runtime.runtime_binary(Path("x")).name).write_bytes(b"#!msb")
+    (root / "lib" / "libkrunfw.5.dylib").write_bytes(b"krun")
+    monkeypatch.setattr(runtime, "files", lambda package: root)
+    monkeypatch.setattr(microsandbox, "version", lambda: "0.6.17")
+    monkeypatch.delenv(runtime.RUNTIME_BINARY_ENV, raising=False)
+    return root
+
+
+def test_doctor_places_the_bundled_runtime_at_the_fixed_home_and_points_the_sdk_at_it(
+    monkeypatch, bundled: Path
+) -> None:
+    monkeypatch.setattr(microsandbox, "is_installed", lambda: True)
+    home = runtime.runtime_home()
+
+    health = doctor()
+
+    assert health == AgentEnvironmentHealth(
+        True, runtime_version="0.6.17", home=str(home)
+    )
+    assert home == Path.home() / ".guildbotics" / "data" / "msb"
+    binary = runtime.runtime_binary(home)
+    assert binary.read_bytes() == b"#!msb"
+    assert binary.stat().st_mode & 0o111
+    assert (home / "lib" / "libkrunfw.5.dylib").read_bytes() == b"krun"
+    assert (home / "version").read_text() == "0.6.17"
+    assert os.environ[runtime.RUNTIME_HOME_ENV] == str(home)
+    assert os.environ[runtime.RUNTIME_BINARY_ENV] == str(binary)
+
+
+def test_doctor_copies_the_runtime_again_only_when_the_sdk_version_changed(
+    monkeypatch, bundled: Path
+) -> None:
+    monkeypatch.setattr(microsandbox, "is_installed", lambda: True)
+    home = runtime.runtime_home()
+    doctor()
+    (bundled / "bin" / runtime.runtime_binary(home).name).write_bytes(b"#!newer")
+
+    doctor()
+    assert runtime.runtime_binary(home).read_bytes() == b"#!msb"
+
+    monkeypatch.setattr(microsandbox, "version", lambda: "0.7.0")
+    doctor()
+    assert runtime.runtime_binary(home).read_bytes() == b"#!newer"
+    assert (home / "version").read_text() == "0.7.0"
+
+
+def test_doctor_reports_a_runtime_the_sdk_still_does_not_see(
+    monkeypatch, bundled: Path
+) -> None:
     monkeypatch.setattr(microsandbox, "is_installed", lambda: False)
     assert doctor() == AgentEnvironmentHealth(
-        False, "The microsandbox runtime (msb and libkrunfw) is not installed."
+        False,
+        "The microsandbox runtime (msb and libkrunfw) is not installed.",
+        home=str(runtime.runtime_home()),
     )
 
+
+def test_doctor_reports_a_home_the_runtime_cannot_be_placed_in(
+    monkeypatch, bundled: Path
+) -> None:
+    def refuse(*_: Any, **__: Any) -> None:
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(runtime.shutil, "copyfile", refuse)
+
+    health = doctor()
+
+    assert not health.available
+    assert "could not be placed under" in health.reason
+    assert "read-only" in health.reason
+
+
+def test_the_windows_firewall_rule_is_created_once_for_the_fixed_path(
+    monkeypatch, bundled: Path
+) -> None:
     monkeypatch.setattr(microsandbox, "is_installed", lambda: True)
-    monkeypatch.setattr(microsandbox, "version", lambda: "0.6.17")
-    assert doctor() == AgentEnvironmentHealth(True, runtime_version="0.6.17")
+    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    calls: list[list[str]] = []
+    missing = {"rule": True}
+
+    def fake_run(command: list[str], **_: Any) -> SimpleNamespace:
+        calls.append(command)
+        if command[:2] == ["netsh", "advfirewall"]:
+            return SimpleNamespace(returncode=1 if missing["rule"] else 0)
+        missing["rule"] = False
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+
+    doctor()
+    # Shown once, missing, so created through an elevated netsh naming the
+    # fixed binary; on the next placement the rule is there and nothing runs.
+    assert [c[0] for c in calls] == ["netsh", "powershell"]
+    assert runtime.FIREWALL_RULE_NAME in calls[0][-1]
+    assert str(runtime.runtime_binary(runtime.runtime_home())) in calls[1][-1]
+    assert "RunAs" in calls[1][-1]
+    monkeypatch.setattr(microsandbox, "version", lambda: "0.7.0")
+    doctor()
+    assert [c[0] for c in calls] == ["netsh", "powershell", "netsh"]
 
 
 def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:

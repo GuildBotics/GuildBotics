@@ -102,6 +102,7 @@ def agent_environment_status(
             available=device.runtime.available,
             reason=device.runtime.reason,
             version=device.runtime.runtime_version,
+            home=device.runtime.home,
         ),
         snapshot=EnvironmentSnapshotStatus(
             state=snapshot.state if snapshot else "missing",

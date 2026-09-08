@@ -128,6 +128,8 @@ def status_command(output_format: str) -> None:
     click.echo(
         f"runtime: {'available ' + health['version'] if health['available'] else 'unavailable: ' + health['reason']}"
     )
+    if health["home"]:
+        click.echo(f"runtime home: {health['home']}")
     state = payload["snapshot"]
     detail = f" ({state['detail']})" if state["detail"] else ""
     click.echo(f"snapshot: {state['state']} {state['name']}{detail}")
@@ -156,6 +158,7 @@ def _status_payload() -> dict[str, Any]:
             "available": status.runtime.available,
             "reason": status.runtime.reason,
             "version": status.runtime.runtime_version,
+            "home": status.runtime.home,
         },
         "snapshot": {
             "state": state.state if state else "missing",

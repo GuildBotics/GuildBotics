@@ -74,7 +74,12 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
     result = _invoke(workspace, "status", "--format", "json")
 
     payload = json.loads(result.output)
-    assert payload["runtime"] == {"available": True, "reason": "", "version": "0.6.17"}
+    assert payload["runtime"] == {
+        "available": True,
+        "reason": "",
+        "version": "0.6.17",
+        "home": "",
+    }
     assert payload["snapshot"]["state"] == "missing"
     assert payload["dns"] == {
         "declared": "host",

@@ -56,6 +56,33 @@ a provider can or cannot enforce: a setting the environment cannot honour on
 this device (no runtime, no snapshot, no login) stops the agent from
 starting, and is never widened.
 
+The environment's runtime is [microsandbox](https://microsandbox.dev/) (a
+libkrun microVM). GuildBotics ships it and, the first time it is needed,
+places it under `~/.guildbotics/data/msb` and points the SDK at that path
+(`MSB_HOME` / `MSB_PATH`): nothing is downloaded, and nothing outside
+GuildBotics decides which runtime runs. The hardware virtualization it
+needs is Apple Silicon on macOS, the Windows Hypervisor Platform on Windows
+11, and KVM on Linux. On Windows the runtime listens on a socket that
+Windows Defender Firewall asks about, so a rule for the fixed path is
+created once with an elevation prompt. Inside the environment a Windows host
+path appears with its drive letter as the top-level directory (`C:\work`
+is `/c/work`); the working directory is bound under the same convention.
+
+What the environment holds -- the base image, the provider CLIs GuildBotics
+installs at pinned versions, and the extra packages declared in
+`config/intelligences/agent_environment.yml` -- is built per device as a
+snapshot and rebuilt when it no longer matches the declaration. The
+**Isolated agent environment** card under **LLM / AI CLI tools** in the
+Desktop shows the runtime, the snapshot's state (with a build button), the
+DNS resolvers, and each tool's login; `guildbotics environment status` /
+`build` / `login` are the same state and actions from a terminal. While the
+service runs, a changed declaration (including one that arrived from another
+device through synchronization) is rebuilt by itself, and while it builds,
+or whenever the environment is unusable, the ticket patrol and chat
+dispatch are deferred rather than failed. Why a turn cannot start here (no
+runtime, an unreadable declaration, an unbuilt snapshot, no login) is shown
+in the same words in the alert band at the top of the screen.
+
 - **Working directory**: the turn's `cwd` (the member's clone for ticket work,
   `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
   read/write at the same path it has on the host. The workspace's
@@ -154,11 +181,19 @@ validation instead of silently changing the effective boundary.
 
 ## Authentication
 
-Install and authenticate each selected CLI before starting GuildBotics. Use the
-provider's normal interactive login (`codex login`, `claude auth login`, `grok login`,
-or `copilot login`) as the same OS user that runs the GuildBotics service. Provider
-credentials stay in the provider's own credential store. GuildBotics does not copy them
-into its conversation store or diagnostics.
+The AI CLI tools run inside the isolated environment, so nothing is installed on the
+host and a host login is not what a turn uses. Logging in happens inside the
+environment: on every device that runs turns, run `guildbotics environment login
+<tool>` (`codex` / `claude`) in a terminal. The tool's own login command starts inside
+the environment and walks you through its device code flow in the browser. The result
+is kept in the device's store (`~/.guildbotics/data/agent_environment/<tool>/`), shared
+by every member and workspace on that device, and only the credentials and sessions
+are bound into each turn. GuildBotics does not copy them into its conversation store or
+diagnostics. The Desktop shows the login state and the command to run; it never
+drives the login dialogue itself.
+
+Grok Build, GitHub Copilot, and Antigravity are not provisioned in the environment yet
+and cannot be selected. The authentication behaviour below applies once they are.
 
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the

@@ -965,6 +965,8 @@ export type EnvironmentRuntimeStatus = {
   available: boolean;
   reason: string;
   version: string;
+  // Where the runtime and its state live on this device.
+  home: string;
 };
 
 export type SnapshotState = "missing" | "stale" | "building" | "failed" | "ready";

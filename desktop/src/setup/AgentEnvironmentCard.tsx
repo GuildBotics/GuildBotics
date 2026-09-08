@@ -124,6 +124,11 @@ export function AgentEnvironmentCard({
                         <Text size="sm">{data.runtime.reason}</Text>
                       </>
                     )}
+                    {data.runtime.home ? (
+                      <Text size="xs" c="dimmed" ff="monospace">
+                        {data.runtime.home}
+                      </Text>
+                    ) : null}
                   </Group>
                 </Table.Td>
               </Table.Tr>

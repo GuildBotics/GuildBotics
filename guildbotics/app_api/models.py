@@ -1145,6 +1145,8 @@ class EnvironmentRuntimeStatus(BaseModel):
     available: bool
     reason: str = ""
     version: str = ""
+    #: Where the runtime and its state live on this device.
+    home: str = ""
 
 
 class EnvironmentSnapshotStatus(BaseModel):

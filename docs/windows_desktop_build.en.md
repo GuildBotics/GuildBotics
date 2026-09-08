@@ -12,6 +12,7 @@ Install the following before cloning the repository:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.12 or later.
 - Git for Windows. Run the repository build scripts from Git Bash.
 - WebView2 Runtime. Windows 11 normally includes it; the NSIS installer uses Tauri's download-bootstrapper mode when it is absent.
+- The **Windows Hypervisor Platform** optional feature, for the isolated agent environment (a microVM per AI CLI turn). The runtime (microsandbox) ships inside the sidecar; GuildBotics places it under `%USERPROFILE%\.guildbotics\data\msb` on first use.
 
 NSIS is downloaded by Tauri during the build. WiX is not needed because the Windows bundle target is NSIS only. Code signing is outside the current scope, so the resulting installer is unsigned.
 
@@ -80,6 +81,7 @@ Open a new cmd, PowerShell, or Git Bash session before testing bare `guildbotics
 - Confirm `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` exists and bare `guildbotics` resolves to it in new cmd, PowerShell, and Git Bash sessions.
 - Start and stop the scheduler; verify duplicate start is rejected and the file-based graceful stop leaves no process behind.
 - Run a command and confirm activity streaming in Desktop.
+- Open **Setup → LLM / AI CLI tools**. The **Isolated agent environment** card must report the runtime as available with `%USERPROFILE%\.guildbotics\data\msb` as its home (`guildbotics environment status` prints the same). Press **Build**; the first build accepts one elevation prompt that creates the firewall rule `GuildBotics agent environment (msb)` for `...\data\msb\bin\msb.exe`, and no further Windows Defender Firewall dialog appears on later launches. Run `guildbotics environment login codex` in a terminal, then run an AI CLI turn and confirm it reports a Linux guest (`/c/...` working directory) rather than the host.
 - Force-stop an AI CLI and verify no descendant process remains in Task Manager.
 - Run an AI CLI workflow that commits and pushes with a multiline commit message containing spaces, Japanese text, `$`, and backticks. This validates the UTF-8 `--content-file` path.
 - Run `to_pdf` and confirm the existing `PDF conversion requires WeasyPrint native dependencies.` error. The bundled CLI intentionally excludes WeasyPrint; only a normal Python installation with GTK/Pango/Cairo can provide it.

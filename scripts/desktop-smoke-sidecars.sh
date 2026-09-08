@@ -34,6 +34,15 @@ for _ in $(seq 1 30); do
     echo "sidecar health check passed"
     "$CLI_PATH" --help >/dev/null
     "$CLI_PATH" member --help >/dev/null
+    # The bundle must carry the agent environment runtime: in this fresh home
+    # the CLI places it under ~/.guildbotics/data/msb itself. The status is
+    # read against an empty workspace, because it is a workspace's question.
+    mkdir -p "$SMOKE_HOME/ws/.guildbotics/config"
+    "$CLI_PATH" environment --workspace "$SMOKE_HOME/ws" status | grep -q "^runtime: available" || {
+      echo "the bundled CLI does not carry the agent environment runtime" >&2
+      "$CLI_PATH" environment --workspace "$SMOKE_HOME/ws" status >&2 || true
+      exit 1
+    }
     exit 0
   fi
   sleep 1

@@ -26,7 +26,12 @@ function status(
 ): AgentEnvironmentStatusResponse {
   return {
     platform: "darwin",
-    runtime: { available: true, reason: "", version: "0.6.17" },
+    runtime: {
+      available: true,
+      reason: "",
+      version: "0.6.17",
+      home: "/Users/me/.guildbotics/data/msb",
+    },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
     tools: [
@@ -175,6 +180,7 @@ describe("AgentEnvironmentCard", () => {
           available: false,
           reason: "The microsandbox runtime is not installed.",
           version: "",
+          home: "",
         },
         snapshot: { state: "missing", name: "guildbotics-abc", detail: "", output: [] },
         problem: "The microsandbox runtime is not installed.",

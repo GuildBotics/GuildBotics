@@ -17,10 +17,14 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import shutil
+import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentNetwork,
 )
+from guildbotics.utils.fileio import get_machine_state_path
 
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
 _NAME_PREFIX = "guildbotics-"
@@ -41,6 +46,15 @@ _KILLED = -1
 _STOP_TIMEOUT = 5.0
 #: Longest output line a build step may print before its reader gives up.
 _BUILD_LINE_LIMIT = 1 << 20
+#: The SDK reads where the runtime and its state live from these variables.
+RUNTIME_HOME_ENV = "MSB_HOME"
+RUNTIME_BINARY_ENV = "MSB_PATH"
+#: Written beside the placed runtime, so a newer SDK replaces an older copy.
+_RUNTIME_VERSION_FILE = "version"
+#: The Windows Defender Firewall rule for the runtime, created once for its
+#: fixed path (the runtime binds a listening socket, which Windows asks about
+#: per program path; a path that changed on every launch asked every time).
+FIREWALL_RULE_NAME = "GuildBotics agent environment (msb)"
 
 
 class AgentEnvironmentError(RuntimeError):
@@ -54,25 +68,134 @@ class AgentEnvironmentHealth:
     available: bool
     reason: str = ""
     runtime_version: str = ""
+    #: Where the runtime and its state (images, sandboxes) live on this device.
+    home: str = ""
+
+
+def runtime_home() -> Path:
+    """The fixed directory the runtime lives in on this device.
+
+    GuildBotics places the runtime here itself, from the copy the SDK wheel
+    carries, so nothing outside GuildBotics decides which runtime runs and
+    the path is the same on every launch. The path is kept short: the
+    runtime opens unix sockets under it, and those have a length limit.
+    """
+    return get_machine_state_path("msb")
+
+
+def runtime_binary(home: Path) -> Path:
+    """The ``msb`` binary under a runtime home."""
+    return home / "bin" / ("msb.exe" if os.name == "nt" else "msb")
 
 
 def doctor() -> AgentEnvironmentHealth:
     """Check that the SDK and its runtime are present on this device.
 
-    Absent either, no agent may start here (fail-closed), and the reason is
-    what the Desktop shows beside that refusal.
+    The runtime is placed under :func:`runtime_home` when it is missing or
+    older than the SDK, and the SDK is pointed at it; nothing is fetched from
+    the network. Absent the SDK, or a runtime the device cannot hold, no
+    agent may start here (fail-closed), and the reason is what the Desktop
+    shows beside that refusal.
     """
+    home = runtime_home()
+    os.environ[RUNTIME_HOME_ENV] = str(home)
+    os.environ.setdefault(RUNTIME_BINARY_ENV, str(runtime_binary(home)))
     try:
         import microsandbox
     except ImportError:
         return AgentEnvironmentHealth(
             False, "The microsandbox SDK is not installed for this platform."
         )
+    version = microsandbox.version()
+    try:
+        _place_runtime(home, version)
+    except OSError as exc:
+        return AgentEnvironmentHealth(
+            False,
+            f"The microsandbox runtime could not be placed under {home}: {exc}",
+            home=str(home),
+        )
     if not microsandbox.is_installed():
         return AgentEnvironmentHealth(
-            False, "The microsandbox runtime (msb and libkrunfw) is not installed."
+            False,
+            "The microsandbox runtime (msb and libkrunfw) is not installed.",
+            home=str(home),
         )
-    return AgentEnvironmentHealth(True, runtime_version=microsandbox.version())
+    return AgentEnvironmentHealth(True, runtime_version=version, home=str(home))
+
+
+def _place_runtime(home: Path, version: str) -> None:
+    """Copy the SDK's bundled ``msb`` and ``libkrunfw`` under ``home`` once per version.
+
+    The wheel carries both; a packaged GuildBotics unpacks them to a fresh
+    temporary directory on every launch, so they are copied to the fixed
+    home the SDK is pointed at. On Windows the firewall rule for that fixed
+    path is created at the same time.
+    """
+    marker = home / _RUNTIME_VERSION_FILE
+    if runtime_binary(home).is_file() and _read(marker) == version:
+        return
+    bundled = files("microsandbox._bundled")
+    for part in ("bin", "lib"):
+        target_dir = home / part
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for entry in bundled.joinpath(part).iterdir():
+            if not entry.is_file():
+                continue
+            target = target_dir / entry.name
+            with as_file(entry) as source:
+                shutil.copyfile(source, target)
+            if part == "bin":
+                target.chmod(0o755)
+    marker.write_text(version, encoding="utf-8")
+    _ensure_firewall_rule(runtime_binary(home))
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _ensure_firewall_rule(binary: Path) -> None:
+    """Create the Windows Defender Firewall rule for the runtime, once, elevated.
+
+    Best effort: a declined elevation leaves Windows to ask on the runtime's
+    first listen, which for a fixed path it does once.
+    """
+    if sys.platform != "win32":
+        return
+    shown = subprocess.run(
+        [
+            "netsh",
+            "advfirewall",
+            "firewall",
+            "show",
+            "rule",
+            f"name={FIREWALL_RULE_NAME}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode == 0:
+        return
+    arguments = (
+        f'advfirewall firewall add rule name="{FIREWALL_RULE_NAME}" dir=in '
+        f'action=allow program="{binary}" enable=yes profile=any'
+    )
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Start-Process -FilePath netsh -Verb RunAs -Wait -ArgumentList '{arguments}'",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 class EnvironmentStdin:

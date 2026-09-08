@@ -61,14 +61,14 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - **OpenSSH**（1 つのワークスペースを複数マシンで共有する場合のみ）:
   - 参加する各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
   - Hub 役のマシンには OpenSSH **サーバー**も必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
-- **AI CLI ツール**（いずれか 1 つを事前にインストールして一度起動し、認証を済ませてください）:
-  - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+- **ハードウェア仮想化**（エージェント隔離環境のため）。AI CLI の turn はすべて、turn を実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
+- **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**LLM・AI CLIツール** 画面にそのコマンドが表示されます）。現在、隔離環境に導入できるのは次の 2 つです:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（Claude Pro または Max サブスクリプションが必要）
-  - [Grok Build](https://docs.x.ai/build/overview)
-  - [GitHub Copilot CLI](https://docs.github.com/ja/copilot/concepts/agents/about-copilot-cli)
 
-Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI を利用する場合、メンバーはセッションを引き継いで前回の続きから作業を再開できます。認証方法、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
+  Grok Build・GitHub Copilot CLI・Antigravity CLI はまだ隔離環境に導入できないため、選択できません
+
+Codex・Claude Code を利用する場合、メンバーはセッションを引き継いで前回の続きから作業を再開できます。隔離環境、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
 
 ### インストール
 
@@ -79,6 +79,7 @@ Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI を利�
 - macOS / Linux の `~/.guildbotics/bin/guildbotics`、または Windows の `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`: AI CLI ツール / スキルが使う管理用 GuildBotics CLI
 - macOS / Linux の `~/.local/bin/guildbotics`: 上記 CLI へ転送する小さな実行ファイル（shim）。Windows では代わりに NSIS installer が managed bin を user PATH へ追加し、uninstall 時は自分が追加した entry だけを削除します
 - 検出済みの Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI のユーザースキル用ディレクトリ配下の GuildBotics スキル。ユーザーが作成・編集したスキルは上書きしません
+- `~/.guildbotics/data/msb`: エージェント隔離環境の runtime。最初に必要になったときに、GuildBotics に同梱された複製から配置します（ダウンロードはしません）。Windows ではこの固定パスに対する firewall 規則を、昇格の確認 1 回で作成します
 
 デスクトップアプリを使わない環境（ヘッドレスサーバーなど）では、`uv tool install guildbotics` で CLI を単体インストールできます（→ [サーバーで運用する](#サーバーで運用する)）。
 
@@ -107,7 +108,7 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 プロジェクト設定に続けて、デスクトップアプリで以下を設定します。
 
-- **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択と LLM API キーの設定
+- **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択、LLM API キーの設定、そして **エージェント隔離環境** カード。**ビルド** でこのマシンに環境を作り、表示されるコマンドで選んだツールへログインします。どちらもマシンごとの作業です
 - **メンバー**: チームメンバーの追加と設定（GitHub アカウントを割り当てる場合は、上記の認証情報が必要です）
 - **GitHub**: タスクボードの設定（GitHub を利用する場合のみ。GitHub Project の URL 自体は**プロジェクト**セクションで入力します）。独自ステータス名を使う場合の[レーンマッピング](#タスクボードの取り決め)と、`Agent` フィールドを設定します
 - **検証**: **設定を検証** を押すと、LLM、AI CLI ツール、GitHub、Slack、Git を読み取り専用でチェックします。GitHub や Slack のデータは更新しません
@@ -142,8 +143,9 @@ API キーやアカウントトークンの値は、利用可能な場合は OS 
 
 スキルは各ツールが読み込むユーザースキル用ディレクトリ（Claude Code なら `~/.claude/skills`、Codex なら `~/.agents/skills` など）に置かれるため、CLI から起動しても、そのツールのアプリから起動しても同じスキルが使われます。スキルが配置されているかは、デスクトップアプリの **設定 → LLM・AI CLIツール** で各ツールのスキル状態から確認できます。
 
-前提は 2 つです。
+前提は 3 つです。
 
+- AI CLI ツールが手元のマシンにインストールされ、そこでログイン済みであること。host へのインストールが必要なのはここだけで、これはメンバーの turn（エージェント隔離環境の中で動く）ではなく、あなた自身が対話的に使うためです
 - デスクトップアプリを一度起動していること（guildbotics スキルと管理用 CLI が配置されます）
 - メンバーが設定済みであること
 
@@ -238,10 +240,10 @@ GitHub App 作成後に以下の作業を行ってください。
 - 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、デスクトップアプリのメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
 - チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/local/clones/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
 - AI CLI ツールを対話的にも使う場合は、`gh`、直接のトークン / API 書き込み、`git push` を拒否または承認必須にすることを推奨します。これは利用者自身の GitHub アカウントへフォールバックすることを避けるための防止策であり、トークン流出を完全に技術的に封じ込めるサンドボックスではありません
-- Codex を AI CLI ツールとして使う場合は、Codex CLI の認証とネットワーク到達性を確認してください:
+- AI CLI の turn は、サービスを実行するマシンのエージェント隔離環境の中で動きます。**設定 → LLM・AI CLIツール** で環境が **準備完了**、ツールが **この端末ではログイン済み** になっていることを確認してください。ターミナルからは次で確認できます:
 
   ```bash
-  codex doctor
+  guildbotics environment status
   ```
 
 ### 設定を検証する
@@ -444,6 +446,15 @@ guildbotics secrets --workspace /path/to/workspace list
 2. ワークスペースフォルダを移行先へコピーします
 3. シークレットを移行します。移行元で `guildbotics secrets export --file ...`、移行先で `guildbotics secrets import ...` を実行します（エクスポートファイルは使用後に削除してください）。キーチェーンのエントリ自体がマシンの外に出ることはありません
 4. キーチェーンの無いサーバーでは、OS 秘密ストアを用意するか、実行時の環境変数でシークレットを渡してください
+5. サーバー上でエージェント隔離環境をビルドし、AI CLI ツールへログインします（サーバーには KVM が必要です。[必要なもの](#必要なもの) を参照）:
+
+   ```bash
+   guildbotics environment status         # このマシンの runtime・環境・ログイン状態
+   guildbotics environment build          # ワークスペースの宣言どおりに環境をビルド
+   guildbotics environment login codex    # 環境の中でログイン（device code 方式）
+   ```
+
+   サービス稼働中は、宣言が変わると自動で再ビルドされます。ログインはマシンごとに `~/.guildbotics/data/agent_environment/` に保持されます
 
 **サービスの起動と停止**（デスクトップアプリの **サービス実行** 画面に相当します）:
 
@@ -526,7 +537,8 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
 - memory、会話の制御状態、task-run 証跡、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
-- 診断ログ、transcript、チャット cache、member clone、AI CLI session、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
+- 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
+- エージェント隔離環境の runtime と image は `$HOME/.guildbotics/data/msb` に、AI CLI ツールのログインとセッション（マシン内の全メンバー・全ワークスペースで共有）は `$HOME/.guildbotics/data/agent_environment/<tool>/` に保存されます
 
 ### 複数マシンでワークスペースを共有する
 
@@ -839,8 +851,9 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 **LLM / AI CLI ツール設定**:
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
-- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。各端末が PATH から読める場所はその端末で導出し、端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
+- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの effort マッピングと、コマンド・組み込み Web 機能の接続先を決める `network:` ブロック。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
+- `intelligences/agent_environment.yml`: 各マシンがエージェント隔離環境にベースイメージの上へ足すもの（`packages` の apt / npm / uv。版を固定して書く）と、環境が使う DNS リゾルバ（`dns.nameservers`: `host` か IPv4 アドレスの一覧）。ワークスペースで共有され、パッケージを変えると全マシンで環境が再ビルドされます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
@@ -860,6 +873,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください                                                                                                                                                                                                                                       |
 | コマンド実行が失敗した                       | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
 | スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |
+| AI CLI の turn が始まらない・「この端末では実行できません」と警告が出る | **設定 → LLM・AI CLIツール** の **エージェント隔離環境** カード（または `guildbotics environment status`）を確認してください。runtime にはハードウェア仮想化（Apple Silicon / Windows ハイパーバイザー プラットフォーム / KVM）が必要で、環境が **準備完了**（**ビルド** を押す。サービス稼働中は宣言の変更で自動再ビルド）、ツールがこのマシンでログイン済み（`guildbotics environment login <tool>`）である必要があります。ビルド中は作業が失敗ではなく見送りになります |
 
 **診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
 

@@ -48,6 +48,26 @@ CLIは中で動き、それ以外を見ないので、OSやプロバイダによ
 隔離環境が用意できない場合（runtimeが無い、snapshotが無い、ログインしていない）は、より広い
 権限へ置き換えずにエージェントを起動しません。
 
+隔離環境のruntimeは[microsandbox](https://microsandbox.dev/)（libkrun系のmicroVM）で、
+GuildBoticsが同梱し、最初に必要になったときに`~/.guildbotics/data/msb`へ配置してSDKに
+そのパスを指させます（`MSB_HOME` / `MSB_PATH`）。ダウンロードはせず、GuildBotics以外が
+どのruntimeを動かすかを決めることはありません。必要なハードウェア仮想化はmacOSでApple
+Silicon、Windows 11でWindowsハイパーバイザー プラットフォーム、LinuxでKVMです。Windowsでは
+runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出すため、固定パスに対する
+規則を昇格の確認1回で作成します。Windowsのhostパスは環境の中では`C:\work`→`/c/work`の
+ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
+bindします）。
+
+環境の中身（ベースイメージ、GuildBoticsが版を固定して導入するプロバイダCLI、
+`config/intelligences/agent_environment.yml`で宣言した追加パッケージ）はsnapshotとして端末ごとに
+ビルドし、宣言と一致しなければ再ビルドします。Desktopの **LLM・AI CLIツール** の
+「エージェント隔離環境」カードがruntime、snapshotの状態（ビルドボタンつき）、DNSリゾルバ、
+ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` / `login`が
+同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
+自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
+見送りにします。turnが起動できない理由（runtime無し、宣言不正、snapshot未ビルド、
+未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
+
 - **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
   `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
   ワークスペースの`.guildbotics/config`や`state`は含みません
@@ -127,11 +147,17 @@ member brokerが強制します（person leaseを持たず、書き込み系のm
 
 ## 認証
 
-GuildBoticsを起動する前に、使用するAI CLIツールをインストールしてください。その後、
-GuildBoticsのサービスを実行するOSユーザーと同じユーザーで、各ツールの標準的なログイン操作
-（`codex login`、`claude auth login`、`grok login`、`copilot login`、または`agy`の
-初回起動時のログイン）を行います。ログイン情報は各ツール自身の
-認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
+AI CLIツールは隔離環境の中で動くため、hostにインストールする必要はなく、hostでのログインも
+turnには使われません。ログインは環境の中で行います。turnを実行する端末ごとに、ターミナルで
+`guildbotics environment login <tool>`（`codex` / `claude`）を実行すると、そのツール自身の
+ログインコマンドが環境の中で起動し、device code方式でブラウザ承認を案内します。結果は
+端末のstore（`~/.guildbotics/data/agent_environment/<tool>/`）に保存され、その端末の全メンバー・
+全ワークスペースで共有し、turnごとに認証情報とセッションだけを環境へbindします。
+GuildBoticsのセッション情報や診断記録には複製されません。Desktopはログイン状態と
+実行すべきコマンドを示し、Desktop自身がログインの対話を行うことはありません。
+
+Grok Build・GitHub Copilot・Antigravityはまだ環境に導入できないため選択できません。以下の
+認証方式の記述は、それらを導入したときに適用されます。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか

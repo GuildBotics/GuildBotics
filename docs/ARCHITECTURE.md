@@ -833,10 +833,12 @@ Two Person distinctions matter architecturally:
   `intelligences/agent_runtime/`, register it in `agent_runtime/factory.py`, and add
   its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
   `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
-  a tool without an adapter cannot run. Declare which network modes the tool can
-  enforce in its catalog entry; the access contract
-  (`intelligences/agent_environment/contract.py`) is enforced by the isolated agent
-  environment (`intelligences/agent_environment/`), not translated per adapter.
+  a tool without an adapter cannot run. Declare in its catalog entry how the tool is
+  provisioned into the isolated agent environment (`CliAgentProvision`: the pinned
+  npm package, its state root, which entries persist, its login command, its API
+  domains); the access contract (`intelligences/agent_environment/contract.py`) is
+  enforced by the environment (`intelligences/agent_environment/`), not translated per
+  adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the
