@@ -6,7 +6,9 @@ from fastapi import UploadFile
 from starlette.datastructures import Headers
 
 from guildbotics.app_api import command_input_files
+from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.command_input_files import (
+    command_cwd,
     CommandInputFileStore,
     GrantSuggestion,
     copy_command_input_file,
@@ -176,6 +178,24 @@ def test_store_preserves_another_active_session(tmp_path: Path) -> None:
 
     second.close()
     first.close()
+
+
+def test_the_working_directory_expands_the_home_and_refuses_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    # No shell sits in front of the Desktop's field, so `~` is expanded here.
+    assert command_cwd(None) is None
+    assert command_cwd(Path("~/gb-test/clone")) == home / "gb-test/clone"
+    assert command_cwd(home / "x") == home / "x"
+    # A relative path has nothing the user can see to resolve against.
+    with pytest.raises(AppApiError) as refused:
+        command_cwd(Path("gb-test/clone"))
+    assert refused.value.code == "command_cwd_not_absolute"
+    assert "gb-test/clone" in refused.value.message
 
 
 def test_describe_command_input_paths_answers_as_the_turn_would(

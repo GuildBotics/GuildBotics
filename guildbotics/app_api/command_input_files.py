@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
+from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     exchange_tmp_dir,
@@ -213,6 +214,21 @@ class CommandInputPath:
     kind: InputPathKind
     reachable: bool
     grant: GrantSuggestion | None = None
+
+
+def command_cwd(cwd: Path | None) -> Path | None:
+    """The working directory as the Desktop typed it, ready to run in.
+
+    ``~`` is expanded, as a shell would, because the field has no shell in
+    front of it. A relative path is refused: the sidecar's own directory is
+    nowhere the user can see, so there is nothing to resolve it against.
+    """
+    if cwd is None:
+        return None
+    expanded = cwd.expanduser()
+    if not expanded.is_absolute():
+        raise AppApiError("command_cwd_not_absolute", params={"cwd": str(cwd)})
+    return expanded
 
 
 def describe_command_input_paths(

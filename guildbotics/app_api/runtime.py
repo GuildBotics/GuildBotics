@@ -23,6 +23,7 @@ from guildbotics.app_api.agent_environment_status import (
 )
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.command_files import CommandFileService, file_revision
+from guildbotics.app_api.command_input_files import command_cwd
 from guildbotics.app_api.config_revisions import apply_config_write
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
@@ -972,7 +973,7 @@ class AppRuntime:
                 command_name=request.command,
                 command_args=request.args,
                 person_identifier=person_id,
-                cwd=request.cwd or _default_command_cwd(),
+                cwd=command_cwd(request.cwd) or _default_command_cwd(),
             )
         except asyncio.CancelledError:
             self._event_bus.publish_event(

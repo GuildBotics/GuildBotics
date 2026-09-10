@@ -34,6 +34,7 @@ from guildbotics.app_api.agent_environment_status import (
 )
 from guildbotics.app_api.command_input_files import (
     CommandInputFileStore,
+    command_cwd,
     describe_command_input_paths,
 )
 from guildbotics.app_api.config_revisions import (
@@ -676,7 +677,9 @@ def create_app(
                         else None
                     ),
                 )
-                for entry in describe_command_input_paths(request.paths, request.cwd)
+                for entry in describe_command_input_paths(
+                    request.paths, command_cwd(request.cwd)
+                )
             ]
         )
 
