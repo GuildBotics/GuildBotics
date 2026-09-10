@@ -106,7 +106,7 @@ export function AgentEnvironmentCard({
         {data ? (
           <Table withTableBorder={false} verticalSpacing="xs">
             <Table.Tbody>
-              <Table.Tr>
+              <Table.Tr id={`${AGENT_ENVIRONMENT_CARD_ID}-runtime`}>
                 <Table.Th style={narrow}>{t("setup.intelligence.environment.runtime")}</Table.Th>
                 <Table.Td>
                   <Group gap="xs">

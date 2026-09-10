@@ -19,6 +19,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     SharedGrants,
 )
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
+from guildbotics.intelligences.agent_environment.status import DeviceSetting
 from guildbotics.intelligences.agent_environment.toolchain import ToolchainDeclaration
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
@@ -1158,10 +1159,10 @@ class EnvironmentAccessStatus(BaseModel):
     problem: str = ""
 
 
-#: Which setting an environment problem is about, so the Desktop can open it:
-#: the device's environment (runtime, snapshot, declaration), one tool's row
-#: in it (provisioning, login), or the directory grants.
-EnvironmentSetting = Literal["environment", "tool", "grants"]
+#: Which setting an environment problem is about, so the Desktop can open it
+#: and say what to do there: a part of the device (:data:`DeviceSetting`),
+#: one tool's row in it (provisioning, login), or the directory grants.
+EnvironmentSetting = Literal[DeviceSetting, "tool", "grants"]
 
 
 class EnvironmentProblem(BaseModel):
@@ -1233,6 +1234,8 @@ class AgentEnvironmentStatusResponse(BaseModel):
     tools: list[EnvironmentToolStatus] = Field(default_factory=list)
     #: Why no turn at all can start on this device, or "" when one can.
     problem: str = ""
+    #: What ``problem`` is about, or "" when there is none.
+    problem_setting: DeviceSetting | Literal[""] = ""
     access: EnvironmentAccessStatus = Field(default_factory=EnvironmentAccessStatus)
     members: list[EnvironmentMemberStatus] = Field(default_factory=list)
 

@@ -61,7 +61,10 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "runtime: available 0.6.17" in result.output
-    assert f"snapshot: missing {snapshot_name(load_toolchain())}" in result.output
+    assert (
+        f"snapshot: missing {snapshot_name(load_toolchain())} "
+        "(run `guildbotics environment build`)"
+    ) in result.output
     assert "dns: host -> 192.168.3.1" in result.output
     assert (
         "codex: not logged in (run `guildbotics environment login codex`)"

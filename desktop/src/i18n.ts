@@ -384,6 +384,13 @@ const resources = {
           agent_environment_slot_blocked:
             "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
         },
+        environmentFix: {
+          runtime:
+            'This device cannot host the isolated agent environment; see "What You Need" in the README.',
+          declaration:
+            'Fix the "Environment declaration" in the advanced settings, then build again.',
+          snapshot: 'Press "Build" on the "Isolated agent environment" card in the settings.',
+        },
         actions: {
           diagnostics: "Run diagnostics",
           setup: "Open setup",
@@ -2342,6 +2349,12 @@ const resources = {
           agent_environment_tool_unavailable: "AI CLIツールがこの端末で使えません: {{reason}}",
           agent_environment_slot_blocked:
             "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
+        },
+        environmentFix: {
+          runtime:
+            "この端末ではエージェント隔離環境を用意できません。README の「必要なもの」を確認してください。",
+          declaration: "詳細設定の「環境の宣言」を直してから、もう一度ビルドしてください。",
+          snapshot: "設定の「エージェント隔離環境」カードで「ビルド」を押してください。",
         },
         actions: {
           diagnostics: "診断を実行",

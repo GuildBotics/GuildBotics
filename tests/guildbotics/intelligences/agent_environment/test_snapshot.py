@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import asyncio
 import logging
 import threading
@@ -31,6 +32,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     parse_toolchain,
 )
 from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.i18n_tool import t
 
 
 def _declaration(**packages: list[str]) -> ToolchainDeclaration:
@@ -265,7 +267,8 @@ def test_a_stalled_build_is_failed_with_the_lock_released(
     monkeypatch.setattr(snapshot, "BUILD_TIMEOUT_SECONDS", 0.05)
     declaration = _declaration()
 
-    with pytest.raises(AgentEnvironmentError, match="did not finish within 0 minutes"):
+    timed_out = t("intelligences.agent_environment.snapshot.build_timeout", minutes=0)
+    with pytest.raises(AgentEnvironmentError, match=re.escape(timed_out)):
         asyncio.run(
             build_snapshot(
                 declaration, on_line=lambda _: None, workspace_root=workspace
@@ -285,7 +288,12 @@ def test_a_second_build_is_refused_while_one_runs(
     directory.mkdir(parents=True)
 
     with held_lock(directory / "build.lock"):
-        with pytest.raises(AgentEnvironmentError, match="already running"):
+        with pytest.raises(
+            AgentEnvironmentError,
+            match=re.escape(
+                t("intelligences.agent_environment.snapshot.build_running")
+            ),
+        ):
             asyncio.run(
                 build_snapshot(
                     _declaration(), on_line=lambda _: None, workspace_root=workspace

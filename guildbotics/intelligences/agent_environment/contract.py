@@ -30,6 +30,7 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
     load_yaml_file,
 )
+from guildbotics.utils.i18n_tool import t
 
 NetworkMode = Literal["deny", "allowlist", "unrestricted"]
 NETWORK_MODES: tuple[NetworkMode, ...] = ("deny", "allowlist", "unrestricted")
@@ -83,14 +84,23 @@ class NetworkPolicy(BaseModel):
                 or any(ch.isspace() for ch in domain)
                 or "/" in domain
             ):
-                raise ValueError(f"'{domain}' is not a domain name")
+                raise ValueError(
+                    t(
+                        "intelligences.agent_environment.grants.not_a_domain",
+                        domain=domain,
+                    )
+                )
         return domains
 
     def check(self) -> None:
         if self.mode == "allowlist" and not self.allowed_domains:
-            raise ValueError("mode 'allowlist' needs at least one allowed domain")
+            raise ValueError(
+                t("intelligences.agent_environment.grants.allowlist_needs_domain")
+            )
         if self.mode != "allowlist" and self.allowed_domains:
-            raise ValueError("allowed_domains is only used with mode 'allowlist'")
+            raise ValueError(
+                t("intelligences.agent_environment.grants.domains_need_allowlist")
+            )
 
 
 def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
@@ -103,12 +113,23 @@ def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
     if raw is None:
         return NetworkPolicy()
     if not isinstance(raw, dict):
-        raise AccessContractError(f"{where}: 'network' must be a mapping")
+        raise AccessContractError(
+            t(
+                "intelligences.agent_environment.grants.network_not_a_mapping",
+                where=where,
+            )
+        )
     try:
         policy = NetworkPolicy.model_validate(raw)
         policy.check()
     except (ValidationError, ValueError) as exc:
-        raise AccessContractError(f"{where}: invalid 'network': {exc}") from exc
+        raise AccessContractError(
+            t(
+                "intelligences.agent_environment.grants.network_invalid",
+                where=where,
+                error=exc,
+            )
+        ) from exc
     return policy
 
 
@@ -129,7 +150,9 @@ class DocumentGrant(BaseModel):
     @classmethod
     def _validate_path(cls, path: str) -> str:
         if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
-            raise ValueError(f"'{path}' must be relative to the home directory")
+            raise ValueError(
+                t("intelligences.agent_environment.grants.path_not_relative", path=path)
+            )
         _require_directory_name(path)
         return path
 
@@ -164,7 +187,12 @@ class LocalPathGrant(BaseModel):
 def _require_directory_name(path: str) -> None:
     segments = path.replace("\\", "/").strip("/").split("/")
     if not path.strip("/") or any(segment in {"", ".", ".."} for segment in segments):
-        raise ValueError(f"'{path}' must name a directory")
+        raise ValueError(
+            t(
+                "intelligences.agent_environment.grants.path_not_a_directory_name",
+                path=path,
+            )
+        )
 
 
 class SharedGrants(BaseModel):
@@ -227,11 +255,15 @@ def _parse[T: BaseModel](model: type[T], raw: Any, where: str) -> T:
     if raw is None:
         return model()
     if not isinstance(raw, dict):
-        raise AccessContractError(f"{where}: must be a mapping")
+        raise AccessContractError(
+            t("intelligences.agent_environment.grants.not_a_mapping", where=where)
+        )
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
-        raise AccessContractError(f"{where}: invalid grants: {exc}") from exc
+        raise AccessContractError(
+            t("intelligences.agent_environment.grants.invalid", where=where, error=exc)
+        ) from exc
 
 
 def load_shared_grants() -> SharedGrants:
@@ -341,18 +373,27 @@ def _resolve_document(
             target.mkdir(parents=True, exist_ok=True)
         except FileExistsError as exc:
             raise AccessContractError(
-                f"document grant '{grant.path}' exists but is not a directory"
+                t(
+                    "intelligences.agent_environment.grants.document_not_a_directory",
+                    path=grant.path,
+                )
             ) from exc
     elif not target.exists():
         return ResolvedGrant(target, grant.access, grant.path, present=False)
     real = target.resolve()
     if not real.is_dir():
         raise AccessContractError(
-            f"document grant '{grant.path}' exists but is not a directory"
+            t(
+                "intelligences.agent_environment.grants.document_not_a_directory",
+                path=grant.path,
+            )
         )
     if real == home_root or not real.is_relative_to(home_root):
         raise AccessContractError(
-            f"document grant '{grant.path}' must stay below the home directory"
+            t(
+                "intelligences.agent_environment.grants.document_outside_home",
+                path=grant.path,
+            )
         )
     return ResolvedGrant(real, grant.access, grant.path)
 
@@ -360,7 +401,7 @@ def _resolve_document(
 def local_path_missing(path: str) -> str:
     """Why a local path grant cannot be honoured: the same words for the turn
     that refuses to start and the preview that points at the row."""
-    return f"local path '{path}' does not exist on this device"
+    return t("intelligences.agent_environment.grants.local_path_missing", path=path)
 
 
 def _resolve_local(
@@ -374,7 +415,10 @@ def _resolve_local(
         return ResolvedGrant(real, grant.access, grant.path, present=False)
     if real == home_root or real == Path(real.anchor):
         raise AccessContractError(
-            f"local path '{grant.path}' would grant the whole home directory or root"
+            t(
+                "intelligences.agent_environment.grants.local_path_too_broad",
+                path=grant.path,
+            )
         )
     return ResolvedGrant(real, grant.access, grant.path)
 
@@ -384,7 +428,7 @@ def _resolve_deny(path: str, home_root: Path) -> Path:
     target = (Path(path) if absolute else home_root / path).resolve()
     if target == home_root or target == Path(target.anchor):
         raise AccessContractError(
-            f"deny '{path}' would close the whole home directory or root"
+            t("intelligences.agent_environment.grants.deny_too_broad", path=path)
         )
     return target
 
@@ -469,7 +513,7 @@ def sensitive_grant_reason(path: str, home: Path | None = None) -> str:
     else:
         target = (home_root / path).resolve()
     if target == home_root or home_root.is_relative_to(target):
-        return "the home directory"
+        return t("intelligences.agent_environment.grants.sensitive_home")
     for name in SENSITIVE_HOME_DIRECTORIES:
         sensitive = (home_root / name).resolve()
         if target.is_relative_to(sensitive) or sensitive.is_relative_to(target):

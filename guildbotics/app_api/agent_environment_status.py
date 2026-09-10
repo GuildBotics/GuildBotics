@@ -127,6 +127,7 @@ def agent_environment_status(
             for tool in device.tools
         ],
         problem=device.refusal,
+        problem_setting=device.setting,
         access=_access_status(access, problem, home),
         members=members,
     )
@@ -169,9 +170,9 @@ def _slot_status(
 
 
 #: ``(person_id, slot, setting, reason)``: one thing that keeps work from
-#: starting here. ``setting`` says whose it is: ``environment`` (the device;
-#: person and slot empty), ``tool`` (one AI CLI tool, named in the slot field;
-#: person empty), or ``grants`` (one member's slot).
+#: starting here. ``setting`` says whose it is: a part of the device (person
+#: and slot empty), ``tool`` (one AI CLI tool, named in the slot field; person
+#: empty), or ``grants`` (one member's slot).
 EnvironmentProblemEntry = tuple[str, str, str, str]
 
 
@@ -183,8 +184,8 @@ def agent_environment_problems(person_ids: list[str]) -> list[EnvironmentProblem
     """
     status = agent_environment_status(person_ids)
     entries: list[EnvironmentProblemEntry] = []
-    if status.problem:
-        entries.append(("", "", "environment", status.problem))
+    if status.problem_setting:
+        entries.append(("", "", status.problem_setting, status.problem))
     used = {slot.tool for member in status.members for slot in member.slots}
     entries += [
         ("", tool.name, "tool", tool.problem)

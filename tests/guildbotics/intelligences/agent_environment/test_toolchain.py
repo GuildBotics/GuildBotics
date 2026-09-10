@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     upstream_nameservers,
 )
 from guildbotics.utils.fileio import get_template_path, load_yaml_file
+from guildbotics.utils.i18n_tool import t
 
 _DNS = {"nameservers": ["10.0.0.53"]}
 
@@ -71,7 +73,10 @@ def test_anything_the_declaration_does_not_define_is_rejected(raw: object) -> No
 
 @pytest.mark.parametrize("spec", ["", "--force", "-y", "ripgrep 14.1", "a\tb"])
 def test_a_package_entry_is_one_argument_and_never_an_option(spec: str) -> None:
-    with pytest.raises(ToolchainError, match="package specification"):
+    not_a_package = t(
+        "intelligences.agent_environment.declaration.not_a_package", spec=spec
+    )
+    with pytest.raises(ToolchainError, match=re.escape(not_a_package)):
         parse_toolchain({"dns": _DNS, "packages": {"apt": [spec]}}, where="t")
 
 
@@ -121,7 +126,12 @@ def test_host_without_an_ipv4_resolver_is_an_error_naming_the_fix(
 ) -> None:
     monkeypatch.setattr(toolchain, "device_nameservers", lambda: ())
 
-    with pytest.raises(ToolchainError, match="no IPv4 resolver; name the nameservers"):
+    expected = t(
+        "intelligences.agent_environment.declaration.no_device_resolver",
+        where=toolchain.TOOLCHAIN_PATH,
+        host="host",
+    )
+    with pytest.raises(ToolchainError, match=re.escape(expected)):
         upstream_nameservers(DnsSettings(nameservers="host"))
 
 

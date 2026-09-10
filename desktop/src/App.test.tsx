@@ -28,6 +28,7 @@ import {
   traceStatusColor,
   traceDuration,
   shortTraceId,
+  systemAlertMessage,
   systemAlertSetupTarget,
   upsertCommandRecord,
   type CommandRunRecord,
@@ -293,17 +294,23 @@ describe("App", () => {
       reason: "x",
       actions: ["setup" as const],
     };
-    // The device as a whole: the snapshot row of the environment card.
-    expect(
+    // The device: the row of the environment card that is the problem, or
+    // the declaration card in the advanced settings.
+    const device = (setting: "runtime" | "declaration" | "snapshot" | "building") =>
       systemAlertSetupTarget({
         ...base,
         id: "agent-environment:device",
         code: "agent_environment_unavailable",
         person_id: "",
         command: "",
-        setting: "environment",
-      }),
-    ).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
+        setting,
+      });
+    expect(device("runtime")).toBe("/setup?section=intelligence&focus=agent-environment-runtime");
+    expect(device("snapshot")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
+    expect(device("building")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
+    expect(device("declaration")).toBe(
+      "/setup?section=intelligence&advanced=intelligence&focus=agent-environment-declaration",
+    );
     // One tool: its own row in the card.
     expect(
       systemAlertSetupTarget({
@@ -326,6 +333,30 @@ describe("App", () => {
         setting: "grants",
       }),
     ).toBe("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
+  });
+
+  it("tells the person what to do about a device alert, by the part that is wrong", () => {
+    const device = (setting: "runtime" | "declaration" | "snapshot" | "building") =>
+      systemAlertMessage(t(), {
+        id: "agent-environment:device",
+        code: "agent_environment_unavailable",
+        severity: "warning",
+        opened_at: "",
+        updated_at: "",
+        occurrence_count: 1,
+        person_id: "",
+        command: "",
+        trace_id: "",
+        reason: "why",
+        setting,
+        actions: ["setup"],
+      });
+    const said = t()("systemAlerts.codes.agent_environment_unavailable", { reason: "why" });
+    expect(device("snapshot")).toBe(`${said} ${t()("systemAlerts.environmentFix.snapshot")}`);
+    expect(device("runtime")).toBe(`${said} ${t()("systemAlerts.environmentFix.runtime")}`);
+    expect(device("declaration")).toBe(`${said} ${t()("systemAlerts.environmentFix.declaration")}`);
+    // A build in progress asks for nothing but patience.
+    expect(device("building")).toBe(said);
   });
 
   it("links a GitHub credential alert to the affected member's GitHub settings", () => {

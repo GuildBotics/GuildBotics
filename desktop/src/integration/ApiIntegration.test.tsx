@@ -494,6 +494,7 @@ describe("Setup integration (real client + mock server)", () => {
           },
         ],
         problem: "",
+        problem_setting: "",
         access: { documents: [], paths: [], denied: [], problem: "" },
         members: [],
       })

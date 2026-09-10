@@ -33,6 +33,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     EnvironmentNetwork,
 )
 from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.i18n_tool import t
 
 #: How a sandbox GuildBotics created is named, so a stale one is recognisable.
 _NAME_PREFIX = "guildbotics-"
@@ -104,7 +105,7 @@ def doctor() -> AgentEnvironmentHealth:
         import microsandbox
     except ImportError:
         return AgentEnvironmentHealth(
-            False, "The microsandbox SDK is not installed for this platform."
+            False, t("intelligences.agent_environment.runtime.sdk_missing")
         )
     version = microsandbox.version()
     try:
@@ -112,13 +113,17 @@ def doctor() -> AgentEnvironmentHealth:
     except OSError as exc:
         return AgentEnvironmentHealth(
             False,
-            f"The microsandbox runtime could not be placed under {home}: {exc}",
+            t(
+                "intelligences.agent_environment.runtime.not_placed",
+                home=home,
+                error=exc,
+            ),
             home=str(home),
         )
     if not microsandbox.is_installed():
         return AgentEnvironmentHealth(
             False,
-            "The microsandbox runtime (msb and libkrunfw) is not installed.",
+            t("intelligences.agent_environment.runtime.not_installed"),
             home=str(home),
         )
     return AgentEnvironmentHealth(True, runtime_version=version, home=str(home))
@@ -332,7 +337,7 @@ class AgentEnvironment:
             )
         except Exception as exc:
             raise AgentEnvironmentError(
-                f"Could not start the environment: {exc}"
+                t("intelligences.agent_environment.runtime.start_failed", error=exc)
             ) from exc
         return cls(sandbox, spec)
 
@@ -357,7 +362,11 @@ class AgentEnvironment:
             )
         except Exception as exc:
             raise AgentEnvironmentError(
-                f"Could not start '{command}' in the environment: {exc}"
+                t(
+                    "intelligences.agent_environment.runtime.exec_failed",
+                    command=command,
+                    error=exc,
+                )
             ) from exc
         return EnvironmentProcess(handle, limit=limit)
 
@@ -422,7 +431,7 @@ async def build_snapshot(
             )
     except Exception as exc:
         raise AgentEnvironmentError(
-            f"Could not start the build environment: {exc}"
+            t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
         ) from exc
     try:
         for step in steps:
@@ -437,7 +446,11 @@ async def build_snapshot(
             code = await process.wait()
             if code != 0:
                 raise AgentEnvironmentError(
-                    f"Build step '{step.label}' failed with exit code {code}."
+                    t(
+                        "intelligences.agent_environment.runtime.build_step_failed",
+                        step=step.label,
+                        code=code,
+                    )
                 )
         await sandbox.stop(timeout=_STOP_TIMEOUT)
         snapshot = await Snapshot.create(
@@ -447,7 +460,9 @@ async def build_snapshot(
     except AgentEnvironmentError:
         raise
     except Exception as exc:
-        raise AgentEnvironmentError(f"Could not build the snapshot: {exc}") from exc
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.build_failed", error=exc)
+        ) from exc
     finally:
         with suppress(Exception):
             await (await Sandbox.get(_BUILD_NAME)).destroy(force=True)
@@ -484,7 +499,11 @@ async def remove_snapshot(path: Path) -> None:
         await Snapshot.remove(str(path), force=True)
     except Exception as exc:
         raise AgentEnvironmentError(
-            f"Could not remove the snapshot at {path}: {exc}"
+            t(
+                "intelligences.agent_environment.runtime.remove_failed",
+                path=path,
+                error=exc,
+            )
         ) from exc
 
 

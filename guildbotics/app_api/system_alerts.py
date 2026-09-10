@@ -6,10 +6,11 @@ import json
 import threading
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from guildbotics.app_api.agent_environment_status import EnvironmentProblemEntry
 from guildbotics.app_api.models import (
+    DeviceSetting,
     RuntimeStatus,
     SystemAlert,
     SystemAlertAction,
@@ -60,9 +61,13 @@ _RELEVANT_EVENT_TYPES = frozenset(
 )
 _STATE_VERSION = 3
 _ALERT_ID_PARTS = 3
-#: Alert key template and code by the ``setting`` of an environment problem.
+#: Alert key template and code by the ``setting`` of an environment problem:
+#: the device is one alert whichever part of it is the problem.
 _AGENT_ENVIRONMENT_ALERTS: dict[str, tuple[str, SystemAlertCode]] = {
-    "environment": ("agent-environment:device", "agent_environment_unavailable"),
+    **dict.fromkeys(
+        get_args(DeviceSetting),
+        ("agent-environment:device", "agent_environment_unavailable"),
+    ),
     "tool": ("agent-environment:tool:{slot}", "agent_environment_tool_unavailable"),
     "grants": (
         "agent-environment:{person_id}:{slot}",

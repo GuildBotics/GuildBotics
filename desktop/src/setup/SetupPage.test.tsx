@@ -1356,6 +1356,7 @@ function environmentStatus(
       },
     ],
     problem: "",
+    problem_setting: "",
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
     ...overrides,

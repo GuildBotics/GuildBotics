@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
@@ -27,6 +28,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     redact_path,
     resolve_access,
 )
+from guildbotics.utils.i18n_tool import t
 
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
 
@@ -53,22 +55,34 @@ def test_a_full_network_block_round_trips() -> None:
 @pytest.mark.parametrize(
     ("raw", "message"),
     [
-        ("deny", "must be a mapping"),
-        ({**_CLOSED, "mode": "allowlist"}, "needs at least one allowed domain"),
+        (
+            "deny",
+            t(
+                "intelligences.agent_environment.grants.network_not_a_mapping",
+                where="AI CLI tool 'x'",
+            ),
+        ),
+        (
+            {**_CLOSED, "mode": "allowlist"},
+            t("intelligences.agent_environment.grants.allowlist_needs_domain"),
+        ),
         (
             {**_CLOSED, "allowed_domains": ["docs.npmjs.com"]},
-            "only used with mode 'allowlist'",
+            t("intelligences.agent_environment.grants.domains_need_allowlist"),
         ),
         ({**_CLOSED, "x": 1}, "Extra inputs"),
         (
             {**_CLOSED, "mode": "allowlist", "allowed_domains": ["https://a.example"]},
-            "is not a domain name",
+            t(
+                "intelligences.agent_environment.grants.not_a_domain",
+                domain="https://a.example",
+            ),
         ),
         ({"command": _CLOSED, "web": _CLOSED}, "Extra inputs"),
     ],
 )
 def test_inconsistent_network_blocks_are_rejected(raw: object, message: str) -> None:
-    with pytest.raises(AccessContractError, match=message) as excinfo:
+    with pytest.raises(AccessContractError, match=re.escape(message)) as excinfo:
         parse_network_policy(raw, where="AI CLI tool 'x'")
 
     assert "AI CLI tool 'x'" in str(excinfo.value)
@@ -221,13 +235,19 @@ def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
     outside.mkdir()
     (home / "link").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(AccessContractError, match="is not a directory"):
+    not_a_directory = t(
+        "intelligences.agent_environment.grants.document_not_a_directory", path="notes"
+    )
+    with pytest.raises(AccessContractError, match=re.escape(not_a_directory)):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
             LocalGrants(),
             home,
         )
-    with pytest.raises(AccessContractError, match="below the home directory"):
+    outside = t(
+        "intelligences.agent_environment.grants.document_outside_home", path="link"
+    )
+    with pytest.raises(AccessContractError, match=re.escape(outside)):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="link", access="read")]),
             LocalGrants(),
@@ -300,7 +320,10 @@ def test_the_builtin_denies_are_the_credential_directories_that_exist(
         (Path("/opt/homebrew/etc").resolve(), False),
         ((home / ".local/share/some-app").resolve(), False),
     ]
-    with pytest.raises(AccessContractError, match="whole home directory"):
+    too_broad = t(
+        "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
+    )
+    with pytest.raises(AccessContractError, match=re.escape(too_broad)):
         resolve_access(SharedGrants(), LocalGrants(deny=[str(home)]), home)
 
 
@@ -326,14 +349,20 @@ def test_a_local_path_must_exist_on_this_device(tmp_path: Path) -> None:
     ]
 
     missing = LocalGrants(paths=[LocalPathGrant(path="/opt/nowhere", access="read")])
-    with pytest.raises(AccessContractError, match="does not exist on this device"):
+    missing_here = t(
+        "intelligences.agent_environment.grants.local_path_missing", path="/opt/nowhere"
+    )
+    with pytest.raises(AccessContractError, match=re.escape(missing_here)):
         resolve_access(SharedGrants(), missing, home)
     # A preview points at the row instead of failing as a whole.
     preview = resolve_access(SharedGrants(), missing, home, create=False)
     assert [(g.path, g.present) for g in preview.paths] == [
         (Path("/opt/nowhere").resolve(), False)
     ]
-    with pytest.raises(AccessContractError, match="whole home directory"):
+    too_broad = t(
+        "intelligences.agent_environment.grants.local_path_too_broad", path=str(home)
+    )
+    with pytest.raises(AccessContractError, match=re.escape(too_broad)):
         resolve_access(
             SharedGrants(),
             LocalGrants(paths=[LocalPathGrant(path=str(home), access="read")]),

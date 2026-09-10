@@ -10,6 +10,7 @@ set of words.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from guildbotics.intelligences.agent_environment import runtime, snapshot
 from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
@@ -24,6 +25,12 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, CliAgentInfo
+from guildbotics.utils.i18n_tool import t
+
+#: Which part of the device a refusal is about, so whoever shows it can point
+#: at what to do: the runtime this device lacks, the shared declaration (or
+#: the resolvers it names), the snapshot to build, or a build to wait for.
+DeviceSetting = Literal["runtime", "declaration", "snapshot", "building"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,11 +55,14 @@ class ToolStatus:
     def refusal(self) -> str:
         """Why a turn of this tool cannot start here, or "" when it can."""
         if not self.provisioned:
-            return f"{self.label} is not provisioned in the agent environment yet."
+            return t(
+                "intelligences.agent_environment.tool.not_provisioned", tool=self.label
+            )
         if not self.logged_in:
-            return (
-                f"{self.label} is not logged in on this device; run "
-                f"`guildbotics environment login {self.name}`."
+            return t(
+                "intelligences.agent_environment.tool.not_logged_in",
+                tool=self.label,
+                name=self.name,
             )
         return ""
 
@@ -85,6 +95,19 @@ class DeviceStatus:
         if self.dns.problem:
             return self.dns.problem
         return _not_ready(self.snapshot)
+
+    @property
+    def setting(self) -> DeviceSetting | Literal[""]:
+        """What :attr:`refusal` is about, or "" when nothing refuses."""
+        if not self.runtime.available:
+            return "runtime"
+        if self.snapshot is None or self.dns.problem:
+            return "declaration"
+        if self.snapshot.state == "building":
+            return "building"
+        if self.snapshot.state != "ready":
+            return "snapshot"
+        return ""
 
     @property
     def ready(self) -> bool:
@@ -149,13 +172,11 @@ def _not_ready(status: SnapshotStatus) -> str:
     if status.state == "ready":
         return ""
     if status.state == "building":
-        return (
-            "The agent environment is being built on this device; "
-            "try again when it is ready."
-        )
+        return t("intelligences.agent_environment.snapshot.building")
     if status.state == "failed":
-        return f"The agent environment failed to build on this device: {status.detail}"
-    return (
-        f"The agent environment is {status.state} on this device; build it with "
-        "`guildbotics environment build`."
-    )
+        return t(
+            "intelligences.agent_environment.snapshot.failed", detail=status.detail
+        )
+    if status.state == "stale":
+        return t("intelligences.agent_environment.snapshot.stale")
+    return t("intelligences.agent_environment.snapshot.missing")

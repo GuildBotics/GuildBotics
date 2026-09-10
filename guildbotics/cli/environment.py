@@ -131,7 +131,13 @@ def status_command(output_format: str) -> None:
     if health["home"]:
         click.echo(f"runtime home: {health['home']}")
     state = payload["snapshot"]
-    detail = f" ({state['detail']})" if state["detail"] else ""
+    # The reason is the device's; what to do about it is this command's.
+    hint = state["detail"] or (
+        "run `guildbotics environment build`"
+        if state["state"] in ("missing", "stale")
+        else ""
+    )
+    detail = f" ({hint})" if hint else ""
     click.echo(f"snapshot: {state['state']} {state['name']}{detail}")
     click.echo(f"location: {state['path']}")
     dns = payload["dns"]

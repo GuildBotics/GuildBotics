@@ -17,6 +17,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
 )
+from guildbotics.utils.i18n_tool import t
 
 
 @pytest.fixture
@@ -57,63 +58,77 @@ def device(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
     status = device_status()
 
-    assert status.ready and status.refusal == ""
+    assert status.ready and (status.refusal, status.setting) == ("", "")
     assert (status.dns.declared, status.dns.nameservers) == ("host", ("192.168.3.1",))
     assert status.tool("codex").refusal == ""
-    assert status.tool("claude").refusal == (
-        "Claude Code is not logged in on this device; run "
-        "`guildbotics environment login claude`."
+    assert status.tool("claude").refusal == t(
+        "intelligences.agent_environment.tool.not_logged_in",
+        tool="Claude Code",
+        name="claude",
     )
-    assert status.tool("grok").refusal == (
-        "Grok Build is not provisioned in the agent environment yet."
+    assert status.tool("grok").refusal == t(
+        "intelligences.agent_environment.tool.not_provisioned", tool="Grok Build"
     )
     with pytest.raises(ValueError):
         status.tool("nope")
 
 
 @pytest.mark.parametrize(
-    ("part", "value", "expected"),
+    ("part", "value", "expected", "setting"),
     [
-        ("health", AgentEnvironmentHealth(False, "no hypervisor"), "no hypervisor"),
+        (
+            "health",
+            AgentEnvironmentHealth(False, "no hypervisor"),
+            "no hypervisor",
+            "runtime",
+        ),
         (
             "declaration",
             ToolchainError("agent_environment.yml: bad"),
             "agent_environment.yml: bad",
+            "declaration",
         ),
-        ("nameservers", ToolchainError("no IPv4 resolver"), "no IPv4 resolver"),
+        (
+            "nameservers",
+            ToolchainError("no IPv4 resolver"),
+            "no IPv4 resolver",
+            "declaration",
+        ),
         (
             "snapshot",
             SnapshotStatus("missing", "guildbotics-abc", Path("/snap")),
-            "The agent environment is missing on this device; build it with "
-            "`guildbotics environment build`.",
+            t("intelligences.agent_environment.snapshot.missing"),
+            "snapshot",
         ),
         (
             "snapshot",
             SnapshotStatus("stale", "guildbotics-abc", Path("/snap")),
-            "The agent environment is stale on this device; build it with "
-            "`guildbotics environment build`.",
+            t("intelligences.agent_environment.snapshot.stale"),
+            "snapshot",
         ),
         (
             "snapshot",
             SnapshotStatus("building", "guildbotics-abc", Path("/snap")),
-            "The agent environment is being built on this device; try again when "
-            "it is ready.",
+            t("intelligences.agent_environment.snapshot.building"),
+            "building",
         ),
         (
             "snapshot",
             SnapshotStatus("failed", "guildbotics-abc", Path("/snap"), "E: boom"),
-            "The agent environment failed to build on this device: E: boom",
+            t("intelligences.agent_environment.snapshot.failed", detail="E: boom"),
+            "snapshot",
         ),
     ],
 )
 def test_the_refusal_is_the_first_thing_a_turn_would_stop_on(
-    device, part: str, value: object, expected: str
+    device, part: str, value: object, expected: str, setting: str
 ) -> None:
     device[part] = value
 
     status = device_status()
 
-    assert status.refusal == expected
+    # The reason and what it is about are one reading, so they never disagree.
+    assert (status.refusal, status.setting) == (expected, setting)
     assert not status.ready
 
 

@@ -61,6 +61,7 @@ function status(
       },
     ],
     problem: "",
+    problem_setting: "",
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
     ...overrides,
@@ -184,6 +185,7 @@ describe("AgentEnvironmentCard", () => {
         },
         snapshot: { state: "missing", name: "guildbotics-abc", detail: "", output: [] },
         problem: "The microsandbox runtime is not installed.",
+        problem_setting: "runtime",
       }),
     );
     renderCard();

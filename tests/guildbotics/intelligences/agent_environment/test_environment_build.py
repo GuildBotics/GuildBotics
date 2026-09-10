@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     build_snapshot,
     remove_snapshot,
 )
+from guildbotics.utils.i18n_tool import t
 
 
 def _event(kind: str, **fields: Any) -> SimpleNamespace:
@@ -186,7 +188,10 @@ async def test_a_failing_step_names_itself_and_the_build_sandbox_is_dropped(
 ) -> None:
     lines: list[str] = []
 
-    with pytest.raises(AgentEnvironmentError, match="'apt' failed with exit code 7"):
+    failed = t(
+        "intelligences.agent_environment.runtime.build_step_failed", step="apt", code=7
+    )
+    with pytest.raises(AgentEnvironmentError, match=re.escape(failed)):
         await build_snapshot(
             "guildbotics-abc",
             dest_dir=tmp_path,

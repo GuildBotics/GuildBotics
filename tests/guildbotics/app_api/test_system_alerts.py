@@ -558,7 +558,7 @@ def test_environment_problems_open_one_alert_per_thing_to_fix(
 ) -> None:
     service = SystemAlertService(DiagnosticsStore(tmp_path / "diagnostics.jsonl"))
     problems = [
-        ("", "", "environment", "The agent environment is missing on this device."),
+        ("", "", "snapshot", "The agent environment is missing on this device."),
         ("", "codex", "tool", "Codex is not logged in on this device."),
         ("aiko", "default", "grants", "local path '/opt/x' does not exist here"),
         ("kenji", "default", "grants", "local path '/opt/x' does not exist here"),
@@ -583,7 +583,7 @@ def test_environment_problems_open_one_alert_per_thing_to_fix(
             "warning",
             "",
             "",
-            "environment",
+            "snapshot",
             ["setup"],
         ),
         (

@@ -32,6 +32,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 )
 from guildbotics.intelligences.brains.cli_agent import ExecutableInfo
 from guildbotics.intelligences.cli_agents import CLI_AGENTS
+from guildbotics.utils.i18n_tool import t
 
 
 def _network(mode: str = "deny", **extra):
@@ -128,18 +129,25 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     )
     assert status.snapshot.output == ["[apt]", "E: boom"]
     assert (status.dns.declared, status.dns.nameservers) == ("host", ["192.168.3.1"])
-    assert status.problem == (
-        "The agent environment failed to build on this device: boom"
+    assert (status.problem, status.problem_setting) == (
+        t("intelligences.agent_environment.snapshot.failed", detail="boom"),
+        "snapshot",
     )
     tools = {tool.name: tool for tool in status.tools}
     assert tools["codex"].config_reference == "cli_agents/codex/default.yml"
     assert (tools["codex"].provisioned, tools["codex"].logged_in) == (True, False)
-    assert "not logged in on this device" in tools["codex"].problem
+    assert tools["codex"].problem == t(
+        "intelligences.agent_environment.tool.not_logged_in", tool="Codex", name="codex"
+    )
     assert (tools["grok"].provisioned, tools["grok"].problem) == (
         False,
-        "Grok Build is not provisioned in the agent environment yet.",
+        t("intelligences.agent_environment.tool.not_provisioned", tool="Grok Build"),
     )
-    assert tools["claude"].problem.startswith("Claude Code is not logged in")
+    assert tools["claude"].problem == t(
+        "intelligences.agent_environment.tool.not_logged_in",
+        tool="Claude Code",
+        name="claude",
+    )
 
 
 def test_problems_name_the_device_once_and_only_the_tools_in_use(
@@ -150,16 +158,20 @@ def test_problems_name_the_device_once_and_only_the_tools_in_use(
 
     problems = agent_environment_problems(["aiko", "kenji"])
 
-    # The device is one problem however many members there are; Claude is
-    # not logged in either, but no slot uses it, so it is not one.
+    # The device is one problem however many members there are, named by the
+    # part that is wrong; Claude is not logged in either, but no slot uses it,
+    # so it is not one.
     assert problems == [
-        ("", "", "environment", "no hypervisor"),
+        ("", "", "runtime", "no hypervisor"),
         (
             "",
             "codex",
             "tool",
-            "Codex is not logged in on this device; run "
-            "`guildbotics environment login codex`.",
+            t(
+                "intelligences.agent_environment.tool.not_logged_in",
+                tool="Codex",
+                name="codex",
+            ),
         ),
     ]
 
@@ -226,7 +238,10 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
             "",
             "grok",
             "tool",
-            "Grok Build is not provisioned in the agent environment yet.",
+            t(
+                "intelligences.agent_environment.tool.not_provisioned",
+                tool="Grok Build",
+            ),
         )
     ]
 
@@ -255,24 +270,30 @@ def test_an_unresolvable_local_path_is_reported_on_every_slot(
         ("/opt/nowhere", False)
     ]
     assert [(p.setting, p.reason) for p in status.members[0].slots[0].problems] == [
-        ("grants", "local path '/opt/nowhere' does not exist on this device")
+        (
+            "grants",
+            t(
+                "intelligences.agent_environment.grants.local_path_missing",
+                path="/opt/nowhere",
+            ),
+        )
     ]
 
 
 @pytest.mark.parametrize(
-    ("scope", "path", "access", "valid", "present", "reason_part", "sensitive"),
+    ("scope", "path", "access", "valid", "present", "reason", "sensitive"),
     [
         ("document", "Documents", "read", True, True, "", ""),
         ("document", "Projects/new", "read_write", True, False, "", ""),
-        ("document", "/opt/x", "read", False, False, "relative to the home", ""),
-        ("document", "..", "read", False, False, "must name a directory", ""),
+        ("document", "/opt/x", "read", False, False, "path_not_relative", ""),
+        ("document", "..", "read", False, False, "path_not_a_directory_name", ""),
         ("document", ".ssh", "read", True, True, "", "~/.ssh"),
-        ("local", "/opt/nowhere", "read", False, False, "does not exist", ""),
+        ("local", "/opt/nowhere", "read", False, False, "local_path_missing", ""),
         ("local", ".cache/uv", "read_write", True, True, "", ""),
         ("local", ".codex", "read", True, True, "", "~/.codex"),
         ("deny", "/opt/homebrew/etc", "", True, True, "", ""),
         ("deny", ".local/share/some-app", "", True, True, "", ""),
-        ("deny", "..", "", False, False, "must name a directory", ""),
+        ("deny", "..", "", False, False, "path_not_a_directory_name", ""),
     ],
 )
 def test_a_typed_grant_is_judged_before_it_is_saved(
@@ -282,7 +303,7 @@ def test_a_typed_grant_is_judged_before_it_is_saved(
     access: str,
     valid: bool,
     present: bool,
-    reason_part: str,
+    reason: str,
     sensitive: str,
 ) -> None:
     for name in ("Documents", ".ssh", ".cache/uv", ".codex"):
@@ -292,7 +313,9 @@ def test_a_typed_grant_is_judged_before_it_is_saved(
 
     assert evaluation.valid is valid
     assert evaluation.present is present
-    assert reason_part in evaluation.reason
+    # ``reason`` names the sentence under intelligences.agent_environment.grants.
+    expected = t(f"intelligences.agent_environment.grants.{reason}", path=path)
+    assert evaluation.reason == (expected if reason else "")
     assert evaluation.sensitive == sensitive
     assert not (home / "Projects/new").exists()
 
@@ -301,7 +324,9 @@ def test_a_deny_that_would_close_the_home_is_refused(home: Path) -> None:
     refused = evaluate_grant("deny", str(home))
 
     assert refused.valid is False
-    assert "whole home directory" in refused.reason
+    assert refused.reason == t(
+        "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
+    )
 
 
 def test_the_sandbox_endpoints_answer_from_this_device(

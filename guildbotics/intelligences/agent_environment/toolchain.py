@@ -21,6 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
+from guildbotics.utils.i18n_tool import t
 
 #: The shared declaration, resolved like every configuration file: the
 #: workspace's own copy first, the package template otherwise.
@@ -35,7 +36,12 @@ def _package_specs(specs: list[str]) -> list[str]:
     """A package spec is one argument to the package manager: never an option."""
     for spec in specs:
         if not spec or any(ch.isspace() for ch in spec) or spec.startswith("-"):
-            raise ValueError(f"'{spec}' is not a package specification")
+            raise ValueError(
+                t(
+                    "intelligences.agent_environment.declaration.not_a_package",
+                    spec=spec,
+                )
+            )
     return specs
 
 
@@ -82,12 +88,22 @@ class DnsSettings(BaseModel):
         if isinstance(nameservers, str):
             return nameservers
         if not nameservers:
-            raise ValueError("name at least one nameserver, or 'host'")
+            raise ValueError(
+                t(
+                    "intelligences.agent_environment.declaration.no_nameservers",
+                    host=HOST_NAMESERVERS,
+                )
+            )
         for nameserver in nameservers:
             try:
                 ipaddress.IPv4Address(nameserver)
             except ValueError as exc:
-                raise ValueError(f"'{nameserver}' is not an IPv4 address") from exc
+                raise ValueError(
+                    t(
+                        "intelligences.agent_environment.declaration.not_ipv4",
+                        nameserver=nameserver,
+                    )
+                ) from exc
         return nameservers
 
 
@@ -103,8 +119,11 @@ def upstream_nameservers(dns: DnsSettings) -> tuple[str, ...]:
     resolvers = device_nameservers()
     if not resolvers:
         raise ToolchainError(
-            f"{TOOLCHAIN_PATH}: dns.nameservers is '{HOST_NAMESERVERS}' but this "
-            "device has no IPv4 resolver; name the nameservers explicitly"
+            t(
+                "intelligences.agent_environment.declaration.no_device_resolver",
+                where=TOOLCHAIN_PATH,
+                host=HOST_NAMESERVERS,
+            )
         )
     return resolvers
 
@@ -157,7 +176,9 @@ class ToolchainDeclaration(BaseModel):
 def parse_toolchain(raw: Any, *, where: str) -> ToolchainDeclaration:
     """Validate a loaded declaration; ``where`` names it in the error."""
     if not isinstance(raw, dict):
-        raise ToolchainError(f"{where}: the declaration must be a mapping")
+        raise ToolchainError(
+            t("intelligences.agent_environment.declaration.not_a_mapping", where=where)
+        )
     try:
         return ToolchainDeclaration.model_validate(raw)
     except ValidationError as exc:

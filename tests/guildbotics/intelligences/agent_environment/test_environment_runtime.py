@@ -30,6 +30,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     EnvironmentMount,
     EnvironmentNetwork,
 )
+from guildbotics.utils.i18n_tool import t
 
 
 def _event(kind: str, **fields: Any) -> SimpleNamespace:
@@ -218,7 +219,7 @@ def test_doctor_reports_a_runtime_the_sdk_still_does_not_see(
     monkeypatch.setattr(microsandbox, "is_installed", lambda: False)
     assert doctor() == AgentEnvironmentHealth(
         False,
-        "The microsandbox runtime (msb and libkrunfw) is not installed.",
+        t("intelligences.agent_environment.runtime.not_installed"),
         home=str(runtime.runtime_home()),
     )
 
@@ -234,8 +235,11 @@ def test_doctor_reports_a_home_the_runtime_cannot_be_placed_in(
     health = doctor()
 
     assert not health.available
-    assert "could not be placed under" in health.reason
-    assert "read-only" in health.reason
+    assert health.reason == t(
+        "intelligences.agent_environment.runtime.not_placed",
+        home=runtime.runtime_home(),
+        error="read-only",
+    )
 
 
 def test_the_windows_firewall_rule_is_created_once_for_the_fixed_path(
@@ -280,7 +284,7 @@ def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:
     monkeypatch.setattr(builtins, "__import__", refuse)
 
     assert doctor() == AgentEnvironmentHealth(
-        False, "The microsandbox SDK is not installed for this platform."
+        False, t("intelligences.agent_environment.runtime.sdk_missing")
     )
 
 

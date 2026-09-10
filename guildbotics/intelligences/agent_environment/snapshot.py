@@ -48,6 +48,7 @@ from guildbotics.utils.advisory_lock import (
     unlock_file,
 )
 from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.i18n_tool import t
 
 #: The base image: Debian with Node.js, npm, and git, the tools the provider
 #: CLIs are installed and run with. Pinned to an exact tag so two devices
@@ -251,8 +252,10 @@ async def build_snapshot(
                 reason = (
                     str(exc)
                     if isinstance(exc, AgentEnvironmentError)
-                    else "The build did not finish within "
-                    f"{int(BUILD_TIMEOUT_SECONDS // 60)} minutes."
+                    else t(
+                        "intelligences.agent_environment.snapshot.build_timeout",
+                        minutes=int(BUILD_TIMEOUT_SECONDS // 60),
+                    )
                 )
                 failed.write_text(f"{reason}\n")
                 raise AgentEnvironmentError(reason) from exc
@@ -264,7 +267,7 @@ async def build_snapshot(
             return SnapshotStatus("ready", name, path)
     except LockTimeoutError as exc:
         raise AgentEnvironmentError(
-            "Another build of this workspace's agent environment is already running."
+            t("intelligences.agent_environment.snapshot.build_running")
         ) from exc
 
 
