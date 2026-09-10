@@ -77,7 +77,9 @@ test("sends a troubleshooting question through the real backend and reports the 
 }) => {
   // `functions/troubleshoot` is a `brain: agent` command, so the assistant turn
   // reaches the real FastAPI endpoint and launches the member's AI CLI tool —
-  // which the harness has shadowed with a stub that fails immediately. That is
+  // Every turn of an AI CLI tool boots inside the isolated agent environment,
+  // and this stack's temp HOME holds none (no snapshot was ever built there),
+  // so the device refuses the turn before any process starts. That refusal is
   // exactly the wire this journey exists to prove: client.ts ->
   // /diagnostics/troubleshoot -> AppRuntime -> error mapping -> the panel's
   // error alert. Answer quality and the branch matrix are covered by the unit /
@@ -100,21 +102,24 @@ test("sends a troubleshooting question through the real backend and reports the 
   await panel.getByLabel("Message to troubleshooting AI").fill("Why did the service fail?");
   await panel.getByRole("button", { name: "Send" }).click();
 
-  // The wire contract this journey proves: the stub's non-zero exit comes back
-  // as the typed 502 (not an unmapped 500, not a CORS-blocked "Failed to
-  // fetch"), and the panel shows the backend's reason for the failure, not
-  // just a generic failure title. The exact wording is owned by the CLI agent
-  // adapter, so the assertion pins the error type and echoes the response
-  // message into the panel instead of hard-coding adapter prose.
+  // The wire contract this journey proves: the device's refusal comes back as
+  // the typed 502 (not an unmapped 500, not a CORS-blocked "Failed to fetch"),
+  // and the panel shows the backend's reason for the failure, not just a
+  // generic failure title. The reason differs by machine (no virtualization,
+  // no runtime, no snapshot) and its wording is owned by the environment
+  // status, so the assertion pins the error type and echoes the response
+  // message into the panel instead of hard-coding backend prose.
   const response = await request;
   expect(response.status()).toBe(502);
   const body = await response.json();
   expect(body.code).toBe("troubleshooting_failed");
-  expect(body.message).toContain("exited with code 1");
   await expect(panel.getByText("The troubleshooting AI could not answer")).toBeVisible();
   await expect(panel.getByText(body.message)).toBeVisible();
 
-  // The turn stopped at the stub: the failure came from the harness, not from a
-  // real — possibly logged-in — binary on the machine running the suite.
-  expect(readFileSync(ctx.cliStubLog, "utf-8")).toMatch(/^codex\b/m);
+  // The turn never reached a process: no AI CLI tool runs on the host, and the
+  // environment gate closed before one could start inside the microVM. The
+  // harness still shadows every tool on PATH as a tripwire, and its log staying
+  // empty is what proves that nothing on the machine running the suite — a
+  // real, possibly logged-in binary — was ever launched.
+  expect(readFileSync(ctx.cliStubLog, "utf-8")).toBe("");
 });

@@ -102,13 +102,14 @@ function cliAgentExecutables() {
 }
 
 // Shadow every AI CLI tool with a stub that records the call and fails at once,
-// and put the stub dir at the FRONT of the backend's PATH. A journey that
-// reaches the agent path — `brain: agent`, as `functions/troubleshoot` does —
-// would otherwise launch whatever real binary the developer has installed: a
-// live, billed agent turn on a logged-in machine, a test-timeout on a logged-out
-// one, and an instant miss on CI where nothing is installed at all. Shadowing
-// keeps that wiring under test while the run stays hermetic and fast, and the
-// log lets a spec prove the real binary was never reached.
+// and put the stub dir at the FRONT of the backend's PATH. No turn runs a
+// provider CLI on the host: every turn boots inside the isolated agent
+// environment, and this stack's temp HOME holds none, so the device refuses
+// the turn before a process starts. The stub stays as a tripwire for a journey
+// that reaches the agent path — `brain: agent`, as `functions/troubleshoot`
+// does: its log staying empty is how a spec proves that whatever real binary
+// the developer has installed (a live, billed agent turn on a logged-in
+// machine) was never launched.
 const cliStubDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-bin-`));
 const cliStubLog = join(cliStubDir, "invocations.log");
 writeFileSync(cliStubLog, "", { mode: 0o600 });

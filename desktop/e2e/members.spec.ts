@@ -37,7 +37,21 @@ test("adds a second member through the UI and persists it to the backend", async
   await page.getByLabel("Display name").fill("Second Agent");
   await page.getByRole("combobox", { name: "Roles", exact: true }).click();
   await page.getByRole("option", { name: "product" }).click();
+
+  // Adding a member is one real `POST /config/members`, and the backend writes
+  // person.yml before it answers. While the request is in flight the form is
+  // still open, and its identity preview shows the same "name (id)" line as a
+  // list row, so a row match alone cannot tell the saved member from the
+  // draft: wait for the wire to answer and the form to close before reading
+  // the list and the disk.
+  const saved = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/config/members" &&
+      response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Add member" }).click();
+  expect((await saved).status()).toBe(200);
+  await expect(page.getByRole("button", { name: "Add new member" })).toBeVisible();
 
   // The reloaded list (driven by the real /team response) now shows BOTH members.
   await expect(memberRow("Second Agent (local-agent-2)")).toBeVisible({ timeout: 30_000 });
