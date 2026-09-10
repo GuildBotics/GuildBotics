@@ -119,7 +119,7 @@ npm run e2e
 補足:
 
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
-- 各スタックの backend は temp workspace / temp HOME で動きます。AI CLIツールの turn はエージェント隔離環境の中でだけ起動し、temp HOME にはその環境（snapshot）が無いため、`brain: agent` の journey（⑤のトラブルシューティングAI）は turn の開始前に端末の拒否として失敗します。加えて harness は AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に置き、その呼び出しログが空のままであることで実バイナリが一度も起動していないことを spec が確認します。
+- 各スタックの backend は temp workspace / temp HOME で動きます。harness は temp HOME のエージェント隔離環境の runtime 置き場（`~/.guildbotics/data/msb`）にただのファイルを置き、その端末を「runtime を置けない端末」にします。製品はこの状態を fail-closed に扱うので、service を start しても snapshot の build（container image の取得）は始まらず、`brain: agent` の journey（⑤のトラブルシューティングAI）は turn の開始前に端末の拒否として失敗します。加えて harness は AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に置き、その呼び出しログが空のままであることで実バイナリが一度も起動していないことを spec が確認します。
 - E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイルを変更する pull request、手動実行、nightly で実行します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
 - 各スタックの Local API token は harness が起動ごとにランダム生成し、stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）経由で spec へ渡します。CORS は各スタックの Vite origin だけを許可します。

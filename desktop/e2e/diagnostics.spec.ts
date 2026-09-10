@@ -78,8 +78,9 @@ test("sends a troubleshooting question through the real backend and reports the 
   // `functions/troubleshoot` is a `brain: agent` command, so the assistant turn
   // reaches the real FastAPI endpoint and launches the member's AI CLI tool —
   // Every turn of an AI CLI tool boots inside the isolated agent environment,
-  // and this stack's temp HOME holds none (no snapshot was ever built there),
-  // so the device refuses the turn before any process starts. That refusal is
+  // and the harness makes this stack a device that cannot hold that
+  // environment's runtime (see `start-stack.mjs`), so the device refuses the
+  // turn before any process starts. That refusal is
   // exactly the wire this journey exists to prove: client.ts ->
   // /diagnostics/troubleshoot -> AppRuntime -> error mapping -> the panel's
   // error alert. Answer quality and the branch matrix are covered by the unit /

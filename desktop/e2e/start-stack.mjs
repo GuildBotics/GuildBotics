@@ -86,34 +86,53 @@ const workspaceDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-ws
 const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`));
 const configDir = join(workspaceDir, ".guildbotics", "config");
 
-// The catalog of AI CLI tools lives on the Python side; read it from there so a
-// newly supported tool is shadowed below without a second list to keep in sync.
-function cliAgentExecutables() {
+// Two facts live on the Python side and are read from there so no second copy
+// has to be kept in sync: the catalog of AI CLI tools shadowed below, and where
+// this stack's backend will keep the agent environment runtime. The latter is
+// derived from HOME, so it is asked with the stack's temp HOME in place.
+function backendFacts() {
   const source = [
     "import json",
+    "from guildbotics.intelligences.agent_environment.runtime import runtime_home",
     "from guildbotics.intelligences.cli_agents import CLI_AGENTS",
-    "print(json.dumps([agent.executable for agent in CLI_AGENTS]))",
+    "print(json.dumps({" +
+      "'executables': [agent.executable for agent in CLI_AGENTS], " +
+      "'runtime_home': str(runtime_home())}))",
   ].join("; ");
   return JSON.parse(
     execFileSync("uv", ["run", "--project", repoRoot, "python", "-c", source], {
       encoding: "utf-8",
+      env: { ...process.env, HOME: homeDir },
     }),
   );
 }
+const { executables: cliAgentExecutables, runtime_home: runtimeHome } = backendFacts();
+
+// Every AI CLI turn boots inside the isolated agent environment, and the
+// service keeps that environment built while it runs (`SnapshotUpkeep`). Left
+// alone, the configured stack would copy the bundled runtime into its temp HOME
+// and pull a container image over the network the moment `service.spec.ts`
+// starts the service. A device that cannot hold the runtime is a state the
+// product handles fail-closed — no build, no turn, one warning in the log — so
+// this stack is made exactly that device: a plain file sits where the runtime
+// home would be, and placing the runtime fails at its first mkdir. The SDK is
+// still imported and version-checked; nothing is written or fetched.
+mkdirSync(dirname(runtimeHome), { recursive: true, mode: 0o700 });
+writeFileSync(runtimeHome, "", { mode: 0o600 });
 
 // Shadow every AI CLI tool with a stub that records the call and fails at once,
 // and put the stub dir at the FRONT of the backend's PATH. No turn runs a
 // provider CLI on the host: every turn boots inside the isolated agent
-// environment, and this stack's temp HOME holds none, so the device refuses
-// the turn before a process starts. The stub stays as a tripwire for a journey
-// that reaches the agent path — `brain: agent`, as `functions/troubleshoot`
-// does: its log staying empty is how a spec proves that whatever real binary
-// the developer has installed (a live, billed agent turn on a logged-in
-// machine) was never launched.
+// environment, which this device cannot hold, so the turn is refused before a
+// process starts. The stub stays as a tripwire for a journey that reaches the
+// agent path — `brain: agent`, as `functions/troubleshoot` does: its log
+// staying empty is how a spec proves that whatever real binary the developer
+// has installed (a live, billed agent turn on a logged-in machine) was never
+// launched.
 const cliStubDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-bin-`));
 const cliStubLog = join(cliStubDir, "invocations.log");
 writeFileSync(cliStubLog, "", { mode: 0o600 });
-for (const executable of cliAgentExecutables()) {
+for (const executable of cliAgentExecutables) {
   writeFileSync(
     join(cliStubDir, executable),
     [
