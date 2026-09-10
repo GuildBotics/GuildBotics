@@ -140,8 +140,13 @@ async def test_cli_agent_run_raises_when_the_tool_fails(monkeypatch, tmp_path):
     )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
-    with pytest.raises(cli_agent.CliAgentExecutionError, match="bad option"):
+    with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
         await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    # The brain never sees the tool's process, so the message must not dress
+    # the reason up as an exit code: a device that refused the turn before any
+    # process started reaches here through the same path.
+    assert str(excinfo.value) == "AI CLI tool 'default' failed: bad option"
 
 
 @pytest.mark.asyncio

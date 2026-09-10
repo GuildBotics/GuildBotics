@@ -161,6 +161,16 @@ class CliAgentExecutionResult:
 
 
 class CliAgentExecutionError(RuntimeError):
+    """A turn of an AI CLI tool that produced no usable response.
+
+    The message names the tool and carries the reason as the runtime stated
+    it. It claims no exit code: the brain never observes the tool's process,
+    only the adapter does, and an adapter that saw one exit puts the code in
+    its own words. Most failures reach here without any process at all (the
+    device refused the turn, the tool is not logged in, the session is gone),
+    so ``returncode`` is only the failed / finished distinction.
+    """
+
     def __init__(
         self,
         *,
@@ -173,10 +183,7 @@ class CliAgentExecutionError(RuntimeError):
         self.category = result.error_category
         self.details = dict(result.error_details)
         detail = result.stderr or result.stdout or "no output"
-        super().__init__(
-            message
-            or f"AI CLI tool '{cli_agent}' exited with code {result.returncode}: {detail}"
-        )
+        super().__init__(message or f"AI CLI tool '{cli_agent}' failed: {detail}")
 
 
 def normalize_cli_agent_retry_after(
