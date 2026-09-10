@@ -117,6 +117,46 @@ def test_init_with_auth_token_uses_temporary_askpass(tmp_path: Path):
     assert not askpass_path.exists()
 
 
+def test_reopening_repository_preserves_dormant_config_value(tmp_path: Path):
+    """Identity updates must not turn quoted text into active Git directives."""
+    tool, workspace, remote = _init_git_tool(tmp_path)
+    config_path = Path(tool.repo.git_dir) / "config"
+    dormant = '\tzzz = "A\\nhooksPath = ../unused-hooks\\\n"\n'
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            "[core]\n", "[core]\n" + dormant
+        ),
+        encoding="utf-8",
+    )
+    expected = tool.repo.git.config("--local", "--get", "core.zzz")
+    assert "core.hookspath" not in tool.repo.git.config("--local", "--list").lower()
+    tool.close()
+
+    reopened = GitTool(
+        workspace=workspace,
+        repo_url=str(remote),
+        logger=_logger(),
+        user_name="Updated User",
+        user_email="updated@example.com",
+        default_branch="main",
+    )
+    try:
+        assert (
+            "core.hookspath"
+            not in reopened.repo.git.config("--local", "--list").lower()
+        )
+        assert reopened.repo.git.config("--local", "--get", "core.zzz") == expected
+        assert (
+            reopened.repo.git.config("--local", "--get", "user.name") == "Updated User"
+        )
+        assert (
+            reopened.repo.git.config("--local", "--get", "user.email")
+            == "updated@example.com"
+        )
+    finally:
+        reopened.close()
+
+
 def test_auth_environment_appends_credential_reset_to_command_config(
     monkeypatch, tmp_path: Path
 ) -> None:
