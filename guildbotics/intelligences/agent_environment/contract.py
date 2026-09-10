@@ -203,12 +203,11 @@ class SharedGrants(BaseModel):
     documents: list[DocumentGrant] = Field(default_factory=list)
 
 
-def default_shared_grants() -> SharedGrants:
-    """What a workspace grants before its grants file exists: the exchange
-    directory, read-write."""
-    return SharedGrants(
-        documents=[DocumentGrant(path=EXCHANGE_DIRECTORY, access="read_write")]
-    )
+#: The exchange directory as every turn is granted it: read-write and built
+#: in, so what the Desktop hands over and what an agent makes for the user
+#: always have a place both can reach, whatever the grants file says. A grants
+#: file entry for the same path is ignored rather than merged.
+EXCHANGE_GRANT = DocumentGrant(path=EXCHANGE_DIRECTORY, access="read_write")
 
 
 def exchange_dir(home: Path | None = None) -> Path:
@@ -267,10 +266,10 @@ def _parse[T: BaseModel](model: type[T], raw: Any, where: str) -> T:
 
 
 def load_shared_grants() -> SharedGrants:
-    """The workspace's shared grants; no file means the default."""
+    """The workspace's shared grants; no file means none beyond the built-in."""
     path = get_config_path(FILESYSTEM_GRANTS_PATH)
     if not path.exists():
-        return default_shared_grants()
+        return SharedGrants()
     return parse_shared_grants(load_yaml_file(path), where=FILESYSTEM_GRANTS_PATH)
 
 
@@ -292,13 +291,16 @@ class ResolvedGrant:
     this device can be matched back to the entry that produced it without
     the reader re-deriving how a path is written on this OS. ``present`` is
     False for a document directory a preview found missing; a turn creates
-    it instead, so what the provider receives is always there.
+    it instead, so what the provider receives is always there. ``builtin``
+    marks the grant GuildBotics makes itself (:data:`EXCHANGE_GRANT`), which
+    no grants file entry produced and none can remove.
     """
 
     path: Path
     access: GrantAccess
     grant: str
     present: bool = True
+    builtin: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,11 +349,17 @@ def resolve_access(
     preview passes ``create=False`` and sees it as absent instead. A local
     path must exist here, because this file describes this machine: a turn
     refuses to start over one that does not, and a preview reports it absent
-    so the row can be pointed at.
+    so the row can be pointed at. The exchange directory comes first, built
+    in, ahead of whatever the grants file adds.
     """
     home_root = (home or Path.home()).resolve()
-    documents = tuple(
-        _resolve_document(grant, home_root, create) for grant in shared.documents
+    documents = (
+        _resolve_document(EXCHANGE_GRANT, home_root, create, builtin=True),
+        *(
+            _resolve_document(grant, home_root, create)
+            for grant in shared.documents
+            if grant.path != EXCHANGE_GRANT.path
+        ),
     )
     paths = tuple(_resolve_local(grant, home_root, create) for grant in local.paths)
     denied = (
@@ -365,7 +373,7 @@ def resolve_access(
 
 
 def _resolve_document(
-    grant: DocumentGrant, home_root: Path, create: bool
+    grant: DocumentGrant, home_root: Path, create: bool, *, builtin: bool = False
 ) -> ResolvedGrant:
     target = home_root / grant.path
     if create:
@@ -379,7 +387,9 @@ def _resolve_document(
                 )
             ) from exc
     elif not target.exists():
-        return ResolvedGrant(target, grant.access, grant.path, present=False)
+        return ResolvedGrant(
+            target, grant.access, grant.path, present=False, builtin=builtin
+        )
     real = target.resolve()
     if not real.is_dir():
         raise AccessContractError(
@@ -395,7 +405,7 @@ def _resolve_document(
                 path=grant.path,
             )
         )
-    return ResolvedGrant(real, grant.access, grant.path)
+    return ResolvedGrant(real, grant.access, grant.path, builtin=builtin)
 
 
 def local_path_missing(path: str) -> str:

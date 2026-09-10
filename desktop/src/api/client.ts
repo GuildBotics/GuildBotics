@@ -955,6 +955,8 @@ export type EnvironmentGrantStatus = {
   grant: string;
   access: string;
   present: boolean;
+  // Granted by GuildBotics itself (the exchange directory): shown, not editable.
+  builtin: boolean;
 };
 
 export type EnvironmentDenyStatus = {

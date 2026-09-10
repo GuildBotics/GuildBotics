@@ -851,7 +851,7 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 **LLM / AI CLI ツール設定**:
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
-- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルが無い間は `Documents/GuildBotics`（受け渡しフォルダ）が読み書きで許可され、デスクトップから渡したファイルとエージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
+- `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、デスクトップから渡したファイルとエージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの effort マッピングと、コマンド・組み込み Web 機能の接続先を決める `network:` ブロック。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
 - `intelligences/agent_environment.yml`: 各マシンがエージェント隔離環境にベースイメージの上へ足すもの（`packages` の apt / npm / uv。版を固定して書く）と、環境が使う DNS リゾルバ（`dns.nameservers`: `host` か IPv4 アドレスの一覧）。ワークスペースで共有され、パッケージを変えると全マシンで環境が再ビルドされます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します

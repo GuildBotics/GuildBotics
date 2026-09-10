@@ -142,6 +142,7 @@ def _access_status(
             grant=g.grant,
             access=g.access,
             present=g.present,
+            builtin=g.builtin,
         )
 
     return EnvironmentAccessStatus(
@@ -222,7 +223,7 @@ def evaluate_grant(
             path=path,
             access=access,
             valid=True,
-            present=resolved.documents[0].present,
+            present=resolved.documents[-1].present,
             sensitive=sensitive_grant_reason(path, home),
         )
     if scope == "deny":

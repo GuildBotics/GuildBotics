@@ -966,7 +966,8 @@ const resources = {
           documents: {
             title: "Directories shared by the workspace",
             description:
-              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn is always readable and writable. Documents/GuildBotics is granted read/write until this list says otherwise: it is where files handed over from this app land (its tmp/ is emptied when the app closes) and where agents leave what they make for you.",
+              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn and Documents/GuildBotics (the exchange directory) are always readable and writable: files handed over from this app are placed there (its tmp/ is emptied when the app closes), and so is what agents make for you.",
+            builtin: "built in",
             empty: "No directories registered.",
             pathPlaceholder: "Documents/shared-documents",
           },
@@ -1399,6 +1400,10 @@ const resources = {
           action: "Save",
           saved: "Saved",
           error: "Save failed",
+        },
+        invalidSave: {
+          title: "Nothing was saved",
+          body: "An entry in the advanced settings needs fixing. Correct it, then save again.",
         },
         staleSave: {
           title: "Nothing was saved",
@@ -2625,7 +2630,8 @@ const resources = {
           documents: {
             title: "ワークスペース共通のディレクトリ",
             description:
-              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリは常に読み書きできます。この一覧で変えない限り Documents/GuildBotics が読み書きで許可されており、このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリと Documents/GuildBotics（受け渡しフォルダ）は常に読み書きできます。このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
+            builtin: "同梱",
             empty: "登録されたディレクトリはありません。",
             pathPlaceholder: "Documents/shared-documents",
           },
@@ -3060,6 +3066,10 @@ const resources = {
           action: "保存",
           saved: "保存しました",
           error: "保存できませんでした",
+        },
+        invalidSave: {
+          title: "保存していません",
+          body: "詳細設定に修正が必要な入力があります。直してから、もう一度保存してください。",
         },
         staleSave: {
           title: "保存しませんでした",

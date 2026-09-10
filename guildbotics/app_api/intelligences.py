@@ -25,7 +25,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     LocalGrants,
     NetworkPolicy,
     SharedGrants,
-    default_shared_grants,
     parse_local_grants,
     parse_network_policy,
     parse_shared_grants,
@@ -752,10 +751,10 @@ class IntelligenceConfigService:
             raise SetupServiceError("invalid_agent_environment", str(exc)) from exc
 
     def _read_shared_grants(self, config_dir: Path) -> SharedGrants:
-        """The workspace's shared grants; absent file, the default."""
+        """The workspace's shared grants; absent file, none beyond the built-in."""
         path = config_dir / FILESYSTEM_GRANTS_PATH
         if not path.exists():
-            return default_shared_grants()
+            return SharedGrants()
         try:
             return parse_shared_grants(
                 self._read_optional_yaml(path) or None, where=FILESYSTEM_GRANTS_PATH

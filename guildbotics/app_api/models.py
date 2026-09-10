@@ -1142,6 +1142,8 @@ class EnvironmentGrantStatus(BaseModel):
     grant: str
     access: str
     present: bool
+    #: Granted by GuildBotics itself, not by the grants file, and not removable.
+    builtin: bool = False
 
 
 class EnvironmentDenyStatus(BaseModel):

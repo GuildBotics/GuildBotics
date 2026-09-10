@@ -84,8 +84,10 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
     spec = build_environment_spec(_contract(access), cwd, home=home)
 
     assert spec.home == home.as_posix()
+    exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
         EnvironmentMount(cwd.as_posix(), cwd, readonly=False),
+        EnvironmentMount(exchange.as_posix(), exchange, readonly=False),
         EnvironmentMount((home / "out").as_posix(), home / "out", readonly=False),
         EnvironmentMount(
             (home / "Documents" / "notes").as_posix(),

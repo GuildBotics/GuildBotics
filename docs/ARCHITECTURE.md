@@ -228,8 +228,9 @@ one exception is Windows, where a drive becomes `/c/`; `guest_path()` in
 the mount table and the working directory only. (2) A turn reaches only its working
 directory, the granted directories, and what GuildBotics itself binds; everything else
 is absent rather than forbidden. (3) Hand-overs go through the exchange directory
-`~/Documents/GuildBotics`, granted read-write until the workspace's grants file says
-otherwise (`default_shared_grants()` in `intelligences/agent_environment/contract.py`).
+`~/Documents/GuildBotics`, which every turn is granted read-write by GuildBotics itself
+(`EXCHANGE_GRANT` in `intelligences/agent_environment/contract.py`; the grants file adds
+to it and cannot remove it).
 What the Desktop hands a command -- a pasted image, a copy of a dropped file the
 environment could not reach -- is placed in its `tmp/` for one App API session and
 removed when the session ends (`app_api/command_input_files.py`); a Desktop run that

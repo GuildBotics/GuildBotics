@@ -4088,6 +4088,30 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
+  it("saves neither half while the advanced settings hold an invalid entry", async () => {
+    // One button, two writes: an invalid advanced draft must stop the button
+    // as a whole. Saving the basic half and reporting success while the
+    // advanced half is dropped would contradict what the screen says.
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
+    );
+    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
+    await user.click(effortInput);
+    await user.paste("{not json");
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
+
+    await saveSection(user);
+
+    expect(await screen.findByText(t("setup.invalidSave.body"))).toBeInTheDocument();
+    expect(updateProjectConfig).not.toHaveBeenCalled();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
   it("reseeds the model effort editor when the slot switches provider", async () => {
     // The editor seeds its state once per mount. Switching provider replaces
     // what the slot inherits, so a field that did not remount would keep
@@ -4274,6 +4298,32 @@ describe("IntelligenceEditor (member override)", () => {
     // The default CLI slot still renders, showing the newly picked tool (a
     // missing agent def would drop the slot entirely -> zero matches).
     expect((await screen.findAllByText("➔ claude")).length).toBeGreaterThan(0);
+  });
+
+  it("saves neither the member nor its advanced settings while an entry is invalid", async () => {
+    // The effort JSON editor needs a model with effort levels to edit.
+    const team = teamIntelligenceConfig();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      memberIntelligenceConfig({ model_mapping: team.model_mapping, models: team.models }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceAdvanced(user);
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
+    );
+    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
+    await user.click(effortInput);
+    await user.paste("{not json");
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    expect(await screen.findByText(t("setup.invalidSave.body"))).toBeInTheDocument();
+    expect(updateMemberConfig).not.toHaveBeenCalled();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
   it("locks rename of team-owned slots but keeps member-added ones editable", async () => {

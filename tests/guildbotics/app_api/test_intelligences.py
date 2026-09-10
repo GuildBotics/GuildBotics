@@ -1271,7 +1271,7 @@ def test_read_config_returns_the_grants(
     assert member.filesystem_grants == response.filesystem_grants
 
 
-def test_read_config_returns_the_default_grants_when_no_file_exists(
+def test_read_config_returns_no_shared_grants_when_no_file_exists(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
@@ -1279,11 +1279,9 @@ def test_read_config_returns_the_default_grants_when_no_file_exists(
 
     response = IntelligenceConfigService().read_config(config_dir=config_dir)
 
-    # The screen shows what a turn would get: the exchange directory, until
-    # the workspace saves its own list (possibly without it).
-    assert response.filesystem_grants.model_dump() == {
-        "documents": [{"path": "Documents/GuildBotics", "access": "read_write"}],
-    }
+    # The exchange directory is granted by GuildBotics itself, so the list the
+    # workspace edits starts empty rather than carrying it.
+    assert response.filesystem_grants.model_dump() == {"documents": []}
 
 
 def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> None:

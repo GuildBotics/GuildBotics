@@ -27,8 +27,19 @@ const t = i18n.getFixedT("en");
 
 /** How the device reports the saved grants: display form beside the grant file's spelling. */
 const macStatus: EnvironmentAccessStatus = {
-  documents: [{ path: "$HOME/Documents", grant: "Documents", access: "read", present: true }],
-  paths: [{ path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false }],
+  documents: [
+    {
+      path: "$HOME/Documents/GuildBotics",
+      grant: "Documents/GuildBotics",
+      access: "read_write",
+      present: true,
+      builtin: true,
+    },
+    { path: "$HOME/Documents", grant: "Documents", access: "read", present: true, builtin: false },
+  ],
+  paths: [
+    { path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false, builtin: false },
+  ],
   denied: [{ path: "$HOME/.ssh", builtin: true }],
   problem: "",
 };
@@ -332,6 +343,42 @@ describe("GrantsCards", () => {
     } finally {
       delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     }
+  });
+
+  it("lists the exchange directory GuildBotics grants itself, fixed and not addable again", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const documents = within(screen.getByTestId("grants:document"));
+
+    // Shown first in the device's spelling, with its access as a label rather
+    // than a control, and no remove button.
+    const row = within(documents.getByText("Documents/GuildBotics").closest("tr") as HTMLElement);
+    expect(row.getByText(t("setup.intelligence.documents.builtin"))).toBeInTheDocument();
+    expect(
+      row.getByText(t("setup.intelligence.grants.accessLabels.read_write")),
+    ).toBeInTheDocument();
+    expect(
+      documents.queryByRole("combobox", {
+        name: t("setup.intelligence.grants.accessFor", { path: "Documents/GuildBotics" }),
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      documents.queryByRole("button", {
+        name: t("setup.intelligence.grants.remove", { path: "Documents/GuildBotics" }),
+      }),
+    ).not.toBeInTheDocument();
+
+    // Typing it again is a duplicate, not a second row.
+    await user.type(
+      documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") }),
+      "Documents/GuildBotics",
+    );
+    expect(
+      await documents.findByText(t("setup.intelligence.grants.duplicate")),
+    ).toBeInTheDocument();
+    expect(
+      documents.getByRole("button", { name: t("setup.intelligence.grants.add") }),
+    ).toBeDisabled();
   });
 
   it("judges a typed document path, warns on sensitive ones, and adds it", async () => {

@@ -1150,9 +1150,13 @@ function IntelligenceSection({
   const queryClient = useQueryClient();
   // The advanced editor writes different files from the basic settings above
   // it, but they are one screen to the user, so one button saves both.
-  const saveAdvanced = useRef<((written: ConfigRevisions) => Promise<void>) | null>(null);
+  const saveAdvanced = useRef<AdvancedSave | null>(null);
   const [savingSection, setSavingSection] = useState(false);
   const saveSection = async () => {
+    if (saveAdvanced.current && !saveAdvanced.current.valid) {
+      notifyInvalidAdvancedSave(t);
+      return;
+    }
     setSavingSection(true);
     try {
       // The basic settings write two of the files the advanced editor guards,
@@ -1165,7 +1169,7 @@ function IntelligenceSection({
         // the user just saw says happened.
         return;
       }
-      await saveAdvanced.current?.(written);
+      await saveAdvanced.current?.save?.(written);
     } catch {
       // Both halves report their own failure: the basic settings through the
       // section's save state, the advanced editor through its own alert.
@@ -1744,7 +1748,7 @@ function IntelligenceEditor({
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
   /** The enclosing section's save button drives this editor too. */
-  onRegisterSave?: (save: ((written?: ConfigRevisions) => Promise<void>) | null) => void;
+  onRegisterSave?: (advanced: AdvancedSave | null) => void;
   teamLlmApiType?: string;
   teamCliAgent?: string;
   onTeamLlmApiTypeChange?: (val: string) => void;
@@ -1856,9 +1860,9 @@ function IntelligenceEditor({
     if (!enabled || !onRegisterSave) {
       return;
     }
-    onRegisterSave(canSave ? saveDraft : null);
+    onRegisterSave({ save: canSave ? saveDraft : null, valid: !hasJsonError });
     return () => onRegisterSave(null);
-  }, [canSave, enabled, onRegisterSave, saveDraft]);
+  }, [canSave, enabled, hasJsonError, onRegisterSave, saveDraft]);
 
   // Sync basic settings (props) -> advanced settings (draftState)
   useEffect(() => {
@@ -2825,7 +2829,7 @@ function MembersSection({
   const [savingMember, setSavingMember] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [draftMembers, setDraftMembers] = useState<MemberConfig[]>([]);
-  const memberIntelligenceSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
   const routineDefaultDismissedRef = useRef(false);
   const hasPersistedProject = Boolean(config?.project_file_exists);
@@ -3614,6 +3618,10 @@ function MembersSection({
     if (!canSubmit) {
       return;
     }
+    if (memberIntelligenceSaveRef.current && !memberIntelligenceSaveRef.current.valid) {
+      notifyInvalidAdvancedSave(t);
+      return;
+    }
     setSavingMember(true);
     try {
       const request = buildMemberRequest();
@@ -3644,7 +3652,7 @@ function MembersSection({
         });
         syncAgentFieldAfterSave(request);
         if (!isHumanMember) {
-          await memberIntelligenceSaveRef.current?.();
+          await memberIntelligenceSaveRef.current?.save?.();
         }
         return;
       }
@@ -6680,6 +6688,24 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
 }
 
 /** Bring a settings control into view once it exists; a no-op where it does not. */
+// What the advanced intelligence editor offers the one save button above it:
+// the save to chain when its draft is dirty (null when there is nothing to
+// write), and whether every input in it is valid. An invalid draft stops the
+// button as a whole -- saving the basic half and reporting success while the
+// advanced half is dropped would contradict what the screen says happened.
+export type AdvancedSave = {
+  save: ((written?: ConfigRevisions) => Promise<void>) | null;
+  valid: boolean;
+};
+
+function notifyInvalidAdvancedSave(t: TFunction) {
+  notifications.show({
+    color: "warning",
+    title: t("setup.invalidSave.title"),
+    message: t("setup.invalidSave.body"),
+  });
+}
+
 function scrollToElement(id: string) {
   window.requestAnimationFrame(() => {
     document.getElementById(id)?.scrollIntoView?.({ block: "start", behavior: "smooth" });

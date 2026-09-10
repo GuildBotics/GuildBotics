@@ -102,6 +102,9 @@ function DocumentsCard({
 }) {
   const { t } = useTranslation();
   const present = (path: string) => status?.documents.find((row) => row.grant === path)?.present;
+  // What GuildBotics grants on its own (the exchange directory): listed first
+  // in the device's spelling, and neither editable nor addable again.
+  const builtin = status?.documents.filter((row) => row.builtin) ?? [];
   return (
     <AccessCard
       id="grants-documents"
@@ -114,35 +117,60 @@ function DocumentsCard({
       accesses={GRANT_ACCESSES}
       scopeOf={() => "document"}
       withinHome
-      taken={(path) => documents.some((grant) => grant.path === path)}
+      taken={(path) =>
+        builtin.some((row) => row.grant === path) || documents.some((grant) => grant.path === path)
+      }
       onAdd={(path, access) => onChange([...documents, { path, access: access as GrantAccess }])}
-      rows={documents.map((grant) => ({
-        key: grant.path,
-        name: grant.path,
-        path: (
-          <Group gap="xs">
-            <Text size="sm" ff="monospace">
-              {grant.path}
+      rows={[
+        ...builtin.map((row) => ({
+          key: `builtin:${row.grant}`,
+          name: row.grant,
+          path: (
+            <Group gap="xs">
+              <Text size="sm" ff="monospace" c="dimmed">
+                {row.grant}
+              </Text>
+              <Badge color="gray" variant="light" size="xs">
+                {t("setup.intelligence.documents.builtin")}
+              </Badge>
+            </Group>
+          ),
+          // Plain text, not a badge: the access column is as narrow as its
+          // content, and a badge in it would truncate the label to "Read...".
+          access: (
+            <Text size="sm" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+              {accessLabel(t, row.access as Access)}
             </Text>
-            <PresenceBadge present={present(grant.path)} />
-          </Group>
-        ),
-        access: (
-          <AccessSelect
-            path={grant.path}
-            accesses={GRANT_ACCESSES}
-            value={grant.access}
-            onChange={(access) =>
-              onChange(
-                documents.map((g) =>
-                  g.path === grant.path ? { ...g, access: access as GrantAccess } : g,
-                ),
-              )
-            }
-          />
-        ),
-        onRemove: () => onChange(documents.filter((g) => g.path !== grant.path)),
-      }))}
+          ),
+        })),
+        ...documents.map((grant) => ({
+          key: grant.path,
+          name: grant.path,
+          path: (
+            <Group gap="xs">
+              <Text size="sm" ff="monospace">
+                {grant.path}
+              </Text>
+              <PresenceBadge present={present(grant.path)} />
+            </Group>
+          ),
+          access: (
+            <AccessSelect
+              path={grant.path}
+              accesses={GRANT_ACCESSES}
+              value={grant.access}
+              onChange={(access) =>
+                onChange(
+                  documents.map((g) =>
+                    g.path === grant.path ? { ...g, access: access as GrantAccess } : g,
+                  ),
+                )
+              }
+            />
+          ),
+          onRemove: () => onChange(documents.filter((g) => g.path !== grant.path)),
+        })),
+      ]}
     />
   );
 }

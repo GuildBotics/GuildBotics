@@ -217,9 +217,13 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     # A preview creates nothing: the missing document directory is shown absent.
     # Each row carries the spelling the grant file uses beside its display
     # form, so the editor matches rows to entries without re-deriving it.
-    assert [(g.path, g.grant, g.present) for g in status.access.documents] == [
-        ("$HOME/tools", "tools", True),
-        ("$HOME/Projects/out", "Projects/out", False),
+    # The exchange directory leads, granted by GuildBotics itself.
+    assert [
+        (g.path, g.grant, g.present, g.builtin) for g in status.access.documents
+    ] == [
+        ("$HOME/Documents/GuildBotics", "Documents/GuildBotics", False, True),
+        ("$HOME/tools", "tools", True, False),
+        ("$HOME/Projects/out", "Projects/out", False, False),
     ]
     assert not (home / "Projects/out").exists()
     assert [(d.path, d.builtin) for d in status.access.denied] == [

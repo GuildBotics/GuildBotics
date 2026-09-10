@@ -16,7 +16,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     LocalPathGrant,
     NetworkPolicy,
     SharedGrants,
-    default_shared_grants,
     exchange_dir,
     exchange_tmp_dir,
     grant_spelling,
@@ -164,12 +163,8 @@ def test_the_grant_files_are_optional(monkeypatch, tmp_path: Path) -> None:
         lambda *parts: workspace.joinpath(".guildbotics", "local", *parts),
     )
 
-    # No shared file: the exchange directory is granted, so a hand-over from
-    # the Desktop has somewhere to land before anyone edits the grants.
-    assert load_shared_grants() == default_shared_grants()
-    assert load_shared_grants() == SharedGrants(
-        documents=[DocumentGrant(path="Documents/GuildBotics", access="read_write")]
-    )
+    # No shared file: nothing beyond what GuildBotics grants on its own.
+    assert load_shared_grants() == SharedGrants()
     assert load_local_grants() == LocalGrants()
 
     shared = config / FILESYSTEM_GRANTS_PATH
@@ -216,14 +211,16 @@ def test_a_missing_document_directory_is_created_for_a_turn_and_reported_for_a_p
         documents=[DocumentGrant(path="Projects/out", access="read_write")]
     )
 
+    # The built-in exchange directory leads; the file's own entry follows.
     preview = resolve_access(shared, LocalGrants(), home, create=False)
-    assert preview.documents[0].present is False
+    assert preview.documents[1].present is False
     assert not (home / "Projects/out").exists()
 
     turn = resolve_access(shared, LocalGrants(), home)
-    assert turn.documents[0].path == (home / "Projects/out").resolve()
-    assert turn.documents[0].present is True
+    assert turn.documents[1].path == (home / "Projects/out").resolve()
+    assert turn.documents[1].present is True
     assert (home / "Projects/out").is_dir()
+    assert (home / "Documents/GuildBotics").is_dir()
 
 
 def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
@@ -260,11 +257,20 @@ def test_the_exchange_directory_is_under_the_home(tmp_path: Path) -> None:
 
     assert exchange_dir(home) == home / "Documents/GuildBotics"
     assert exchange_tmp_dir(home) == home / "Documents/GuildBotics/tmp"
-    # The default grant and the directory the Desktop writes to are the same
-    # place, so a pasted file is reachable without any grant being edited.
-    grant = default_shared_grants().documents[0]
-    assert home / grant.path == exchange_dir(home)
-    assert grant.access == "read_write"
+    # The built-in grant and the directory the Desktop writes to are the same
+    # place, so a pasted file is reachable whatever the grants file says -- an
+    # entry for it there is ignored, not merged into a second row.
+    listed = SharedGrants(
+        documents=[DocumentGrant(path="Documents/GuildBotics", access="read")]
+    )
+    for shared in (SharedGrants(), listed):
+        (grant,) = resolve_access(shared, LocalGrants(), home, create=False).documents
+        assert (grant.path, grant.access, grant.builtin, grant.present) == (
+            exchange_dir(home),
+            "read_write",
+            True,
+            False,
+        )
 
 
 def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
@@ -277,7 +283,6 @@ def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
     access = resolve_access(
         SharedGrants(
             documents=[
-                DocumentGrant(path="Documents/GuildBotics", access="read_write"),
                 DocumentGrant(path="Projects/out", access="read"),
                 DocumentGrant(path="Projects/absent", access="read"),
             ]
@@ -395,7 +400,12 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
     assert policy["filesystem"] == {
         "working_directory": "<workspace>/.guildbotics/local/clones/aiko",
         "documents": [
-            {"path": "$HOME/Documents/shared", "access": "read", "present": True}
+            {
+                "path": "$HOME/Documents/GuildBotics",
+                "access": "read_write",
+                "present": True,
+            },
+            {"path": "$HOME/Documents/shared", "access": "read", "present": True},
         ],
         "paths": [],
         "denied": [

@@ -186,13 +186,8 @@ def test_describe_command_input_paths_answers_as_the_turn_would(
     (home / "Desktop").mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setattr(
-        command_input_files,
-        "load_shared_grants",
-        lambda: SharedGrants(
-            documents=[DocumentGrant(path="Documents/GuildBotics", access="read_write")]
-        ),
-    )
+    # The exchange directory needs no entry: GuildBotics grants it itself.
+    monkeypatch.setattr(command_input_files, "load_shared_grants", SharedGrants)
     monkeypatch.setattr(command_input_files, "load_local_grants", LocalGrants)
     pasted = home / "Documents/GuildBotics/tmp/a.png"
     pasted.write_bytes(b"x")
