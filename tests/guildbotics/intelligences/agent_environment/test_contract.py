@@ -15,6 +15,9 @@ from guildbotics.intelligences.agent_environment.contract import (
     LocalPathGrant,
     NetworkPolicy,
     SharedGrants,
+    default_shared_grants,
+    exchange_dir,
+    exchange_tmp_dir,
     grant_spelling,
     load_local_grants,
     load_shared_grants,
@@ -147,7 +150,12 @@ def test_the_grant_files_are_optional(monkeypatch, tmp_path: Path) -> None:
         lambda *parts: workspace.joinpath(".guildbotics", "local", *parts),
     )
 
-    assert load_shared_grants() == SharedGrants()
+    # No shared file: the exchange directory is granted, so a hand-over from
+    # the Desktop has somewhere to land before anyone edits the grants.
+    assert load_shared_grants() == default_shared_grants()
+    assert load_shared_grants() == SharedGrants(
+        documents=[DocumentGrant(path="Documents/GuildBotics", access="read_write")]
+    )
     assert load_local_grants() == LocalGrants()
 
     shared = config / FILESYSTEM_GRANTS_PATH
@@ -225,6 +233,51 @@ def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
             LocalGrants(),
             home,
         )
+
+
+def test_the_exchange_directory_is_under_the_home(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+
+    assert exchange_dir(home) == home / "Documents/GuildBotics"
+    assert exchange_tmp_dir(home) == home / "Documents/GuildBotics/tmp"
+    # The default grant and the directory the Desktop writes to are the same
+    # place, so a pasted file is reachable without any grant being edited.
+    grant = default_shared_grants().documents[0]
+    assert home / grant.path == exchange_dir(home)
+    assert grant.access == "read_write"
+
+
+def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
+    home = _home(tmp_path)
+    (home / "Documents/GuildBotics/tmp").mkdir(parents=True)
+    (home / ".ssh").mkdir()
+    (home / "Projects/out/private").mkdir(parents=True)
+    cwd = tmp_path / "clone"
+    cwd.mkdir()
+    access = resolve_access(
+        SharedGrants(
+            documents=[
+                DocumentGrant(path="Documents/GuildBotics", access="read_write"),
+                DocumentGrant(path="Projects/out", access="read"),
+                DocumentGrant(path="Projects/absent", access="read"),
+            ]
+        ),
+        LocalGrants(deny=["Projects/out/private"]),
+        home,
+        create=False,
+    )
+
+    assert access.reaches(home / "Documents/GuildBotics/tmp/a.png")
+    assert access.reaches(home / "Projects/out/report.md")
+    assert access.reaches(cwd / "src/main.py", cwd)
+    # Outside every opened root, inside a closed corner, under a document
+    # directory that does not exist here, or in the working directory of a
+    # turn that has not been named: not reachable.
+    assert not access.reaches(cwd / "src/main.py")
+    assert not access.reaches(home / "Projects/out/private/key.pem")
+    assert not access.reaches(home / "Projects/absent/x.md")
+    assert not access.reaches(home / "Desktop/shot.png")
+    assert not access.reaches(home / ".ssh/id_ed25519", home)
 
 
 def test_the_builtin_denies_are_the_credential_directories_that_exist(

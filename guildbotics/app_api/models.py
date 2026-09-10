@@ -455,6 +455,36 @@ class CommandInputFileResponse(BaseModel):
     path: Path
 
 
+class CommandInputFileCopyRequest(BaseModel):
+    path: Path
+
+
+class CommandInputPathsRequest(BaseModel):
+    """Paths the Desktop is about to put in a command's input field."""
+
+    paths: list[Path] = Field(min_length=1)
+    cwd: Path | None = None
+
+
+class CommandInputGrantSuggestion(BaseModel):
+    """The grant that would open an unreachable path, for the grants screen."""
+
+    scope: Literal["document", "device"]
+    path: str
+
+
+class CommandInputPathStatus(BaseModel):
+    path: Path
+    kind: Literal["file", "directory", "missing"]
+    #: Whether a turn of this device's isolated agent environment sees it.
+    reachable: bool
+    grant: CommandInputGrantSuggestion | None = None
+
+
+class CommandInputPathsResponse(BaseModel):
+    paths: list[CommandInputPathStatus]
+
+
 CommandFileFormat = CommandFormat
 
 

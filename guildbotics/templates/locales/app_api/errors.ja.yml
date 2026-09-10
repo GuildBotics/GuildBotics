@@ -16,7 +16,7 @@ ja:
   slack_user_id_missing: "このメンバーには Slack ユーザー ID が設定されていません。"
   slack_token_missing: "このワークスペースには Slack Bot Token が設定されていません。"
   slack_missing_scope: "Slack Bot Token に 'users:read' スコープがありません。OAuth & Permissions で追加して、アプリを再インストールしてください。"
-  command_input_file_save_failed: "貼り付けた画像を保存できませんでした。"
+  command_input_file_save_failed: "コマンドへ渡すファイルを保存できませんでした。"
   hotkey_invalid: "'%{accelerator}' はキーの組み合わせとして使えません。"
   hotkey_needs_modifier: "'%{accelerator}' には修飾キーが必要です。"
   hotkey_conflict: "'%{accelerator}' は既に '%{command}' に割り当てられています。"

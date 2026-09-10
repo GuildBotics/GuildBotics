@@ -131,6 +131,7 @@ from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.agent_environment.contract import exchange_dir
 from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
@@ -330,7 +331,7 @@ class AppRuntime:
             config_dir / "team" / "project.yml" if config_dir is not None else None
         )
         return ConfigStatus(
-            cwd=Path.cwd(),
+            cwd=exchange_dir(),
             workspace=workspace,
             config_dir=config_dir,
             project_file=project_file,
@@ -971,7 +972,7 @@ class AppRuntime:
                 command_name=request.command,
                 command_args=request.args,
                 person_identifier=person_id,
-                cwd=request.cwd,
+                cwd=request.cwd or _default_command_cwd(),
             )
         except asyncio.CancelledError:
             self._event_bus.publish_event(
@@ -2344,3 +2345,11 @@ def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
         },
         status_code=409,
     )
+
+
+def _default_command_cwd() -> Path:
+    """Where a command runs when the screen names no directory: the exchange
+    directory, so what it produces lands where the user looks for it."""
+    cwd = exchange_dir()
+    cwd.mkdir(parents=True, exist_ok=True)
+    return cwd

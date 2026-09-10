@@ -959,7 +959,7 @@ const resources = {
           documents: {
             title: "Directories shared by the workspace",
             description:
-              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn is always readable and writable.",
+              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn is always readable and writable. Documents/GuildBotics is granted read/write until this list says otherwise: it is where files handed over from this app land (its tmp/ is emptied when the app closes) and where agents leave what they make for you.",
             empty: "No directories registered.",
             pathPlaceholder: "Documents/shared-documents",
           },
@@ -1808,11 +1808,17 @@ const resources = {
         messageDescription:
           "Text passed to the command. Drop files to insert their paths, or paste an image to save it temporarily.",
         inputFileDropActive: "Drop to insert the file path",
-        inputFileSaving: "Saving the pasted image…",
-        inputFileSaveError: "Could not save the pasted image: {{message}}",
+        inputFileSaving: "Saving the file…",
+        inputFileSaveError: "Could not save the file: {{message}}",
+        inputPathUnreachable: "The isolated agent environment cannot reach:",
+        inputPathCopy: "Hand over a copy",
+        inputPathGrant: "Allow this folder",
+        inputPathDismiss: "Do not use this file",
+        inputPathHint:
+          "Agents reach only the working directory and the folders allowed under Settings → AI. A copy is placed in ~/Documents/GuildBotics/tmp and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
-        cwd: "Workspace",
-        cwdDescription: "Blank uses the current workspace: {{cwd}}",
+        cwd: "Working directory",
+        cwdDescription: "Blank uses the exchange folder: {{cwd}}",
         noRunsYet: "No command result yet.",
         output: "Output",
         events: "Events",
@@ -2606,7 +2612,7 @@ const resources = {
           documents: {
             title: "ワークスペース共通のディレクトリ",
             description:
-              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリは常に読み書きできます。",
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリは常に読み書きできます。この一覧で変えない限り Documents/GuildBotics が読み書きで許可されており、このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
             empty: "登録されたディレクトリはありません。",
             pathPlaceholder: "Documents/shared-documents",
           },
@@ -3772,11 +3778,17 @@ const resources = {
         messageDescription:
           "この実行でコマンドへ渡す入力文です。ファイルのドロップでパスを挿入し、画像の貼り付けで一時保存できます。",
         inputFileDropActive: "ドロップしてファイルパスを挿入",
-        inputFileSaving: "貼り付け画像を保存しています…",
-        inputFileSaveError: "貼り付け画像を保存できませんでした: {{message}}",
+        inputFileSaving: "ファイルを保存しています…",
+        inputFileSaveError: "ファイルを保存できませんでした: {{message}}",
+        inputPathUnreachable: "エージェント隔離環境から届きません:",
+        inputPathCopy: "コピーを渡す",
+        inputPathGrant: "このフォルダを許可する",
+        inputPathDismiss: "このファイルは使わない",
+        inputPathHint:
+          "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは ~/Documents/GuildBotics/tmp に置かれアプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",
-        cwd: "ワークスペース",
-        cwdDescription: "空欄の場合は現在の workspace を使います: {{cwd}}",
+        cwd: "作業ディレクトリ",
+        cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",
         noRunsYet: "コマンド実行結果はまだありません。",
         output: "出力",
         events: "イベント",

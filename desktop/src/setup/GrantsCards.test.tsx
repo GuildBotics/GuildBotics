@@ -14,7 +14,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
-import { GrantsCards } from "./GrantsCards";
+import { GrantsCards, type GrantPrefill } from "./GrantsCards";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn(async () => "/Users/me/") }));
@@ -45,12 +45,14 @@ function Harness({
   shared: initialShared = { documents: [] },
   local: initialLocal = { paths: [], deny: [] },
   status = macStatus,
+  prefill,
   onShared,
   onLocal,
 }: {
   shared?: SharedGrants;
   local?: LocalGrants;
   status?: EnvironmentAccessStatus;
+  prefill?: GrantPrefill;
   onShared?: (shared: SharedGrants) => void;
   onLocal?: (local: LocalGrants) => void;
 }) {
@@ -64,6 +66,7 @@ function Harness({
           shared={shared}
           local={local}
           status={status}
+          prefill={prefill}
           onSharedChange={(next) => {
             setShared(next);
             onShared?.(next);
@@ -221,6 +224,19 @@ describe("GrantsCards", () => {
       }),
     );
     expect(onLocal).toHaveBeenLastCalledWith({ paths: [], deny: [] });
+  });
+
+  it("starts the path field of the card another screen pointed at with the directory it sent", () => {
+    render(<Harness prefill={{ card: "grants-device", path: "/Volumes/data" }} />);
+
+    const documents = within(screen.getByTestId("grants:document"));
+    const device = within(screen.getByTestId("grants:device"));
+    expect(
+      documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") }),
+    ).toHaveValue("");
+    expect(device.getByRole("textbox", { name: t("setup.intelligence.grants.path") })).toHaveValue(
+      "/Volumes/data",
+    );
   });
 
   it("changes a shared document's access in place", async () => {

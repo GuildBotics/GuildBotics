@@ -37,6 +37,16 @@ GrantAccess = Literal["read", "read_write"]
 #: The workspace-shared file: the directories under the home directory every
 #: agent may use for documents.
 FILESYSTEM_GRANTS_PATH = "intelligences/cli_agent_filesystem_grants.yml"
+#: The exchange directory, relative to the home: where what the user hands an
+#: agent from the Desktop is placed, and where an agent leaves what it makes
+#: for the user. Granted read-write to every workspace until its grants file
+#: says otherwise, so the two sides of a hand-over have one place to look.
+EXCHANGE_DIRECTORY = "Documents/GuildBotics"
+#: Under the exchange directory: what GuildBotics itself placed there for one
+#: App API session -- pasted images, copies of files an agent could not
+#: otherwise reach -- emptied when that session ends. What is made for the
+#: user goes beside it, never inside.
+EXCHANGE_TMP_DIRECTORY = "tmp"
 #: The device-local file (under ``<workspace>/.guildbotics/local``): extra
 #: paths this machine alone opens or closes, never synchronized.
 LOCAL_GRANTS_FILENAME = "cli_agent_filesystem_grants.yml"
@@ -165,6 +175,24 @@ class SharedGrants(BaseModel):
     documents: list[DocumentGrant] = Field(default_factory=list)
 
 
+def default_shared_grants() -> SharedGrants:
+    """What a workspace grants before its grants file exists: the exchange
+    directory, read-write."""
+    return SharedGrants(
+        documents=[DocumentGrant(path=EXCHANGE_DIRECTORY, access="read_write")]
+    )
+
+
+def exchange_dir(home: Path | None = None) -> Path:
+    """The exchange directory on this device."""
+    return (home or Path.home()) / EXCHANGE_DIRECTORY
+
+
+def exchange_tmp_dir(home: Path | None = None) -> Path:
+    """Where GuildBotics places what it hands over for one App API session."""
+    return exchange_dir(home) / EXCHANGE_TMP_DIRECTORY
+
+
 class LocalGrants(BaseModel):
     """The device-local part of what agents may reach, and may not.
 
@@ -207,10 +235,10 @@ def _parse[T: BaseModel](model: type[T], raw: Any, where: str) -> T:
 
 
 def load_shared_grants() -> SharedGrants:
-    """The workspace's shared grants; no file means none."""
+    """The workspace's shared grants; no file means the default."""
     path = get_config_path(FILESYSTEM_GRANTS_PATH)
     if not path.exists():
-        return SharedGrants()
+        return default_shared_grants()
     return parse_shared_grants(load_yaml_file(path), where=FILESYSTEM_GRANTS_PATH)
 
 
@@ -256,6 +284,20 @@ class ResolvedAccess:
     documents: tuple[ResolvedGrant, ...] = ()
     paths: tuple[ResolvedGrant, ...] = ()
     denied: tuple[DeniedPath, ...] = ()
+
+    def reaches(self, path: Path, cwd: Path | None = None) -> bool:
+        """Whether a turn run in ``cwd`` sees ``path`` on this device.
+
+        The same answer the mounts give: under the working directory or a
+        granted directory that exists here, and not under a closed one.
+        """
+        target = path.resolve()
+        opened = [g.path for g in (*self.documents, *self.paths) if g.present]
+        if cwd is not None:
+            opened.append(cwd.resolve())
+        return any(target.is_relative_to(root) for root in opened) and not any(
+            target.is_relative_to(denied.path) for denied in self.denied
+        )
 
 
 def resolve_access(

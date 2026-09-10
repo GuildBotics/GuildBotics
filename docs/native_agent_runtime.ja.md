@@ -74,7 +74,11 @@ bindします）。
 - **作業ディレクトリの外**は2つあり、どちらもhostと同じパスに、hostのホームディレクトリと同じ
   パスのホームの下でbindします。**documents**: 作業で読み書きするホームディレクトリ配下の
   ディレクトリ（`read` / `read_write`、相対パスのみ）。無ければターン開始時に作成し、
-  `intelligences/cli_agent_filesystem_grants.yml`で共有します。**この端末の設定**: 追加パス
+  `intelligences/cli_agent_filesystem_grants.yml`で共有します。このファイルが無い間は
+  `Documents/GuildBotics`（受け渡しフォルダ）が読み書きで許可されています: Desktopから渡した
+  ファイル（貼り付け画像、隔離環境から届かないファイルのコピー）はその`tmp/`に置かれてアプリの
+  終了時に消え、作業ディレクトリを指定しないDesktopからの実行はここで動き、エージェントが作った
+  成果物は指定が無ければこの下に出ます。**この端末の設定**: 追加パス
   （絶対パス可、存在が必要）と、開いている場所の一部を閉じる`deny`。
   `local/cli_agent_filesystem_grants.yml`に置き、同期しません。認証情報のディレクトリ
   （`~/.ssh`、プロバイダ自身のディレクトリ）は同梱のdenyで常に閉じます。それ以外のhostのもの

@@ -40,10 +40,14 @@ const LOOKUP_DEBOUNCE_MS = 300;
  * shape: the directories the workspace shares, and what this device opens or
  * closes. The lists are the setting; everything else only judges.
  */
+/** A directory another screen sent here to be granted, and which card it belongs in. */
+export type GrantPrefill = { card: string; path: string };
+
 export function GrantsCards({
   shared,
   local,
   status,
+  prefill,
   onSharedChange,
   onLocalChange,
 }: {
@@ -51,17 +55,25 @@ export function GrantsCards({
   local: LocalGrants;
   /** How the saved grants resolve on this device, once the preview has them. */
   status?: EnvironmentAccessStatus;
+  prefill?: GrantPrefill;
   onSharedChange: (shared: SharedGrants) => void;
   onLocalChange: (local: LocalGrants) => void;
 }) {
+  const prefillFor = (card: string) => (prefill?.card === card ? prefill.path : undefined);
   return (
     <>
       <DocumentsCard
         documents={shared.documents}
         status={status}
+        initialPath={prefillFor("grants-documents")}
         onChange={(documents) => onSharedChange({ ...shared, documents })}
       />
-      <DeviceAccessCard local={local} status={status} onChange={onLocalChange} />
+      <DeviceAccessCard
+        local={local}
+        status={status}
+        initialPath={prefillFor("grants-device")}
+        onChange={onLocalChange}
+      />
     </>
   );
 }
@@ -80,10 +92,12 @@ function isTauriRuntime(): boolean {
 function DocumentsCard({
   documents,
   status,
+  initialPath,
   onChange,
 }: {
   documents: DocumentGrant[];
   status?: EnvironmentAccessStatus;
+  initialPath?: string;
   onChange: (documents: DocumentGrant[]) => void;
 }) {
   const { t } = useTranslation();
@@ -92,6 +106,7 @@ function DocumentsCard({
     <AccessCard
       id="grants-documents"
       testId="grants:document"
+      initialPath={initialPath}
       title={t("setup.intelligence.documents.title")}
       description={t("setup.intelligence.documents.description")}
       empty={t("setup.intelligence.documents.empty")}
@@ -146,10 +161,12 @@ function DocumentsCard({
 function DeviceAccessCard({
   local,
   status,
+  initialPath,
   onChange,
 }: {
   local: LocalGrants;
   status?: EnvironmentAccessStatus;
+  initialPath?: string;
   onChange: (local: LocalGrants) => void;
 }) {
   const { t } = useTranslation();
@@ -182,6 +199,7 @@ function DeviceAccessCard({
     <AccessCard
       id="grants-device"
       testId="grants:device"
+      initialPath={initialPath}
       title={t("setup.intelligence.deviceAccess.title")}
       description={t("setup.intelligence.deviceAccess.description")}
       empty={t("setup.intelligence.deviceAccess.empty")}
@@ -254,6 +272,7 @@ type AccessRow = {
 function AccessCard({
   id,
   testId,
+  initialPath = "",
   title,
   description,
   empty,
@@ -268,6 +287,8 @@ function AccessCard({
   /** Anchor for a system alert to scroll to. */
   id: string;
   testId: string;
+  /** What the path field starts with: a directory another screen sent here. */
+  initialPath?: string;
   title: string;
   description: string;
   empty: string;
@@ -281,7 +302,7 @@ function AccessCard({
   rows: AccessRow[];
 }) {
   const { t } = useTranslation();
-  const [path, setPath] = useState("");
+  const [path, setPath] = useState(initialPath);
   const [access, setAccess] = useState<Access>("read");
   const scope = scopeOf(access);
   const { typed, judged } = useGrantJudgement(scope, path, access);

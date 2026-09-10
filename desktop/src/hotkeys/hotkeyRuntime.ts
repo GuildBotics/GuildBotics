@@ -56,6 +56,14 @@ export async function hideQuickWindow(): Promise<void> {
   await invokeHost("hide_quick_window");
 }
 
+/**
+ * Reveal the main window at an in-app route. Works from either window: the
+ * host emits the route to the main window, whose router follows it.
+ */
+export async function openMainWindow(route: string): Promise<void> {
+  await invokeHost("open_main_window", { route });
+}
+
 /** Whether this platform can report clipboard changes without reading them. */
 export async function clipboardWatchSupported(): Promise<boolean> {
   return (await invokeHost<boolean>("clipboard_watch_supported")) ?? false;

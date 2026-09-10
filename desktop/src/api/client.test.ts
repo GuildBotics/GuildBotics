@@ -4,6 +4,8 @@ import {
   ApiRequestError,
   applyCommandAuthoring,
   authorCommand,
+  checkCommandInputPaths,
+  copyCommandInputFile,
   troubleshoot,
   configureApi,
   createCommandFile,
@@ -171,6 +173,24 @@ describe("request headers and body", () => {
       expect(call.init.body).toBeInstanceOf(FormData);
       expect((call.init.body as FormData).get("file")).toBe(file);
     }
+  });
+
+  it("POSTs the paths about to enter a command input, and a copy request", async () => {
+    const check = captureFetch(
+      jsonResponse({ paths: [{ path: "/a", kind: "file", reachable: false }] }),
+    );
+    await checkCommandInputPaths({ paths: ["/a"], cwd: "/work" });
+
+    expect(check.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-paths");
+    expect(check.calls[0].init.method).toBe("POST");
+    expect(check.calls[0].init.body).toBe(JSON.stringify({ paths: ["/a"], cwd: "/work" }));
+
+    const copy = captureFetch(jsonResponse({ path: "/home/Documents/GuildBotics/tmp/x-a" }));
+    await copyCommandInputFile("/a");
+
+    expect(copy.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files/copy");
+    expect(copy.calls[0].init.method).toBe("POST");
+    expect(copy.calls[0].init.body).toBe(JSON.stringify({ path: "/a" }));
   });
 
   it("POSTs the GitHub App registration with the API base as callback", async () => {

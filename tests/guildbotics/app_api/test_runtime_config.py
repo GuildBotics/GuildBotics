@@ -263,7 +263,8 @@ def test_config_status_reports_workspace_when_workspace_config_present(
 
     status = AppRuntime(EventBus()).get_config_status()
 
-    assert status.cwd == isolated_home
+    # The directory a command runs in when the screen names none.
+    assert status.cwd == isolated_home / "home/Documents/GuildBotics"
     assert status.config_dir == isolated_home / ".guildbotics" / "config"
     assert status.project_file_exists is True
 
@@ -365,7 +366,9 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     )
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace.resolve())
     assert active_workspace_file().exists()
-    assert status.cwd == workspace.resolve()
+    # The process moved, but a command without a directory still runs in the
+    # exchange directory: it is the user's, not the workspace's.
+    assert status.cwd == isolated_home / "home/Documents/GuildBotics"
     assert status.workspace == workspace.resolve()
     assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
     assert status.workspace_state_dir == (

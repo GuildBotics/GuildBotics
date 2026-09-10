@@ -286,6 +286,24 @@ export type CommandInputFileResponse = {
   path: string;
 };
 
+/** The grant that would open an unreachable path, spelled for the grants screen. */
+export type CommandInputGrantSuggestion = {
+  scope: "document" | "device";
+  path: string;
+};
+
+/** A path about to enter a command's input, as a turn on this device would find it. */
+export type CommandInputPathStatus = {
+  path: string;
+  kind: "file" | "directory" | "missing";
+  reachable: boolean;
+  grant: CommandInputGrantSuggestion | null;
+};
+
+export type CommandInputPathsResponse = {
+  paths: CommandInputPathStatus[];
+};
+
 export type TraceSummary = {
   trace_id: string;
   source: string;
@@ -1678,6 +1696,17 @@ export async function runCommand(body: {
 
 export async function uploadCommandInputFile(file: File): Promise<CommandInputFileResponse> {
   return uploadFile("/commands/input-files", file);
+}
+
+export async function copyCommandInputFile(path: string): Promise<CommandInputFileResponse> {
+  return request("/commands/input-files/copy", { method: "POST", body: { path } });
+}
+
+export async function checkCommandInputPaths(body: {
+  paths: string[];
+  cwd?: string;
+}): Promise<CommandInputPathsResponse> {
+  return request("/commands/input-paths", { method: "POST", body });
 }
 
 export async function authorCommand(

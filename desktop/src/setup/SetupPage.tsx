@@ -478,6 +478,8 @@ export function SetupPage() {
   // open is read live, so a second alert link on the same page still opens them.
   const [focusSlot] = useState(searchParams.get("slot")?.trim() || undefined);
   const [focusElement] = useState(searchParams.get("focus")?.trim() || undefined);
+  // A directory another screen sent here to be granted, for the focused card.
+  const [focusGrant] = useState(searchParams.get("grant")?.trim() || undefined);
   const openAdvanced = searchParams.get("advanced") === "intelligence";
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
@@ -790,6 +792,7 @@ export function SetupPage() {
               form={form}
               openAdvanced={openAdvanced}
               focusElement={focusElement}
+              focusGrant={focusGrant}
               saveState={saveState}
               persisted={canSaveProject && !workspaceSwitching}
               saving={saveMutation.isPending}
@@ -1120,6 +1123,7 @@ function IntelligenceSection({
   form,
   openAdvanced,
   focusElement,
+  focusGrant,
   saveState,
   persisted,
   saving,
@@ -1132,6 +1136,8 @@ function IntelligenceSection({
   /** A system alert asked for the advanced settings, and for one card in them. */
   openAdvanced: boolean;
   focusElement?: string;
+  /** A directory to start the focused grants card's path field with. */
+  focusGrant?: string;
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
@@ -1395,6 +1401,7 @@ function IntelligenceSection({
                   enabled={persisted}
                   openAdvanced={openAdvanced}
                   focusElement={focusElement}
+                  focusGrant={focusGrant}
                   onRegisterSave={(save) => {
                     saveAdvanced.current = save;
                   }}
@@ -1713,6 +1720,7 @@ function IntelligenceEditor({
   focusSlot,
   openAdvanced = false,
   focusElement,
+  focusGrant,
   tools,
   llmProviderAvailability,
   providers,
@@ -1730,6 +1738,8 @@ function IntelligenceEditor({
   /** A system alert asked for the advanced settings, and for one card in them. */
   openAdvanced?: boolean;
   focusElement?: string;
+  /** A directory to start the focused grants card's path field with. */
+  focusGrant?: string;
   tools: EnvironmentToolStatus[];
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -2622,6 +2632,9 @@ function IntelligenceEditor({
                 shared={draft.filesystem_grants ?? { documents: [] }}
                 local={draft.local_grants ?? { paths: [], deny: [] }}
                 status={environmentStatus.data?.access}
+                prefill={
+                  focusElement && focusGrant ? { card: focusElement, path: focusGrant } : undefined
+                }
                 onSharedChange={(filesystem_grants) =>
                   updateDraft((current) => ({ ...current, filesystem_grants }))
                 }

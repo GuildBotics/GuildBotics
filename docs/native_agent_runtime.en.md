@@ -92,6 +92,12 @@ in the same words in the alert band at the top of the screen.
   directories under the home directory the work reads from or writes to
   (`read` / `read_write`, relative paths only), created before a turn starts
   when missing, shared in `intelligences/cli_agent_filesystem_grants.yml`.
+  Until that file exists, `Documents/GuildBotics` (the exchange directory) is
+  granted read/write: what the Desktop hands over (a pasted image, a copy of a
+  file the environment could not reach) is placed in its `tmp/` and removed
+  when the app session ends, a Desktop run that names no working directory
+  runs there, and what an agent makes for the user goes under it unless the
+  request names a destination.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that close a corner of what is open, in
   `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential

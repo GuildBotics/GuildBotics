@@ -56,6 +56,11 @@ ELSEWHERE = {
     ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
     ("POST", "/commands/input-files"): "a temporary file outside the workspace",
+    ("POST", "/commands/input-files/copy"): "a temporary file outside the workspace",
+    (
+        "POST",
+        "/commands/input-paths",
+    ): "answers what a turn would reach, writes nothing",
     ("POST", "/commands/run"): "starts a run; its own writes go through the port",
     ("POST", "/config/members/resolve"): "resolves an identity, writes nothing",
     ("POST", "/config/members/github-app/registrations"): "starts an OAuth flow",

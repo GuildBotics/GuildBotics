@@ -143,6 +143,7 @@ export function App() {
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
   const closeGuard = useAppCloseGuard();
+  useHostNavigation();
   useHotkeyRegistration();
   return (
     <main className="shell">
@@ -496,6 +497,42 @@ function runtimeHasActiveWork(status: RuntimeStatus | undefined): boolean {
  * working — so the guard hangs off the tray's Quit item instead. The user can
  * force stop the runtime and quit from the modal.
  */
+/**
+ * Follow a route the host asks for (`app://navigate`): a control in the
+ * quick-run window, a separate webview, sends the user to a settings screen
+ * this way. The navigation guard applies as it does for the sidebar.
+ */
+function useHostNavigation() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const stop = await listen<string>("app://navigate", (event) => {
+          requestNavigation(() => navigate(event.payload));
+        });
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      } catch {
+        // The event API is unavailable (a harness that only stubs
+        // __TAURI_INTERNALS__): nothing can ask for a route, so nothing to follow.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [navigate]);
+}
+
 function useAppCloseGuard() {
   const [blocked, setBlocked] = useState(false);
   const [forceQuitting, setForceQuitting] = useState(false);

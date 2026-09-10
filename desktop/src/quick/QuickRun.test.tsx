@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkCommandInputPaths,
   getCommandOptions,
   getTeam,
   getTraceDetail,
@@ -45,6 +46,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getTraceDetail: vi.fn(),
     subscribeEvents: vi.fn(),
     uploadCommandInputFile: vi.fn(),
+    checkCommandInputPaths: vi.fn(),
   };
 });
 const hideQuickWindowMock = vi.fn();
@@ -59,6 +61,7 @@ vi.mock("./quickRunState", async (importOriginal) => {
 });
 vi.mock("../hotkeys/hotkeyRuntime", () => ({
   hideQuickWindow: () => hideQuickWindowMock(),
+  openMainWindow: vi.fn(async () => {}),
   clipboardWatchSupported: () => watchSupportedMock(),
   pollClipboard: (since: number) => pollClipboardMock(since),
   clipboardImageFile: (resourceId: number) => clipboardImageFileMock(resourceId),
@@ -167,6 +170,13 @@ beforeEach(() => {
   setClipboard(1, "initial");
   vi.mocked(runCommand).mockReset().mockResolvedValue({ trace_id: "t1", output: "done" });
   vi.mocked(uploadCommandInputFile).mockReset();
+  // The quick window names no working directory; what it drops is judged
+  // against the grants alone, and this stub says every path is reachable.
+  vi.mocked(checkCommandInputPaths)
+    .mockReset()
+    .mockImplementation(async ({ paths }) => ({
+      paths: paths.map((path) => ({ path, kind: "file" as const, reachable: true, grant: null })),
+    }));
   vi.mocked(getTeam)
     .mockReset()
     .mockResolvedValue({
@@ -270,7 +280,11 @@ describe("QuickRun", () => {
       });
     });
 
-    expect(input).toHaveValue("/tmp/source document.pdf");
+    await waitFor(() => expect(input).toHaveValue("/tmp/source document.pdf"));
+    expect(checkCommandInputPaths).toHaveBeenCalledWith({
+      paths: ["/tmp/source document.pdf"],
+      cwd: undefined,
+    });
   });
 
   it("saves a screenshot pasted into the selected Polish command", async () => {

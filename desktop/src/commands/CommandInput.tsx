@@ -1,17 +1,52 @@
-import { Text, Textarea, type TextareaProps } from "@mantine/core";
+import {
+  ActionIcon,
+  Button,
+  Group,
+  Stack,
+  Text,
+  Textarea,
+  Tooltip,
+  type TextareaProps,
+} from "@mantine/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
-import { uploadCommandInputFile } from "../api/client";
+import {
+  checkCommandInputPaths,
+  copyCommandInputFile,
+  uploadCommandInputFile,
+  type CommandInputGrantSuggestion,
+  type CommandInputPathStatus,
+} from "../api/client";
+import { isMacPlatform } from "../hotkeys/accelerator";
+import { openMainWindow } from "../hotkeys/hotkeyRuntime";
 
 type CommandInputProps = Omit<TextareaProps, "onChange" | "value"> & {
   inputRef?: RefObject<HTMLTextAreaElement | null>;
   value: string;
   onChange: (value: string) => void;
+  /** Where the command will run, when the screen knows; a dropped file there is reachable. */
+  cwd?: string;
 };
 
 type DropPosition = { x: number; y: number };
+
+/**
+ * The settings screen where a grant that would open a dropped path is added:
+ * the advanced intelligence panel, scrolled to the right card, with the
+ * directory already in its path field.
+ */
+export function grantSettingsRoute(grant: CommandInputGrantSuggestion): string {
+  const search = new URLSearchParams({
+    section: "intelligence",
+    advanced: "intelligence",
+    focus: grant.scope === "document" ? "grants-documents" : "grants-device",
+    grant: grant.path,
+  });
+  return `/setup?${search.toString()}`;
+}
 
 export function appendCommandInputPaths(value: string, paths: string[]): string {
   const additions = paths.filter(Boolean);
@@ -27,6 +62,7 @@ export function CommandInput({
   value,
   onChange,
   onPaste,
+  cwd,
   ...textareaProps
 }: CommandInputProps) {
   const { t } = useTranslation();
@@ -36,6 +72,8 @@ export function CommandInput({
   const [dropActive, setDropActive] = useState(false);
   const [uploadsInFlight, setUploadsInFlight] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  /** Dropped paths the isolated agent environment cannot reach, awaiting the user's choice. */
+  const [unreachable, setUnreachable] = useState<CommandInputPathStatus[]>([]);
 
   useEffect(() => {
     valueRef.current = value;
@@ -48,6 +86,60 @@ export function CommandInput({
       onChange(next);
     },
     [onChange],
+  );
+
+  /**
+   * A dropped path goes in as it is when a turn would see it there; otherwise
+   * the user decides between a copy the environment can reach and the original.
+   * A missing path is not a file to hand over, so it goes in untouched too.
+   */
+  const acceptDroppedPaths = useCallback(
+    async (paths: string[]) => {
+      setUploadError(null);
+      let described: CommandInputPathStatus[];
+      try {
+        described = (await checkCommandInputPaths({ paths, cwd })).paths;
+      } catch (error) {
+        setUploadError(error instanceof Error ? error.message : String(error));
+        appendPaths(paths);
+        return;
+      }
+      const held = described.filter((entry) => !entry.reachable && entry.kind !== "missing");
+      appendPaths(described.filter((entry) => !held.includes(entry)).map((entry) => entry.path));
+      setUnreachable((current) => [...current, ...held]);
+    },
+    [appendPaths, cwd],
+  );
+
+  /**
+   * Hand over a copy the environment can reach, keep the original and go and
+   * open its directory to agents (the path goes in as it is, so the command
+   * is ready once the grant is saved), or drop the file altogether.
+   */
+  const settleUnreachable = useCallback(
+    async (entry: CommandInputPathStatus, choice: "copy" | "grant" | "dismiss") => {
+      setUnreachable((current) => current.filter((held) => held !== entry));
+      if (choice === "dismiss") {
+        return;
+      }
+      if (choice === "grant") {
+        appendPaths([entry.path]);
+        if (entry.grant) {
+          void openMainWindow(grantSettingsRoute(entry.grant));
+        }
+        return;
+      }
+      setUploadError(null);
+      setUploadsInFlight((count) => count + 1);
+      try {
+        appendPaths([(await copyCommandInputFile(entry.path)).path]);
+      } catch (error) {
+        setUploadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setUploadsInFlight((count) => count - 1);
+      }
+    },
+    [appendPaths],
   );
 
   useEffect(() => {
@@ -63,11 +155,11 @@ export function CommandInput({
           setDropActive(false);
           return;
         }
-        const inside = containsPhysicalPoint(resolvedInputRef.current, payload.position);
+        const inside = containsDropPoint(resolvedInputRef.current, payload.position);
         if (payload.type === "drop") {
           setDropActive(false);
           if (inside) {
-            appendPaths(payload.paths);
+            void acceptDroppedPaths(payload.paths);
           }
           return;
         }
@@ -85,7 +177,7 @@ export function CommandInput({
       disposed = true;
       unlisten?.();
     };
-  }, [appendPaths, resolvedInputRef]);
+  }, [acceptDroppedPaths, resolvedInputRef]);
 
   const uploadPastedImage = useCallback(
     async (file: File) => {
@@ -127,6 +219,52 @@ export function CommandInput({
           {t("commands.inputFileDropActive")}
         </Text>
       ) : null}
+      {unreachable.length ? (
+        <Stack gap={4} role="group" aria-label={t("commands.inputPathUnreachable")}>
+          <Text size="xs" c="dimmed">
+            {t("commands.inputPathUnreachable")}
+          </Text>
+          {unreachable.map((entry) => (
+            <Group key={entry.path} gap="xs" wrap="nowrap">
+              <Text size="xs" ff="monospace" style={{ flex: 1, wordBreak: "break-all" }}>
+                {entry.path}
+              </Text>
+              {entry.kind === "file" ? (
+                <Button
+                  size="compact-xs"
+                  variant="light"
+                  onClick={() => void settleUnreachable(entry, "copy")}
+                >
+                  {t("commands.inputPathCopy")}
+                </Button>
+              ) : null}
+              {entry.grant ? (
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  onClick={() => void settleUnreachable(entry, "grant")}
+                >
+                  {t("commands.inputPathGrant")}
+                </Button>
+              ) : null}
+              <Tooltip label={t("commands.inputPathDismiss")}>
+                <ActionIcon
+                  aria-label={t("commands.inputPathDismiss")}
+                  size="xs"
+                  variant="subtle"
+                  color="gray"
+                  onClick={() => void settleUnreachable(entry, "dismiss")}
+                >
+                  <X size={12} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          ))}
+          <Text size="xs" c="dimmed">
+            {t("commands.inputPathHint")}
+          </Text>
+        </Stack>
+      ) : null}
       {uploadsInFlight > 0 ? (
         <Text size="xs" c="dimmed" role="status">
           {t("commands.inputFileSaving")}
@@ -150,11 +288,18 @@ function pastedImage(items: DataTransferItemList): File | null {
   return null;
 }
 
-function containsPhysicalPoint(element: HTMLElement | null, position: DropPosition): boolean {
+/**
+ * Whether a drop landed on the element. The host reports the position as
+ * physical pixels, except on macOS, where wry reads the view's own
+ * coordinates (points, i.e. CSS pixels) and Tauri wraps them unscaled
+ * (`wry/src/wkwebview/drag_drop.rs`); dividing those by the pixel ratio put
+ * the target below and to the right of the field on Retina displays.
+ */
+function containsDropPoint(element: HTMLElement | null, position: DropPosition): boolean {
   if (!element) {
     return false;
   }
-  const scale = window.devicePixelRatio || 1;
+  const scale = isMacPlatform() ? 1 : window.devicePixelRatio || 1;
   const x = position.x / scale;
   const y = position.y / scale;
   const rect = element.getBoundingClientRect();

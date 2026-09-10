@@ -11,10 +11,7 @@ from fastapi.routing import APIRoute
 from yaml import safe_load
 
 from guildbotics.app_api.api import TAURI_ORIGINS, TOKEN_HEADER, create_app
-from guildbotics.app_api.command_input_files import (
-    COMMAND_INPUT_DIRECTORY_NAME,
-    CommandInputFileStore,
-)
+from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
@@ -748,7 +745,7 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
     tmp_path: Path,
 ) -> None:
     runtime = RuntimeStub(tmp_path)
-    store = CommandInputFileStore(temporary_root=tmp_path)
+    store = CommandInputFileStore(root=tmp_path / "tmp")
     app = create_app(
         session_token="secret",
         runtime=runtime,
@@ -764,10 +761,85 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
 
         assert response.status_code == HTTP_OK
         saved = Path(response.json()["path"])
-        assert saved.is_relative_to(tmp_path / COMMAND_INPUT_DIRECTORY_NAME)
+        assert saved.is_relative_to(tmp_path / "tmp")
         assert saved.read_bytes() == b"image-data"
 
     assert not saved.exists()
+
+
+def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
+    tmp_path: Path,
+) -> None:
+    store = CommandInputFileStore(root=tmp_path / "tmp")
+    app = create_app(
+        session_token="secret",
+        runtime=RuntimeStub(tmp_path),
+        command_input_file_store=store,
+    )
+    source = tmp_path / "report.md"
+    source.write_text("hello", encoding="utf-8")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-files/copy",
+            headers=AUTH_HEADERS,
+            json={"path": str(source)},
+        )
+        assert response.status_code == HTTP_OK
+        copied = Path(response.json()["path"])
+        assert copied.is_relative_to(tmp_path / "tmp")
+        assert copied.name.endswith("-report.md")
+        assert copied.read_text(encoding="utf-8") == "hello"
+
+        refused = client.post(
+            "/commands/input-files/copy",
+            headers=AUTH_HEADERS,
+            json={"path": str(tmp_path)},
+        )
+
+    assert refused.status_code == HTTP_BAD_REQUEST
+    assert refused.json()["code"] == "command_input_file_invalid"
+    assert not copied.exists()
+    assert source.exists()
+
+
+def test_command_input_paths_report_what_a_turn_would_reach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    home = Path.home()
+    reachable = home / "Documents/GuildBotics/tmp/a.png"
+    reachable.parent.mkdir(parents=True)
+    reachable.write_bytes(b"x")
+    unreachable = tmp_path / "shot.png"
+    unreachable.write_bytes(b"x")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-paths",
+            headers=AUTH_HEADERS,
+            json={"paths": [str(reachable), str(unreachable), str(tmp_path)]},
+        )
+
+    assert response.status_code == HTTP_OK
+    device = {"scope": "device", "path": str(tmp_path.resolve())}
+    assert response.json() == {
+        "paths": [
+            {"path": str(reachable), "kind": "file", "reachable": True, "grant": None},
+            {
+                "path": str(unreachable),
+                "kind": "file",
+                "reachable": False,
+                "grant": device,
+            },
+            {
+                "path": str(tmp_path),
+                "kind": "directory",
+                "reachable": False,
+                "grant": device,
+            },
+        ]
+    }
 
 
 def test_command_input_file_upload_runs_sync_io_outside_event_loop(
