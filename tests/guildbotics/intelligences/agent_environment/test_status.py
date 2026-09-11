@@ -12,6 +12,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
 )
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
@@ -67,10 +68,26 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
         name="claude",
     )
     assert status.tool("grok").refusal == t(
-        "intelligences.agent_environment.tool.not_provisioned", tool="Grok Build"
+        "intelligences.agent_environment.tool.not_logged_in",
+        tool="Grok Build",
+        name="grok",
     )
     with pytest.raises(ValueError):
         status.tool("nope")
+
+
+def test_a_tool_the_snapshot_does_not_carry_is_refused_as_such(
+    device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ghost = CliAgentInfo(name="ghost", label="Ghost", executable="ghost")
+    monkeypatch.setattr(module, "CLI_AGENTS", (*module.CLI_AGENTS, ghost))
+
+    status = device_status()
+
+    assert not status.tool("ghost").provisioned
+    assert status.tool("ghost").refusal == t(
+        "intelligences.agent_environment.tool.not_provisioned", tool="Ghost"
+    )
 
 
 @pytest.mark.parametrize(

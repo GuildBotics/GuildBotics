@@ -175,10 +175,11 @@ class GrokAcpAdapter(AcpAdapterBase):
         return super()._decode_extension(update, session_id)
 
 
-#: The one profile every turn runs under: reads anywhere, writes confined to
-#: the working directory, `~/.grok` and temp. The provider-neutral contract
-#: (working directory plus explicit grants) is not translated for Grok yet.
-_SANDBOX_PROFILE = "workspace"
+#: Grok's own sandbox is off inside the agent environment: its Linux
+#: profiles need Landlock, which the environment's kernel does not have, and
+#: Grok refuses to start rather than run a profile it cannot enforce. The
+#: environment is the boundary; the inner sandbox was never counted as one.
+_SANDBOX_PROFILE = "off"
 
 
 def _launch_argv(

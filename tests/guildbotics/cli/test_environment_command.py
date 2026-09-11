@@ -70,7 +70,10 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
         "codex: not logged in (run `guildbotics environment login codex`)"
         in result.output
     )
-    assert "grok: not provisioned" in result.output
+    assert (
+        "grok: not logged in (run `guildbotics environment login grok`)"
+        in result.output
+    )
 
 
 def test_status_json_has_the_same_facts(workspace: Path) -> None:
@@ -96,7 +99,7 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "provisioned": True,
         "logged_in": False,
     }
-    assert tools["antigravity"]["provisioned"] is False
+    assert tools["antigravity"]["provisioned"] is True
 
 
 def test_commands_refuse_without_a_runtime(
@@ -170,10 +173,12 @@ def test_login_needs_a_ready_snapshot(workspace: Path) -> None:
 
 
 def test_login_accepts_only_provisioned_tools(workspace: Path) -> None:
-    result = _invoke(workspace, "login", "grok")
+    result = _invoke(workspace, "login", "ghost")
 
     assert result.exit_code != 0
-    assert "Invalid value for '{codex|claude}'" in result.output
+    assert (
+        "Invalid value for '{codex|claude|grok|copilot|antigravity}'" in result.output
+    )
 
 
 def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
@@ -186,7 +191,7 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
 
     async def fake_login(tool: Any, declaration: Any, **kwargs: Any) -> int:
         calls.append({"tool": tool.name, **kwargs})
-        kwargs["write_line"]("Logged in")
+        kwargs["write"]("Logged in\n")
         store = provider_state.provider_state_dir(tool)
         store.mkdir(parents=True)
         (store / "auth.json").write_text("{}")

@@ -71,7 +71,7 @@ def _device(
         ToolStatus(
             name=agent.name,
             label=agent.label,
-            provisioned=bool(agent.provision.package),
+            provisioned=agent.provision.provisioned,
             logged_in=agent.name in logged_in,
         )
         for agent in CLI_AGENTS
@@ -140,8 +140,12 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         "intelligences.agent_environment.tool.not_logged_in", tool="Codex", name="codex"
     )
     assert (tools["grok"].provisioned, tools["grok"].problem) == (
-        False,
-        t("intelligences.agent_environment.tool.not_provisioned", tool="Grok Build"),
+        True,
+        t(
+            "intelligences.agent_environment.tool.not_logged_in",
+            tool="Grok Build",
+            name="grok",
+        ),
     )
     assert tools["claude"].problem == t(
         "intelligences.agent_environment.tool.not_logged_in",
@@ -235,16 +239,17 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     aiko, kenji = status.members[0].slots[0], status.members[1].slots[0]
     assert (aiko.tool, aiko.network.allow_local_network) == ("codex", True)
     assert aiko.problems == [] and kenji.problems == []
-    # What does keep kenji's slot from starting is its tool, which is not in
-    # the environment yet; that is reported once for the tool, not per slot.
+    # What does keep kenji's slot from starting is its tool, which is not
+    # logged in here; that is reported once for the tool, not per slot.
     assert agent_environment_problems(["aiko", "kenji"]) == [
         (
             "",
             "grok",
             "tool",
             t(
-                "intelligences.agent_environment.tool.not_provisioned",
+                "intelligences.agent_environment.tool.not_logged_in",
                 tool="Grok Build",
+                name="grok",
             ),
         )
     ]

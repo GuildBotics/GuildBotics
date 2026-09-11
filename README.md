@@ -62,13 +62,14 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
   - Every participating machine needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
   - The machine acting as the hub also needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
 - **Hardware virtualization** for the isolated agent environment. Every AI CLI turn runs inside a microVM that GuildBotics boots on the machine running the turn, so that machine needs: on macOS, Apple Silicon (Intel Macs are not supported); on Windows 11, the **Windows Hypervisor Platform** optional feature; on Linux, KVM (`/dev/kvm` readable by the user). The runtime itself ([microsandbox](https://microsandbox.dev/)) ships with GuildBotics and is placed under `~/.guildbotics/data/msb` on first use; nothing else needs to be installed
-- **An account for an AI CLI tool**. The tools themselves are installed by GuildBotics inside the isolated environment, so nothing has to be installed on the machine for turns. What you need is the account: after setup, log in once per machine from a terminal with `guildbotics environment login <tool>` (the **LLM / AI CLI tools** screen shows the exact command). Currently provisioned in the environment:
+- **An account for an AI CLI tool**. The tools themselves are installed by GuildBotics inside the isolated environment, so nothing has to be installed on the machine for turns. What you need is the account: after setup, log in once per machine from a terminal with `guildbotics environment login <tool>` (the **LLM / AI CLI tools** screen shows the exact command). The tools GuildBotics provisions in the environment:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires a Claude Pro or Max subscription)
+  - [Grok Build](https://docs.x.ai/build)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (the environment has no system keychain, so the login asks once whether to keep its token in a file under the device's store)
+  - [Antigravity CLI](https://antigravity.google/docs/cli)
 
-  Grok Build, GitHub Copilot CLI, and Antigravity CLI are not provisioned in the environment yet and cannot be selected
-
-With Codex or Claude Code, a member can carry a session over and resume where it left off. For the isolated environment, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
+A member can carry a session over and resume where it left off. For the isolated environment, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
 
 ### Installation
 

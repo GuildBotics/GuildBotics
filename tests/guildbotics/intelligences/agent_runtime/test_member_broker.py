@@ -270,14 +270,19 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     context = _context(tmp_path)
     await broker.activate(context)
     descriptor = broker.mcp_server
+    endpoint = broker.endpoint
     turn_grant = broker.turn_grant
 
     try:
+        # The descriptor a provider reads inside the environment names the
+        # broker by the gateway's alias; this host-side test reaches it by
+        # the loopback address the same port answers on.
+        assert descriptor["url"] == endpoint.guest_url
         async with httpx2.AsyncClient(
             headers={"Authorization": "Bearer wrong-token"}
         ) as client:
             response = await client.post(
-                descriptor["url"],
+                endpoint.url,
                 headers={"Accept": "application/json, text/event-stream"},
                 json={
                     "jsonrpc": "2.0",
@@ -295,9 +300,8 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
         # A turn inside the agent environment names this host by the
         # gateway's alias; the Host check, which runs behind the bearer
         # check, lets it through and still refuses any other name.
-        endpoint = broker.endpoint
         authorization = descriptor["headers"][0]["value"]
-        assert endpoint.port == int(descriptor["url"].rsplit(":", 1)[1].split("/")[0])
+        assert endpoint.port == int(endpoint.url.rsplit(":", 1)[1].split("/")[0])
         assert (
             endpoint.guest_url
             == f"http://host.microsandbox.internal:{endpoint.port}/mcp"
@@ -310,7 +314,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
                 (f"evil.example:{endpoint.port}", 421),
             ):
                 response = await client.post(
-                    descriptor["url"],
+                    endpoint.url,
                     headers={
                         "Accept": "application/json, text/event-stream",
                         "Host": host,
@@ -322,7 +326,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
         authorization = descriptor["headers"][0]["value"]
         async with (
             httpx2.AsyncClient(headers={"Authorization": authorization}) as client,
-            streamable_http_client(descriptor["url"], http_client=client) as streams,
+            streamable_http_client(endpoint.url, http_client=client) as streams,
             ClientSession(*streams) as session,
         ):
             await session.initialize()

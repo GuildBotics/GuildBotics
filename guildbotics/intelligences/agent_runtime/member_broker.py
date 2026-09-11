@@ -148,12 +148,16 @@ class MemberCapabilityBroker:
 
     @property
     def mcp_server(self) -> dict[str, Any]:
-        """Return the ACP HTTP MCP server descriptor for this broker."""
+        """Return the ACP HTTP MCP server descriptor for this broker.
+
+        The provider reads it inside the agent environment, so the broker is
+        named the way the guest reaches it.
+        """
         endpoint = self.endpoint
         return {
             "type": "http",
             "name": endpoint.name,
-            "url": endpoint.url,
+            "url": endpoint.guest_url,
             "headers": [{"name": "Authorization", "value": endpoint.authorization}],
         }
 

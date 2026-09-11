@@ -167,7 +167,8 @@ unexpected approval request is declined. Claude Code runs with
 `bypassPermissions` and `sandbox.enabled=false` (and `IS_SANDBOX=1`, since the
 turn is root inside the microVM and Claude Code otherwise refuses that mode as
 root). Grok Build launches with
-`--sandbox workspace` and `--always-approve`, GitHub Copilot with
+`--sandbox off` and `--always-approve` (its Linux profiles need Landlock, which the
+environment's kernel lacks, and Grok refuses to start with a profile it cannot enforce), GitHub Copilot with
 `--no-remote-export` and `allow_all: on` (`off` on a read-only turn, where every
 request is declined), Antigravity with `--dangerously-skip-permissions`; none of
 them takes a flag from configuration. Which providers' inner sandboxes run on
@@ -192,7 +193,7 @@ validation instead of silently changing the effective boundary.
 The AI CLI tools run inside the isolated environment, so nothing is installed on the
 host and a host login is not what a turn uses. Logging in happens inside the
 environment: on every device that runs turns, run `guildbotics environment login
-<tool>` (`codex` / `claude`) in a terminal. The tool's own login command starts inside
+<tool>` (`codex` / `claude` / `grok` / `copilot` / `antigravity`) in a terminal. The tool's own login command starts inside
 the environment and walks you through its device code flow in the browser. The result
 is kept in the device's store (`~/.guildbotics/data/agent_environment/<tool>/`), shared
 by every member and workspace on that device, and only the credentials and sessions
@@ -200,8 +201,14 @@ are bound into each turn. GuildBotics does not copy them into its conversation s
 diagnostics. The Desktop shows the login state and the command to run; it never
 drives the login dialogue itself.
 
-Grok Build, GitHub Copilot, and Antigravity are not provisioned in the environment yet
-and cannot be selected. The authentication behaviour below applies once they are.
+The login runs on a terminal inside the environment, because a tool that must ask
+before it stores its credentials in a file only asks on one: Copilot, finding no system
+keychain there, confirms plain-text storage under its state root once. Grok Build uses
+its device-code login. Antigravity has no login command; a print-mode run without a
+saved login prints the Google sign-in URL and takes the authorization code on standard
+input (within 60 seconds). Grok Build's own sandbox profiles need Landlock, which the
+environment's kernel lacks, so it runs with `--sandbox off` there; the environment is
+the boundary.
 
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the

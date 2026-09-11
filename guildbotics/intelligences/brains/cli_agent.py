@@ -920,9 +920,14 @@ class CliAgentBrain(Brain):
             details["cli_agent"] = adapter_name
             if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
                 _normalize_native_retry_after(details)
+            # What the tool itself said last is the only lead a reader has
+            # when the process just ended, so it rides along with the reason.
+            stderr = str(exc)
+            if tail := details.get("stderr", "").strip():
+                stderr = f"{stderr}\n{tail}"
             return CliAgentExecutionResult(
                 stdout="",
-                stderr=str(exc),
+                stderr=stderr,
                 returncode=1,
                 error_category=exc.category.value,
                 error_details=details,

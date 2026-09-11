@@ -35,7 +35,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, cli_agent_info
 
-_PROVISIONED = [agent.name for agent in CLI_AGENTS if agent.provision.package]
+_PROVISIONED = [agent.name for agent in CLI_AGENTS if agent.provision.provisioned]
 
 
 @click.group()
@@ -98,7 +98,7 @@ def login_command(tool: str) -> None:
                 declaration,
                 snapshot=status.path,
                 read_line=_read_stdin_line,
-                write_line=click.echo,
+                write=_write_stdout,
             )
         )
     except (AgentEnvironmentError, ToolchainError) as exc:
@@ -114,6 +114,11 @@ def login_command(tool: str) -> None:
 
 def _read_stdin_line() -> str | None:
     return sys.stdin.readline() or None
+
+
+def _write_stdout(text: str) -> None:
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 @environment.command(name="status")

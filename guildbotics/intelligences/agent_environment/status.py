@@ -163,7 +163,7 @@ def _tool_status(agent: CliAgentInfo) -> ToolStatus:
     return ToolStatus(
         name=agent.name,
         label=agent.label,
-        provisioned=bool(agent.provision.package),
+        provisioned=agent.provision.provisioned,
         logged_in=is_logged_in(agent),
     )
 

@@ -121,10 +121,14 @@ async def login(
     *,
     snapshot: Path,
     read_line: Callable[[], str | None],
-    write_line: Callable[[str], None],
+    write: Callable[[str], None],
     home: Path | None = None,
 ) -> int:
     """Run the provider's login command inside the environment, interactively.
+
+    The command gets a terminal: a tool that must ask before it stores its
+    credentials in a file (Copilot, where there is no keychain) only asks on
+    one.
 
     Args:
         tool: The provider to log in to; it must be provisioned.
@@ -132,7 +136,8 @@ async def login(
         snapshot: The snapshot to boot from.
         read_line: Blocks for one line the user typed, or None at the end
             of their input; it is called from a worker thread.
-        write_line: Receives every line the login command prints.
+        write: Receives what the login command prints, as it comes; a
+            prompt waits without a newline, so this is not line by line.
         home: The host home directory, the guest's too.
 
     Returns:
@@ -142,11 +147,13 @@ async def login(
         login_spec(tool, declaration, home), snapshot=str(snapshot)
     )
     try:
-        process = await environment.run(*tool.provision.login, limit=_LOGIN_LINE_LIMIT)
+        process = await environment.run(
+            *tool.provision.login, limit=_LOGIN_LINE_LIMIT, tty=True
+        )
 
         async def pump(reader: asyncio.StreamReader) -> None:
-            while line := await reader.readline():
-                write_line(line.decode(errors="replace").rstrip("\r\n"))
+            while chunk := await reader.read(_LOGIN_LINE_LIMIT):
+                write(chunk.decode(errors="replace"))
 
         async def feed() -> None:
             while (line := await asyncio.to_thread(read_line)) is not None:

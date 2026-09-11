@@ -282,7 +282,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
-    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["url"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"][0]["name"] == "Authorization"
     assert server["headers"][0]["value"].startswith("Bearer ")
     prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
@@ -297,7 +297,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
         "grok",
         "--no-auto-update",
         "--sandbox",
-        "workspace",
+        "off",
         "agent",
         "--always-approve",
         "stdio",
@@ -1198,7 +1198,8 @@ async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> N
 
     await _run(GrokAcpAdapter(), tmp_path, read_only=True)
 
-    assert launched[0][0][2:4] == ("--sandbox", "workspace")
+    # The environment is the boundary; Grok's Landlock profiles cannot run there.
+    assert launched[0][0][2:4] == ("--sandbox", "off")
 
 
 @pytest.mark.asyncio

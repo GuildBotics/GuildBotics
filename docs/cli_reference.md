@@ -254,7 +254,7 @@ through it here; what it stores stays on this device, outside the
 snapshot, and every member uses it.
 
 ```text
-guildbotics environment login [OPTIONS] {codex|claude}
+guildbotics environment login [OPTIONS] {codex|claude|grok|copilot|antigravity}
 ```
 
 | Option | Description |

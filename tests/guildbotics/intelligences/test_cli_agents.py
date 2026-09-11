@@ -232,12 +232,15 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
 
     for agent in CLI_AGENTS:
         provision = agent.provision
-        if not provision.package:
-            assert provision == type(provision)(), agent.name
-            continue
+        assert provision.provisioned, agent.name
+        # One way in: npm, or a script that pins its own version.
+        assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
         assert provision.auth in provision.persisted, agent.name
-        assert provision.environment("/h") == {
-            provision.state_root_env: f"/h/{provision.state_root}"
-        }
+        expected = (
+            {provision.state_root_env: f"/h/{provision.state_root}"}
+            if provision.state_root_env
+            else {}
+        )
+        assert provision.environment("/h") == expected, agent.name

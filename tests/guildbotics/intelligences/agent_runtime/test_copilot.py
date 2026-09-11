@@ -301,7 +301,7 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
-    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["url"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"][0]["value"].startswith("Bearer ")
     prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
     assert "never run those commands" in prompt

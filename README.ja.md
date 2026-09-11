@@ -62,13 +62,14 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
   - 参加する各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
   - Hub 役のマシンには OpenSSH **サーバー**も必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
 - **ハードウェア仮想化**（エージェント隔離環境のため）。AI CLI の turn はすべて、turn を実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
-- **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**LLM・AI CLIツール** 画面にそのコマンドが表示されます）。現在、隔離環境に導入できるのは次の 2 つです:
+- **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**LLM・AI CLIツール** 画面にそのコマンドが表示されます）。GuildBotics が隔離環境に導入するツールは次のとおりです:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（Claude Pro または Max サブスクリプションが必要）
+  - [Grok Build](https://docs.x.ai/build)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)（環境にはキーチェーンが無いため、ログイン時に token を端末の store のファイルへ置くかを 1 回確認されます）
+  - [Antigravity CLI](https://antigravity.google/docs/cli)
 
-  Grok Build・GitHub Copilot CLI・Antigravity CLI はまだ隔離環境に導入できないため、選択できません
-
-Codex・Claude Code を利用する場合、メンバーはセッションを引き継いで前回の続きから作業を再開できます。隔離環境、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
+メンバーはセッションを引き継いで前回の続きから作業を再開できます。隔離環境、Slack スレッドやチケットとセッションの対応付け、実行権限の設定については [Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md)を参照してください。
 
 ### インストール
 

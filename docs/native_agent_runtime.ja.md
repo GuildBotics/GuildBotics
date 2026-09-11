@@ -134,8 +134,8 @@ Codexは、`~/.codex`を除く環境全体を読み、作業ディレクトリ�
 すると、Codex 0.153では`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
 `bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
-rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox workspace`と
-`--always-approve`、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
+rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
+`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
 `off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
 フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
 provisionするたびに実機で確認し、Codex（Landlockとbubblewrap）は確認済みです。
@@ -154,15 +154,19 @@ member brokerが強制します（person leaseを持たず、書き込み系のm
 
 AI CLIツールは隔離環境の中で動くため、hostにインストールする必要はなく、hostでのログインも
 turnには使われません。ログインは環境の中で行います。turnを実行する端末ごとに、ターミナルで
-`guildbotics environment login <tool>`（`codex` / `claude`）を実行すると、そのツール自身の
+`guildbotics environment login <tool>`（`codex` / `claude` / `grok` / `copilot` / `antigravity`）を実行すると、そのツール自身の
 ログインコマンドが環境の中で起動し、device code方式でブラウザ承認を案内します。結果は
 端末のstore（`~/.guildbotics/data/agent_environment/<tool>/`）に保存され、その端末の全メンバー・
 全ワークスペースで共有し、turnごとに認証情報とセッションだけを環境へbindします。
 GuildBoticsのセッション情報や診断記録には複製されません。Desktopはログイン状態と
 実行すべきコマンドを示し、Desktop自身がログインの対話を行うことはありません。
 
-Grok Build・GitHub Copilot・Antigravityはまだ環境に導入できないため選択できません。以下の
-認証方式の記述は、それらを導入したときに適用されます。
+loginは環境の中の端末（TTY）で動かします。認証情報をファイルに保存する前に確認するツールは端末でしか
+確認しないためで、Copilotは環境にキーチェーンが無いことを検出し、state root配下への平文保存を1回
+確認します。Grok Buildはdevice code方式のloginです。Antigravityにはloginコマンドが無く、保存済み
+loginの無いprint mode実行がGoogleのサインインURLを表示して認可コードを標準入力から受け取ります
+（60秒以内）。Grok Build自身のsandbox profileはLinuxでLandlockを要し、環境のkernelには無いため、
+環境の中では`--sandbox off`で動きます（境界は環境です）。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか

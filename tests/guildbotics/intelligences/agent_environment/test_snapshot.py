@@ -99,8 +99,12 @@ def test_the_name_changes_with_the_pinned_provider_versions(
     monkeypatch.setattr(
         snapshot, "provisioned_packages", lambda: {"codex": "@openai/codex@9.9.9"}
     )
+    changed = snapshot_name(_declaration())
+    assert changed != before
 
-    assert snapshot_name(_declaration()) != before
+    # A script-installed tool is pinned by its script, so that counts too.
+    monkeypatch.setattr(snapshot, "provisioned_installs", lambda: {"grok": "pin 9.9.9"})
+    assert snapshot_name(_declaration()) != changed
 
 
 # --- recipe ----------------------------------------------------------------------
@@ -113,8 +117,19 @@ def test_the_recipe_installs_the_providers_and_the_declared_packages() -> None:
         )
     )
 
-    assert [step.label for step in steps] == ["home", "apt", "uv", "npm", "uv-tools"]
+    installs = list(snapshot.provisioned_installs())
+    assert [step.label for step in steps] == [
+        "home",
+        "apt",
+        "uv",
+        "npm",
+        *installs,
+        "uv-tools",
+    ]
     scripts = {step.label: step.script for step in steps}
+    # A tool that is not on npm is put in by its own pinned script.
+    for name in installs:
+        assert scripts[name] == snapshot.provisioned_installs()[name]
     assert 'install -d -m 0700 "$HOME"' in scripts["home"]
     assert (
         "apt-get install -y --no-install-recommends ripgrep=14.1.0-1" in scripts["apt"]
@@ -129,7 +144,12 @@ def test_the_recipe_installs_the_providers_and_the_declared_packages() -> None:
 
 
 def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
-    assert [s.label for s in build_steps(_declaration())] == ["home", "uv", "npm"]
+    assert [s.label for s in build_steps(_declaration())] == [
+        "home",
+        "uv",
+        "npm",
+        *snapshot.provisioned_installs(),
+    ]
 
 
 def test_package_arguments_are_shell_quoted() -> None:
@@ -210,7 +230,12 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert call["image"] == snapshot.IMAGE
     assert call["home"] == home.resolve().as_posix()
     assert call["nameservers"] == ("10.0.0.53",)
-    assert [s.label for s in call["steps"]] == ["home", "uv", "npm"]
+    assert [s.label for s in call["steps"]] == [
+        "home",
+        "uv",
+        "npm",
+        *snapshot.provisioned_installs(),
+    ]
     assert status.state == "ready"
     assert status.path.is_dir()
     assert fake.removed == [old]

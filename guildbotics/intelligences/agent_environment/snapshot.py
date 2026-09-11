@@ -97,11 +97,20 @@ def snapshots_dir(workspace_root: Path | None = None) -> Path:
 
 
 def provisioned_packages() -> dict[str, str]:
-    """The provider CLIs the snapshot installs, by tool name."""
+    """The provider CLIs the snapshot installs from npm, by tool name."""
     return {
         agent.name: agent.provision.package
         for agent in CLI_AGENTS
         if agent.provision.package
+    }
+
+
+def provisioned_installs() -> dict[str, str]:
+    """The provider CLIs the snapshot installs by their own script, by tool name."""
+    return {
+        agent.name: agent.provision.install
+        for agent in CLI_AGENTS
+        if agent.provision.install
     }
 
 
@@ -112,6 +121,7 @@ def snapshot_name(declaration: ToolchainDeclaration) -> str:
         "image": IMAGE,
         "uv": UV_VERSION,
         "providers": provisioned_packages(),
+        "installs": provisioned_installs(),
         "packages": declaration.packages.model_dump(),
     }
     encoded = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
@@ -150,6 +160,9 @@ def build_steps(declaration: ToolchainDeclaration) -> tuple[BuildStep, ...]:
             f"npm install -g {_args([*provisioned_packages().values(), *packages.npm])}\n"
             "npm cache clean --force",
         )
+    )
+    steps.extend(
+        BuildStep(name, script) for name, script in provisioned_installs().items()
     )
     if packages.uv:
         steps.append(

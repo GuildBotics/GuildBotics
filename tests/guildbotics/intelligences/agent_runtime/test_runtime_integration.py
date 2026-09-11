@@ -538,6 +538,60 @@ async def test_native_brain_does_not_contact_provider_when_person_lease_conflict
     assert provider_calls == 0
 
 
+class _CrashedAdapter(_Adapter):
+    async def run_turn(self, prompt, context, conversation, emit):
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.PROCESS,
+            "Codex stdout closed unexpectedly.",
+            details={"returncode": 1, "stderr": "error: no such option: --foo"},
+            rotate_session=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_brain_failure_carries_what_the_tool_said_last(
+    monkeypatch, tmp_path
+) -> None:
+    original = cli_agent.person_cli_agent_mapping.copy()
+    cli_agent.person_cli_agent_mapping.clear()
+    cli_agent.person_cli_agent_mapping["aiko"] = {
+        "default": cli_agent.ExecutableInfo(adapter="codex")
+    }
+
+    async def get_adapter(*_args):
+        return _CrashedAdapter()
+
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    try:
+        result = await brain.run_with_execution_details(
+            "hello",
+            cwd=tmp_path,
+            session_state={
+                "agent_execution_context": {
+                    "run_id": "run-1",
+                    "workspace_data_root": str(tmp_path),
+                    "work_kind": "ticket",
+                    "work_identity": "issue-300",
+                    "resume_policy": "auto",
+                    "context_cursor": "cursor-1",
+                }
+            },
+        )
+    finally:
+        cli_agent.person_cli_agent_mapping.clear()
+        cli_agent.person_cli_agent_mapping.update(original)
+
+    # A process that just ended leaves only its stderr as a lead, so the
+    # reason a reader sees carries it rather than the bare "closed" claim.
+    assert result.error_category == "process"
+    assert result.stderr == (
+        "Codex stdout closed unexpectedly.\nerror: no such option: --foo"
+    )
+    assert result.error_details["stderr"] == "error: no such option: --foo"
+
+
 @pytest.mark.asyncio
 async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()

@@ -152,8 +152,9 @@ class _Environment:
         cls.process = _Process()
         return cls()
 
-    async def run(self, *command: str, limit: int) -> _Process:
+    async def run(self, *command: str, limit: int, tty: bool = False) -> _Process:
         _Environment.started["command"] = command
+        _Environment.started["tty"] = tty
         self.process.stdout.feed_data(
             b"Open https://auth.example/device and enter ABCD-1234\n"
         )
@@ -177,7 +178,7 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
             DECLARATION,
             snapshot=tmp_path / "snap",
             read_line=lambda: next(typed, None),
-            write_line=shown.append,
+            write=shown.append,
             home=tmp_path / "home",
         )
     )
@@ -186,9 +187,10 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
     assert _Environment.started["snapshot"] == str(tmp_path / "snap")
     assert _Environment.started["command"] == ("codex", "login", "--device-auth")
     assert _Environment.started["spec"].network.unrestricted
-    assert shown == [
-        "Open https://auth.example/device and enter ABCD-1234",
-        "Logged in",
-    ]
+    # A terminal, so a tool that asks before storing credentials can ask.
+    assert _Environment.started["tty"] is True
+    assert "".join(shown) == (
+        "Open https://auth.example/device and enter ABCD-1234\nLogged in\n"
+    )
     assert _Environment.process.written == [b"ABCD-1234\n"]
     assert _Environment.closed

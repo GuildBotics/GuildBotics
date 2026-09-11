@@ -341,7 +341,9 @@ class AgentEnvironment:
             ) from exc
         return cls(sandbox, spec)
 
-    async def run(self, command: str, *args: str, limit: int) -> EnvironmentProcess:
+    async def run(
+        self, command: str, *args: str, limit: int, tty: bool = False
+    ) -> EnvironmentProcess:
         """Start ``command`` inside the environment with its stdio bridged.
 
         Args:
@@ -349,6 +351,8 @@ class AgentEnvironment:
             args: Its arguments.
             limit: Buffer limit of the stdout / stderr readers; a transport
                 that reads long single lines sets it high enough for them.
+            tty: Give the command a terminal, for a dialogue that only asks
+                its questions on one (a login's confirmation prompt).
         """
         from microsandbox import Stdin
 
@@ -359,6 +363,7 @@ class AgentEnvironment:
                 stdin=Stdin.pipe(),
                 cwd=self.spec.cwd,
                 env={"HOME": self.spec.home, **self.spec.env},
+                tty=tty,
             )
         except Exception as exc:
             raise AgentEnvironmentError(
