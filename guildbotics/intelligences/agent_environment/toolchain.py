@@ -140,6 +140,9 @@ def device_nameservers() -> tuple[str, ...]:
             ],
             capture_output=True,
             text=True,
+            # The addresses are ASCII; anything else PowerShell prints (an
+            # error in the console code page) must not break the read.
+            errors="replace",
             check=False,
         )
         candidates = completed.stdout.split()

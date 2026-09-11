@@ -171,6 +171,9 @@ def _ensure_firewall_rule(binary: Path) -> None:
     """
     if sys.platform != "win32":
         return
+    # Only the exit status says whether the rule exists; the text netsh
+    # prints is in the console code page and is not read at all (decoding it
+    # as text has failed on a Japanese Windows).
     shown = subprocess.run(
         [
             "netsh",
@@ -180,8 +183,8 @@ def _ensure_firewall_rule(binary: Path) -> None:
             "rule",
             f"name={FIREWALL_RULE_NAME}",
         ],
-        capture_output=True,
-        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         check=False,
     )
     if shown.returncode == 0:
@@ -197,8 +200,8 @@ def _ensure_firewall_rule(binary: Path) -> None:
             "-Command",
             f"Start-Process -FilePath netsh -Verb RunAs -Wait -ArgumentList '{arguments}'",
         ],
-        capture_output=True,
-        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         check=False,
     )
 
