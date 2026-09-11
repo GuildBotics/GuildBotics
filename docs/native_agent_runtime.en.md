@@ -164,7 +164,9 @@ included) and the temporary directories, and has the network on; the profile
 never names `/` as writable, because Codex 0.153 then loses `/dev/null`.
 Codex always uses the non-interactive `never` approval policy, and any
 unexpected approval request is declined. Claude Code runs with
-`bypassPermissions` and `sandbox.enabled=false`. Grok Build launches with
+`bypassPermissions` and `sandbox.enabled=false` (and `IS_SANDBOX=1`, since the
+turn is root inside the microVM and Claude Code otherwise refuses that mode as
+root). Grok Build launches with
 `--sandbox workspace` and `--always-approve`, GitHub Copilot with
 `--no-remote-export` and `allow_all: on` (`off` on a read-only turn, where every
 request is declined), Antigravity with `--dangerously-skip-permissions`; none of

@@ -39,6 +39,10 @@ from guildbotics.intelligences.agent_runtime.models import (
 
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
+# Claude Code refuses bypassPermissions as root unless told it is inside a
+# sandbox (the check its container images satisfy the same way). The turn is
+# root inside the microVM, and the microVM is that sandbox.
+_ENVIRONMENT = {"IS_SANDBOX": "1"}
 # A read-only turn runs under the ordinary permission mode, where anything not
 # allowed below is denied outright in non-interactive mode. The allowlist is the
 # enforcement; the prompt is only a description of it.
@@ -160,7 +164,7 @@ class ClaudeStreamJsonAdapter:
             context,
             "claude",
             host_ports=(self._member_broker.endpoint.port,),
-            env=self._member_broker.provider_environment(),
+            env={**_ENVIRONMENT, **self._member_broker.provider_environment()},
         )
         try:
             self._process = await self._environment.run(*args, limit=STREAM_READ_LIMIT)

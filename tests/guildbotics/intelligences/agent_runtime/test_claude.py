@@ -221,6 +221,9 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     )
     env = provider_envs[0]
     assert env[MEMBER_BROKER_TOKEN_ENV]
+    # Root inside the microVM: without this, Claude Code refuses the permission
+    # mode above ("cannot be used with root/sudo privileges").
+    assert env["IS_SANDBOX"] == "1"
     for key in (
         RUN_ENV,
         TASK_RUN_ENV,

@@ -133,7 +133,8 @@ Codexは、`~/.codex`を除く環境全体を読み、作業ディレクトリ�
 書き、ネットワークを有効にするpermission profileで動きます。profileで`/`を書き込み可能に
 すると、Codex 0.153では`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
-`bypassPermissions`と`sandbox.enabled=false`で動きます。Grok Buildは`--sandbox workspace`と
+`bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
+rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox workspace`と
 `--always-approve`、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
 `off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
 フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
