@@ -229,10 +229,13 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 "config/",
             ),
             login=("agy", "--print", "Reply with OK."),
+            # The eligibility check at start fetches the account's profile
+            # picture from googleusercontent.com; without it no turn starts.
             api_domains=(
                 "cloudcode-pa.googleapis.com",
                 "*.googleapis.com",
                 "accounts.google.com",
+                "*.googleusercontent.com",
             ),
         ),
     ),

@@ -523,13 +523,20 @@ async def _relay_lines(
 
 
 def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+    """The SDK volumes for the spec's mounts.
+
+    The host side is bound by its resolved path: the runtime cannot bind
+    through a symlinked component (macOS spells its temporary directories
+    under `/var`, a link to `/private/var`). The guest side keeps the spelling
+    the spec gave it, so what the agent is told is where it is.
+    """
     from microsandbox import Volume
 
     return {
         mount.guest: (
             Volume.tmpfs(size_mib=_COVER_MIB, readonly=True)
             if mount.host is None
-            else Volume.bind(str(mount.host), readonly=mount.readonly)
+            else Volume.bind(str(mount.host.resolve()), readonly=mount.readonly)
         )
         for mount in spec.mounts
     }

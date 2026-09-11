@@ -316,6 +316,25 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
 
 
 @pytest.mark.asyncio
+async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
+    sandbox: type[_Sandbox], tmp_path: Path
+) -> None:
+    # macOS spells temporary directories under /var, a symlink to
+    # /private/var, and the runtime cannot bind through the link. The guest
+    # keeps the spelling it was given.
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    spec = _spec(mounts=(EnvironmentMount("/work/link", link, readonly=False),))
+
+    await AgentEnvironment.start(spec, snapshot="s")
+
+    volume = sandbox.created["volumes"]["/work/link"]
+    assert (volume.kind, volume.bind) == (MountKind.BIND, str(real.resolve()))
+
+
+@pytest.mark.asyncio
 async def test_a_closed_network_allows_only_dns_domains_and_host_ports(
     sandbox: type[_Sandbox],
 ) -> None:
