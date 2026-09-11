@@ -47,6 +47,13 @@ _KILLED = -1
 _STOP_TIMEOUT = 5.0
 #: Longest output line a build step may print before its reader gives up.
 _BUILD_LINE_LIMIT = 1 << 20
+#: The environment's network is IPv4: the declaration names IPv4 resolvers,
+#: the policy is written for IPv4, and the gateway forwards over IPv4. The
+#: guest nevertheless boots with an IPv6 address and an IPv6 gateway resolver
+#: in ``/etc/resolv.conf``, and a stub resolver that consults both (Codex's)
+#: never answers; so IPv6 is switched off before anything else runs, in a
+#: turn's environment and in the build's alike.
+_IPV4_ONLY = "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
 #: The SDK reads where the runtime and its state live from these variables.
 RUNTIME_HOME_ENV = "MSB_HOME"
 RUNTIME_BINARY_ENV = "MSB_PATH"
@@ -342,7 +349,13 @@ class AgentEnvironment:
             raise AgentEnvironmentError(
                 t("intelligences.agent_environment.runtime.start_failed", error=exc)
             ) from exc
-        return cls(sandbox, spec)
+        environment = cls(sandbox, spec)
+        try:
+            await _ipv4_only(sandbox)
+        except AgentEnvironmentError:
+            await environment.close()
+            raise
+        return environment
 
     async def run(
         self, command: str, *args: str, limit: int, tty: bool = False
@@ -442,6 +455,7 @@ async def build_snapshot(
             t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
         ) from exc
     try:
+        await _ipv4_only(sandbox)
         for step in steps:
             on_line(f"[{step.label}]")
             handle = await sandbox.exec_stream(
@@ -513,6 +527,24 @@ async def remove_snapshot(path: Path) -> None:
                 error=exc,
             )
         ) from exc
+
+
+async def _ipv4_only(sandbox: Any) -> None:
+    """Switch off IPv6 in a sandbox that just booted (see ``_IPV4_ONLY``)."""
+    try:
+        handle = await sandbox.exec_stream("sh", ["-ec", _IPV4_ONLY])
+        code = await EnvironmentProcess(handle, limit=_BUILD_LINE_LIMIT).wait()
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.ipv4_only_failed", error=exc)
+        ) from exc
+    if code != 0:
+        raise AgentEnvironmentError(
+            t(
+                "intelligences.agent_environment.runtime.ipv4_only_failed",
+                error=t("intelligences.agent_environment.runtime.exit_code", code=code),
+            )
+        )
 
 
 async def _relay_lines(

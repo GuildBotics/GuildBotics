@@ -4,6 +4,8 @@ ja:
     not_placed: "microsandbox ランタイムを %{home} に配置できませんでした: %{error}"
     not_installed: "microsandbox ランタイム（msb と libkrunfw）がインストールされていません。"
     start_failed: "環境を起動できませんでした: %{error}"
+    ipv4_only_failed: "環境を IPv4 のみにできませんでした: %{error}"
+    exit_code: "終了コード %{code}"
     exec_failed: "環境の中で '%{command}' を起動できませんでした: %{error}"
     build_start_failed: "ビルド用の環境を起動できませんでした: %{error}"
     build_step_failed: "ビルド手順 '%{step}' が終了コード %{code} で失敗しました。"

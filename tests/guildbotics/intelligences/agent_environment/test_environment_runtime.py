@@ -92,6 +92,8 @@ class _Handle:
 class _Sandbox:
     created: dict[str, Any] = {}
     instance: _Sandbox | None = None
+    #: What the IPv4-only switch exits with, right after boot.
+    ipv4_only_code: int = 0
 
     def __init__(self) -> None:
         self.execs: list[dict[str, Any]] = []
@@ -112,6 +114,8 @@ class _Sandbox:
         if cmd == "explode":
             raise microsandbox.MicrosandboxError("agent unreachable")
         self.execs.append({"cmd": cmd, "args": args, **kwargs})
+        if args == ["-ec", runtime._IPV4_ONLY]:
+            return _Handle([_event("exited", code=self.ipv4_only_code)])
         return self.handle
 
     async def stop(self, timeout: float | None = None) -> None:
@@ -129,6 +133,7 @@ class _Sandbox:
 def sandbox(monkeypatch) -> type[_Sandbox]:
     _Sandbox.created = {}
     _Sandbox.instance = None
+    _Sandbox.ipv4_only_code = 0
     monkeypatch.setattr(microsandbox, "Sandbox", _Sandbox)
     return _Sandbox
 
@@ -313,6 +318,21 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     cover = volumes["/work/repo/private"]
     assert (cover.kind, cover.readonly) == (MountKind.TMPFS, True)
     assert boundary.spec is not None
+    # The guest's network is IPv4 only, from before anything else runs.
+    (switch,) = sandbox.instance.execs  # type: ignore[union-attr]
+    assert (switch["cmd"], switch["args"]) == ("sh", ["-ec", runtime._IPV4_ONLY])
+
+
+@pytest.mark.asyncio
+async def test_start_ends_the_sandbox_when_ipv6_cannot_be_switched_off(
+    sandbox: type[_Sandbox],
+) -> None:
+    sandbox.ipv4_only_code = 2
+
+    with pytest.raises(AgentEnvironmentError, match="IPv4 only.*exit code 2"):
+        await AgentEnvironment.start(_spec(), snapshot="s")
+
+    assert sandbox.instance.stopped  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -411,7 +431,7 @@ async def test_run_starts_the_command_in_the_cwd_with_the_spec_environment(
 
     await boundary.run("codex", "app-server", "-c", "x=1", limit=1024)
 
-    (call,) = sandbox.instance.execs  # type: ignore[union-attr]
+    (_switch, call) = sandbox.instance.execs  # type: ignore[union-attr]
     assert (call["cmd"], call["args"]) == ("codex", ["app-server", "-c", "x=1"])
     assert call["cwd"] == "/work/repo"
     # The guest's home is the host's, so the provider keeps its state where

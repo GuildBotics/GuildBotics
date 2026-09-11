@@ -13,8 +13,9 @@ const t = i18n.getFixedT("en");
 
 const packaged: AgentEnvironmentDeclaration = {
   packages: { apt: [], npm: [], uv: [] },
-  dns: { nameservers: "host" },
+  dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
 };
+const onHost: AgentEnvironmentDeclaration = { ...packaged, dns: { nameservers: "host" } };
 
 function Harness({
   initial = packaged,
@@ -52,7 +53,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
 
     expect(onChange).toHaveBeenLastCalledWith({
       packages: { apt: [], npm: ["typescript@5.6.3"], uv: [] },
-      dns: { nameservers: "host" },
+      dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
     });
   });
 
@@ -75,7 +76,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const onValidityChange = vi.fn();
-    render(<Harness onChange={onChange} onValidityChange={onValidityChange} />);
+    render(<Harness initial={onHost} onChange={onChange} onValidityChange={onValidityChange} />);
 
     await user.click(
       screen.getByRole("combobox", {

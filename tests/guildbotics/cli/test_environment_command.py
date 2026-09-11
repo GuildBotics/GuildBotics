@@ -18,7 +18,6 @@ from guildbotics.intelligences.agent_environment import (
     runtime,
     snapshot,
 )
-from guildbotics.intelligences.agent_environment import status as status_module
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
@@ -44,9 +43,6 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         runtime, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
     )
-    monkeypatch.setattr(
-        status_module, "upstream_nameservers", lambda dns: ("192.168.3.1",)
-    )
     return root
 
 
@@ -65,7 +61,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
         f"snapshot: missing {snapshot_name(load_toolchain())} "
         "(run `guildbotics environment build`)"
     ) in result.output
-    assert "dns: host -> 192.168.3.1" in result.output
+    assert "dns: 1.1.1.1, 8.8.8.8 -> 1.1.1.1, 8.8.8.8" in result.output
     assert (
         "codex: not logged in (run `guildbotics environment login codex`)"
         in result.output
@@ -88,8 +84,8 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
     }
     assert payload["snapshot"]["state"] == "missing"
     assert payload["dns"] == {
-        "declared": "host",
-        "nameservers": ["192.168.3.1"],
+        "declared": "1.1.1.1, 8.8.8.8",
+        "nameservers": ["1.1.1.1", "8.8.8.8"],
         "problem": "",
     }
     tools = {tool["name"]: tool for tool in payload["tools"]}

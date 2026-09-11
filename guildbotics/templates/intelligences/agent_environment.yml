@@ -16,9 +16,11 @@ packages:
   # Python tools, installed with `uv tool install`: `ruff==0.6.9`
   uv: []
 
-# The upstream DNS resolvers the environment forwards queries to. `host` is
-# the IPv4 resolvers of whichever device runs the turn, read when it starts;
-# a list of IPv4 addresses (`[10.0.0.53, 1.1.1.1]`) is shared as written, so
-# name ones every device can reach.
+# The upstream DNS resolvers the environment forwards queries to: a list of
+# IPv4 addresses, shared as written. The default is public resolvers, so the
+# environment resolves names the same way on every device and does not
+# inherit the quirks of a LAN router. `host` instead reads the IPv4 resolvers
+# of whichever device runs the turn, for networks that block outside DNS;
+# private answers are dropped by the environment either way.
 dns:
-  nameservers: host
+  nameservers: [1.1.1.1, 8.8.8.8]

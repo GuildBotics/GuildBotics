@@ -10,6 +10,8 @@ en:
     not_placed: "The microsandbox runtime could not be placed under %{home}: %{error}"
     not_installed: "The microsandbox runtime (msb and libkrunfw) is not installed."
     start_failed: "Could not start the environment: %{error}"
+    ipv4_only_failed: "Could not switch the environment to IPv4 only: %{error}"
+    exit_code: "exit code %{code}"
     exec_failed: "Could not start '%{command}' in the environment: %{error}"
     build_start_failed: "Could not start the build environment: %{error}"
     build_step_failed: "Build step '%{step}' failed with exit code %{code}."

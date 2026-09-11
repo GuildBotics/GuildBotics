@@ -86,7 +86,7 @@ def test_the_template_is_a_valid_declaration() -> None:
     declaration = parse_toolchain(load_yaml_file(template), where="template")
 
     assert declaration == ToolchainDeclaration.model_validate(
-        {"dns": {"nameservers": "host"}}
+        {"dns": {"nameservers": ["1.1.1.1", "8.8.8.8"]}}
     )
 
 

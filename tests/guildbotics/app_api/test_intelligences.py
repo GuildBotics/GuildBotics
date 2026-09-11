@@ -1291,7 +1291,7 @@ def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> 
     response = IntelligenceConfigService().read_config(config_dir=config_dir)
     # Without a file of its own the workspace inherits the packaged declaration.
     assert response.agent_environment is not None
-    assert response.agent_environment.dns.nameservers == "host"
+    assert response.agent_environment.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
     assert response.agent_environment.packages.npm == []
 
     _write_yaml(

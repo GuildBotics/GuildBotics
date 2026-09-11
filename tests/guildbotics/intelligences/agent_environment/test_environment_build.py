@@ -12,6 +12,7 @@ import microsandbox
 import pytest
 from microsandbox import Action
 
+from guildbotics.intelligences.agent_environment import runtime
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     BuildStep,
@@ -138,11 +139,12 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     assert policy.rules == ()
     assert created["network"].dns.nameservers == ("10.0.0.53",)
     assert [e["args"] for e in _Sandbox.execs] == [
+        ["-ec", runtime._IPV4_ONLY],
         ["-ec", 'mkdir -p "$HOME"'],
         ["-ec", "npm install -g x"],
     ]
     assert all(e["cmd"] == "sh" for e in _Sandbox.execs)
-    assert _Sandbox.execs[0]["env"] == {
+    assert _Sandbox.execs[1]["env"] == {
         "HOME": "/Users/u",
         "DEBIAN_FRONTEND": "noninteractive",
     }
@@ -203,7 +205,7 @@ async def test_a_failing_step_names_itself_and_the_build_sandbox_is_dropped(
         )
 
     assert lines == ["[apt]", "boom"]
-    assert len(_Sandbox.execs) == 1
+    assert len(_Sandbox.execs) == 2
     assert _Snapshot.created == {}
     assert _Sandbox.destroyed
 

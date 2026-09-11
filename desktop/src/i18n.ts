@@ -956,7 +956,8 @@ const resources = {
               invalidPackage:
                 "A package is one argument to its manager: no spaces, and it cannot start with '-'.",
               nameservers: "DNS resolvers",
-              nameserversHost: "This device's resolvers, read when a turn starts",
+              nameserversHost:
+                "This device's resolvers, read when a turn starts (for networks that block outside DNS)",
               nameserversList: "Fixed IPv4 addresses, shared as written",
               nameserversPlaceholder: "10.0.0.53",
               invalidNameserver: "Enter IPv4 addresses.",
@@ -2620,7 +2621,8 @@ const resources = {
               invalidPackage:
                 "パッケージはマネージャへの 1 引数です。空白を含めず、'-' で始めないでください。",
               nameservers: "DNS リゾルバ",
-              nameserversHost: "この端末のリゾルバ（turn 開始時に読む）",
+              nameserversHost:
+                "この端末のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",
               nameserversList: "固定の IPv4 アドレス（書いたまま共有）",
               nameserversPlaceholder: "10.0.0.53",
               invalidNameserver: "IPv4 アドレスを入力してください。",

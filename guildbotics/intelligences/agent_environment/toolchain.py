@@ -71,11 +71,14 @@ _RESOLV_CONF = Path("/etc/resolv.conf")
 class DnsSettings(BaseModel):
     """Where the environment's DNS gateway forwards queries.
 
-    The gateway's own default forwarding does not answer Codex's built-in
-    resolver in time, so the upstreams are always named. ``host`` names the
-    IPv4 resolvers of whichever device runs the turn, read when it starts:
-    a shared list of one network's resolvers would strand a device on
-    another. An explicit list is for a resolver every device can reach.
+    The default is a list of public resolvers: the gateway drops answers
+    that carry private addresses, so a device's own resolver adds nothing
+    the environment can use, while its quirks (a home router that sends
+    oversized UDP answers the gateway cannot relay) would break tools that
+    treat SERVFAIL as failure. ``host`` names the IPv4 resolvers of
+    whichever device runs the turn, read when it starts, for networks that
+    block outside DNS; a shared list of one network's private resolvers
+    would strand a device on another.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
