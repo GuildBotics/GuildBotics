@@ -278,6 +278,7 @@ class AppRuntime:
         self._activity_sync_lock = threading.Lock()
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
         self._running_command_id: str | None = None
+        self.on_workspace_changed: Callable[[Path], None] | None = None
         self._execution_status = ExecutionStatusPublisher()
         self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage_lock = asyncio.Lock()
@@ -348,6 +349,12 @@ class AppRuntime:
         )
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
+        with self._lock:
+            if self._running_command_id is not None:
+                raise _workspace_switch_blocked_error(self.get_scheduler_status())
+            return self._set_workspace(workspace_dir)
+
+    def _set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         workspace = workspace_dir.expanduser().resolve()
         if not workspace.exists():
             raise AppApiError(
@@ -386,6 +393,8 @@ class AppRuntime:
         os.chdir(workspace)
         write_active_workspace(workspace)
         apply_workspace_root(workspace)
+        if self.on_workspace_changed is not None:
+            self.on_workspace_changed(workspace)
         self._load_workspace_env()
         if self._diagnostics_store is not None:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
@@ -855,6 +864,16 @@ class AppRuntime:
             )
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
+        trace_id = new_id()
+        self._reserve_command(trace_id, request.expected_workspace)
+        try:
+            return await self._run_reserved_command(request, trace_id)
+        finally:
+            self._release_command(trace_id)
+
+    async def _run_reserved_command(
+        self, request: CommandRunRequest, trace_id: str
+    ) -> CommandRunResponse:
         context = self._get_context(request.message)
         # Resolve the member up front: the guard must check the file that this
         # very member runs, and an omitted person would otherwise resolve twice
@@ -865,8 +884,6 @@ class AppRuntime:
         person_id = person.person_id
         if request.expected_command_file_id is not None:
             self._guard_run_target(request, context.clone_for(person))
-        trace_id = new_id()
-        self._reserve_command(trace_id)
         try:
             loop = asyncio.get_running_loop()
             task = asyncio.current_task()
@@ -875,31 +892,26 @@ class AppRuntime:
                 if task is not None:
                     loop.call_soon_threadsafe(task.cancel)
 
-            try:
-                with (
-                    self._execution.track_work(
-                        source="manual",
-                        person_id=person_id,
-                        command=request.command,
-                        work_id=trace_id,
-                        cancel=_cancel_manual_command,
-                    ),
-                    trace_scope(
-                        "manual",
-                        command=request.command,
-                        person_id=person_id,
-                        trace_id=trace_id,
-                    ),
-                ):
-                    output = await self._run_command_traced(request, context, person_id)
-            except WorkRejectedError as exc:
-                raise AppApiError(
-                    "work_rejected",
-                    reason=str(exc),
-                    status_code=409,
-                ) from exc
-        finally:
-            self._release_command(trace_id)
+            with (
+                self._execution.track_work(
+                    source="manual",
+                    person_id=person_id,
+                    command=request.command,
+                    work_id=trace_id,
+                    cancel=_cancel_manual_command,
+                ),
+                trace_scope(
+                    "manual",
+                    command=request.command,
+                    person_id=person_id,
+                    trace_id=trace_id,
+                ),
+            ):
+                output = await self._run_command_traced(request, context, person_id)
+        except WorkRejectedError as exc:
+            raise AppApiError(
+                "work_rejected", reason=str(exc), status_code=409
+            ) from exc
         return CommandRunResponse(trace_id=trace_id, output=output)
 
     def _resolve_execution_person(
@@ -1815,8 +1827,19 @@ class AppRuntime:
                 os.environ[key] = new_values[key]
         self._loaded_dotenv_keys = loaded_keys
 
-    def _reserve_command(self, trace_id: str) -> None:
-        with self._lock:
+    def _reserve_command(
+        self, trace_id: str, expected_workspace: Path | None = None
+    ) -> None:
+        # Workspace switching may wait for I/O while holding this lock. A
+        # command arrives on the event loop, so reject it instead of blocking.
+        if not self._lock.acquire(blocking=False):
+            raise AppApiError("command_workspace_changing", status_code=409)
+        try:
+            if (
+                expected_workspace is not None
+                and self.get_config_status().workspace != expected_workspace.resolve()
+            ):
+                raise AppApiError("command_workspace_changed", status_code=409)
             if self._running_command_id is not None:
                 raise AppApiError(
                     "command_already_running",
@@ -1824,6 +1847,8 @@ class AppRuntime:
                     context={"trace_id": self._running_command_id},
                 )
             self._running_command_id = trace_id
+        finally:
+            self._lock.release()
 
     def _release_command(self, trace_id: str) -> None:
         with self._lock:

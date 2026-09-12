@@ -253,6 +253,10 @@ On Windows, use `guildbotics` and pipe the file's UTF-8 text to stdin. Delete th
 
 `ask` uses `brain: agent` and requires a message. It reads uncommitted changes in the same working tree and returns text on stdout. A review request permits reading only; a fix request permits the requested edits and verification. Publishing must be part of the request. Select the GuildBotics workspace first (`--cwd` selects the working tree, not the workspace configuration), and prepare the receiving member's isolated agent environment and AI CLI login on this machine. Run from the host, allow several minutes with a longer caller timeout or background execution, and wait for the result. Environment/login failures return the existing runtime refusal reason.
 
+Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs or the calling shell's environment variables.
+
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+
 Invocation examples:
 
 ```shell

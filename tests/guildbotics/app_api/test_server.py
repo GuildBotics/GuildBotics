@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from guildbotics.app_api.server import (
     _restore_active_workspace,
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.local_api import LocalApiEndpoint, endpoint_path, read_endpoint
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
     active_workspace_file,
@@ -92,15 +95,38 @@ def captured_launch(monkeypatch, tmp_path: Path) -> dict[str, Any]:
     """Run ``main`` without binding a port, capturing what it hands the app."""
     captured: dict[str, Any] = {}
 
-    def fake_create_app(**kwargs: Any) -> str:
+    def fake_create_app(**kwargs: Any) -> Any:
         captured["create_app"] = kwargs
-        return "app"
+        return SimpleNamespace(
+            state=SimpleNamespace(
+                runtime=SimpleNamespace(
+                    system_service_run_id="api-instance",
+                    get_config_status=lambda: SimpleNamespace(workspace=tmp_path),
+                )
+            )
+        )
 
-    def fake_run(app: str, **kwargs: Any) -> None:
-        captured["uvicorn"] = {"app": app, **kwargs}
+    def fake_run(runner: Any, **kwargs: Any) -> None:
+        app = runner.config.app
+        captured["uvicorn"] = {
+            "app": app,
+            "port": runner.config.port,
+            "loop": runner.config.loop,
+        }
+        captured["endpoint"] = read_endpoint()
+        captured["mode"] = endpoint_path().stat().st_mode & 0o777
+        app.state.runtime.on_workspace_changed(tmp_path / "other")
+        captured["changed_endpoint"] = read_endpoint()
 
     monkeypatch.setattr(server, "create_app", fake_create_app)
-    monkeypatch.setattr(server.uvicorn, "run", fake_run)
+    monkeypatch.setattr(server.uvicorn.Server, "run", fake_run)
+    monkeypatch.setattr(
+        server.uvicorn.Config,
+        "bind_socket",
+        lambda config: nullcontext(
+            SimpleNamespace(getsockname=lambda: (config.host, config.port))
+        ),
+    )
     monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
     monkeypatch.chdir(tmp_path)
     for key in (ALLOWED_ORIGINS_ENV, "GUILDBOTICS_APP_API_PARENT_PID"):
@@ -160,13 +186,92 @@ def test_main_does_not_print_the_session_token(
 def test_main_consumes_the_session_token_env(
     monkeypatch, captured_launch: dict[str, Any]
 ) -> None:
-    """AI CLI agents inherit a copy of os.environ; the token must not linger."""
+    """Launch-only credentials must not linger in host subprocess environments."""
     monkeypatch.setenv(TOKEN_ENV, "env-token")
 
     server.main()
 
     assert TOKEN_ENV not in os.environ
     assert captured_launch["create_app"]["session_token"] == "env-token"
+
+
+def test_discovery_is_private_tracks_workspace_and_is_removed(
+    monkeypatch, captured_launch, tmp_path
+):
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+    server.main()
+
+    endpoint = captured_launch["endpoint"]
+    assert endpoint.port == 8765
+    assert endpoint.pid == os.getpid()
+    assert endpoint.token == "env-token"
+    assert endpoint.service_instance_id == "api-instance"
+    assert endpoint.workspace == tmp_path
+    if os.name != "nt":
+        assert captured_launch["mode"] == 0o600
+    assert captured_launch["changed_endpoint"].workspace == tmp_path / "other"
+    assert not endpoint_path().exists()
+
+
+def test_discovery_is_removed_even_if_server_fails(monkeypatch, captured_launch):
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+
+    def fail(*args, **kwargs):
+        assert read_endpoint() is not None
+        raise RuntimeError("bind failed")
+
+    monkeypatch.setattr(server.uvicorn.Server, "run", fail)
+    with pytest.raises(RuntimeError, match="bind failed"):
+        server.main()
+    assert not endpoint_path().exists()
+
+
+def test_failed_bind_preserves_running_desktop_discovery(
+    monkeypatch, captured_launch, tmp_path
+):
+    endpoint = LocalApiEndpoint(
+        port=8765,
+        token="first",
+        pid=42,
+        service_instance_id="running",
+        workspace=tmp_path,
+    )
+    endpoint.publish()
+    monkeypatch.setenv(TOKEN_ENV, "second")
+
+    def fail(config):
+        raise SystemExit(1)
+
+    monkeypatch.setattr(server.uvicorn.Config, "bind_socket", fail)
+    with pytest.raises(SystemExit):
+        server.main()
+    assert read_endpoint() == endpoint
+
+
+def test_parent_watchdog_removes_discovery_before_exiting(monkeypatch, tmp_path):
+    endpoint = LocalApiEndpoint(
+        port=8765, token="secret", pid=42, service_instance_id="old", workspace=tmp_path
+    )
+    endpoint.publish()
+    monkeypatch.setattr(server, "_parent_is_alive", lambda pid: False)
+
+    def exit_process(code):
+        assert not endpoint_path().exists()
+        raise SystemExit(code)
+
+    monkeypatch.setattr(server.os, "_exit", exit_process)
+    with pytest.raises(SystemExit):
+        server._watch_parent(100, endpoint.discard)
+
+
+def test_old_server_shutdown_preserves_replacement_discovery(tmp_path):
+    endpoint = LocalApiEndpoint(
+        port=8765, token="secret", pid=42, service_instance_id="old", workspace=tmp_path
+    )
+    replacement = endpoint.model_copy(update={"service_instance_id": "new"})
+    replacement.publish()
+    endpoint.discard()
+    assert read_endpoint() == replacement
 
 
 @pytest.mark.parametrize(

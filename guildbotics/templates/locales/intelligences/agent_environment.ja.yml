@@ -11,6 +11,11 @@ ja:
     build_step_failed: "ビルド手順 '%{step}' が終了コード %{code} で失敗しました。"
     build_failed: "スナップショットをビルドできませんでした: %{error}"
     remove_failed: "%{path} のスナップショットを削除できませんでした: %{error}"
+  filesystem:
+    unavailable: "この GuildBotics はディレクトリ「%{path}」にアクセスできません: %{error}"
+    macos_documents: "この GuildBotics を起動しているアプリ%{app}に、システム設定 → プライバシーとセキュリティ → ファイルとフォルダ で書類フォルダへのアクセスを許可してください。"
+    launching_app: "（いまは %{app}）"
+    permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:
     not_a_package: "'%{spec}' はパッケージ指定ではありません"
     no_nameservers: "nameserver を 1 つ以上書くか、'%{host}' を指定してください"

@@ -6,6 +6,7 @@ en:
   # validator's own explanation, the runtime's error -- is passed through
   # as %{error} / %{detail}, never restated.
   runtime:
+    # Runtime failures stay verbatim; filesystem preflight is described below.
     sdk_missing: "The microsandbox SDK is not installed for this platform."
     not_placed: "The microsandbox runtime could not be placed under %{home}: %{error}"
     not_installed: "The microsandbox runtime (msb and libkrunfw) is not installed."
@@ -17,6 +18,11 @@ en:
     build_step_failed: "Build step '%{step}' failed with exit code %{code}."
     build_failed: "Could not build the snapshot: %{error}"
     remove_failed: "Could not remove the snapshot at %{path}: %{error}"
+  filesystem:
+    unavailable: "This GuildBotics cannot access directory '%{path}': %{error}"
+    macos_documents: "Allow the app that launched this GuildBotics%{app} to access the Documents folder in System Settings > Privacy & Security > Files & Folders."
+    launching_app: " (currently %{app})"
+    permission_denied: "This GuildBotics cannot list '%{path}'. Allow its launching app or user to access this directory."
   declaration:
     not_a_package: "'%{spec}' is not a package specification"
     no_nameservers: "name at least one nameserver, or '%{host}'"

@@ -9,10 +9,21 @@ set of words.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from guildbotics.intelligences.agent_environment import runtime, snapshot
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    ResolvedAccess,
+    exchange_dir,
+    load_local_grants,
+    load_shared_grants,
+    resolve_access,
+)
 from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
@@ -26,11 +37,12 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, CliAgentInfo
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.processes import launching_app_name
 
 #: Which part of the device a refusal is about, so whoever shows it can point
 #: at what to do: the runtime this device lacks, the shared declaration (or
 #: the resolvers it names), the snapshot to build, or a build to wait for.
-DeviceSetting = Literal["runtime", "declaration", "snapshot", "building"]
+DeviceSetting = Literal["runtime", "declaration", "snapshot", "building", "filesystem"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +93,8 @@ class DeviceStatus:
     snapshot: SnapshotStatus | None
     dns: DnsStatus
     tools: tuple[ToolStatus, ...]
+    access: ResolvedAccess = field(default_factory=ResolvedAccess)
+    filesystem_problem: str = ""
 
     @property
     def refusal(self) -> str:
@@ -94,7 +108,7 @@ class DeviceStatus:
             return self.declaration_problem
         if self.dns.problem:
             return self.dns.problem
-        return _not_ready(self.snapshot)
+        return _not_ready(self.snapshot) or self.filesystem_problem
 
     @property
     def setting(self) -> DeviceSetting | Literal[""]:
@@ -107,6 +121,8 @@ class DeviceStatus:
             return "building"
         if self.snapshot.state != "ready":
             return "snapshot"
+        if self.filesystem_problem:
+            return "filesystem"
         return ""
 
     @property
@@ -129,6 +145,7 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
             building rather than let the answer flicker.
     """
     health = runtime.doctor()
+    access, filesystem_problem = filesystem_status()
     try:
         declaration: ToolchainDeclaration | None = load_toolchain()
         declaration_problem = ""
@@ -156,7 +173,58 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
         snapshot=state,
         dns=dns,
         tools=tuple(_tool_status(agent) for agent in CLI_AGENTS),
+        access=access,
+        filesystem_problem=filesystem_problem,
     )
+
+
+def filesystem_status() -> tuple[ResolvedAccess, str]:
+    """Resolve grants without creating them and try directory enumeration.
+
+    Missing document grants probe their nearest existing parent, where a turn
+    would create them. A stat/exists check alone does not trigger macOS TCC.
+    """
+    access = ResolvedAccess()
+    target = exchange_dir()
+    try:
+        access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
+        for grant in (*access.documents, *(g for g in access.paths if g.present)):
+            if any(grant.path.is_relative_to(d.path) for d in access.denied):
+                continue
+            target = grant.path
+            while True:
+                try:
+                    with os.scandir(target) as entries:
+                        next(entries, None)
+                    break
+                except FileNotFoundError:
+                    if target == target.parent:
+                        raise
+                    target = target.parent
+    except PermissionError as exc:
+        return access, filesystem_permission_problem(Path(exc.filename or target))
+    except AccessContractError as exc:
+        return access, str(exc)
+    except OSError as exc:
+        return access, t(
+            "intelligences.agent_environment.filesystem.unavailable",
+            path=target,
+            error=exc,
+        )
+    return access, ""
+
+
+def filesystem_permission_problem(path: Path) -> str:
+    """Describe a permission refusal in the same words for every caller."""
+    if sys.platform == "darwin" and path.is_relative_to(Path.home() / "Documents"):
+        app = launching_app_name()
+        return t(
+            "intelligences.agent_environment.filesystem.macos_documents",
+            app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
+            if app
+            else "",
+        )
+    return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
 def _tool_status(agent: CliAgentInfo) -> ToolStatus:

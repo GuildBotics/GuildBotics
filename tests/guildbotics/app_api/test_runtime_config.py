@@ -345,6 +345,8 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = AppRuntime(EventBus())
+    published_workspaces: list[Path] = []
+    runtime.on_workspace_changed = published_workspaces.append
     stop_calls: list[bool] = []
     monkeypatch.setattr(
         runtime,
@@ -360,6 +362,7 @@ def test_set_workspace_stops_scheduler_changes_cwd_and_loads_env(
     status = runtime.set_workspace(workspace)
 
     assert stop_calls == [True]
+    assert published_workspaces == [workspace.resolve()]
     assert Path.cwd() == workspace.resolve()
     assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(
         workspace.resolve() / ".guildbotics" / "config"

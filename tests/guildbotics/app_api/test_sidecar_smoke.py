@@ -159,7 +159,8 @@ def test_sidecar_health_returns_ok(sidecar: _Sidecar) -> None:
     )
 
     assert response.status_code == HTTP_OK
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["service_instance_id"]
 
 
 def test_sidecar_rejects_invalid_token(sidecar: _Sidecar) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from guildbotics.intelligences.agent_environment.snapshot import (
     snapshot_name,
 )
 from guildbotics.intelligences.agent_environment.toolchain import load_toolchain
+from guildbotics.utils.i18n_tool import t
 
 
 @pytest.fixture
@@ -96,6 +98,20 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "logged_in": False,
     }
     assert tools["antigravity"]["provisioned"] is True
+
+
+def test_status_displays_the_device_filesystem_refusal(workspace, monkeypatch):
+    _invoke(workspace, "status")
+    reason = t("intelligences.agent_environment.filesystem.macos_documents", app="")
+    status = replace(
+        environment_cli.device_status(),
+        snapshot=SnapshotStatus("ready", "test", Path("/snap")),
+        filesystem_problem=reason,
+    )
+    monkeypatch.setattr(environment_cli, "device_status", lambda: status)
+    assert reason in _invoke(workspace, "status").output
+    payload = json.loads(_invoke(workspace, "status", "--format", "json").output)
+    assert (payload["refusal"], payload["setting"]) == (reason, "filesystem")
 
 
 def test_commands_refuse_without_a_runtime(

@@ -39,8 +39,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     ResolvedAccess,
     ResolvedGrant,
     SharedGrants,
-    load_local_grants,
-    load_shared_grants,
     local_path_missing,
     redact_path,
     resolve_access,
@@ -72,12 +70,8 @@ def agent_environment_status(
     home = Path.home()
     device = device_status(building_here=building_here)
     snapshot = device.snapshot
-    try:
-        access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
-        problem = ""
-    except AccessContractError as exc:
-        access = ResolvedAccess()
-        problem = str(exc)
+    access = device.access
+    problem = device.filesystem_problem
     # What a turn would refuse to start over: the resolution failing as a
     # whole, or a local path this device does not have (shown on its row).
     problems = [problem] if problem else []

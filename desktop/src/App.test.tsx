@@ -296,7 +296,7 @@ describe("App", () => {
     };
     // The device: the row of the environment card that is the problem, or
     // the declaration card in the advanced settings.
-    const device = (setting: "runtime" | "declaration" | "snapshot" | "building") =>
+    const device = (setting: "runtime" | "declaration" | "snapshot" | "building" | "filesystem") =>
       systemAlertSetupTarget({
         ...base,
         id: "agent-environment:device",
@@ -308,6 +308,9 @@ describe("App", () => {
     expect(device("runtime")).toBe("/setup?section=intelligence&focus=agent-environment-runtime");
     expect(device("snapshot")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
     expect(device("building")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
+    expect(device("filesystem")).toBe(
+      "/setup?section=intelligence&advanced=intelligence&focus=grants-device",
+    );
     expect(device("declaration")).toBe(
       "/setup?section=intelligence&advanced=intelligence&focus=agent-environment-declaration",
     );
@@ -336,7 +339,7 @@ describe("App", () => {
   });
 
   it("tells the person what to do about a device alert, by the part that is wrong", () => {
-    const device = (setting: "runtime" | "declaration" | "snapshot" | "building") =>
+    const device = (setting: "runtime" | "declaration" | "snapshot" | "building" | "filesystem") =>
       systemAlertMessage(t(), {
         id: "agent-environment:device",
         code: "agent_environment_unavailable",

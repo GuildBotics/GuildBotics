@@ -1,10 +1,54 @@
 from __future__ import annotations
 
 import errno
+import plistlib
+from types import SimpleNamespace
 
 import pytest
 
 from guildbotics.utils import processes
+
+
+def test_launching_app_name_walks_parents_and_reads_bundle_name(monkeypatch, tmp_path):
+    bundle = tmp_path / "Visual Studio Code.app"
+    contents = bundle / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleDisplayName": "Visual Studio Code"})
+    )
+    monkeypatch.setattr(processes.sys, "platform", "darwin")
+    monkeypatch.setattr(processes.os, "getpid", lambda: 42)
+    rows = {"42": "41 /usr/bin/python", "41": f"1 {contents}/MacOS/Electron"}
+    calls = []
+
+    def ps(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(stdout=rows[argv[2]])
+
+    monkeypatch.setattr(processes.subprocess, "run", ps)
+    assert processes.launching_app_name() == "Visual Studio Code"
+    assert calls == [
+        ["ps", "-p", "42", "-o", "ppid=,comm="],
+        ["ps", "-p", "41", "-o", "ppid=,comm="],
+    ]
+
+
+@pytest.mark.parametrize("output", ["", "42 /usr/bin/python", "1 /usr/bin/python"])
+def test_launching_app_name_omits_unavailable_app(monkeypatch, output):
+    monkeypatch.setattr(processes.sys, "platform", "darwin")
+    monkeypatch.setattr(processes.os, "getpid", lambda: 42)
+    monkeypatch.setattr(
+        processes.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=output)
+    )
+    assert processes.launching_app_name() == ""
+
+
+def test_launching_app_name_does_not_probe_other_platforms(monkeypatch):
+    monkeypatch.setattr(processes.sys, "platform", "linux")
+    monkeypatch.setattr(
+        processes.subprocess, "run", lambda *a, **k: pytest.fail("must not run ps")
+    )
+    assert processes.launching_app_name() == ""
 
 
 def test_pid_exists_windows_uses_open_process_without_os_kill(monkeypatch) -> None:

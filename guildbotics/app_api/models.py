@@ -42,6 +42,8 @@ class ApiError(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    service_instance_id: str
+    workspace: Path | None
 
 
 class ConfigStatus(BaseModel):
@@ -432,6 +434,7 @@ class CommandRunRequest(BaseModel):
     person: str | None = None
     message: str = ""
     cwd: Path | None = None
+    expected_workspace: Path | None = None
     expected_command_file_id: str | None = None
     expected_command_file_revision: str | None = None
 

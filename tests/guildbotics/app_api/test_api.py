@@ -417,7 +417,11 @@ def test_health_requires_session_token(tmp_path: Path) -> None:
         "context": {},
     }
     assert response.status_code == HTTP_OK
-    assert response.json() == {"status": "ok"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["service_instance_id"]
+    assert response.json()["workspace"] == str(
+        app.state.runtime.get_config_status().workspace
+    )
 
 
 def test_workspace_change_updates_runtime_workspace(tmp_path: Path) -> None:

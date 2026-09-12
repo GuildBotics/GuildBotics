@@ -168,6 +168,10 @@ Ask bob to review the current changes, including uncommitted edits.
 
 The active member runs the built-in `ask` command and relays bob's result. Bob sees the same working tree; if you ask him to fix something, his edits appear there too. Select the workspace in GuildBotics first, and prepare bob's isolated agent environment and AI CLI login on this machine under **Setup → LLM / AI CLI tools**. The host CLI login used for your interactive session is separate. Reviews can take several minutes; an unavailable environment or login is reported back in the session.
 
+Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs or the calling shell's environment variables.
+
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+
 ## Delegate GitHub Tickets
 
 This is the flow where you ask a member for work through a GitHub Projects ticket and delegate investigation, implementation, and PR creation (using the default `ticket_driven_workflow`).

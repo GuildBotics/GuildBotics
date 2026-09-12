@@ -10,12 +10,14 @@ from guildbotics.app_api.agent_environment_status import (
     agent_environment_status,
     evaluate_grant,
 )
+from guildbotics.intelligences.agent_environment import status as device_module
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
     SharedGrants,
     parse_network_policy,
+    resolve_access,
 )
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
@@ -55,6 +57,7 @@ def _device(
     runtime_ok: bool = True,
     snapshot_state: str = "ready",
     logged_in: frozenset[str] = frozenset({"codex", "claude"}),
+    filesystem_problem: str = "",
 ) -> None:
     """Stand in for the device: its runtime, snapshot, DNS, and logins."""
     health = AgentEnvironmentHealth(
@@ -85,6 +88,12 @@ def _device(
             snapshot=state,
             dns=DnsStatus("host", ("192.168.3.1",)),
             tools=tools,
+            filesystem_problem=filesystem_problem,
+            access=resolve_access(
+                device_module.load_shared_grants(),
+                device_module.load_local_grants(),
+                create=False,
+            ),
         )
 
     monkeypatch.setattr(module, "device_status", fake)
@@ -95,8 +104,8 @@ def home(monkeypatch, tmp_path: Path) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(module, "load_shared_grants", lambda: SharedGrants())
-    monkeypatch.setattr(module, "load_local_grants", lambda: LocalGrants())
+    monkeypatch.setattr(device_module, "load_shared_grants", lambda: SharedGrants())
+    monkeypatch.setattr(device_module, "load_local_grants", lambda: LocalGrants())
     _device(monkeypatch)
     return home
 
@@ -186,13 +195,22 @@ def test_a_ready_device_with_logins_has_no_problems(monkeypatch, home: Path) -> 
     assert agent_environment_problems(["aiko"]) == []
 
 
+def test_filesystem_refusal_is_shared_by_status_and_alerts(monkeypatch, home):
+    _codex_slot(monkeypatch)
+    reason = t("intelligences.agent_environment.filesystem.macos_documents", app="")
+    _device(monkeypatch, filesystem_problem=reason)
+    status = agent_environment_status(["aiko"])
+    assert (status.problem, status.problem_setting) == (reason, "filesystem")
+    assert ("", "", "filesystem", reason) in agent_environment_problems(["aiko"])
+
+
 def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     monkeypatch, home: Path
 ) -> None:
     (home / "tools").mkdir()
     (home / ".ssh").mkdir()
     monkeypatch.setattr(
-        module,
+        device_module,
         "load_shared_grants",
         lambda: SharedGrants(
             documents=[
@@ -202,7 +220,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
         ),
     )
     monkeypatch.setattr(
-        module, "load_local_grants", lambda: LocalGrants(deny=[".local/share/x"])
+        device_module, "load_local_grants", lambda: LocalGrants(deny=[".local/share/x"])
     )
     mappings = {
         "aiko": {
@@ -259,7 +277,7 @@ def test_an_unresolvable_local_path_is_reported_on_every_slot(
     monkeypatch, home: Path
 ) -> None:
     monkeypatch.setattr(
-        module,
+        device_module,
         "load_local_grants",
         lambda: LocalGrants(paths=[LocalPathGrant(path="/opt/nowhere", access="read")]),
     )
