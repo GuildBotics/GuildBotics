@@ -48,6 +48,9 @@ for pkg in (
     "google.genai",
     "openai",
     "anthropic",
+    # Windows has no system IANA timezone database. Bundle the dependency's
+    # zoneinfo files so reset timestamps work in the packaged sidecar too.
+    "tzdata",
     # The agent environment runtime: the wheel carries msb and libkrunfw under
     # `microsandbox/_bundled`, which GuildBotics copies to a fixed path on
     # first use (`agent_environment/runtime.py`).

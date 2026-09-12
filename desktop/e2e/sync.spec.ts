@@ -244,7 +244,10 @@ test("⑧ keeps the change that reached the hub first and sets the other aside",
 test("⑧ the set aside change is described but never handed over", async ({ page }) => {
   await page.goto("/#/activity");
   const pin = page.getByRole("button", { name: /Update not applied/ }).first();
-  await pin.hover();
+  await expect(async () => {
+    await pin.hover();
+    await expect(pin).toHaveAttribute("aria-expanded", "true", { timeout: 500 });
+  }).toPass({ timeout: 15_000 });
 
   await expect(page.getByText("This change was not applied")).toBeVisible();
   await expect(page.getByText("config/team/project.yml").first()).toBeVisible();

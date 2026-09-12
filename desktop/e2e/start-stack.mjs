@@ -43,6 +43,13 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  environmentValue,
+  npmInvocation,
+  withEnvironment,
+  withoutEnvironment,
+} from "./environment.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(here, "..");
 const repoRoot = resolve(desktopDir, "..");
@@ -85,6 +92,12 @@ if (!/^[a-z][a-z0-9-]*$/.test(stackName)) {
 const workspaceDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-ws-`));
 const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`));
 const configDir = join(workspaceDir, ".guildbotics", "config");
+const stackEnv = withEnvironment(process.env, {
+  HOME: homeDir,
+  USERPROFILE: homeDir,
+  PATH: environmentValue(process.env, "PATH"),
+});
+const npm = npmInvocation(stackEnv);
 
 // Two facts live on the Python side and are read from there so no second copy
 // has to be kept in sync: the catalog of AI CLI tools shadowed below, and where
@@ -102,7 +115,7 @@ function backendFacts() {
   return JSON.parse(
     execFileSync("uv", ["run", "--project", repoRoot, "python", "-c", source], {
       encoding: "utf-8",
-      env: { ...process.env, HOME: homeDir },
+      env: stackEnv,
     }),
   );
 }
@@ -187,21 +200,22 @@ writeFileSync(
 );
 console.log(`${tag} stack context: ${contextPath}`);
 
-const backendEnv = {
-  ...process.env,
+let backendEnv = withEnvironment(stackEnv, {
   HOME: homeDir,
+  USERPROFILE: homeDir,
+  PATH: [cliStubDir, environmentValue(stackEnv, "PATH")].filter(Boolean).join(delimiter),
   // Handed over through the environment so the token stays out of `ps`, and the
   // CORS allowlist names this stack's Vite origin explicitly — the backend
   // accepts no other browser origin.
   GUILDBOTICS_APP_API_TOKEN: token,
   GUILDBOTICS_APP_API_ALLOWED_ORIGINS: frontendOrigin,
-};
-// `get_cli_agent_search_path` appends the usual install locations after PATH, so
-// the stubs only win by being first.
-backendEnv.PATH = [cliStubDir, backendEnv.PATH].filter(Boolean).join(delimiter);
+});
+// `get_cli_agent_search_path` appends the usual install locations after PATH,
+// so the stubs only win by being first. `withEnvironment` also replaces a
+// Windows parent environment's `Path` key instead of leaving two spellings.
 // The backend never derives a workspace from its cwd, so the stack's temp
 // workspace must be selected explicitly; remove any inherited config override.
-delete backendEnv.GUILDBOTICS_CONFIG_DIR;
+backendEnv = withoutEnvironment(backendEnv, ["GUILDBOTICS_CONFIG_DIR"]);
 backendEnv.GUILDBOTICS_WORKSPACE_ROOT = workspaceDir;
 // Keep e2e secrets in a throwaway file-backed keyring stub instead of
 // polluting the developer's OS keychain (or failing on keychain-less CI).
@@ -253,14 +267,18 @@ writeFileSync(
   { mode: 0o600 },
 );
 backendEnv.PYTHON_KEYRING_BACKEND = "guildbotics_e2e_keyring.E2EKeyring";
-backendEnv.PYTHONPATH = [cliStubDir, backendEnv.PYTHONPATH].filter(Boolean).join(delimiter);
+backendEnv.PYTHONPATH = [cliStubDir, environmentValue(backendEnv, "PYTHONPATH")]
+  .filter(Boolean)
+  .join(delimiter);
 // Offline-LLM stacks must NOT inherit a developer's real LLM key from the
 // shell; otherwise the diagnostics missing-key short-circuit cannot be
 // asserted deterministically.
 if (seedWithoutLlmKey) {
-  delete backendEnv.OPENAI_API_KEY;
-  delete backendEnv.GOOGLE_API_KEY;
-  delete backendEnv.ANTHROPIC_API_KEY;
+  backendEnv = withoutEnvironment(backendEnv, [
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+  ]);
 }
 
 let backend;
@@ -389,15 +407,24 @@ async function seedWorkspace() {
 
 function startFrontend() {
   frontend = spawn(
-    "npm",
-    ["run", "dev", "--", "--host", host, "--port", String(frontendPort), "--strictPort"],
+    npm.executable,
+    [
+      ...npm.arguments,
+      "run",
+      "dev",
+      "--",
+      "--host",
+      host,
+      "--port",
+      String(frontendPort),
+      "--strictPort",
+    ],
     {
       cwd: desktopDir,
-      env: {
-        ...process.env,
+      env: withEnvironment(stackEnv, {
         VITE_GUILDBOTICS_API_TOKEN: token,
         VITE_GUILDBOTICS_API_BASE: baseUrl,
-      },
+      }),
       stdio: "inherit",
     },
   );
