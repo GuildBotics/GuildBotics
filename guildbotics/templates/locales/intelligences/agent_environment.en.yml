@@ -38,7 +38,9 @@ en:
     build_running: "Another build of this workspace's agent environment is already running."
   tool:
     not_provisioned: "%{tool} is not provisioned in the agent environment yet."
-    not_logged_in: "%{tool} is not logged in on this device; run `guildbotics environment login %{name}`."
+    credentials_missing: "No credentials are saved for %{tool} on this device; run `guildbotics environment login %{name}`."
+    credentials_saved: "Credentials saved for %{tool} on this device."
+    authentication_failed: "%{tool} authentication failed. Log in again with `guildbotics environment login %{name}`."
   grants:
     not_a_domain: "'%{domain}' is not a domain name"
     allowlist_needs_domain: "mode 'allowlist' needs at least one allowed domain"

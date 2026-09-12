@@ -978,3 +978,54 @@ async def test_the_workflow_path_records_the_credential_outcome_too(
     )
     # A failure that is not a refusal says nothing about the credentials.
     assert [r for r in recorded if r["event_type"].startswith("credential.")] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "category,returncode,expected",
+    [
+        ("authentication", 1, True),
+        ("network", 1, False),
+        ("rate_limited", 1, False),
+        ("", 2, False),
+        ("", 0, False),
+    ],
+)
+async def test_structured_outcomes_are_shared_across_members(
+    monkeypatch, tmp_path, category, returncode, expected
+):
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    tool = cli_agent_info("claude")
+    result = cli_agent.CliAgentExecutionResult(
+        stdout="done", stderr="", returncode=returncode, error_category=category
+    )
+    _native_brain(monkeypatch, result)
+    first = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    await first.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+    assert provider_state.authentication_failed(tool) is expected
+    assert not provider_state.authentication_failed(cli_agent_info("codex"))
+
+    # Unrelated errors do not erase a known failure either.
+    provider_state.record_authentication_outcome(tool, failed=True)
+    await first.run_with_execution_details(
+        "again", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+    assert provider_state.authentication_failed(tool) is (returncode != 0)
+
+    # A successful turn by another member clears the device/tool outcome.
+    monkeypatch.setitem(
+        cli_agent.person_cli_agent_mapping,
+        "p2",
+        {"default": cli_agent.ExecutableInfo(adapter="claude")},
+    )
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="ok", stderr="", returncode=0),
+    )
+    second = cli_agent.CliAgentBrain("p2", "x", logger=_test_logger())
+    await second.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+    assert not provider_state.authentication_failed(tool)

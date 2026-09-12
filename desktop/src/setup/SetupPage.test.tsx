@@ -361,7 +361,9 @@ beforeEach(() => {
           label: "OpenAI Codex CLI",
           config_reference: "cli_agents/codex/default.yml",
           provisioned: true,
-          logged_in: true,
+          credentials_saved: true,
+          authentication_failed: false,
+          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
           problem: "",
         },
         {
@@ -369,7 +371,9 @@ beforeEach(() => {
           label: "Claude Code",
           config_reference: "cli_agents/claude/default.yml",
           provisioned: true,
-          logged_in: false,
+          credentials_saved: false,
+          authentication_failed: false,
+          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
           problem: "",
         },
       ],
@@ -759,7 +763,7 @@ describe("SetupPage", () => {
     // which tools can be chosen is the catalog's and the same on every device.
     expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
     expect(
-      screen.getByText(t("setup.intelligence.environment.toolNotLoggedIn")),
+      screen.getByText(t("setup.intelligence.environment.toolCredentialsMissing")),
     ).toBeInTheDocument();
   });
 
@@ -773,7 +777,9 @@ describe("SetupPage", () => {
             label: "OpenAI Codex CLI",
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
-            logged_in: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
             problem: "",
           },
           {
@@ -781,7 +787,9 @@ describe("SetupPage", () => {
             label: "Grok Build",
             config_reference: "cli_agents/grok/default.yml",
             provisioned: false,
-            logged_in: false,
+            credentials_saved: false,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login grok",
             problem: "Grok Build is not provisioned in the agent environment yet.",
           },
         ],
@@ -1062,7 +1070,9 @@ describe("SetupPage", () => {
             label: "OpenAI Codex CLI",
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
-            logged_in: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
             problem: "",
           },
         ],
@@ -1343,7 +1353,9 @@ function environmentStatus(
         label: "OpenAI Codex CLI",
         config_reference: "cli_agents/codex/default.yml",
         provisioned: true,
-        logged_in: true,
+        credentials_saved: true,
+        authentication_failed: false,
+        login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
         problem: "",
       },
       {
@@ -1351,7 +1363,9 @@ function environmentStatus(
         label: "Claude Code",
         config_reference: "cli_agents/claude/default.yml",
         provisioned: true,
-        logged_in: false,
+        credentials_saved: false,
+        authentication_failed: false,
+        login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
         problem: "Claude Code is not logged in on this device.",
       },
     ],
@@ -3708,7 +3722,9 @@ describe("IntelligenceEditor (team default)", () => {
             label: "OpenAI Codex CLI",
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
-            logged_in: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
             problem: "",
           },
         ],
@@ -4136,7 +4152,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await screen.findByText(t("setup.intelligence.tabs.cli"));
     expect(
-      screen.getAllByText(t("setup.intelligence.environment.toolLoggedIn")).length,
+      screen.getAllByText(t("setup.intelligence.environment.toolCredentialsSaved")).length,
     ).toBeGreaterThan(0);
   });
 
@@ -4172,7 +4188,9 @@ describe("IntelligenceEditor (member override)", () => {
             label: "OpenAI Codex CLI",
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
-            logged_in: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
             problem: "",
           },
           {
@@ -4180,7 +4198,9 @@ describe("IntelligenceEditor (member override)", () => {
             label: "Claude Code",
             config_reference: "cli_agents/claude/default.yml",
             provisioned: true,
-            logged_in: true,
+            credentials_saved: true,
+            authentication_failed: false,
+            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
             problem: "",
           },
         ],

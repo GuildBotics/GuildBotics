@@ -34,7 +34,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     upstream_nameservers,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo
-from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.fileio import atomic_write_text, get_machine_state_path
 
 #: This device's per-provider stores, and the cache turns keep between them.
 STATE_ROOT = ("agent_environment",)
@@ -53,12 +53,34 @@ def cache_dir() -> Path:
     return get_machine_state_path(*STATE_ROOT, CACHE_DIR)
 
 
-def is_logged_in(tool: CliAgentInfo) -> bool:
+def has_credentials(tool: CliAgentInfo) -> bool:
     """Whether the provider's credentials exist in this device's store."""
     provision = tool.provision
     return (
         bool(provision.auth) and (provider_state_dir(tool) / provision.auth).is_file()
     )
+
+
+def authentication_failed(tool: CliAgentInfo) -> bool:
+    """Whether the last known authentication outcome on this device failed."""
+    return _failure_path(tool).is_file()
+
+
+def record_authentication_outcome(tool: CliAgentInfo, *, failed: bool) -> None:
+    """Keep only the latest outcome, shared by all members on this device.
+
+    This marker is outside the provider's mounted store and contains no
+    credentials or provider output. Unknown outcomes must not call this.
+    """
+    path = _failure_path(tool)
+    if failed:
+        atomic_write_text(path, "authentication failed\n")
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _failure_path(tool: CliAgentInfo) -> Path:
+    return get_machine_state_path(*STATE_ROOT, tool.name, "authentication-failed")
 
 
 def state_mounts(
@@ -166,7 +188,10 @@ async def login(
         feeding = asyncio.create_task(feed())
         try:
             await asyncio.gather(pump(process.stdout), pump(process.stderr))
-            return await process.wait()
+            code = await process.wait()
+            if code == 0 and has_credentials(tool):
+                record_authentication_outcome(tool, failed=False)
+            return code
         finally:
             feeding.cancel()
     finally:

@@ -38,7 +38,7 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
         "declaration": ToolchainDeclaration(dns=DnsSettings(nameservers="host")),
         "snapshot": SnapshotStatus("ready", "guildbotics-abc", Path("/snap")),
         "nameservers": ("192.168.3.1",),
-        "logged_in": {"codex"},
+        "credentials_saved": {"codex"},
     }
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -63,7 +63,9 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
     monkeypatch.setattr(module.snapshot, "snapshot_status", lambda d: parts["snapshot"])
     monkeypatch.setattr(module, "upstream_nameservers", resolvers)
     monkeypatch.setattr(
-        module, "is_logged_in", lambda agent: agent.name in parts["logged_in"]
+        module,
+        "has_credentials",
+        lambda agent: agent.name in parts["credentials_saved"],
     )
     return parts
 
@@ -75,12 +77,12 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
     assert (status.dns.declared, status.dns.nameservers) == ("host", ("192.168.3.1",))
     assert status.tool("codex").refusal == ""
     assert status.tool("claude").refusal == t(
-        "intelligences.agent_environment.tool.not_logged_in",
+        "intelligences.agent_environment.tool.credentials_missing",
         tool="Claude Code",
         name="claude",
     )
     assert status.tool("grok").refusal == t(
-        "intelligences.agent_environment.tool.not_logged_in",
+        "intelligences.agent_environment.tool.credentials_missing",
         tool="Grok Build",
         name="grok",
     )

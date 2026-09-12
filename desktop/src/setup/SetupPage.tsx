@@ -1,3 +1,4 @@
+import { cliToolStatusKey } from "../cliAgent";
 import {
   Avatar,
   FileButton,
@@ -1674,17 +1675,6 @@ function DefaultProviderCards({
   );
 }
 
-/**
- * Which tool a card is, on two layers that must not be confused: whether it can
- * be chosen at all is the catalog's and the same on every device (the
- * environment provisions it or does not); whether it is logged in is this
- * device's, and the badge says so.
- */
-function cliToolStatusKey(tool: EnvironmentToolStatus): string {
-  if (!tool.provisioned) return "toolNotProvisioned";
-  return tool.logged_in ? "toolLoggedIn" : "toolNotLoggedIn";
-}
-
 // The "default AI CLI tool" card grid, shared by the team and member scopes.
 function DefaultCliAgentCards({
   tools,
@@ -1706,7 +1696,7 @@ function DefaultCliAgentCards({
           label={tool.label}
           active={isActive(tool)}
           enabled={tool.provisioned}
-          statusOk={tool.provisioned && tool.logged_in}
+          statusOk={tool.provisioned && tool.credentials_saved && !tool.authentication_failed}
           statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={() => onSelect(tool)}
@@ -2529,7 +2519,7 @@ function IntelligenceEditor({
                                   color={
                                     !tool.provisioned
                                       ? "gray"
-                                      : tool.logged_in
+                                      : tool.credentials_saved && !tool.authentication_failed
                                         ? "success"
                                         : "warning"
                                   }

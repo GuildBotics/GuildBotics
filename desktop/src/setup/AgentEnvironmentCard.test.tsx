@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,7 +40,9 @@ function status(
         label: "Codex",
         config_reference: "cli_agents/codex/default.yml",
         provisioned: true,
-        logged_in: true,
+        credentials_saved: true,
+        authentication_failed: false,
+        login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
         problem: "",
       },
       {
@@ -48,7 +50,9 @@ function status(
         label: "Claude Code",
         config_reference: "cli_agents/claude/default.yml",
         provisioned: true,
-        logged_in: false,
+        credentials_saved: false,
+        authentication_failed: false,
+        login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
         problem: "Claude Code is not logged in on this device.",
       },
       {
@@ -56,7 +60,9 @@ function status(
         label: "Grok Build",
         config_reference: "cli_agents/grok/default.yml",
         provisioned: false,
-        logged_in: false,
+        credentials_saved: false,
+        authentication_failed: false,
+        login_command: "/Users/me/.guildbotics/bin/guildbotics environment login grok",
         problem: "Grok Build is not provisioned in the agent environment yet.",
       },
     ],
@@ -102,11 +108,15 @@ describe("AgentEnvironmentCard", () => {
     expect(screen.getByText(/192\.168\.3\.1/)).toBeInTheDocument();
     // The catalog's three answers, on the device's layer: logged in here, not
     // logged in here (with the command that does it), not provisioned at all.
-    expect(screen.getByText(t("setup.intelligence.environment.toolLoggedIn"))).toBeInTheDocument();
     expect(
-      screen.getByText(t("setup.intelligence.environment.toolNotLoggedIn")),
+      screen.getByText(t("setup.intelligence.environment.toolCredentialsSaved")),
     ).toBeInTheDocument();
-    expect(screen.getByText("guildbotics environment login claude")).toBeInTheDocument();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.toolCredentialsMissing")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("/Users/me/.guildbotics/bin/guildbotics environment login claude"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(t("setup.intelligence.environment.toolNotProvisioned")),
     ).toBeInTheDocument();
@@ -115,6 +125,52 @@ describe("AgentEnvironmentCard", () => {
       screen.queryByRole("button", { name: t("setup.intelligence.environment.build") }),
     ).not.toBeInTheDocument();
   });
+
+  it.each(["en", "ja"])(
+    "keeps login and copy available for every credential state in %s",
+    async (language) => {
+      await i18n.changeLanguage(language);
+      const tr = i18n.getFixedT(language);
+      const user = userEvent.setup();
+      const data = status();
+      data.tools = [
+        data.tools[0],
+        data.tools[1],
+        {
+          ...data.tools[0],
+          name: "gemini",
+          label: "Gemini",
+          authentication_failed: true,
+          login_command: "/Users/me/.guildbotics/bin/guildbotics environment login gemini",
+        },
+      ];
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+      renderCard();
+      await screen.findByText(tr("setup.intelligence.environment.toolAuthenticationFailed"));
+      for (const tool of data.tools) {
+        const row = within(document.getElementById(`agent-environment-tool-${tool.name}`)!);
+        expect(row.getByText(tool.login_command)).toBeInTheDocument();
+        await user.click(
+          row.getByRole("button", { name: tr("setup.intelligence.environment.copy") }),
+        );
+        expect(await navigator.clipboard.readText()).toBe(tool.login_command);
+      }
+      const recovered = {
+        ...data,
+        tools: data.tools.map((tool) => ({ ...tool, authentication_failed: false })),
+      };
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(recovered);
+      await user.click(
+        screen.getByRole("button", { name: tr("setup.intelligence.environment.refresh") }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByText(tr("setup.intelligence.environment.toolAuthenticationFailed")),
+        ).not.toBeInTheDocument(),
+      );
+      await i18n.changeLanguage("en");
+    },
+  );
 
   it("offers a build for a missing snapshot and shows the build's output while it runs", async () => {
     vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
@@ -205,7 +261,7 @@ describe("AgentEnvironmentCard", () => {
     Element.prototype.scrollIntoView = scrollIntoView;
     renderCard("agent-environment-tool-claude");
 
-    await screen.findByText("guildbotics environment login claude");
+    await screen.findByText("/Users/me/.guildbotics/bin/guildbotics environment login claude");
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
     expect(document.getElementById("agent-environment-tool-claude")).not.toBeNull();
   });

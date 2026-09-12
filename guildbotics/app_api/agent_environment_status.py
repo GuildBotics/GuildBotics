@@ -11,6 +11,7 @@ environment as a whole, one AI CLI tool on it, or one slot's grants.
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -115,8 +116,10 @@ def agent_environment_status(
                 label=tool.label,
                 config_reference=cli_agent_info(tool.name).config_reference,
                 provisioned=tool.provisioned,
-                logged_in=tool.logged_in,
-                problem=tool.refusal,
+                credentials_saved=tool.credentials_saved,
+                authentication_failed=tool.authentication_failed,
+                login_command=_login_command(tool.name, platform, home),
+                problem=tool.problem,
             )
             for tool in device.tools
         ],
@@ -124,6 +127,21 @@ def agent_environment_status(
         problem_setting=device.setting,
         access=_access_status(access, problem, home),
         members=members,
+    )
+
+
+def _login_command(name: str, platform: str, home: Path) -> str:
+    """A terminal command using the CLI that Desktop installs on this device."""
+    if platform == "win32":
+        executable = str(home / ".guildbotics" / "bin" / "guildbotics.exe")
+        return "& '" + executable.replace("'", "''") + f"' environment login {name}"
+    return shlex.join(
+        [
+            str(home / ".guildbotics" / "bin" / "guildbotics"),
+            "environment",
+            "login",
+            name,
+        ]
     )
 
 

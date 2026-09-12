@@ -11,7 +11,7 @@ import pytest
 from guildbotics.intelligences.agent_environment import provider_state
 from guildbotics.intelligences.agent_environment.provider_state import (
     cache_dir,
-    is_logged_in,
+    has_credentials,
     login,
     login_spec,
     provider_state_dir,
@@ -41,16 +41,16 @@ def test_the_store_mirrors_the_state_root_under_home(machine: Path) -> None:
     assert cache_dir() == machine / "data/agent_environment/cache"
 
 
-def test_logged_in_means_the_credentials_file_exists(machine: Path) -> None:
+def test_credentials_saved_means_the_credentials_file_exists(machine: Path) -> None:
     codex = cli_agent_info("codex")
-    assert not is_logged_in(codex)
+    assert not has_credentials(codex)
 
     store = provider_state_dir(codex)
     store.mkdir(parents=True)
     (store / "auth.json").write_text("{}")
 
-    assert is_logged_in(codex)
-    assert not is_logged_in(cli_agent_info("grok"))
+    assert has_credentials(codex)
+    assert not has_credentials(cli_agent_info("grok"))
 
 
 def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) -> None:
@@ -194,3 +194,59 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
     )
     assert _Environment.process.written == [b"ABCD-1234\n"]
     assert _Environment.closed
+
+
+@pytest.mark.parametrize(
+    "exit_code,stored,cleared", [(0, True, True), (0, False, False), (1, True, False)]
+)
+def test_only_completed_login_with_credentials_clears_failure(
+    machine, monkeypatch, exit_code, stored, cleared
+):
+    codex = cli_agent_info("codex")
+    provider_state.record_authentication_outcome(codex, failed=True)
+    if stored:
+        store = provider_state_dir(codex)
+        store.mkdir(parents=True)
+        (store / codex.provision.auth).write_text("{}")
+
+    async def wait(self):
+        return exit_code
+
+    monkeypatch.setattr(provider_state, "AgentEnvironment", _Environment)
+    monkeypatch.setattr(_Process, "wait", wait)
+    typed = iter(["code\n"])
+    assert (
+        asyncio.run(
+            login(
+                codex,
+                DECLARATION,
+                snapshot=machine / "snap",
+                read_line=lambda: next(typed, None),
+                write=lambda _: None,
+            )
+        )
+        == exit_code
+    )
+    assert provider_state.authentication_failed(codex) is not cleared
+
+
+def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
+    machine, monkeypatch
+):
+    codex, claude = cli_agent_info("codex"), cli_agent_info("claude")
+    provider_state.record_authentication_outcome(codex, failed=True)
+    assert provider_state.authentication_failed(codex)
+    assert not provider_state.authentication_failed(claude)
+    mounts = state_mounts(codex, machine / "home")
+    assert all(not str(m.host).endswith("authentication-failed") for m in mounts)
+    with monkeypatch.context() as other_device:
+        other_device.setattr(
+            provider_state,
+            "get_machine_state_path",
+            lambda *parts: machine.joinpath("other-device", *parts),
+        )
+        assert not provider_state.authentication_failed(codex)
+        provider_state.record_authentication_outcome(codex, failed=False)
+    assert provider_state.authentication_failed(codex)
+    provider_state.record_authentication_outcome(codex, failed=False)
+    assert not provider_state.authentication_failed(codex)

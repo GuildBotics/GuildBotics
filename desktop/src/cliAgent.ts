@@ -79,3 +79,10 @@ export function useMemberCliAgentUsage(personId: string, enabled: boolean): CliA
   });
   return usage.data?.usages.find((item) => item.agent === agentName) ?? null;
 }
+
+/** Display the device's core facts without claiming credentials are valid. */
+export function cliToolStatusKey(tool: EnvironmentToolStatus): string {
+  if (!tool.provisioned) return "toolNotProvisioned";
+  if (!tool.credentials_saved) return "toolCredentialsMissing";
+  return tool.authentication_failed ? "toolAuthenticationFailed" : "toolCredentialsSaved";
+}

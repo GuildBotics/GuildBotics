@@ -24,7 +24,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_shared_grants,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
+from guildbotics.intelligences.agent_environment.provider_state import (
+    authentication_failed,
+    has_credentials,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
 )
@@ -61,7 +64,21 @@ class ToolStatus:
     name: str
     label: str
     provisioned: bool
-    logged_in: bool
+    credentials_saved: bool
+    authentication_failed: bool = False
+
+    @property
+    def problem(self) -> str:
+        """Current guidance; a past failure does not prevent another attempt."""
+        if self.refusal:
+            return self.refusal
+        if self.authentication_failed:
+            return t(
+                "intelligences.agent_environment.tool.authentication_failed",
+                tool=self.label,
+                name=self.name,
+            )
+        return ""
 
     @property
     def refusal(self) -> str:
@@ -70,9 +87,9 @@ class ToolStatus:
             return t(
                 "intelligences.agent_environment.tool.not_provisioned", tool=self.label
             )
-        if not self.logged_in:
+        if not self.credentials_saved:
             return t(
-                "intelligences.agent_environment.tool.not_logged_in",
+                "intelligences.agent_environment.tool.credentials_missing",
                 tool=self.label,
                 name=self.name,
             )
@@ -232,7 +249,8 @@ def _tool_status(agent: CliAgentInfo) -> ToolStatus:
         name=agent.name,
         label=agent.label,
         provisioned=agent.provision.provisioned,
-        logged_in=is_logged_in(agent),
+        credentials_saved=has_credentials(agent),
+        authentication_failed=authentication_failed(agent),
     )
 
 

@@ -64,14 +64,15 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
         "(run `guildbotics environment build`)"
     ) in result.output
     assert "dns: 1.1.1.1, 8.8.8.8 -> 1.1.1.1, 8.8.8.8" in result.output
-    assert (
-        "codex: not logged in (run `guildbotics environment login codex`)"
-        in result.output
-    )
-    assert (
-        "grok: not logged in (run `guildbotics environment login grok`)"
-        in result.output
-    )
+    for name, label in (("codex", "Codex"), ("grok", "Grok Build")):
+        assert (
+            t(
+                "intelligences.agent_environment.tool.credentials_missing",
+                tool=label,
+                name=name,
+            )
+            in result.output
+        )
 
 
 def test_status_json_has_the_same_facts(workspace: Path) -> None:
@@ -95,7 +96,13 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "name": "codex",
         "label": "Codex",
         "provisioned": True,
-        "logged_in": False,
+        "credentials_saved": False,
+        "authentication_failed": False,
+        "problem": t(
+            "intelligences.agent_environment.tool.credentials_missing",
+            tool="Codex",
+            name="codex",
+        ),
     }
     assert tools["antigravity"]["provisioned"] is True
 
@@ -216,8 +223,9 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     assert result.exit_code == 0, result.output
     assert calls[0]["tool"] == "codex" and calls[0]["snapshot"] == path
     assert "Logged in" in result.output
-    assert "Codex is logged in on this device." in result.output
-    assert "codex: logged in" in _invoke(workspace, "status").output
+    saved = t("intelligences.agent_environment.tool.credentials_saved", tool="Codex")
+    assert saved in result.output
+    assert saved in _invoke(workspace, "status").output
 
 
 def test_login_that_stores_nothing_is_an_error(
@@ -254,3 +262,29 @@ def test_environment_group_lists_its_commands() -> None:
     assert result.exit_code == 0
     for command in ("build", "login", "remove", "status"):
         assert f"\n  {command}" in result.output
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_status_reports_failed_authentication_without_blocking_retries(
+    workspace, language
+):
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+    from guildbotics.utils.i18n_tool import set_language
+
+    set_language(language)
+    tool = cli_agent_info("codex")
+    store = provider_state.provider_state_dir(tool)
+    store.mkdir(parents=True)
+    (store / tool.provision.auth).write_text("{}")
+    provider_state.record_authentication_outcome(tool, failed=True)
+    reason = t(
+        "intelligences.agent_environment.tool.authentication_failed",
+        tool=tool.label,
+        name=tool.name,
+    )
+    assert reason in _invoke(workspace, "status").output
+    payload = json.loads(_invoke(workspace, "status", "--format", "json").output)
+    codex = next(item for item in payload["tools"] if item["name"] == "codex")
+    assert codex["credentials_saved"] and codex["authentication_failed"]
+    assert codex["problem"] == reason
+    assert environment_cli.device_status().tool("codex").refusal == ""

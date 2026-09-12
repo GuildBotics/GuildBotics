@@ -114,3 +114,36 @@ async def test_run_command_exception_logs_and_returns_false(monkeypatch):
         "command.failed",
     ]
     assert events[-1]["payload"]["error_type"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["authentication", "network", "rate_limited"])
+async def test_command_failure_preserves_structured_authentication_cause(
+    monkeypatch, category
+):
+    from guildbotics.drivers.utils import run_with_logging
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.brains.cli_agent import (
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    events = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.utils.record_correlated_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    async def fail():
+        cause = CliAgentExecutionError(
+            cli_agent="codex",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="error", returncode=1, error_category=category
+            ),
+        )
+        raise CommandError("wrapped") from cause
+
+    assert not await run_with_logging(FakeContext(), "test", "scheduled", fail)
+    assert events[-1]["payload"]["code"] == (
+        "cli_agent_authentication" if category == "authentication" else ""
+    )

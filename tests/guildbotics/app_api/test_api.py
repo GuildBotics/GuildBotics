@@ -1204,7 +1204,7 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.is_logged_in",
+        "guildbotics.app_api.runtime.has_credentials",
         lambda agent: agent.name in {"claude", "codex", "grok", "copilot"},
     )
 
@@ -3184,3 +3184,48 @@ def test_diagnostics_troubleshoot_rejects_invalid_requests(
         )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("category", ["authentication", "network", "rate_limited"])
+async def test_command_event_preserves_authentication_cause(
+    tmp_path, monkeypatch, wrapped, category
+):
+    from guildbotics.app_api import runtime as runtime_module
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.brains.cli_agent import (
+        CliAgentExecutionError,
+        CliAgentExecutionResult,
+    )
+
+    events = []
+    bus = EventBus()
+    monkeypatch.setattr(
+        bus, "publish_event", lambda event, payload: events.append((event, payload))
+    )
+    runtime = AppRuntime(event_bus=bus)
+
+    async def fail(*args, **kwargs):
+        error = CliAgentExecutionError(
+            cli_agent="codex",
+            result=CliAgentExecutionResult(
+                stdout="", stderr="error", returncode=1, error_category=category
+            ),
+        )
+        if wrapped:
+            raise CommandError("wrapped") from error
+        raise error
+
+    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", fail)
+    request = CommandRunRequest(command="test", cwd=str(tmp_path))
+    with pytest.raises(AppApiError if wrapped else CliAgentExecutionError):
+        await runtime._run_command_traced(request, None, "alice")
+    assert events[-1][0] == "command.failed"
+    assert events[-1][1]["code"] == (
+        "cli_agent_authentication"
+        if category == "authentication"
+        else "command_error"
+        if wrapped
+        else ""
+    )

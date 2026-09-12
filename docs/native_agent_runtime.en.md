@@ -218,6 +218,17 @@ input (within 60 seconds). Grok Build's own sandbox profiles need Landlock, whic
 environment's kernel lacks, so it runs with `--sandbox off` there; the environment is
 the boundary.
 
+The settings card always offers the login command and copy action, including when
+credentials are already saved. Desktop shows its managed CLI's absolute path;
+after login, use **Refresh status** to reread this device. **Credentials saved**
+only reports file presence, not validity. Structured authentication failures from
+turns are kept per device and tool, outside the provider's mounted store, and feed
+both the card and alerts through `status.py`. A completed login that leaves
+credentials, or a later successful turn by any member, clears the failure.
+Other errors leave the last known result unchanged. Past failures are guidance,
+not startup refusals, so another turn can retry. No authentication probe or token
+refresh is performed by GuildBotics.
+
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the
 process through the environment, and credential-named variables are stripped from the AI

@@ -1019,7 +1019,9 @@ export type EnvironmentToolStatus = {
   label: string;
   config_reference: string;
   provisioned: boolean;
-  logged_in: boolean;
+  credentials_saved: boolean;
+  authentication_failed: boolean;
+  login_command: string;
   // Why a turn of this tool cannot start here, or "" when it can.
   problem: string;
 };

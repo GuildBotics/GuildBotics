@@ -6,6 +6,7 @@ import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from guildbotics.capabilities.completion_retry import find_cli_agent_execution_error
 from guildbotics.drivers.command_runner import CommandRunner
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
@@ -63,6 +64,9 @@ async def run_with_logging(
                 "command": command_name,
                 "person": person.person_id,
                 "error_type": type(e).__name__,
+                "code": "cli_agent_authentication"
+                if find_cli_agent_execution_error(e, category="authentication")
+                else "",
             },
         )
         return False
