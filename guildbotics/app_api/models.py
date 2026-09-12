@@ -987,7 +987,6 @@ class ScenarioDiagnosticsResponse(BaseModel):
 SystemAlertCode = Literal[
     "credential_github",
     "credential_slack",
-    "credential_cli_agent",
     "credential_llm",
     "command_failed",
     "rate_limited",

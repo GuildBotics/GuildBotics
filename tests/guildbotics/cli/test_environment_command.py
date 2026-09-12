@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 environment_cli = importlib.import_module("guildbotics.cli.environment")
+from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.cli.environment import environment as environment_group
 from guildbotics.cli import main
 from guildbotics.intelligences.agent_environment import (
@@ -69,7 +70,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
             t(
                 "intelligences.agent_environment.tool.credentials_missing",
                 tool=label,
-                name=name,
+                command=login_command(name),
             )
             in result.output
         )
@@ -101,7 +102,7 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "problem": t(
             "intelligences.agent_environment.tool.credentials_missing",
             tool="Codex",
-            name="codex",
+            command=login_command("codex"),
         ),
     }
     assert tools["antigravity"]["provisioned"] is True
@@ -280,7 +281,7 @@ def test_status_reports_failed_authentication_without_blocking_retries(
     reason = t(
         "intelligences.agent_environment.tool.authentication_failed",
         tool=tool.label,
-        name=tool.name,
+        command=login_command(tool.name),
     )
     assert reason in _invoke(workspace, "status").output
     payload = json.loads(_invoke(workspace, "status", "--format", "json").output)

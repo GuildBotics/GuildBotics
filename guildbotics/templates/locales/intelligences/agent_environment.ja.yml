@@ -31,9 +31,9 @@ ja:
     build_running: "このワークスペースのエージェント隔離環境は別のビルドが実行中です。"
   tool:
     not_provisioned: "%{tool} はまだエージェント隔離環境に導入されていません。"
-    credentials_missing: "%{tool} の認証情報はこの端末に保存されていません。`guildbotics environment login %{name}` を実行してください。"
+    credentials_missing: "%{tool} の認証情報はこの端末に保存されていません。`%{command}` を実行してください。"
     credentials_saved: "%{tool} の認証情報はこの端末に保存されています。"
-    authentication_failed: "%{tool} の認証に失敗しました。`guildbotics environment login %{name}` で再ログインしてください。"
+    authentication_failed: "%{tool} の認証に失敗しました。`%{command}` で再ログインしてください。"
   grants:
     not_a_domain: "'%{domain}' はドメイン名ではありません"
     allowlist_needs_domain: "mode 'allowlist' には許可ドメインが 1 つ以上必要です"

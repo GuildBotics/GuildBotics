@@ -1366,7 +1366,7 @@ function environmentStatus(
         credentials_saved: false,
         authentication_failed: false,
         login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
-        problem: "Claude Code is not logged in on this device.",
+        problem: "No credentials are saved for Claude Code on this device.",
       },
     ],
     problem: "",
@@ -4154,6 +4154,13 @@ describe("IntelligenceEditor (team default)", () => {
     expect(
       screen.getAllByText(t("setup.intelligence.environment.toolCredentialsSaved")).length,
     ).toBeGreaterThan(0);
+    for (const label of screen.getAllByText(
+      t("setup.intelligence.environment.toolCredentialsSaved"),
+    )) {
+      if (label.classList.contains("detection")) {
+        expect(label).toHaveStyle({ color: "var(--mantine-color-gray-6)" });
+      }
+    }
   });
 
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {

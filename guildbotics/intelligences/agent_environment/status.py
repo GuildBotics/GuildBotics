@@ -10,6 +10,7 @@ set of words.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,7 +77,7 @@ class ToolStatus:
             return t(
                 "intelligences.agent_environment.tool.authentication_failed",
                 tool=self.label,
-                name=self.name,
+                command=login_command(self.name),
             )
         return ""
 
@@ -91,7 +92,7 @@ class ToolStatus:
             return t(
                 "intelligences.agent_environment.tool.credentials_missing",
                 tool=self.label,
-                name=self.name,
+                command=login_command(self.name),
             )
         return ""
 
@@ -242,6 +243,24 @@ def filesystem_permission_problem(path: Path) -> str:
             else "",
         )
     return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
+
+
+def login_command(name: str, *, platform: str | None = None) -> str:
+    """The terminal login instruction shared by status, alerts, and Desktop.
+
+    Windows installers put the CLI on PATH. Unix Desktop installs it under
+    home; quote its absolute path so spaces and shell metacharacters survive.
+    """
+    if (platform or sys.platform) == "win32":
+        return f"guildbotics environment login {name}"
+    return shlex.join(
+        [
+            str(Path.home() / ".guildbotics/bin/guildbotics"),
+            "environment",
+            "login",
+            name,
+        ]
+    )
 
 
 def _tool_status(agent: CliAgentInfo) -> ToolStatus:

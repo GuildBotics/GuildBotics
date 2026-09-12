@@ -53,7 +53,7 @@ function status(
         credentials_saved: false,
         authentication_failed: false,
         login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
-        problem: "Claude Code is not logged in on this device.",
+        problem: "No credentials are saved for Claude Code on this device.",
       },
       {
         name: "grok",

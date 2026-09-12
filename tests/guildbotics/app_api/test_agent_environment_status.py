@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.app_api import agent_environment_status as module
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_problems,
@@ -151,20 +152,20 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     assert tools["codex"].problem == t(
         "intelligences.agent_environment.tool.credentials_missing",
         tool="Codex",
-        name="codex",
+        command=login_command("codex"),
     )
     assert (tools["grok"].provisioned, tools["grok"].problem) == (
         True,
         t(
             "intelligences.agent_environment.tool.credentials_missing",
             tool="Grok Build",
-            name="grok",
+            command=login_command("grok"),
         ),
     )
     assert tools["claude"].problem == t(
         "intelligences.agent_environment.tool.credentials_missing",
         tool="Claude Code",
-        name="claude",
+        command=login_command("claude"),
     )
 
 
@@ -188,7 +189,7 @@ def test_problems_name_the_device_once_and_only_the_tools_in_use(
             t(
                 "intelligences.agent_environment.tool.credentials_missing",
                 tool="Codex",
-                name="codex",
+                command=login_command("codex"),
             ),
         ),
     ]
@@ -272,7 +273,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
             t(
                 "intelligences.agent_environment.tool.credentials_missing",
                 tool="Grok Build",
-                name="grok",
+                command=login_command("grok"),
             ),
         )
     ]
@@ -424,10 +425,7 @@ def test_login_instructions_use_desktop_managed_cli(monkeypatch, home, platform)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: special_home))
     for tool in agent_environment_status([], platform=platform).tools:
         if platform == "win32":
-            expected = str(special_home / ".guildbotics/bin/guildbotics.exe").replace(
-                "'", "''"
-            )
-            assert tool.login_command == f"& '{expected}' environment login {tool.name}"
+            assert tool.login_command == f"guildbotics environment login {tool.name}"
         else:
             assert shlex.split(tool.login_command) == [
                 str(special_home / ".guildbotics/bin/guildbotics"),
@@ -486,7 +484,7 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
             reason = t(
                 "intelligences.agent_environment.tool.authentication_failed",
                 tool="Codex",
-                name="codex",
+                command=login_command("codex"),
             )
             assert codex.problem == reason
             assert problems == [("", "codex", "tool", reason)]
@@ -497,3 +495,20 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
             assert codex.problem == ""
             assert problems == []
             assert alerts == []
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_card_and_guidance_share_the_login_command(monkeypatch, home, failed):
+    from dataclasses import replace
+
+    original = module.device_status()
+    tools = tuple(
+        replace(tool, credentials_saved=failed, authentication_failed=failed)
+        for tool in original.tools
+    )
+    monkeypatch.setattr(
+        module, "device_status", lambda **_: replace(original, tools=tools)
+    )
+    for tool in agent_environment_status([]).tools:
+        if tool.provisioned:
+            assert f"`{tool.login_command}`" in tool.problem

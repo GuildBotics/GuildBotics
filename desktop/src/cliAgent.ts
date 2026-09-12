@@ -86,3 +86,14 @@ export function cliToolStatusKey(tool: EnvironmentToolStatus): string {
   if (!tool.credentials_saved) return "toolCredentialsMissing";
   return tool.authentication_failed ? "toolAuthenticationFailed" : "toolCredentialsSaved";
 }
+
+/** Saved credentials are neutral; only observed problems need warning colors. */
+export function cliToolStatusColor(tool: EnvironmentToolStatus): string {
+  const colors: Record<string, string> = {
+    toolNotProvisioned: "gray",
+    toolCredentialsMissing: "warning",
+    toolAuthenticationFailed: "danger",
+    toolCredentialsSaved: "gray",
+  };
+  return colors[cliToolStatusKey(tool)];
+}

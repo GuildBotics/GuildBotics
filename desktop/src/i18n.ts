@@ -372,7 +372,6 @@ const resources = {
         codes: {
           credential_github: "GitHub credentials for {{person}} could not be verified.",
           credential_slack: "Slack credentials for {{person}} could not be verified.",
-          credential_cli_agent: "The {{command}} credentials for {{person}} could not be verified.",
           credential_llm: "The configured LLM credentials could not be verified.",
           command_failed: "{{command}} failed for {{person}}.",
           rate_limited: "{{command}} was rate limited for {{person}}.",
@@ -942,7 +941,8 @@ const resources = {
             toolAuthenticationFailed: "Authentication failed. Log in again.",
             refresh: "Refresh status",
             toolCredentialsMissing: "No credentials saved on this device",
-            loginHint: "Run this in a terminal to log in or log in again, then refresh the status:",
+            loginHint:
+              "Run this in a terminal to log in or log in again. Status updates automatically; use Refresh status to check immediately:",
             copy: "Copy",
             copied: "Copied",
             loadError: "The environment status could not be loaded.",
@@ -2349,7 +2349,6 @@ const resources = {
         codes: {
           credential_github: "{{person}} の GitHub 資格情報を検証できませんでした。",
           credential_slack: "{{person}} の Slack 資格情報を検証できませんでした。",
-          credential_cli_agent: "{{person}} の {{command}} 資格情報を検証できませんでした。",
           credential_llm: "設定された LLM 資格情報を検証できませんでした。",
           command_failed: "{{person}} の {{command}} が失敗しました。",
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
@@ -2609,7 +2608,8 @@ const resources = {
             toolAuthenticationFailed: "認証に失敗しました。再ログインしてください。",
             refresh: "状態を更新",
             toolCredentialsMissing: "この端末に認証情報未保存",
-            loginHint: "ターミナルで次を実行してログイン・再ログインし、状態を更新してください:",
+            loginHint:
+              "ターミナルで次を実行してログイン・再ログインします。状態は自動更新されます。すぐ確認するには「状態を更新」を押してください:",
             copy: "コピー",
             copied: "コピーしました",
             loadError: "環境の状態を読み込めませんでした。",

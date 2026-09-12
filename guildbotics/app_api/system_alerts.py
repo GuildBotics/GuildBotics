@@ -424,9 +424,6 @@ class SystemAlertService:
         dismissed: set[str],
         agent_environment_problems: list[EnvironmentProblemEntry],
     ) -> None:
-        # AI CLI credentials are device/tool state from core, never a member's
-        # diagnostics history (including records retained from previous runs).
-        _remove_alert_prefix(alerts, "credential:cli_agent:")
         for person_id, slot, setting, reason in agent_environment_problems:
             # One alert per thing to fix: the device, a tool, a member's slot.
             key, code = _AGENT_ENVIRONMENT_ALERTS[setting]

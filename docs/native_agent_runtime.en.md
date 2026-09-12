@@ -219,8 +219,9 @@ environment's kernel lacks, so it runs with `--sandbox off` there; the environme
 the boundary.
 
 The settings card always offers the login command and copy action, including when
-credentials are already saved. Desktop shows its managed CLI's absolute path;
-after login, use **Refresh status** to reread this device. **Credentials saved**
+credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
+absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
+updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
 only reports file presence, not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
 both the card and alerts through `status.py`. A completed login that leaves

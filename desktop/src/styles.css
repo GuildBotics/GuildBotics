@@ -559,26 +559,11 @@ pre {
 }
 
 .option-card .detection i {
+  background: currentColor;
   border-radius: 99px;
   display: inline-block;
   height: 8px;
   width: 8px;
-}
-
-.option-card .detection.ok {
-  color: var(--color-success-text);
-}
-
-.option-card .detection.ok i {
-  background: var(--color-success);
-}
-
-.option-card .detection.ng {
-  color: var(--color-danger-text);
-}
-
-.option-card .detection.ng i {
-  background: var(--color-danger);
 }
 
 .commands-layout {

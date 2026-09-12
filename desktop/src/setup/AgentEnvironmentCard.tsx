@@ -16,7 +16,7 @@ import { Check, Copy, Hammer, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { cliToolStatusKey } from "../cliAgent";
+import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 
 import {
   buildAgentEnvironment,
@@ -245,7 +245,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
   const command = tool.login_command;
   return (
     <Stack gap={4}>
-      <Badge color={tool.authentication_failed ? "danger" : "gray"} variant="light" size="sm">
+      <Badge color={cliToolStatusColor(tool)} variant="light" size="sm">
         {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
       </Badge>
       <Text size="xs" c="dimmed">
