@@ -75,55 +75,46 @@ def test_sending_past_what_the_hub_holds_is_accepted(fake_keyring, workspace_id:
     assert secret_host.read_secret(workspace_id, "A_TOKEN") == ("settled", 2)
 
 
-def test_the_generation_is_recorded_before_the_value(fake_keyring, workspace_id: str):
-    """An interruption between the hub's two writes must not leave it serving a
-    new value under an older generation's name.
-
-    That state is invisible: every device would fetch the value as the one they
-    agreed on. Recording the generation first turns the same interruption into
-    the state the design already handles -- a generation no device fetches, and
-    which the next send moves past."""
-    written: list[str] = []
-
-    class _Recording:
-        def validate_password(self, username: str, password: str) -> None:
-            del username, password
-
-        def get_password(self, service: str, username: str) -> str | None:
-            del service, username
-            return None
-
-        def set_password(self, service: str, username: str, password: str) -> None:
-            del service, password
-            written.append(username)
-
-        def delete_password(self, service: str, username: str) -> None:
-            del service, username
+def test_failed_keychain_write_does_not_advance_generation(
+    fake_keyring,
+    workspace_id: str,
+    monkeypatch,
+):
+    from keyring.errors import KeyringError
+    from guildbotics.utils.keychain import SecretStoreError
 
     _store(workspace_id, "A_TOKEN", 0, 1, "first")
-    generations = (
-        host.workspace_repository_path(workspace_id).parent
-        / secret_host.GENERATIONS_FILENAME
-    )
-    recorded_before_write = []
 
-    class _Watching(_Recording):
-        def set_password(self, service: str, username: str, password: str) -> None:
-            recorded_before_write.append(
-                json.loads(generations.read_text(encoding="utf-8"))["keys"]["A_TOKEN"]
-            )
-            super().set_password(service, username, password)
+    def refuse(*args):
+        raise KeyringError("private-value-must-not-escape")
 
-    secret_host.store_secret(
-        workspace_id,
-        "A_TOKEN",
-        base_generation=1,
-        candidate_generation=2,
-        value="second",
-        keychain=_Watching(),
-    )
+    monkeypatch.setattr(fake_keyring, "set_password", refuse)
+    with pytest.raises(SecretStoreError) as failure:
+        _store(workspace_id, "A_TOKEN", 1, 2, "second")
+    assert "private-value" not in str(failure.value)
+    assert secret_host.generations(workspace_id) == {"A_TOKEN": 1}
+    assert secret_host.read_secret(workspace_id, "A_TOKEN") == ("first", 1)
 
-    assert recorded_before_write == [2]
+
+def test_interrupted_publication_never_serves_new_value_as_old_generation(
+    fake_keyring,
+    workspace_id: str,
+    monkeypatch,
+):
+    _store(workspace_id, "A_TOKEN", 0, 1, "first")
+    with monkeypatch.context() as patch:
+
+        def refuse(*args):
+            raise OSError("disk full")
+
+        patch.setattr(secret_host, "_write_generations", refuse)
+        with pytest.raises(OSError):
+            _store(workspace_id, "A_TOKEN", 1, 2, "second")
+    assert secret_host.generations(workspace_id) == {"A_TOKEN": 1}
+    with pytest.raises(secret_host.HubSecretMissingError):
+        secret_host.read_secret(workspace_id, "A_TOKEN")
+    assert _store(workspace_id, "A_TOKEN", 1, 2, "retry") == 2
+    assert secret_host.read_secret(workspace_id, "A_TOKEN") == ("retry", 2)
 
 
 def test_a_hub_behind_the_workspace_still_accepts_a_value(
@@ -200,7 +191,7 @@ def test_the_generation_and_the_value_are_read_under_one_lock(
             del service, username
             entered.set()
             assert release.wait(timeout=10)
-            return "ghp-first"
+            return json.dumps({"generation": 1, "value": "ghp-first"})
 
     answer: dict[str, tuple[str, int]] = {}
 

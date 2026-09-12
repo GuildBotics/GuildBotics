@@ -135,3 +135,26 @@ def test_input_that_is_not_framed_is_refused(hosted: CliRunner) -> None:
 
     assert result.exit_code != 0
     assert "ghp-loose" not in result.output
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_keychain_failures_return_status_without_traceback(
+    hosted, fake_keyring, monkeypatch, locked
+):
+    from keyring.errors import KeyringError, KeyringLocked
+    from guildbotics.hub import secret_host
+
+    _receive(hosted, [_offer("A_TOKEN", "first", 0, 1)])
+
+    def refuse(*args):
+        error = KeyringLocked if locked else KeyringError
+        raise error("sensitive backend text")
+
+    monkeypatch.setattr(fake_keyring, "get_password", refuse)
+    monkeypatch.setattr(fake_keyring, "set_password", refuse)
+    expected = "locked" if locked else "store_unavailable"
+    assert _send(hosted, "A_TOKEN")[0].header == {"error": expected}
+    assert _receive(hosted, [_offer("A_TOKEN", "second", 1, 2)])["results"] == [
+        {"key": "A_TOKEN", "status": expected}
+    ]
+    assert secret_host.generations(WORKSPACE_ID) == {"A_TOKEN": 1}

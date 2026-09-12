@@ -57,6 +57,7 @@ ja:
     exists: "コマンド '%{command}' は既に存在します。"
     duplicate: "コマンド '%{command}' が複数回提案されています。"
   command_file_shadowed: "コマンド '%{command}' は、より優先度の高いファイルに隠されてしまいます。"
+  hub_desktop_required: "macOS の Hub マシンに GUI ログインし、GuildBotics Desktop を起動してから転送を再実行してください。"
   secret_send_failed: "認証情報を Hub マシンへ送信できませんでした。"
   secret_fetch_failed: "認証情報を Hub マシンから取得できませんでした。"
   secret_publish_failed: "Hub マシンは値を受け取りましたが、このワークスペースへの記録に失敗したため、該当の key は「確認が必要です」と表示されます。下記の原因を解消してから、もう一度送信してください。次の送信は Hub が持つ世代を引き継いで差分を解消します。"

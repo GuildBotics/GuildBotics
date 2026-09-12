@@ -29,6 +29,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.hub import HubUnreachableError, host
 from guildbotics.hub.secret_host import HubSecretError
+from guildbotics.hub.secret_service import HubDesktopRequiredError
 from guildbotics.secrets import (
     HUB_BEHIND,
     UNCONFIRMED,
@@ -234,7 +235,11 @@ def _secrets(
         hub_secret_store=(
             None
             if index is None
-            else SecretStoreState(available=index.available, locked=index.locked)
+            else SecretStoreState(
+                available=index.available,
+                locked=index.locked,
+                error_code=index.error_code,
+            )
         ),
         keys=keys,
         # The two bulk actions name their keys here rather than being worked
@@ -265,7 +270,9 @@ def _reporting(message_key: str) -> Iterator[None]:
     except _HUB_FAILURES as exc:
         raise AppApiError(
             _hub_error_code(exc),
-            message_key,
+            "hub_desktop_required"
+            if isinstance(exc, HubDesktopRequiredError)
+            else message_key,
             context={"detail": str(exc)},
             status_code=409,
         ) from exc
@@ -273,6 +280,8 @@ def _reporting(message_key: str) -> Iterator[None]:
 
 def _hub_error_code(exc: Exception) -> str:
     """Name why the hub did not answer, without quoting anything it sent."""
+    if isinstance(exc, HubDesktopRequiredError):
+        return "hub_desktop_required"
     if isinstance(exc, OpenSshNotFoundError):
         return "openssh_missing"
     return "hub_unreachable"

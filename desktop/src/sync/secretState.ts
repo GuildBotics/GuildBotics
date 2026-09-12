@@ -58,10 +58,20 @@ export function secretNeedsAttention(status: SecretStatus): boolean {
  */
 export function secretAlert(
   secrets: WorkspaceSecrets | undefined,
-): "local_locked" | "hub_locked" | "hub_unreachable" | "attention" | null {
+):
+  | "local_locked"
+  | "hub_locked"
+  | "hub_unreachable"
+  | "hub_desktop_required"
+  | "hub_store_unavailable"
+  | "attention"
+  | null {
   if (!secrets?.enabled) return null;
   if (secrets.secret_store.locked) return "local_locked";
   if (secrets.hub_secret_store?.locked) return "hub_locked";
+  if (secrets.hub_secret_store?.error_code === "desktop_required") return "hub_desktop_required";
+  if (secrets.hub_secret_store && !secrets.hub_secret_store.available)
+    return "hub_store_unavailable";
   if (!secrets.hub_reachable) return "hub_unreachable";
   return secrets.attention_count > 0 ? "attention" : null;
 }

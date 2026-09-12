@@ -120,7 +120,7 @@ beforeEach(() => {
     enabled: false,
     hub_reachable: false,
     hub_error_code: "",
-    secret_store: { available: true, locked: false },
+    secret_store: { available: true, locked: false, error_code: "" },
     hub_secret_store: null,
     keys: [],
     sendable_keys: [],

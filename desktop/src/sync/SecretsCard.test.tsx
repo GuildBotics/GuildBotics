@@ -47,8 +47,8 @@ function secrets(overrides: Partial<WorkspaceSecrets> = {}): WorkspaceSecrets {
     enabled: true,
     hub_reachable: true,
     hub_error_code: "",
-    secret_store: { available: true, locked: false },
-    hub_secret_store: { available: true, locked: false },
+    secret_store: { available: true, locked: false, error_code: "" },
+    hub_secret_store: { available: true, locked: false, error_code: "" },
     keys: [state()],
     sendable_keys: [],
     fetchable_keys: [],
@@ -360,12 +360,24 @@ describe("SecretsCard", () => {
 
   it("says which machine's secret store is locked", async () => {
     vi.mocked(getWorkspaceSecrets).mockResolvedValue(
-      secrets({ hub_secret_store: { available: false, locked: true } }),
+      secrets({ hub_secret_store: { available: false, locked: true, error_code: "" } }),
     );
 
     renderCard();
 
     expect(await screen.findByText(t("sync.secrets.alert.hub_locked.title"))).toBeInTheDocument();
+  });
+
+  it.each([
+    ["desktop_required", "hub_desktop_required"],
+    ["", "hub_store_unavailable"],
+  ])("explains a Hub failure with code %s", async (error_code, alert) => {
+    vi.mocked(getWorkspaceSecrets).mockResolvedValue(
+      secrets({ hub_secret_store: { available: false, locked: false, error_code } }),
+    );
+    renderCard();
+    expect(await screen.findByText(t(`sync.secrets.alert.${alert}.title`))).toBeInTheDocument();
+    expect(screen.getByText(t(`sync.secrets.alert.${alert}.body`))).toBeInTheDocument();
   });
 
   it("still lists what this machine knows when the hub did not answer", async () => {

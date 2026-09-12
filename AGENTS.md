@@ -156,6 +156,8 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - fast-forward only（`receive.denyNonFastForwards` / `denyDeletes`）の適用。並行更新の自動収束はこの拒否が支えている
 - device から Hub への到達（`connection.py`）。接続先の解析、Git remote URL、host key の確認と登録、device 公開鍵、Hub 上の `guildbotics hub` コマンドの SSH 実行
 - Hub 自身の操作は Hub マシンの `guildbotics hub` コマンドが行う（sshd から実行される前提。Windows の PATH 設定は README で案内する）
+- macOS の Hub Secret 操作（同一マシンの client と状態確認を含む）は Desktop Local API へ委譲する。discovery と token は共有するが、Desktop の選択中 workspace とは照合せず、Hub に登録済みの Workspace ID を検証する。Desktop 不在時は `desktop_required` を返し、直接キーチェーンへフォールバックしない。Windows / Linux は同じ protocol handler を直接実行する
+- Hub のキーチェーンは値と世代を一緒に保存し、保存後に世代一覧を更新する。取得は両者の世代が一致するときだけ返す。これにより保存失敗で一覧だけが進まず、一覧の更新中断でも新しい値を古い世代として返さない。旧形式を並行して読み取らない
 - **Secret の世代とキーチェーンの値は、書き込みだけでなく読み出しも同じ `secrets.lock` の中で行う（`secret_host.py`）。** 読みを lock の外に置くと、並行する send との interleaving で「新しい値が古い世代の名で返る」——1 generation = 1 immutable value という世代の前提そのものが壊れる
 - **世代の検証は Hub boundary（`store_secret`）の1箇所。** base は 0 以上、candidate は base+1（よって 1 以上）。wire・local client・Hub CLI のどこから来ても通り道はここだけなので、各入口で再検証しない。読み側（`_read_generations` と client の受信）は正の整数以外の entry を「持っていない」として落とす
 
@@ -186,7 +188,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 禁止:
 
 - 利用者の操作なしに値を移動すること（自動配布は非目標）
-- 値を relay file / Git object / temporary file / log / exception message / API response へ載せること
+- 値を relay file / Git object / temporary file / log / exception message / 画面向け API response へ載せること。唯一の API 転送例外は macOS Hub の `POST /hub/secrets/{workspace_id}/{operation}`。loopback 接続と session token を必須とし、framed bytes をそのまま運ぶ。値は log / diagnostics / validation error に出さない
 - `hub` から import されること（依存方向は上記のハードルール）
 
 #### App API (`guildbotics/app_api/*`)

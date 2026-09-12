@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from guildbotics.hub.secret_service import DESKTOP_REQUIRED, HubDesktopRequiredError
 from guildbotics.secrets.hub_client import (
     HUB_CONFLICT,
     HUB_MISSING,
@@ -248,6 +249,12 @@ class SecretTransfer:
         """Return what the hub holds, so a state can name both sides."""
         return self._client.index()
 
+    def _transfer_index(self) -> HubSecretIndex:
+        index = self.hub_index()
+        if index.error_code == DESKTOP_REQUIRED:
+            raise HubDesktopRequiredError(DESKTOP_REQUIRED)
+        return index
+
     def send(self, keys: list[str]) -> list[SecretTransferOutcome]:
         """Hand the hub this device's value for each key.
 
@@ -257,7 +264,7 @@ class SecretTransfer:
         reachable from the outside -- see :meth:`_offer`.
         """
         known = self._known()
-        held = self.hub_index().generations if keys else {}
+        held = self._transfer_index().generations if keys else {}
         offers: list[SecretOffer] = []
         outcomes: list[SecretTransferOutcome] = []
         for key in keys:
@@ -316,7 +323,9 @@ class SecretTransfer:
         however the fetch was asked for. The check runs before the hub is
         asked, so a value that would be refused never travels at all.
         """
-        return self._fetch(list(keys), self.hub_index() if keys else HubSecretIndex())
+        return self._fetch(
+            list(keys), self._transfer_index() if keys else HubSecretIndex()
+        )
 
     def fetch_missing(self) -> list[SecretTransferOutcome]:
         """Fetch every key this device has no value for or an older value for.
@@ -326,7 +335,7 @@ class SecretTransfer:
         value straight into the OS secret store, so nothing is retyped -- and it
         asks for nothing this machine already holds.
         """
-        hub = self.hub_index()
+        hub = self._transfer_index()
         return self._fetch(bulk_fetch_keys(self._store.key_states(), hub), hub)
 
     def _fetch(
@@ -377,7 +386,9 @@ class SecretTransfer:
 
     def send_pending(self) -> list[SecretTransferOutcome]:
         """Send every value the hub would gain from this device."""
-        return self.send(bulk_send_keys(self._store.key_states(), self.hub_index()))
+        return self.send(
+            bulk_send_keys(self._store.key_states(), self._transfer_index())
+        )
 
     def _offer(
         self, state: SecretKeyState, hub_generation: int | None

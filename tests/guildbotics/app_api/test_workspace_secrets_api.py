@@ -27,6 +27,34 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 TOKEN = "ghp-000111222333"
 
 
+def test_mac_hub_requires_desktop_with_localized_guidance(connected, monkeypatch):
+    from types import SimpleNamespace
+    from guildbotics.hub import secret_transport
+    from guildbotics.utils.i18n_tool import t
+
+    _store().set("A_TOKEN", TOKEN)
+    monkeypatch.setattr(secret_transport, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(secret_transport, "read_endpoint", lambda: None)
+    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    assert payload["hub_reachable"] is True
+    assert payload["hub_secret_store"] == {
+        "available": False,
+        "locked": False,
+        "error_code": "desktop_required",
+    }
+    for operation in ("send", "fetch"):
+        response = connected.post(
+            f"/workspace/secrets/{operation}",
+            headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+            json={"keys": []},
+        )
+        assert response.status_code == HTTP_CONFLICT
+        assert response.json()["code"] == "hub_desktop_required"
+        assert response.json()["message"] == t(
+            "app_api.errors.hub_desktop_required", locale="ja"
+        )
+
+
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
@@ -355,5 +383,13 @@ def test_the_response_names_which_machines_secret_store_answered(
     payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
 
     assert payload["hub_reachable"] is True
-    assert payload["secret_store"] == {"available": True, "locked": False}
-    assert payload["hub_secret_store"] == {"available": True, "locked": False}
+    assert payload["secret_store"] == {
+        "available": True,
+        "locked": False,
+        "error_code": "",
+    }
+    assert payload["hub_secret_store"] == {
+        "available": True,
+        "locked": False,
+        "error_code": "",
+    }

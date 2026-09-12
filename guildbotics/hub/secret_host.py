@@ -17,6 +17,8 @@ first.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from guildbotics.hub.host import HubError, HubNotHostedError, read_hub
@@ -29,7 +31,7 @@ from guildbotics.utils.keychain import (
     SecretStoreError,
     system_keychain,
 )
-from guildbotics.utils.secret_store import require_secret_key
+from guildbotics.utils.secret_store import is_locked_error, require_secret_key
 
 #: The keychain service the hub stores one workspace's values under. It is
 #: distinct from a device's own workspace service: the same machine can host a
@@ -165,15 +167,21 @@ def store_secret(
                 f"This hub holds generation {current} of {key}, not "
                 f"{base_generation}. Another device shared it in between."
             )
-        # The generation is recorded before the value, so an interruption
-        # between the two leaves this hub claiming a generation it cannot serve
-        # rather than serving a value under an older generation's name. The
-        # first is the state the whole design already handles -- no device
-        # fetches it, and the next send moves past it. The second would be
-        # fetched by every device as though it were the value they agreed on.
+        # Store the generation together with the value before publishing it.
+        # A failed keychain write cannot advance the index. If publishing is
+        # interrupted, read_secret refuses the mismatched pair rather than
+        # handing out a new value under the old generation's name.
+        with _keychain_errors():
+            _keychain(keychain).set_password(
+                _service(workspace_id),
+                key,
+                json.dumps(
+                    {"generation": candidate_generation, "value": value},
+                    ensure_ascii=False,
+                ),
+            )
         held[key] = candidate_generation
         _write_generations(directory, held)
-        _keychain(keychain).set_password(_service(workspace_id), key, value)
     return candidate_generation
 
 
@@ -198,13 +206,23 @@ def read_secret(
         held = _read_generations(directory).get(key)
         if held is None:
             raise HubSecretMissingError(f"This hub holds no value for {key}.")
-        value = _keychain(keychain).get_password(_service(workspace_id), key)
-    if value is None:
+        with _keychain_errors():
+            encoded = _keychain(keychain).get_password(_service(workspace_id), key)
+    try:
+        record = json.loads(encoded) if encoded is not None else None
+    except ValueError:
+        record = None
+    if (
+        not isinstance(record, dict)
+        or isinstance(record.get("generation"), bool)
+        or record.get("generation") != held
+        or not isinstance(record.get("value"), str)
+    ):
         raise HubSecretMissingError(
             f"This hub records generation {held} of {key} but its keychain no "
             "longer holds the value."
         )
-    return value, held
+    return record["value"], held
 
 
 def _service(workspace_id: str) -> str:
@@ -214,10 +232,17 @@ def _service(workspace_id: str) -> str:
 def _keychain(keychain: Keychain | None) -> Keychain:
     if keychain is not None:
         return keychain
+    return system_keychain()
+
+
+@contextmanager
+def _keychain_errors() -> Iterator[None]:
+    """Convert backend failures once, without copying their potentially secret text."""
     try:
-        return system_keychain()
-    except Exception as exc:  # pragma: no cover - depends on the host install
-        raise SecretStoreError(str(exc)) from exc
+        yield
+    except Exception as exc:
+        reason = "locked" if is_locked_error(exc) else "unavailable"
+        raise SecretStoreError(f"The Hub keychain is {reason}.") from None
 
 
 def _generations_path(directory: Path) -> Path:

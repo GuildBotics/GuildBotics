@@ -264,6 +264,7 @@ class SecretStoreState(BaseModel):
 
     available: bool = False
     locked: bool = False
+    error_code: str = ""
 
 
 class WorkspaceSecretState(BaseModel):
