@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -26,11 +26,12 @@ test("first-run setup happy path writes project.yml and enters the service view"
 
   // The workspace is pre-filled from the stack's selected workspace root
   // (GUILDBOTICS_WORKSPACE_ROOT), never from the backend cwd.
-  // Allow for macOS /private symlink normalization.
+  // Compare filesystem identities rather than spellings: macOS may add
+  // /private, while Windows may expand an 8.3 temp path before returning it.
   const workspaceField = page.getByLabel("Workspace");
   await expect
-    .poll(async () => (await workspaceField.inputValue()).replace(/^\/private/, ""))
-    .toBe(ctx.workspaceDir.replace(/^\/private/, ""));
+    .poll(async () => realpathSync.native(await workspaceField.inputValue()))
+    .toBe(realpathSync.native(ctx.workspaceDir));
 
   // Project section: start without GitHub so the first member can be completed
   // before GitHub-specific patrol defaults are enabled.

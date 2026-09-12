@@ -79,7 +79,11 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
     /[/\\]Documents[/\\]GuildBotics[/\\]tmp[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
   );
   const pastedImage = await message.inputValue();
-  expect(readFileSync(pastedImage, "utf-8")).toBe("e2e-image");
+  const storedPath = pastedImage.match(/[/\\](session-[^/\\]+)[/\\]([a-f0-9]+\.png)$/);
+  expect(storedPath).not.toBeNull();
+  const [, session, name] = storedPath as RegExpMatchArray;
+  const storedImage = join(ctx.homeDir, "Documents", "GuildBotics", "tmp", session, name);
+  expect(readFileSync(storedImage, "utf-8")).toBe("e2e-image");
 
   // Save-and-run against the REAL backend.
   const run = page.getByRole("button", { name: "Save and run" });
