@@ -127,12 +127,14 @@ bindします）。
 場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、この端末で
 起動できないメンバーはメンバー一覧に理由付きで示され、設定を直すまで画面上部に状態異常が出ます。
 
-隔離環境の中では各プロバイダ自身のsandboxも有効のままで、契約とは無関係な固定値にします。
+隔離環境の中では各プロバイダ自身のsandboxも有効のままですが、環境より狭めることはしません。
 microVMの中にあるものはすべて許可済みなので、内側のsandboxが足すのは、エージェントのコマンドから
 プロバイダ自身の認証情報を隠すことと、プロバイダ設定の変更をターンをまたいで残さないことです。
-Codexは、`~/.codex`を除く環境全体を読み、作業ディレクトリ（`.git`を含む）と一時ディレクトリに
-書き、ネットワークを有効にするpermission profileで動きます。profileで`/`を書き込み可能に
-すると、Codex 0.153では`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
+Codexは環境のmountをそのまま写したpermission profileで動きます: guest全体を読め、環境がbindした
+各ディレクトリはmountされたとおりに書き込み可または読み取り専用（`read_write`のgrantはCodexの
+コマンドからも読み書きできる）、作業ディレクトリ（`.git`を含む）と一時ディレクトリは書き込み可、
+ネットワークは有効、`~/.codex`だけを隠します。profileで`/`を書き込み可能にすると、Codex 0.153では
+`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
 `bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
 rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と

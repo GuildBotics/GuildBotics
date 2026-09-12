@@ -6,13 +6,17 @@ import asyncio
 import json
 from contextlib import suppress
 from logging import getLogger
+from pathlib import PurePosixPath
 from typing import Any
 
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
 )
-from guildbotics.intelligences.agent_environment.spec import guest_home, guest_path
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    guest_path,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     start_turn_environment,
@@ -155,7 +159,7 @@ class CodexAppServerAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_started(context, emit)
+        environment = await self._ensure_started(context, emit)
         await self._check_account()
         await self._check_rate_limits()
         policy_event = AgentEvent(
@@ -166,7 +170,7 @@ class CodexAppServerAdapter:
                 "requested_policy": context.contract.requested_policy(
                     context.cwd, workspace_root=context.workspace_data_root
                 ),
-                "adapter_settings": _sandbox_overrides(guest_home()),
+                "adapter_settings": _sandbox_overrides(environment.spec),
             },
         )
         emitted = emit(policy_event)
@@ -341,21 +345,22 @@ class CodexAppServerAdapter:
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
-    ) -> None:
+    ) -> AgentEnvironment:
         if self._transport.process is not None:
             await self._close_provider()
-        self._environment = await start_turn_environment(
+        environment = await start_turn_environment(
             context,
             "codex",
             host_ports=(self._member_broker.endpoint.port,),
             env=self._member_broker.provider_environment(),
         )
+        self._environment = environment
         try:
-            process = await self._environment.run(
+            process = await environment.run(
                 self._executable,
                 "app-server",
                 *_codex_mcp_arguments(self._member_broker),
-                *_config_arguments(_sandbox_overrides(self._environment.spec.home)),
+                *_config_arguments(_sandbox_overrides(environment.spec)),
                 limit=STREAM_READ_LIMIT,
             )
         except AgentEnvironmentError as exc:
@@ -387,6 +392,7 @@ class CodexAppServerAdapter:
         result = emit(event)
         if asyncio.iscoroutine(result):
             await result
+        return environment
 
     async def _resolve_thread(
         self, context: AgentExecutionContext, conversation: ConversationRecord
@@ -618,19 +624,26 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     )
 
 
-def _sandbox_overrides(home: str) -> dict[str, Any]:
-    """Codex's own sandbox, as narrow as the environment lets it be.
+def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+    """Codex's own sandbox: the environment, as seen from inside it.
 
-    The environment is the boundary; what Codex confines inside it is fixed
-    and owes nothing to the contract, because everything the microVM holds
-    is already allowed. The agent's commands may read all of it except
-    Codex's own state under ``~/.codex`` -- its credentials above all --
-    write the working directory (its ``.git`` included, since the agent
-    stages its own changes) and the temporary directories, and reach the
-    network; which hosts is the environment's gateway's to decide. Codex's
-    ``workspace-write`` default would instead close the network and ask
-    for approvals, which no headless turn can give, and a profile that
-    names ``/`` as writable loses ``/dev/null`` (measured on 0.153.4).
+    The environment is the boundary and everything it holds is already
+    allowed, so the profile mirrors it rather than narrowing it: the whole
+    guest is readable, and every directory the environment bound is
+    writable or read-only exactly as it was mounted -- what the user
+    granted read/write is read/write for Codex's commands too. The working
+    directory (its ``.git`` included, since the agent stages its own
+    changes) and the temporary directories are writable as Codex spells
+    them, and the network is on; which hosts is the environment's
+    gateway's to decide. Naming ``/`` writable instead would lose
+    ``/dev/null`` (measured on 0.153.4), and Codex's ``workspace-write``
+    default would close the network and ask for approvals, which no
+    headless turn can give.
+
+    What the inner sandbox adds is one thing: Codex's own state under
+    ``~/.codex`` -- its credentials above all -- is hidden from the agent's
+    commands. The environment binds the entries Codex itself needs there;
+    the profile never names them, so the deny stands.
 
     Codex enforces the profile -- and reads the working directory's
     instructions through it -- with the bubblewrap it bundles. A bubblewrap
@@ -638,15 +651,22 @@ def _sandbox_overrides(home: str) -> dict[str, Any]:
     Codex's helper (Debian's 0.8.0 on 0.153.4: every session fails to
     start), so the image ships none.
     """
+    state = f"{spec.home}/.codex"
+    mounts = {
+        mount.guest: "read" if mount.readonly else "write"
+        for mount in spec.mounts
+        if not PurePosixPath(mount.guest).is_relative_to(state)
+    }
     profile = f"permissions.{_PERMISSION_PROFILE}"
     return {
         "default_permissions": _PERMISSION_PROFILE,
         f"{profile}.filesystem": {
-            ":minimal": "read",
+            "/": "read",
+            **mounts,
             ":workspace_roots": {".": "write", ".git": "write"},
             ":tmpdir": "write",
             ":slash_tmp": "write",
-            f"{home}/.codex": "deny",
+            state: "deny",
         },
         f"{profile}.network.enabled": True,
     }

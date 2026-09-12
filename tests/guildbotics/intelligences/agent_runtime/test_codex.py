@@ -17,10 +17,16 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_network_policy,
 )
 from guildbotics.intelligences.agent_runtime import codex as codex_module
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    EnvironmentMount,
+    EnvironmentNetwork,
+)
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
     _config_arguments,
+    _sandbox_overrides,
     _decode_notification,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
@@ -1116,3 +1122,42 @@ async def test_codex_is_told_the_working_directory_as_the_guest_spells_it(
     )
     assert started["cwd"] == f"/guest{tmp_path.as_posix()}"
     assert _turn_start(process)["cwd"] == f"/guest{tmp_path.as_posix()}"
+
+
+def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() -> None:
+    """Every directory the environment bound is readable or writable for
+    Codex's commands exactly as it was mounted; the whole guest is readable;
+    only Codex's own state is hidden, and its bound entries are never named."""
+    home = "/home/u"
+    spec = AgentEnvironmentSpec(
+        cwd="/work/repo",
+        home=home,
+        mounts=(
+            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
+            EnvironmentMount(
+                "/home/u/Documents/GuildBotics", Path("/x"), readonly=False
+            ),
+            EnvironmentMount("/home/u/notes", Path("/y"), readonly=True),
+            EnvironmentMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/home/u/.codex/auth.json", Path("/z"), readonly=False),
+            EnvironmentMount("/home/u/.codex/sessions", Path("/w"), readonly=False),
+        ),
+        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        env={},
+    )
+
+    overrides = _sandbox_overrides(spec)
+
+    assert overrides["default_permissions"] == "guildbotics"
+    assert overrides["permissions.guildbotics.network.enabled"] is True
+    assert overrides["permissions.guildbotics.filesystem"] == {
+        "/": "read",
+        "/work/repo": "write",
+        "/home/u/Documents/GuildBotics": "write",
+        "/home/u/notes": "read",
+        "/work/repo/private": "read",
+        ":workspace_roots": {".": "write", ".git": "write"},
+        ":tmpdir": "write",
+        ":slash_tmp": "write",
+        "/home/u/.codex": "deny",
+    }

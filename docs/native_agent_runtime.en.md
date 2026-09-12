@@ -156,14 +156,17 @@ turn is started: a member whose slot cannot start on this device is marked in
 the member list with the reason, and the status band at the top says so until
 the setting is changed.
 
-Inside the environment each provider's own sandbox stays on, at a fixed
-setting that owes nothing to the contract: everything the microVM holds is
-already allowed, so what the inner sandbox adds is hiding the provider's own
+Inside the environment each provider's own sandbox stays on, but never
+narrower than the environment: everything the microVM holds is already
+allowed, so what the inner sandbox adds is hiding the provider's own
 credentials from the agent's commands and keeping provider settings from
-changing between turns. Codex runs under a permission profile that reads the
-whole environment except `~/.codex`, writes the working directory (its `.git`
-included) and the temporary directories, and has the network on; the profile
-never names `/` as writable, because Codex 0.153 then loses `/dev/null`.
+changing between turns. Codex runs under a permission profile that mirrors
+the environment's mounts -- the whole guest readable, every directory the
+environment bound writable or read-only exactly as it was mounted (so a
+read/write grant is read/write for Codex's commands too), the working
+directory (its `.git` included) and the temporary directories writable, the
+network on -- and hides `~/.codex`; the profile never names `/` as writable,
+because Codex 0.153 then loses `/dev/null`.
 Codex always uses the non-interactive `never` approval policy, and any
 unexpected approval request is declined. Claude Code runs with
 `bypassPermissions` and `sandbox.enabled=false` (and `IS_SANDBOX=1`, since the

@@ -51,7 +51,7 @@ class FakeEnvironment:
         context = self.kwargs.get("context")
         home = "/home/member"
         cwd = str(context.cwd) if context is not None else home
-        return type("Spec", (), {"cwd": cwd, "home": home})()
+        return type("Spec", (), {"cwd": cwd, "home": home, "mounts": ()})()
 
     async def run(self, command: str, *args: str, limit: int) -> Any:
         self.commands.append((command, *args))
