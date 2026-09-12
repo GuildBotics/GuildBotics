@@ -177,7 +177,7 @@ describe("request headers and body", () => {
 
   it("POSTs the paths about to enter a command input, and a copy request", async () => {
     const check = captureFetch(
-      jsonResponse({ paths: [{ path: "/a", kind: "file", reachable: false }] }),
+      jsonResponse({ paths: [{ path: "/a", kind: "file", reachable: false, guest_path: "/a" }] }),
     );
     await checkCommandInputPaths({ paths: ["/a"], cwd: "/work" });
 
@@ -185,7 +185,12 @@ describe("request headers and body", () => {
     expect(check.calls[0].init.method).toBe("POST");
     expect(check.calls[0].init.body).toBe(JSON.stringify({ paths: ["/a"], cwd: "/work" }));
 
-    const copy = captureFetch(jsonResponse({ path: "/home/Documents/GuildBotics/tmp/x-a" }));
+    const copy = captureFetch(
+      jsonResponse({
+        path: "/home/Documents/GuildBotics/tmp/x-a",
+        guest_path: "/home/Documents/GuildBotics/tmp/x-a",
+      }),
+    );
     await copyCommandInputFile("/a");
 
     expect(copy.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files/copy");

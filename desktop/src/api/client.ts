@@ -284,6 +284,8 @@ export type CommandRunResponse = {
 
 export type CommandInputFileResponse = {
   path: string;
+  /** The path as the agent inside the environment names it: what the input field carries. */
+  guest_path: string;
 };
 
 /** The grant that would open an unreachable path, spelled for the grants screen. */
@@ -297,6 +299,8 @@ export type CommandInputPathStatus = {
   path: string;
   kind: "file" | "directory" | "missing";
   reachable: boolean;
+  /** The path as the agent inside the environment names it: what the input field carries. */
+  guest_path: string;
   grant: CommandInputGrantSuggestion | null;
 };
 

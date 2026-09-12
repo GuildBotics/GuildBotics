@@ -105,7 +105,9 @@ export function CommandInput({
         return;
       }
       const held = described.filter((entry) => !entry.reachable && entry.kind !== "missing");
-      appendPaths(described.filter((entry) => !held.includes(entry)).map((entry) => entry.path));
+      appendPaths(
+        described.filter((entry) => !held.includes(entry)).map((entry) => entry.guest_path),
+      );
       setUnreachable((current) => [...current, ...held]);
     },
     [appendPaths, cwd],
@@ -123,7 +125,7 @@ export function CommandInput({
         return;
       }
       if (choice === "grant") {
-        appendPaths([entry.path]);
+        appendPaths([entry.guest_path]);
         if (entry.grant) {
           void openMainWindow(grantSettingsRoute(entry.grant));
         }
@@ -132,7 +134,7 @@ export function CommandInput({
       setUploadError(null);
       setUploadsInFlight((count) => count + 1);
       try {
-        appendPaths([(await copyCommandInputFile(entry.path)).path]);
+        appendPaths([(await copyCommandInputFile(entry.path)).guest_path]);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -185,7 +187,7 @@ export function CommandInput({
       setUploadsInFlight((count) => count + 1);
       try {
         const response = await uploadCommandInputFile(file);
-        appendPaths([response.path]);
+        appendPaths([response.guest_path]);
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : String(error));
       } finally {

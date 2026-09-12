@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from yaml import safe_load
 
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.app_api.api import TAURI_ORIGINS, TOKEN_HEADER, create_app
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
@@ -762,6 +763,7 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
         assert response.status_code == HTTP_OK
         saved = Path(response.json()["path"])
         assert saved.is_relative_to(tmp_path / "tmp")
+        assert response.json()["guest_path"] == guest_path(saved)
         assert saved.read_bytes() == b"image-data"
 
     assert not saved.exists()
@@ -788,6 +790,7 @@ def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
         assert response.status_code == HTTP_OK
         copied = Path(response.json()["path"])
         assert copied.is_relative_to(tmp_path / "tmp")
+        assert response.json()["guest_path"] == guest_path(copied)
         assert copied.name.endswith("-report.md")
         assert copied.read_text(encoding="utf-8") == "hello"
 
@@ -825,17 +828,25 @@ def test_command_input_paths_report_what_a_turn_would_reach(
     device = {"scope": "device", "path": str(tmp_path.resolve())}
     assert response.json() == {
         "paths": [
-            {"path": str(reachable), "kind": "file", "reachable": True, "grant": None},
+            {
+                "path": str(reachable),
+                "kind": "file",
+                "reachable": True,
+                "guest_path": guest_path(reachable),
+                "grant": None,
+            },
             {
                 "path": str(unreachable),
                 "kind": "file",
                 "reachable": False,
+                "guest_path": guest_path(unreachable),
                 "grant": device,
             },
             {
                 "path": str(tmp_path),
                 "kind": "directory",
                 "reachable": False,
+                "guest_path": guest_path(tmp_path),
                 "grant": device,
             },
         ]

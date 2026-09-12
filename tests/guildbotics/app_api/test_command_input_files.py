@@ -221,6 +221,10 @@ def test_describe_command_input_paths_answers_as_the_turn_would(
     at_home = home / "notes.md"
     at_home.write_text("x", encoding="utf-8")
 
+    # The field carries the environment's own spelling of a path.
+    monkeypatch.setattr(
+        command_input_files, "guest_path", lambda path: f"/guest{path.as_posix()}"
+    )
     described = describe_command_input_paths(
         [
             pasted,
@@ -237,6 +241,7 @@ def test_describe_command_input_paths_answers_as_the_turn_would(
     # An unreachable path names the grant that would open it: the file's
     # directory (or the directory itself), as a document grant under the
     # home and a device path elsewhere; the home itself cannot be granted.
+    assert all(d.guest_path == f"/guest{d.path.as_posix()}" for d in described)
     assert [(d.path, d.kind, d.reachable, d.grant) for d in described] == [
         (pasted, "file", True, None),
         (shot, "file", False, GrantSuggestion("document", "Desktop")),

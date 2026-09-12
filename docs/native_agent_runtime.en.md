@@ -97,7 +97,9 @@ in the same words in the alert band at the top of the screen.
   file the environment could not reach) is placed in its `tmp/` and removed
   when the app session ends, a Desktop run that names no working directory
   runs there, and what an agent makes for the user goes under it unless the
-  request names a destination.
+  request names a destination. A path the Desktop puts in the input field is
+  spelled as the environment names it (`/c/...` on Windows, never `C:\...`), so
+  the agent opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that close a corner of what is open, in
   `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential

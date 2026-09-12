@@ -89,7 +89,13 @@ async function drop(input: HTMLElement, paths: string[]) {
 function described(
   entries: [string, CommandInputPathStatus["kind"], boolean, CommandInputPathStatus["grant"]?][],
 ): CommandInputPathStatus[] {
-  return entries.map(([path, kind, reachable, grant = null]) => ({ path, kind, reachable, grant }));
+  return entries.map(([path, kind, reachable, grant = null]) => ({
+    path,
+    kind,
+    reachable,
+    guest_path: path,
+    grant,
+  }));
 }
 
 describe("CommandInput", () => {
@@ -137,7 +143,10 @@ describe("CommandInput", () => {
         ["/Users/me/gone.txt", "missing", false],
       ]),
     });
-    copyMock.mockResolvedValue({ path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png" });
+    copyMock.mockResolvedValue({
+      path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
+      guest_path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
+    });
     renderInput("describe");
     const input = screen.getByRole("textbox", { name: t("commands.message") });
 
@@ -230,7 +239,13 @@ describe("CommandInput", () => {
 
   it("reads the drop position as CSS pixels on macOS and as device pixels elsewhere", async () => {
     checkMock.mockImplementation(async ({ paths }) => ({
-      paths: paths.map((path) => ({ path, kind: "file" as const, reachable: true, grant: null })),
+      paths: paths.map((path) => ({
+        path,
+        kind: "file" as const,
+        reachable: true,
+        guest_path: path,
+        grant: null,
+      })),
     }));
     Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
     Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -270,7 +285,10 @@ describe("CommandInput", () => {
   });
 
   it("uploads a pasted image and appends the returned temporary path", async () => {
-    uploadMock.mockResolvedValue({ path: "/workspace/.guildbotics/data/input.png" });
+    uploadMock.mockResolvedValue({
+      path: "/workspace/.guildbotics/data/input.png",
+      guest_path: "/workspace/.guildbotics/data/input.png",
+    });
     renderInput("inspect");
     const input = screen.getByRole("textbox", { name: t("commands.message") });
     const image = new File(["pixels"], "clipboard.png", { type: "image/png" });
@@ -319,6 +337,34 @@ describe("appendCommandInputPaths", () => {
   it("preserves path spaces and avoids an extra blank line", () => {
     expect(appendCommandInputPaths("existing\n", ["/tmp/file name.pdf"])).toBe(
       "existing\n/tmp/file name.pdf",
+    );
+  });
+
+  it("puts the environment's own spelling of a handed-over path in the field", async () => {
+    checkMock.mockResolvedValue({
+      paths: [
+        {
+          path: "C:\\Users\\me\\Desktop\\shot.png",
+          kind: "file",
+          reachable: false,
+          guest_path: "/c/Users/me/Desktop/shot.png",
+          grant: { scope: "document", path: "Desktop" },
+        },
+      ],
+    });
+    copyMock.mockResolvedValue({
+      path: "C:\\Users\\me\\Documents\\GuildBotics\\tmp\\s1\\ab12-shot.png",
+      guest_path: "/c/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
+    });
+    renderInput("describe");
+    const input = screen.getByRole("textbox", { name: t("commands.message") });
+
+    await drop(input, ["C:\\Users\\me\\Desktop\\shot.png"]);
+    await screen.findByText("C:\\Users\\me\\Desktop\\shot.png");
+    fireEvent.click(screen.getByRole("button", { name: t("commands.inputPathCopy") }));
+
+    await waitFor(() =>
+      expect(input).toHaveValue("describe\n/c/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png"),
     );
   });
 });

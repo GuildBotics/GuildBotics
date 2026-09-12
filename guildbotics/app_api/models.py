@@ -454,6 +454,9 @@ class CommandRunResponse(BaseModel):
 
 class CommandInputFileResponse(BaseModel):
     path: Path
+    #: The path as the agent inside the environment names it: what the
+    #: input field carries.
+    guest_path: str
 
 
 class CommandInputFileCopyRequest(BaseModel):
@@ -479,6 +482,9 @@ class CommandInputPathStatus(BaseModel):
     kind: Literal["file", "directory", "missing"]
     #: Whether a turn of this device's isolated agent environment sees it.
     reachable: bool
+    #: The path as the agent inside the environment names it: what the
+    #: input field carries.
+    guest_path: str
     grant: CommandInputGrantSuggestion | None = None
 
 

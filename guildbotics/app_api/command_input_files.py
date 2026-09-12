@@ -22,6 +22,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_shared_grants,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
     open_lock_file,
@@ -208,11 +209,17 @@ class GrantSuggestion:
 @dataclass(frozen=True, slots=True)
 class CommandInputPath:
     """One path the Desktop is about to put in the input field, as a turn
-    on this device would find it."""
+    on this device would find it.
+
+    ``guest_path`` is the spelling that goes into the field: the path as the
+    agent inside the environment names it (``/c/...`` for ``C:\\...``), which
+    is the only spelling it can open.
+    """
 
     path: Path
     kind: InputPathKind
     reachable: bool
+    guest_path: str
     grant: GrantSuggestion | None = None
 
 
@@ -255,7 +262,9 @@ def describe_command_input_paths(
         if not reachable and kind != "missing":
             real = path.resolve()
             grant = _grant_for(real if kind == "directory" else real.parent, home)
-        described.append(CommandInputPath(path, kind, reachable, grant))
+        described.append(
+            CommandInputPath(path, kind, reachable, guest_path(path.absolute()), grant)
+        )
     return described
 
 

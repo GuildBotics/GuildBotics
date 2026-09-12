@@ -160,6 +160,7 @@ from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
     SlackTokenVerification,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import read_workspace_secrets
@@ -652,7 +653,7 @@ def create_app(
                 "command_input_file_save_failed",
                 status_code=500,
             ) from exc
-        return CommandInputFileResponse(path=path)
+        return CommandInputFileResponse(path=path, guest_path=guest_path(path))
 
     @app.post(
         "/commands/input-paths",
@@ -669,6 +670,7 @@ def create_app(
                     path=entry.path,
                     kind=entry.kind,
                     reachable=entry.reachable,
+                    guest_path=entry.guest_path,
                     grant=(
                         CommandInputGrantSuggestion(
                             scope=entry.grant.scope, path=entry.grant.path
