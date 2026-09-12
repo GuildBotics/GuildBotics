@@ -1,7 +1,7 @@
 """Every API error sentence exists in both languages, and says the same thing.
 
 The population is collected from the source: every ``AppApiError``,
-``_error``, ``_reporting`` and ``api_error_message`` call in the application
+``_error``, ``_reporting``, ``api_error_message`` and direct ``t`` call in the application
 layer names either a message key (translated here) or a ``reason`` (a dynamic
 sentence from a lower layer, deliberately passed through verbatim). A key
 without an entry in both locale files, an entry no call uses, or a pair whose
@@ -39,6 +39,13 @@ def _collect_used_keys() -> set[str]:
             if not isinstance(node, ast.Call):
                 continue
             name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+            if name == "t" and node.args:
+                key = node.args[0]
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    prefix = "app_api.errors."
+                    if key.value.startswith(prefix):
+                        keys.add(key.value.removeprefix(prefix))
+                continue
             if name not in _CALL_NAMES or not node.args:
                 continue
             if any(keyword.arg == "reason" for keyword in node.keywords):
