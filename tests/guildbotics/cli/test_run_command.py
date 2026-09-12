@@ -1,6 +1,7 @@
 import textwrap
 import json
 import os
+import sys
 from pathlib import Path
 
 import click
@@ -603,3 +604,24 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     assert shared["invoked_md"].startswith("Placeholder value")
     assert shared["driver"]["invoked"] == shared["invoked_md"]
     assert shared["driver"]["stdin"] == shared["invoked_md"]
+
+
+@pytest.mark.asyncio
+async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    # A process started with PYTHONDONTWRITEBYTECODE would hide a regression.
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    _write(
+        tmp_path / "commands/functions/cached.py",
+        """
+        def main():
+            return "done"
+        """,
+    )
+
+    executor = CommandRunner(_get_context(), "functions/cached", [])
+    result = await executor.run()
+
+    assert result == "done"
+    assert not (tmp_path / "commands/functions/__pycache__").exists()
+    assert list((tmp_path / "commands").rglob("*.pyc")) == []
