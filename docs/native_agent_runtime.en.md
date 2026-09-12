@@ -414,8 +414,9 @@ authentication, protocol, and process failures do.
 
 When a reset timestamp is available, ticket selection and the chat pending queue defer
 the next attempt until that exact time. They do not consume in-process completion
-retries. Diagnostics use `agent_runtime.*`, `workflow.rate_limited`, and
-`credential.failed` records correlated by person, run, logical conversation,
+retries. Diagnostics use `agent_runtime.*`, `workflow.rate_limited`,
+`credential.failed`, and `credential.verified` (a turn the provider answered, which
+closes the credential alert a refusal opened) records correlated by person, run, logical conversation,
 generation, provider session/turn, context cursor, and lease. Sensitive detail keys
 are redacted, and long text is bounded. The records are available in Desktop
 Diagnostics and `<workspace-data-root>/run/diagnostics.jsonl`.

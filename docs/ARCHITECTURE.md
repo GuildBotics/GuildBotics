@@ -724,7 +724,9 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   removal of the affected member/provider closes the alert. A user may also dismiss the
   current occurrence; a later occurrence of the same cause opens it again. Provider adapters
   normalize structured authentication failures to `credential.failed`, allowing a
-  workflow-time failure to become critical without waiting for diagnostics. The desktop
+  workflow-time failure to become critical without waiting for diagnostics, and record
+  `credential.verified` when a later turn of the same member is answered, which closes
+  that alert without a diagnostics run. The desktop
   polls `/system-alerts` and renders the result above every route with links to
   diagnostics, setup, service state, or the correlated trace. Provider classification
   remains in the backend; the frontend only translates stable alert codes.

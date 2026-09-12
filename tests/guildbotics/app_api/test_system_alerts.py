@@ -622,3 +622,50 @@ def test_environment_problems_open_one_alert_per_thing_to_fix(
     }
     # Fixing it does.
     assert service.list_alerts(_runtime(), []).alerts == []
+
+
+def test_credential_alert_closes_when_the_same_credential_is_verified_again(
+    tmp_path: Path,
+) -> None:
+    """A later turn the provider answered proves the credential again, as a
+    finished command closes an execution alert; the next refusal reopens it,
+    even after a dismissal."""
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    failed = {"provider": "cli_agent", "cli_agent": "codex", "person_id": "alice"}
+    store.record(
+        _event(
+            "credential.failed",
+            timestamp="2026-09-12T09:39:00+09:00",
+            payload={**failed, "code": "authentication"},
+        )
+    )
+    service = SystemAlertService(store)
+    (alert,) = service.list_alerts(_runtime()).alerts
+    assert (alert.code, alert.person_id) == ("credential_cli_agent", "alice")
+    service.dismiss(alert.id)
+
+    store.record(
+        _event(
+            "credential.verified", timestamp="2026-09-12T13:10:00+09:00", payload=failed
+        )
+    )
+    assert service.list_alerts(_runtime()).alerts == []
+
+    # Another member's proof closes nothing of alice's.
+    store.record(
+        _event(
+            "credential.failed",
+            timestamp="2026-09-12T14:00:00+09:00",
+            payload={**failed, "code": "authentication"},
+        )
+    )
+    store.record(
+        _event(
+            "credential.verified",
+            timestamp="2026-09-12T14:01:00+09:00",
+            person_id="bob",
+            payload={**failed, "person_id": "bob"},
+        )
+    )
+    (reopened,) = service.list_alerts(_runtime()).alerts
+    assert (reopened.code, reopened.person_id) == ("credential_cli_agent", "alice")

@@ -653,6 +653,7 @@ const resources = {
             chat_dispatch_retry_scheduled: "Retry scheduled",
             chat_dispatch_abandoned: "Dispatch abandoned",
             credential_failed: "Credential failed",
+            credential_verified: "Credential verified",
             diagnostics_completed: "Diagnostics completed",
             verify_completed: "Verification completed",
             system_started: "System started",
@@ -678,6 +679,7 @@ const resources = {
             chat_dispatch_retry_scheduled:
               "Run {{run}} will retry at {{retry_at}} (attempt {{attempt}}/{{max_attempts}}).",
             credential_failed: "{{provider}} credential failed ({{code}}).",
+            credential_verified: "{{provider}} credential verified.",
             diagnostics_completed: "{{count}} diagnostic checks completed.",
             verify_completed: "{{count}} verification checks completed.",
             chat_receive_state_reset: "Reset {{members}} members and {{channels}} channels.",
@@ -3323,6 +3325,7 @@ const resources = {
             chat_dispatch_retry_scheduled: "再試行待ち",
             chat_dispatch_abandoned: "Dispatch 打ち切り",
             credential_failed: "認証情報エラー",
+            credential_verified: "認証情報を確認",
             diagnostics_completed: "診断完了",
             verify_completed: "検証完了",
             system_started: "システム開始",
@@ -3348,6 +3351,7 @@ const resources = {
             chat_dispatch_retry_scheduled:
               "Run {{run}} は {{retry_at}} に再試行します（{{attempt}}/{{max_attempts}} 回目）。",
             credential_failed: "{{provider}} の認証情報が失敗しました（{{code}}）。",
+            credential_verified: "{{provider}} の認証情報が有効であることを確認しました。",
             diagnostics_completed: "{{count}} 件の診断チェックが完了しました。",
             verify_completed: "{{count}} 件の検証チェックが完了しました。",
             chat_receive_state_reset:

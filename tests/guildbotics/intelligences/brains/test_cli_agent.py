@@ -913,3 +913,68 @@ def test_a_partial_network_block_names_the_slot_it_came_from(
     with pytest.raises(ValueError, match="AI CLI tool 'default'"):
         cli_agent.get_cli_agent_mapping("aiko")
     cli_agent.person_cli_agent_mapping.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_provider_answered_records_the_credential_as_verified(
+    monkeypatch, tmp_path
+):
+    """The counterpart of the refusal: the same member and tool, so the
+    credential alert the refusal opened closes on the next successful turn."""
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
+    )
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        cli_agent, "record_correlated_event", lambda **kwargs: recorded.append(kwargs)
+    )
+
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    verified = [r for r in recorded if r["event_type"] == "credential.verified"]
+    assert [r["payload"] for r in verified] == [
+        {"provider": "cli_agent", "cli_agent": "claude", "person_id": "p1"}
+    ]
+    assert verified[0]["person_id"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_the_workflow_path_records_the_credential_outcome_too(
+    monkeypatch, tmp_path
+):
+    """`run_with_execution_details` leaves the judgement to the workflow but
+    still records what the turn proved, so a Slack or ticket turn opens and
+    closes the credential alert like a command does."""
+    recorded: list[dict] = []
+    monkeypatch.setattr(
+        cli_agent, "record_correlated_event", lambda **kwargs: recorded.append(kwargs)
+    )
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(
+            stdout="",
+            stderr="not logged in",
+            returncode=1,
+            error_category="authentication",
+        ),
+    )
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    await brain.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+    assert [
+        r["event_type"] for r in recorded if r["event_type"].startswith("credential.")
+    ] == ["credential.failed"]
+
+    recorded.clear()
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="", stderr="boom", returncode=2),
+    )
+    await brain.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+    # A failure that is not a refusal says nothing about the credentials.
+    assert [r for r in recorded if r["event_type"].startswith("credential.")] == []

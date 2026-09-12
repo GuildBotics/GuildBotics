@@ -51,6 +51,7 @@ _RELEVANT_EVENT_TYPES = frozenset(
         "command.failed",
         "command.finished",
         "credential.failed",
+        "credential.verified",
         "diagnostics.completed",
         "scheduler.failed",
         "scheduler.running",
@@ -212,6 +213,12 @@ class SystemAlertService:
             self._resolve_execution_alerts(alerts, record)
         elif event_type == "credential.failed":
             self._open_credential_alert(alerts, record)
+        elif event_type == "credential.verified":
+            # The same credential proven again by the same person closes the
+            # alert, as a finished command closes an execution alert.
+            key = f"credential:{_payload(record).get('provider') or ''}:{record.get('person_id') or ''}"
+            alerts.pop(key, None)
+            self._dismissed.discard(key)
         elif event_type == "scheduler.worker.failed":
             person_id = str(record.get("person_id") or "")
             self._open(
