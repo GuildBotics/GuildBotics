@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from guildbotics.app_api import hub_secrets
 from guildbotics.app_api.agent_environment_status import (
     evaluate_grant,
 )
@@ -376,6 +377,15 @@ def create_app(
                 "invalid_session_token",
                 status_code=401,
             )
+
+    @app.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
+    async def hub_secret_transfer(
+        request: Request,
+        workspace_id: str,
+        operation: str,
+        _: None = Depends(require_token),
+    ) -> Response:
+        return await hub_secrets.transfer(request, workspace_id, operation)
 
     @app.get("/health", response_model=HealthResponse, responses=error_responses)
     def health(_: None = Depends(require_token)) -> HealthResponse:

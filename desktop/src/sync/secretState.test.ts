@@ -8,8 +8,8 @@ function secrets(overrides: Partial<WorkspaceSecrets> = {}): WorkspaceSecrets {
     enabled: true,
     hub_reachable: true,
     hub_error_code: "",
-    secret_store: { available: true, locked: false },
-    hub_secret_store: { available: true, locked: false },
+    secret_store: { available: true, locked: false, error_code: "" },
+    hub_secret_store: { available: true, locked: false, error_code: "" },
     keys: [],
     sendable_keys: [],
     fetchable_keys: [],
@@ -40,6 +40,30 @@ describe("secretTone", () => {
 });
 
 describe("secretAlert", () => {
+  it("distinguishes an unavailable Desktop from a refused keychain", () => {
+    expect(
+      secretAlert(
+        secrets({
+          hub_secret_store: {
+            available: false,
+            locked: false,
+            error_code: "desktop_required",
+          },
+        }),
+      ),
+    ).toBe("hub_desktop_required");
+    expect(
+      secretAlert(
+        secrets({
+          hub_secret_store: {
+            available: false,
+            locked: false,
+            error_code: "",
+          },
+        }),
+      ),
+    ).toBe("hub_store_unavailable");
+  });
   it("says nothing about a workspace that has no hub", () => {
     expect(secretAlert(undefined)).toBeNull();
     expect(secretAlert(secrets({ enabled: false, attention_count: 3 }))).toBeNull();
@@ -49,15 +73,17 @@ describe("secretAlert", () => {
     expect(
       secretAlert(
         secrets({
-          secret_store: { available: false, locked: true },
+          secret_store: { available: false, locked: true, error_code: "" },
           hub_reachable: false,
           attention_count: 2,
         }),
       ),
     ).toBe("local_locked");
-    expect(secretAlert(secrets({ hub_secret_store: { available: false, locked: true } }))).toBe(
-      "hub_locked",
-    );
+    expect(
+      secretAlert(
+        secrets({ hub_secret_store: { available: false, locked: true, error_code: "" } }),
+      ),
+    ).toBe("hub_locked");
   });
 
   it("names an unreachable hub before the counts it could not check", () => {

@@ -257,6 +257,14 @@ const resources = {
               title: "The hub machine's secret store is locked",
               body: "Unlock the OS secret store on the hub machine, then try again. On a headless Linux hub, unlock the Secret Service once after each restart.",
             },
+            hub_desktop_required: {
+              title: "Start Desktop on the macOS hub",
+              body: "Log in to the GUI on the hub and start GuildBotics Desktop, then retry the transfer.",
+            },
+            hub_store_unavailable: {
+              title: "The hub secret store is unavailable",
+              body: "Check the OS secret store on the hub machine, then retry the transfer.",
+            },
             hub_unreachable: {
               title: "The hub could not be reached",
               body: "The states below are what this machine knows on its own. Credentials can be sent and fetched again once the hub answers.",
@@ -275,6 +283,7 @@ const resources = {
             generation_mismatch:
               "the hub holds a generation this workspace has not recorded; send from any machine that has the value to settle it",
             locked: "a secret store is locked",
+            desktop_required: "log in to the macOS hub and start GuildBotics Desktop",
             store_unavailable: "a secret store could not be used",
             no_value: "this machine has no value to send",
             unknown: "this workspace does not know that key",
@@ -2235,6 +2244,14 @@ const resources = {
               title: "Hub マシンの SecretStore がロックされています",
               body: "Hub マシン上で OS 秘密ストアのロックを解除してから、もう一度実行してください。ヘッドレス Linux の Hub では、再起動のたびに一度 Secret Service のロックを解除します。",
             },
+            hub_desktop_required: {
+              title: "macOS の Hub で Desktop を起動してください",
+              body: "Hub マシンに GUI ログインし、GuildBotics Desktop を起動してから転送を再実行してください。",
+            },
+            hub_store_unavailable: {
+              title: "Hub の SecretStore を利用できません",
+              body: "Hub マシンの OS SecretStore を確認してから転送を再実行してください。",
+            },
             hub_unreachable: {
               title: "Hub に接続できませんでした",
               body: "以下の状態は、このマシンだけで分かる内容です。Hub に接続できるようになれば、送信・取得をやり直せます。",
@@ -2253,6 +2270,8 @@ const resources = {
             generation_mismatch:
               "このワークスペースが記録していない世代を Hub が持っています。値を持っているどのマシンからでも送信すれば解消します",
             locked: "SecretStore がロックされています",
+            desktop_required:
+              "macOS の Hub に GUI ログインし、GuildBotics Desktop を起動してください",
             store_unavailable: "SecretStore を利用できませんでした",
             no_value: "このマシンに送る値がありません",
             unknown: "このワークスペースが知らない key です",

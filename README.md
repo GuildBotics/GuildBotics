@@ -664,6 +664,13 @@ The list and the transfers are under **Settings → Sync → Credentials on this
 The provider and member forms where a value is typed show its state and link here; they
 carry no transfer buttons of their own.
 
+**On a macOS hub**, log in to the GUI with the Hub's user account and start
+GuildBotics Desktop before sending or fetching credentials. Desktop need only stay
+open during the transfer; it can have any workspace selected. Hub Secret commands,
+including status checks, use its authenticated loopback API to access the keychain
+in the GUI session. If Desktop is unavailable, the transfer asks you to start it.
+Windows and Linux hubs access their OS secret stores directly.
+
 **On a machine you have just added**, choose **Fetch all credentials** once. Everything
 this machine lacks or holds an older value for arrives in a single exchange and goes
 straight into this machine's OS secret store. Nothing is retyped.

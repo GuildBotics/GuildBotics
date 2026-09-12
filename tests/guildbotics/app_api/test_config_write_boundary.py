@@ -77,6 +77,9 @@ ELSEWHERE = {
         "/intelligences/agent-environment/build",
     ): "local/agent_environment snapshots, device-local",
     ("POST", "/hub/inspect"): "reads a hub",
+    ("POST", "/hub/secrets/{workspace_id}/{operation}"): (
+        "Hub keychain and generation index, outside any workspace; secrets.lock"
+    ),
     ("POST", "/hub/ssh-key"): "~/.ssh",
     ("POST", "/hub/trust"): "~/.ssh/known_hosts",
     ("POST", "/scheduler/start"): "runtime lifecycle",

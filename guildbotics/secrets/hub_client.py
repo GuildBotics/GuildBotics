@@ -2,9 +2,9 @@
 
 Two clients answer the same three questions -- what do you hold, take this,
 give me that -- so the part above them that decides *which* keys to move never
-learns whether the hub is another machine or this one. Only the remote client
-frames anything: over SSH the exchange has to survive a pipe, while a hub on
-this machine is simply called.
+learns whether the hub is another machine or this one. Both clients use the
+same wire protocol: SSH carries it to another machine, and macOS delegates
+it to the local Desktop before opening the keychain.
 """
 
 from __future__ import annotations
@@ -14,14 +14,9 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from guildbotics.hub import secret_host, secret_stream
+from guildbotics.hub import secret_host, secret_service, secret_stream, secret_transport
 from guildbotics.hub.connection import HubEndpoint, HubLocation, run_hub_stream
-from guildbotics.utils.keychain import SecretStoreError
-from guildbotics.utils.secret_store import (
-    is_locked_error,
-    is_secret_key,
-    keyring_status,
-)
+from guildbotics.utils.secret_store import is_secret_key
 
 #: What a hub can say about one key it was asked for or sent, other than
 #: success. They are the values the hub's own commands report, so a remote and
@@ -64,6 +59,7 @@ class HubSecretIndex:
     generations: dict[str, int] = field(default_factory=dict)
     available: bool = True
     locked: bool = False
+    error_code: str = ""
 
 
 @dataclass(frozen=True)
@@ -101,74 +97,14 @@ class HubSecretClient(ABC):
         """Ask for the current value of each key."""
 
 
-class LocalHubSecretClient(HubSecretClient):
-    """A hub hosted on this same machine, called rather than connected to."""
+class _StreamHubSecretClient(HubSecretClient):
+    """Encode and decode the same protocol for local and SSH transports."""
 
     def __init__(self, workspace_id: str):
         self._workspace_id = workspace_id
 
     def index(self) -> HubSecretIndex:
-        status = keyring_status()
-        return HubSecretIndex(
-            generations=secret_host.generations(self._workspace_id),
-            available=bool(status["available"]),
-            locked=bool(status["locked"]),
-        )
-
-    def send(self, entries: list[SecretOffer]) -> list[HubSendResult]:
-        results: list[HubSendResult] = []
-        for offer in entries:
-            if not is_secret_key(offer.key):
-                results.append(HubSendResult(key=offer.key, status=HUB_INVALID))
-                continue
-            try:
-                generation = secret_host.store_secret(
-                    self._workspace_id,
-                    offer.key,
-                    base_generation=offer.candidate - 1,
-                    candidate_generation=offer.candidate,
-                    value=offer.value,
-                )
-            except secret_host.HubSecretConflictError:
-                results.append(HubSendResult(key=offer.key, status=HUB_CONFLICT))
-                continue
-            except SecretStoreError as exc:
-                results.append(HubSendResult(key=offer.key, status=_store_status(exc)))
-                continue
-            results.append(
-                HubSendResult(key=offer.key, status="stored", generation=generation)
-            )
-        return results
-
-    def fetch(self, keys: list[str]) -> list[HubFetchResult]:
-        named, refused = _named_keys(keys)
-        results = [HubFetchResult(key=key, status=HUB_INVALID) for key in refused]
-        for key in named:
-            try:
-                value, generation = secret_host.read_secret(self._workspace_id, key)
-            except secret_host.HubSecretMissingError:
-                results.append(HubFetchResult(key=key, status=HUB_MISSING))
-                continue
-            except SecretStoreError as exc:
-                results.append(HubFetchResult(key=key, status=_store_status(exc)))
-                continue
-            results.append(
-                HubFetchResult(
-                    key=key, status="sent", generation=generation, value=value
-                )
-            )
-        return results
-
-
-class RemoteHubSecretClient(HubSecretClient):
-    """A hub on another machine, reached by running its own command over SSH."""
-
-    def __init__(self, endpoint: HubEndpoint, workspace_id: str):
-        self._endpoint = endpoint
-        self._workspace_id = workspace_id
-
-    def index(self) -> HubSecretIndex:
-        output = self._run(["list", self._workspace_id])
+        output = self._run("list")
         try:
             payload = json.loads(output.decode("utf-8"))
             store = payload.get("secret_store") or {}
@@ -180,10 +116,11 @@ class RemoteHubSecretClient(HubSecretClient):
                 },
                 available=bool(store.get("available", True)),
                 locked=bool(store.get("locked", False)),
+                error_code=str(store.get("error_code", "")),
             )
         except (ValueError, AttributeError, TypeError) as exc:
             raise secret_host.HubSecretError(
-                f"{self._endpoint.target} did not answer with its secret index."
+                "The hub did not answer with its secret index."
             ) from exc
 
     def send(self, entries: list[SecretOffer]) -> list[HubSendResult]:
@@ -210,7 +147,7 @@ class RemoteHubSecretClient(HubSecretClient):
                 for offer in offered
             ],
         )
-        output = self._run(["receive", self._workspace_id], payload.getvalue())
+        output = self._run("receive", payload.getvalue())
         try:
             results = json.loads(output.decode("utf-8"))["results"]
             return refused + [
@@ -223,7 +160,7 @@ class RemoteHubSecretClient(HubSecretClient):
             ]
         except (ValueError, KeyError, TypeError) as exc:
             raise secret_host.HubSecretError(
-                f"{self._endpoint.target} did not answer the send with a result."
+                "The hub did not answer the send with a result."
             ) from exc
 
     def fetch(self, keys: list[str]) -> list[HubFetchResult]:
@@ -231,20 +168,54 @@ class RemoteHubSecretClient(HubSecretClient):
         results = [HubFetchResult(key=key, status=HUB_INVALID) for key in refused]
         if not named:
             return results
-        arguments = ["send", self._workspace_id]
-        for key in named:
-            arguments += ["--key", key]
-        output = self._run(arguments)
+        output = self._run("send", keys=tuple(named))
         try:
             entries = list(secret_stream.read_entries(output))
         except secret_stream.SecretStreamError as exc:
             raise secret_host.HubSecretError(
-                f"{self._endpoint.target} did not answer with framed values."
+                "The hub did not answer with framed values."
             ) from exc
         return results + [_fetched(entry) for entry in entries]
 
-    def _run(self, arguments: list[str], payload: bytes = b"") -> bytes:
-        return run_hub_stream(self._endpoint, ["secret", *arguments], payload)
+    @abstractmethod
+    def _run(
+        self,
+        operation: secret_service.Operation,
+        payload: bytes = b"",
+        keys: tuple[str, ...] = (),
+    ) -> bytes:
+        """Exchange one request with the Hub."""
+
+
+class LocalHubSecretClient(_StreamHubSecretClient):
+    """A local Hub, delegated to Desktop on macOS."""
+
+    def _run(
+        self,
+        operation: secret_service.Operation,
+        payload: bytes = b"",
+        keys: tuple[str, ...] = (),
+    ) -> bytes:
+        return secret_transport.execute(operation, self._workspace_id, payload, keys)
+
+
+class RemoteHubSecretClient(_StreamHubSecretClient):
+    """A Hub reached by running its own command over SSH."""
+
+    def __init__(self, endpoint: HubEndpoint, workspace_id: str):
+        super().__init__(workspace_id)
+        self._endpoint = endpoint
+
+    def _run(
+        self,
+        operation: secret_service.Operation,
+        payload: bytes = b"",
+        keys: tuple[str, ...] = (),
+    ) -> bytes:
+        arguments = ["secret", operation, self._workspace_id]
+        for key in keys:
+            arguments += ["--key", key]
+        return run_hub_stream(self._endpoint, arguments, payload)
 
 
 def hub_secret_client(location: HubLocation, workspace_id: str) -> HubSecretClient:
@@ -294,7 +265,3 @@ def _fetched(entry: secret_stream.SecretEntry) -> HubFetchResult:
     return HubFetchResult(
         key=entry.key, status="sent", generation=generation, value=value
     )
-
-
-def _store_status(exc: SecretStoreError) -> str:
-    return HUB_LOCKED if is_locked_error(exc) else HUB_UNAVAILABLE

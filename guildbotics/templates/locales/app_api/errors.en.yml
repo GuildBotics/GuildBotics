@@ -58,6 +58,7 @@ en:
     exists: "Command '%{command}' already exists."
     duplicate: "Command '%{command}' is proposed more than once."
   command_file_shadowed: "Command '%{command}' would be shadowed by a higher-priority file."
+  hub_desktop_required: "Log in to the GUI on the macOS hub and start GuildBotics Desktop, then retry the transfer."
   secret_send_failed: "The credentials could not be sent to the hub."
   secret_fetch_failed: "The credentials could not be fetched from the hub."
   secret_publish_failed: "The hub received the values, but recording them in this workspace failed, so the keys show as needing a check. Fix the cause below and send again: the next send builds on what the hub holds and settles the difference."

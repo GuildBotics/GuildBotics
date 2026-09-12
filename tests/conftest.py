@@ -218,3 +218,11 @@ def coverage_suspended():
     finally:
         if cov is not None:
             cov.start()
+
+
+@pytest.fixture(autouse=True)
+def _local_hub_transport(monkeypatch):
+    """Run Hub tests without a real Desktop; macOS transport tests opt in explicitly."""
+    from guildbotics.hub import secret_transport
+
+    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", False)

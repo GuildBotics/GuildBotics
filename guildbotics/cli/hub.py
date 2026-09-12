@@ -14,9 +14,7 @@ from typing import Any
 import click
 
 from guildbotics.cli._options import format_option
-from guildbotics.hub import host, relay, secret_host, secret_stream
-from guildbotics.utils.keychain import InvalidSecretKeyError, SecretStoreError
-from guildbotics.utils.secret_store import is_locked_error, keyring_status
+from guildbotics.hub import host, relay, secret_service, secret_transport
 
 _format_option = format_option("markdown")
 
@@ -172,10 +170,7 @@ def hub_secret() -> None:
 @click.argument("workspace_id")
 def receive_secrets(workspace_id: str) -> None:
     """Store the values a device sends, one framed entry each."""
-    results: list[dict[str, Any]] = []
-    for entry in _read_stdin_entries():
-        results.append(_store_entry(workspace_id, entry))
-    _write_json_line({"results": results})
+    _secret_request("receive", workspace_id, click.get_binary_stream("stdin").read())
 
 
 @hub_secret.command(name="send")
@@ -183,102 +178,28 @@ def receive_secrets(workspace_id: str) -> None:
 @click.option("--key", "keys", multiple=True, help="A logical key to send back.")
 def send_secrets(workspace_id: str, keys: tuple[str, ...]) -> None:
     """Write the requested values back to the device, one framed entry each."""
-    stream = click.get_binary_stream("stdout")
-    for key in keys:
-        try:
-            value, generation = secret_host.read_secret(workspace_id, key)
-        except secret_host.HubSecretMissingError:
-            secret_stream.write_entry(stream, key, {"error": "missing"})
-            continue
-        except InvalidSecretKeyError:
-            secret_stream.write_entry(stream, key, {"error": "invalid"})
-            continue
-        except SecretStoreError as exc:
-            secret_stream.write_entry(stream, key, {"error": _store_error(exc)})
-            continue
-        except (ValueError, host.HubError, OSError) as exc:
-            raise click.ClickException(str(exc)) from exc
-        secret_stream.write_entry(
-            stream,
-            key,
-            {"generation": generation},
-            value.encode("utf-8"),
-        )
-    stream.flush()
+    _secret_request("send", workspace_id, keys=keys)
 
 
 @hub_secret.command(name="list")
 @click.argument("workspace_id")
 def list_secrets(workspace_id: str) -> None:
     """Report which generation this hub holds for each key, without values."""
+    _secret_request("list", workspace_id)
+
+
+def _secret_request(
+    operation: secret_service.Operation,
+    workspace_id: str,
+    payload: bytes = b"",
+    keys: tuple[str, ...] = (),
+) -> None:
     try:
-        held = secret_host.generations(workspace_id)
+        answer = secret_transport.execute(operation, workspace_id, payload, keys)
     except (ValueError, host.HubError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
-    status = keyring_status()
-    _write_json_line(
-        {
-            "workspace_id": workspace_id,
-            "keys": held,
-            "secret_store": {
-                "available": bool(status["available"]),
-                "locked": bool(status["locked"]),
-            },
-        }
-    )
-
-
-def _read_stdin_entries() -> list[secret_stream.SecretEntry]:
-    """Read the whole framed request, refusing anything shaped differently."""
-    try:
-        return list(secret_stream.read_entries(click.get_binary_stream("stdin").read()))
-    except secret_stream.SecretStreamError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-
-def _store_entry(workspace_id: str, entry: secret_stream.SecretEntry) -> dict[str, Any]:
-    """Store one sent value, reporting the outcome without the value."""
-    try:
-        generation = secret_host.store_secret(
-            workspace_id,
-            entry.key,
-            base_generation=_generation(entry, "base"),
-            candidate_generation=_generation(entry, "candidate"),
-            value=entry.value.decode("utf-8"),
-        )
-    except secret_host.HubSecretConflictError:
-        return {"key": entry.key, "status": "conflict"}
-    except InvalidSecretKeyError:
-        # One unusable name does not cost the sender the rest of the batch.
-        return {"key": entry.key, "status": "invalid"}
-    except SecretStoreError as exc:
-        return {"key": entry.key, "status": _store_error(exc)}
-    except UnicodeDecodeError:
-        return {"key": entry.key, "status": "invalid"}
-    except (ValueError, host.HubError, OSError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    return {"key": entry.key, "status": "stored", "generation": generation}
-
-
-def _generation(entry: secret_stream.SecretEntry, name: str) -> int:
-    value = entry.header.get(f"{name}_generation")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise click.ClickException(
-            f"the entry for {entry.key} declares no {name} generation"
-        )
-    return value
-
-
-def _store_error(exc: SecretStoreError) -> str:
-    """Name why the hub's own keychain refused, never quoting the value."""
-    return "locked" if is_locked_error(exc) else "store_unavailable"
-
-
-def _write_json_line(payload: dict[str, Any]) -> None:
     stream = click.get_binary_stream("stdout")
-    stream.write(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8") + b"\n"
-    )
+    stream.write(answer)
     stream.flush()
 
 

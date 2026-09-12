@@ -1291,6 +1291,7 @@ export type WorkspaceDevices = {
 
 /** Whether one machine's OS secret store can be used right now. */
 export type SecretStoreState = {
+  error_code: string;
   available: boolean;
   locked: boolean;
 };

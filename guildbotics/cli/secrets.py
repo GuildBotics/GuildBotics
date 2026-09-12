@@ -20,6 +20,7 @@ import click
 
 from guildbotics.hub import HubUnreachableError, connection
 from guildbotics.hub.secret_host import HubSecretError
+from guildbotics.hub.secret_service import HubDesktopRequiredError
 from guildbotics.secrets import SecretTransfer, SecretTransferOutcome, hub_secret_client
 from guildbotics.sync import hub_remote_url
 from guildbotics.sync.activation import (
@@ -269,10 +270,16 @@ def _run_transfer(
     action: Callable[[], list[SecretTransferOutcome]],
 ) -> list[SecretTransferOutcome]:
     """Run one transfer, reporting a hub failure as a command error."""
+    desktop_help = t("app_api.errors.hub_desktop_required")
     try:
-        return action()
+        outcomes = action()
+    except HubDesktopRequiredError as exc:
+        raise click.ClickException(desktop_help) from exc
     except (HubSecretError, HubUnreachableError, OpenSshNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
+    if any(outcome.status == "desktop_required" for outcome in outcomes):
+        click.echo(desktop_help, err=True)
+    return outcomes
 
 
 def _report(outcomes: list[SecretTransferOutcome]) -> None:

@@ -27,6 +27,113 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 TOKEN = "ghp-000111222333"
 
 
+def test_desktop_self_http_transfers_through_its_own_event_loop(
+    connected,
+    monkeypatch,
+    fake_keyring,
+    workspace,
+):
+    """The synchronous screen API calls the same server's binary API over TCP."""
+    import threading
+    import time
+    import httpx
+    import uvicorn
+    from guildbotics.hub import secret_transport
+    from guildbotics.utils.local_api import LocalApiEndpoint
+
+    config = uvicorn.Config(
+        connected.app,
+        host="127.0.0.1",
+        port=0,
+        lifespan="off",
+        access_log=False,
+        log_level="critical",
+    )
+    with config.bind_socket() as sock:
+        server = uvicorn.Server(config)
+        thread = threading.Thread(
+            target=server.run, kwargs={"sockets": [sock]}, daemon=True
+        )
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started:
+                assert time.monotonic() < deadline, "Local API startup timed out"
+                time.sleep(0.01)
+            port = sock.getsockname()[1]
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}",
+                headers=AUTH_HEADERS,
+                trust_env=False,
+                timeout=10,
+            ) as browser:
+                health = browser.get("/health").json()
+                endpoint = LocalApiEndpoint(
+                    port=port,
+                    token="secret",
+                    pid=1,
+                    service_instance_id=health["service_instance_id"],
+                    workspace=None,
+                )
+                monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
+                monkeypatch.setattr(secret_transport, "read_endpoint", lambda: endpoint)
+                _store().set("A_TOKEN", TOKEN)
+                response = browser.post(
+                    "/workspace/secrets/send", json={"keys": ["A_TOKEN"]}
+                )
+                assert _json(response)["results"][0]["status"] == "sent"
+                assert TOKEN not in response.text
+                for service, key in list(fake_keyring.passwords):
+                    if key == "A_TOKEN" and not service.startswith("GuildBotics-hub/"):
+                        del fake_keyring.passwords[(service, key)]
+                (workspace / ".guildbotics" / "local" / "secrets.json").unlink()
+                state = _json(browser.get("/workspace/secrets"))
+                assert _state(state, "A_TOKEN")["status"] == "missing"
+                response = browser.post(
+                    "/workspace/secrets/fetch", json={"keys": ["A_TOKEN"]}
+                )
+                assert _json(response)["results"][0]["status"] == "fetched"
+                assert TOKEN not in response.text
+                assert _store().get("A_TOKEN") == TOKEN
+                assert (
+                    _state(_json(browser.get("/workspace/secrets")), "A_TOKEN")[
+                        "status"
+                    ]
+                    == "ready"
+                )
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+
+
+def test_mac_hub_requires_desktop_with_localized_guidance(connected, monkeypatch):
+    from guildbotics.hub import secret_transport
+    from guildbotics.utils.i18n_tool import t
+
+    _store().set("A_TOKEN", TOKEN)
+    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
+    monkeypatch.setattr(secret_transport, "read_endpoint", lambda: None)
+    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    assert payload["hub_reachable"] is True
+    assert payload["hub_secret_store"] == {
+        "available": False,
+        "locked": False,
+        "error_code": "desktop_required",
+    }
+    for operation in ("send", "fetch"):
+        response = connected.post(
+            f"/workspace/secrets/{operation}",
+            headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
+            json={"keys": []},
+        )
+        assert response.status_code == HTTP_CONFLICT
+        assert response.json()["code"] == "hub_desktop_required"
+        assert response.json()["message"] == t(
+            "app_api.errors.hub_desktop_required", locale="ja"
+        )
+
+
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
@@ -355,5 +462,13 @@ def test_the_response_names_which_machines_secret_store_answered(
     payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
 
     assert payload["hub_reachable"] is True
-    assert payload["secret_store"] == {"available": True, "locked": False}
-    assert payload["hub_secret_store"] == {"available": True, "locked": False}
+    assert payload["secret_store"] == {
+        "available": True,
+        "locked": False,
+        "error_code": "",
+    }
+    assert payload["hub_secret_store"] == {
+        "available": True,
+        "locked": False,
+        "error_code": "",
+    }

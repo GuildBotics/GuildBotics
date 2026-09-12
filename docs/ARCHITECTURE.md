@@ -658,6 +658,23 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   Entries are framed as a JSON header line plus the exact bytes it declares, so a
   value crosses a Windows machine unaltered and nothing that reads, logs, or reports
   a header can carry one.
+- **macOS Hub execution** (`hub/secret_transport.py`): all local Hub Secret
+  requests, including those arriving over SSH, use Desktop's discovery record and
+  session token. `POST /hub/secrets/{workspace_id}/{operation}` accepts `list`,
+  `send`, or `receive` and passes framed bytes to `hub/secret_service.py`. It requires
+  a loopback peer and the session token, validates a registered Hub Workspace ID,
+  and does not depend on the workspace open in Desktop. This binary transfer route
+  is the sole exception to the rule excluding secret values from API responses.
+  Values stay out of logs, diagnostics, validation errors, and screen responses.
+  A missing Desktop returns `desktop_required`; no direct-keychain fallback runs.
+  Windows and Linux execute the same protocol handler directly.
+- **Hub storage consistency** (`hub/secret_host.py`): the keychain stores one JSON
+  record containing both `generation` and `value` per key. Under `secrets.lock`, a
+  send writes that record before publishing the generation index. A failed keychain
+  write leaves the index unchanged. A read uses the same lock and refuses a record
+  whose generation differs from the index, so interruption during publication
+  cannot expose a new value as an older generation. Resending the key recovers it.
+  Keychain exceptions become value-free `SecretStoreError` failures at this boundary.
 - **Generations**: entering a value locally does not advance the shared generation —
   that number names a value every device can obtain, so it is published only after
   the hub holds the value. A send is built on the generation the *hub* reports, and

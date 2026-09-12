@@ -1,7 +1,8 @@
 """The framing that carries secret values between a device and its hub.
 
 Secret values travel as the standard input and standard output of one SSH
-command and nowhere else: no relay file, no Git object, no temporary file. That
+command and, on a macOS hub, through Desktop's authenticated loopback transfer
+endpoint: no relay file, no Git object, no temporary file. That
 leaves one problem to solve here -- how several values share one stream without
 any of them being altered on the way.
 

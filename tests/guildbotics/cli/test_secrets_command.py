@@ -402,3 +402,38 @@ class FakeHubSecrets:
             )
             for key in keys
         ]
+
+
+def test_desktop_requirement_is_localized(monkeypatch):
+    import click
+    from guildbotics.cli.secrets import _run_transfer, _report
+    from guildbotics.hub.secret_service import HubDesktopRequiredError
+    from guildbotics.secrets import SecretTransferOutcome
+    from guildbotics.utils.i18n_tool import t
+    from click.testing import CliRunner
+
+    @click.command()
+    def command():
+        def failed():
+            raise HubDesktopRequiredError("desktop_required")
+
+        _run_transfer(failed)
+
+    result = CliRunner().invoke(command)
+    assert result.exit_code == 1
+    assert t("app_api.errors.hub_desktop_required") in result.output
+
+    @click.command()
+    def report():
+        _report(
+            _run_transfer(
+                lambda: [
+                    SecretTransferOutcome("A_TOKEN", "desktop_required"),
+                    SecretTransferOutcome("B_TOKEN", "desktop_required"),
+                ]
+            )
+        )
+
+    result = CliRunner().invoke(report)
+    assert result.stdout == "A_TOKEN: desktop_required\nB_TOKEN: desktop_required\n"
+    assert result.stderr == t("app_api.errors.hub_desktop_required") + "\n"
