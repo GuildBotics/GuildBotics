@@ -190,7 +190,7 @@ class AntigravityStreamJsonAdapter:
             "--output-format",
             "stream-json",
             _WORKSPACE_FLAG,
-            str(context.cwd),
+            guest_path(context.cwd),
             "--dangerously-skip-permissions",
             "--print-timeout",
             f"{int(self._timeout)}s",

@@ -20,6 +20,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     start_turn_environment,
@@ -460,7 +461,7 @@ class AcpAdapterBase:
                     await self._transport.request(
                         "session/new",
                         {
-                            "cwd": str(context.cwd),
+                            "cwd": guest_path(context.cwd),
                             "mcpServers": self._mcp_servers(context),
                         },
                     )
@@ -492,7 +493,7 @@ class AcpAdapterBase:
                     method,
                     {
                         "sessionId": session_id,
-                        "cwd": str(context.cwd),
+                        "cwd": guest_path(context.cwd),
                         "mcpServers": self._mcp_servers(context),
                     },
                 )

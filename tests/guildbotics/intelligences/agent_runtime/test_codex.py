@@ -16,6 +16,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     ResolvedGrant,
     parse_network_policy,
 )
+from guildbotics.intelligences.agent_runtime import codex as codex_module
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
@@ -1083,3 +1084,35 @@ def test_overrides_are_spelled_as_toml_values() -> None:
         "-c",
         'tools.web_search.allowed_domains=["docs.npmjs.com"]',
     )
+
+
+@pytest.mark.asyncio
+async def test_codex_is_told_the_working_directory_as_the_guest_spells_it(
+    monkeypatch, tmp_path
+) -> None:
+    """``thread/start`` and ``turn/start`` name the directory inside the
+    environment (``/c/...`` on Windows), never the host's own spelling."""
+    monkeypatch.setattr(
+        codex_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
+    )
+    process = _Process()
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = CodexAppServerAdapter()
+    context = _context(tmp_path)
+
+    await adapter.run_turn(
+        "go", context, ConversationRecord(key=context.conversation_key), lambda _e: None
+    )
+    await adapter.close()
+
+    started = next(
+        message["params"]
+        for message in process.messages
+        if message.get("method") == "thread/start"
+    )
+    assert started["cwd"] == f"/guest{tmp_path.as_posix()}"
+    assert _turn_start(process)["cwd"] == f"/guest{tmp_path.as_posix()}"

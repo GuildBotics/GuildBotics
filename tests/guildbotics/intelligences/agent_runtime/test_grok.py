@@ -16,6 +16,7 @@ from acp_fake_peer import (
 )
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
@@ -1645,3 +1646,20 @@ async def test_disabled_resume_without_load_session_is_unsupported(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+
+@pytest.mark.asyncio
+async def test_the_session_names_the_working_directory_as_the_guest_spells_it(
+    monkeypatch, tmp_path
+) -> None:
+    """``session/new`` names the directory inside the environment (``/c/...``
+    on Windows), never the host's own spelling."""
+    monkeypatch.setattr(
+        acp_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
+    )
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
+
+    await _run(GrokAcpAdapter(), tmp_path)
+
+    assert peer.sent("session/new")["params"]["cwd"] == f"/guest{tmp_path.as_posix()}"

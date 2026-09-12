@@ -12,7 +12,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
 )
-from guildbotics.intelligences.agent_environment.spec import guest_home
+from guildbotics.intelligences.agent_environment.spec import guest_home, guest_path
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
     start_turn_environment,
@@ -189,7 +189,7 @@ class CodexAppServerAdapter:
                             "text": self._member_broker.prompt(prompt),
                         }
                     ],
-                    "cwd": str(context.cwd),
+                    "cwd": guest_path(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
                     **turn_settings,
                 },
@@ -406,7 +406,7 @@ class CodexAppServerAdapter:
         else:
             response = await self._request(
                 "thread/start",
-                {"cwd": str(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
+                {"cwd": guest_path(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
             )
         thread_id = _identifier(_dict(_dict(response).get("thread")))
         if not thread_id:
