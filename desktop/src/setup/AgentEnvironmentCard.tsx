@@ -14,6 +14,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Hammer, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
+import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
@@ -21,6 +22,7 @@ import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import {
   buildAgentEnvironment,
   getAgentEnvironmentStatus,
+  recheckCliAgentUsage,
   type AgentEnvironmentStatusResponse,
   type EnvironmentToolStatus,
   type SnapshotState,
@@ -217,7 +219,18 @@ export function AgentEnvironmentCard({
                 </Table.Td>
               </Table.Tr>
               {data.tools.map((tool) => (
-                <Table.Tr key={tool.name} id={`${AGENT_ENVIRONMENT_CARD_ID}-tool-${tool.name}`}>
+                <Table.Tr
+                  key={tool.name}
+                  id={`${AGENT_ENVIRONMENT_CARD_ID}-tool-${tool.name}`}
+                  style={{
+                    background: tool.problem ? "var(--mantine-color-yellow-light)" : undefined,
+                    outline:
+                      focusElement === `${AGENT_ENVIRONMENT_CARD_ID}-tool-${tool.name}`
+                        ? "1px solid var(--mantine-color-teal-6)"
+                        : undefined,
+                    scrollMarginTop: 24,
+                  }}
+                >
                   <Table.Th style={narrow}>{tool.label}</Table.Th>
                   <Table.Td>
                     <ToolLogin tool={tool} />
@@ -234,7 +247,17 @@ export function AgentEnvironmentCard({
 
 /** One tool's login on this device, with the command that performs it. */
 function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
+  const recheck = useMutation({
+    mutationFn: () => recheckCliAgentUsage(tool.name),
+    onSuccess: async (usage) => {
+      queryClient.setQueryData(["cli-agent-usage"], usage);
+      const updated = await getAgentEnvironmentStatus();
+      queryClient.setQueryData(["agent-environment-status"], updated);
+      await queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
+    },
+  });
   if (!tool.provisioned) {
     return (
       <Badge color="gray" variant="light" size="sm">
@@ -243,14 +266,89 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
     );
   }
   const command = tool.login_command;
+  const check = tool.usage_check;
+  const resultKey = tool.authentication_failed
+    ? "toolAuthenticationFailed"
+    : check?.status === "failed"
+      ? "usageFailed"
+      : check?.status === "succeeded"
+        ? "usageSucceeded"
+        : null;
   return (
-    <Stack gap={4}>
-      <Badge color={cliToolStatusColor(tool)} variant="light" size="sm">
-        {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
-      </Badge>
+    <Stack gap="xs" py={4}>
+      <Group gap="xs">
+        <Badge
+          color={
+            recheck.isPending
+              ? "info"
+              : tool.authentication_failed
+                ? "danger"
+                : resultKey
+                  ? tool.problem
+                    ? "warning"
+                    : "success"
+                  : cliToolStatusColor(tool)
+          }
+          variant="light"
+          size="sm"
+        >
+          {t(
+            `setup.intelligence.environment.${recheck.isPending ? "usageChecking" : (resultKey ?? cliToolStatusKey(tool))}`,
+          )}
+        </Badge>
+        {check && (
+          <Text size="xs" c="dimmed">
+            {t("setup.intelligence.environment.lastChecked", {
+              time: new Date(check.checked_at).toLocaleString(i18n.language),
+            })}
+          </Text>
+        )}
+      </Group>
+      {resultKey && (
+        <Text size="xs" c="dimmed">
+          {t(
+            `setup.intelligence.environment.${tool.credentials_saved ? "toolCredentialsSaved" : "toolCredentialsMissing"}`,
+          )}
+        </Text>
+      )}
+      {tool.problem && <Text size="sm">{tool.problem}</Text>}
+      {recheck.isError && (
+        <Text size="sm" c="danger" role="alert">
+          {t("setup.intelligence.environment.recheckError")}
+        </Text>
+      )}
+      <Group gap="xs">
+        {tool.usage_supported && (
+          <Button
+            size="compact-xs"
+            variant={tool.problem ? "light" : "subtle"}
+            loading={recheck.isPending}
+            disabled={!tool.credentials_saved}
+            leftSection={<RefreshCw size={12} />}
+            onClick={() => recheck.mutate()}
+          >
+            {t("setup.intelligence.environment.recheck")}
+          </Button>
+        )}
+        {check?.status === "failed" && (
+          <Button
+            component={Link}
+            to={`/diagnostics?tab=executions${check.trace_id ? `&trace_id=${encodeURIComponent(check.trace_id)}` : ""}`}
+            size="compact-xs"
+            variant="subtle"
+          >
+            {t("setup.intelligence.environment.errorDetails")}
+          </Button>
+        )}
+      </Group>
       <Text size="xs" c="dimmed">
         {t("setup.intelligence.environment.loginHint")}
       </Text>
+      {tool.usage_supported && (
+        <Text size="xs" c="dimmed">
+          {t("setup.intelligence.environment.loginRecheckHint")}
+        </Text>
+      )}
       <Group gap="xs">
         <Code>{command}</Code>
         <CopyButton value={command}>

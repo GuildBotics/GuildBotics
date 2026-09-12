@@ -1052,6 +1052,14 @@ class CliAgentUsage(BaseModel):
     checked_at: str = ""
 
 
+class CliAgentUsageCheck(BaseModel):
+    """Latest completed usage probe, shared by settings and notifications."""
+
+    status: Literal["succeeded", "failed"]
+    checked_at: str
+    trace_id: str = ""
+
+
 class CliAgentUsagesResponse(BaseModel):
     usages: list[CliAgentUsage] = Field(default_factory=list)
 
@@ -1222,6 +1230,8 @@ class EnvironmentToolStatus(BaseModel):
     login_command: str
     #: Current guidance, including a past failure that does not block retries.
     problem: str = ""
+    usage_supported: bool = False
+    usage_check: CliAgentUsageCheck | None = None
 
 
 class EnvironmentSlotStatus(BaseModel):

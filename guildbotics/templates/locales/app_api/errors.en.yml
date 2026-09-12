@@ -1,4 +1,5 @@
 en:
+  cli_agent_usage_failed: "Could not retrieve %{label} usage. The cause has not been identified. Check again or open the error details in the tool's settings."
   command_workspace_changing: "The Desktop workspace is being switched. Try again after it finishes."
   # One key per sentence. A code that answers several situations nests one
   # key per situation; the pair of this file and errors.ja.yml is what keeps

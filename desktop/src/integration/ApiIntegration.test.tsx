@@ -491,6 +491,8 @@ describe("Setup integration (real client + mock server)", () => {
             provisioned: true,
             credentials_saved: true,
             authentication_failed: false,
+            usage_supported: false,
+            usage_check: null,
             login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
             problem: "",
           },

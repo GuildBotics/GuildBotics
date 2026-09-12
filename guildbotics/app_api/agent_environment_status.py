@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from guildbotics.app_api.models import (
     AgentEnvironmentStatusResponse,
+    CliAgentUsageCheck,
     EnvironmentAccessStatus,
     EnvironmentDenyStatus,
     EnvironmentDnsStatus,
@@ -48,8 +49,10 @@ from guildbotics.intelligences.agent_environment.status import (
     device_status,
     login_command,
 )
+from guildbotics.intelligences.agent_runtime.usage import CLI_AGENT_USAGE_READERS
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
 from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.utils.i18n_tool import t
 
 
 def agent_environment_status(
@@ -58,6 +61,7 @@ def agent_environment_status(
     platform: str = sys.platform,
     build_output: list[str] | None = None,
     building_here: bool = False,
+    usage_checks: dict[str, CliAgentUsageCheck] | None = None,
 ) -> AgentEnvironmentStatusResponse:
     """Read the device and resolve every slot of the given members against it.
 
@@ -69,6 +73,7 @@ def agent_environment_status(
         platform: This device's platform.
         build_output: The tail of the build this process last ran.
         building_here: This process has just started a build.
+        usage_checks: Latest completed probes, shared with the alert band.
     """
     home = Path.home()
     device = device_status(building_here=building_here)
@@ -121,7 +126,9 @@ def agent_environment_status(
                 credentials_saved=tool.credentials_saved,
                 authentication_failed=tool.authentication_failed,
                 login_command=login_command(tool.name, platform=platform),
-                problem=tool.problem,
+                problem=tool.problem or _usage_problem(tool.name, usage_checks or {}),
+                usage_supported=tool.name in CLI_AGENT_USAGE_READERS,
+                usage_check=(usage_checks or {}).get(tool.name),
             )
             for tool in device.tools
         ],
@@ -176,13 +183,22 @@ def _slot_status(
 EnvironmentProblemEntry = tuple[str, str, str, str]
 
 
-def agent_environment_problems(person_ids: list[str]) -> list[EnvironmentProblemEntry]:
-    """Everything that keeps work from starting on this device, by what to open.
+def _usage_problem(name: str, checks: dict[str, CliAgentUsageCheck]) -> str:
+    check = checks.get(name)
+    if check is None or check.status != "failed":
+        return ""
+    return t("app_api.errors.cli_agent_usage_failed", label=cli_agent_info(name).label)
 
-    A tool is reported only when an active member's slot uses it: a login the
-    workspace never needs is not a problem.
+
+def agent_environment_problems(
+    person_ids: list[str], *, usage_checks: dict[str, CliAgentUsageCheck] | None = None
+) -> list[EnvironmentProblemEntry]:
+    """Current device/tool problems, by the setting that addresses them.
+
+    A tool is reported when an active member uses it or its usage probe failed.
+    Unused tools with no failed probe do not produce missing-login alerts.
     """
-    status = agent_environment_status(person_ids)
+    status = agent_environment_status(person_ids, usage_checks=usage_checks)
     entries: list[EnvironmentProblemEntry] = []
     if status.problem_setting:
         entries.append(("", "", status.problem_setting, status.problem))
@@ -190,7 +206,11 @@ def agent_environment_problems(person_ids: list[str]) -> list[EnvironmentProblem
     entries += [
         ("", tool.name, "tool", tool.problem)
         for tool in status.tools
-        if tool.name in used and tool.problem
+        if tool.problem
+        and (
+            tool.name in used
+            or (tool.usage_check and tool.usage_check.status == "failed")
+        )
     ]
     entries += [
         (member.person_id, slot.slot, problem.setting, problem.reason)

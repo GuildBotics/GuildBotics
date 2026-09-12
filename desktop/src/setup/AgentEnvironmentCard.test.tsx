@@ -1,12 +1,15 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildAgentEnvironment,
   getAgentEnvironmentStatus,
+  recheckCliAgentUsage,
+  type CliAgentUsagesResponse,
   type AgentEnvironmentStatusResponse,
 } from "../api/client";
 import i18n from "../i18n";
@@ -17,6 +20,7 @@ vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   getAgentEnvironmentStatus: vi.fn(),
   buildAgentEnvironment: vi.fn(),
+  recheckCliAgentUsage: vi.fn(),
 }));
 
 const t = i18n.getFixedT("en");
@@ -42,6 +46,8 @@ function status(
         provisioned: true,
         credentials_saved: true,
         authentication_failed: false,
+        usage_supported: false,
+        usage_check: null,
         login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
         problem: "",
       },
@@ -52,6 +58,8 @@ function status(
         provisioned: true,
         credentials_saved: false,
         authentication_failed: false,
+        usage_supported: false,
+        usage_check: null,
         login_command: "/Users/me/.guildbotics/bin/guildbotics environment login claude",
         problem: "No credentials are saved for Claude Code on this device.",
       },
@@ -62,6 +70,8 @@ function status(
         provisioned: false,
         credentials_saved: false,
         authentication_failed: false,
+        usage_supported: false,
+        usage_check: null,
         login_command: "/Users/me/.guildbotics/bin/guildbotics environment login grok",
         problem: "Grok Build is not provisioned in the agent environment yet.",
       },
@@ -76,19 +86,125 @@ function status(
 
 function renderCard(focusElement?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const rendered = render(
     <MantineProvider env="test">
       <QueryClientProvider client={client}>
-        <AgentEnvironmentCard focusElement={focusElement} />
+        <MemoryRouter>
+          <AgentEnvironmentCard focusElement={focusElement} />
+        </MemoryRouter>
       </QueryClientProvider>
     </MantineProvider>,
   );
+  return { ...rendered, client };
 }
 
 describe("AgentEnvironmentCard", () => {
   beforeEach(() => {
     vi.mocked(getAgentEnvironmentStatus).mockReset();
     vi.mocked(buildAgentEnvironment).mockReset();
+    vi.mocked(recheckCliAgentUsage).mockReset();
+  });
+
+  it.each(["en", "ja"])(
+    "shows a failed usage check and verifies recovery in %s",
+    async (language) => {
+      await i18n.changeLanguage(language);
+      const tr = i18n.getFixedT(language);
+      const user = userEvent.setup();
+      const data = status();
+      const check = {
+        status: "failed" as const,
+        checked_at: "2026-09-12T12:00:00Z",
+        trace_id: "system:usage-test",
+      };
+      data.tools[0] = {
+        ...data.tools[0],
+        usage_supported: true,
+        usage_check: check,
+        problem: "Usage retrieval failed.",
+      };
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+      let finish!: (value: CliAgentUsagesResponse) => void;
+      vi.mocked(recheckCliAgentUsage).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const { client } = renderCard("agent-environment-tool-codex");
+      await screen.findByText(tr("setup.intelligence.environment.usageFailed"));
+      const row = within(document.getElementById("agent-environment-tool-codex")!);
+      expect(
+        row.getByText(tr("setup.intelligence.environment.toolCredentialsSaved")),
+      ).toBeVisible();
+      expect(row.getByText("Usage retrieval failed.")).toBeVisible();
+      expect(
+        row.getByRole("link", { name: tr("setup.intelligence.environment.errorDetails") }),
+      ).toHaveAttribute("href", "/diagnostics?tab=executions&trace_id=system%3Ausage-test");
+      expect(
+        row.getByText(
+          tr("setup.intelligence.environment.lastChecked", {
+            time: new Date(check.checked_at).toLocaleString(language),
+          }),
+        ),
+      ).toBeVisible();
+      // Rereading saved state must not be presented as a new provider check.
+      await user.click(
+        screen.getByRole("button", { name: tr("setup.intelligence.environment.refresh") }),
+      );
+      expect(recheckCliAgentUsage).not.toHaveBeenCalled();
+      await user.click(
+        row.getByRole("button", { name: tr("setup.intelligence.environment.recheck") }),
+      );
+      expect(recheckCliAgentUsage).toHaveBeenCalledWith("codex");
+      expect(row.getByText(tr("setup.intelligence.environment.usageChecking"))).toBeVisible();
+      expect(
+        row.getByRole("button", { name: tr("setup.intelligence.environment.recheck") }),
+      ).toBeDisabled();
+      const recovered = status({
+        tools: [
+          {
+            ...data.tools[0],
+            problem: "",
+            usage_check: { ...check, status: "succeeded", checked_at: "2026-09-12T12:01:00Z" },
+          },
+        ],
+      });
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(recovered);
+      const invalidate = vi.spyOn(client, "invalidateQueries");
+      await act(async () => finish({ usages: [] }));
+      await screen.findByText(tr("setup.intelligence.environment.usageSucceeded"));
+      expect(screen.queryByText("Usage retrieval failed.")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("link", { name: tr("setup.intelligence.environment.errorDetails") }),
+      ).not.toBeInTheDocument();
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["system-alerts"] });
+      await i18n.changeLanguage("en");
+    },
+  );
+
+  it("keeps the previous result visible when a recheck request fails", async () => {
+    const data = status();
+    data.tools[0] = {
+      ...data.tools[0],
+      usage_supported: true,
+      usage_check: {
+        status: "failed",
+        checked_at: "2026-09-12T12:00:00Z",
+        trace_id: "system:failed",
+      },
+      problem: "Previous failure",
+    };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+    vi.mocked(recheckCliAgentUsage).mockRejectedValue(new Error("offline"));
+    renderCard();
+    await userEvent.click(
+      await screen.findByRole("button", { name: t("setup.intelligence.environment.recheck") }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      t("setup.intelligence.environment.recheckError"),
+    );
+    expect(screen.getByText("Previous failure")).toBeVisible();
   });
 
   it("shows the runtime, the snapshot, the resolvers, and each tool's login on this device", async () => {
@@ -141,6 +257,8 @@ describe("AgentEnvironmentCard", () => {
           name: "gemini",
           label: "Gemini",
           authentication_failed: true,
+          usage_supported: false,
+          usage_check: null,
           login_command: "/Users/me/.guildbotics/bin/guildbotics environment login gemini",
         },
       ];
