@@ -377,7 +377,7 @@ class RuntimeStub:
         )
 
     async def get_cli_agent_usage(
-        self, refresh: bool = False
+        self, refresh: bool = False, agent_name: str | None = None
     ) -> CliAgentUsagesResponse:
         return CliAgentUsagesResponse(
             usages=[
@@ -1234,16 +1234,38 @@ async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
 
     runtime = AppRuntime(EventBus())
 
-    async def failing_read(executable: str, timeout: float = 20.0):
+    async def failing_read():
         raise CliAgentUsageError("not logged in")
 
     from guildbotics.intelligences.agent_runtime import usage as usage_module
 
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", failing_read)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.has_credentials",
+        lambda agent: agent.name == "codex",
+    )
 
     response = await runtime.get_cli_agent_usage()
 
     assert response.usages == []
+
+
+def test_usage_endpoint_forwards_targeted_recheck(tmp_path, monkeypatch):
+    runtime = RuntimeStub(tmp_path)
+    calls = []
+
+    async def read(refresh=False, agent_name=None):
+        calls.append((refresh, agent_name))
+        return CliAgentUsagesResponse()
+
+    monkeypatch.setattr(runtime, "get_cli_agent_usage", read)
+    with TestClient(create_app(session_token="secret", runtime=runtime)) as client:
+        response = client.get(
+            "/intelligences/cli-agents/usage?refresh=true&agent=claude",
+            headers={"X-GuildBotics-Session-Token": "secret"},
+        )
+    assert response.status_code == HTTP_OK
+    assert calls == [(True, "claude")]
 
 
 def test_scenario_diagnostics_endpoint_uses_runtime(tmp_path: Path) -> None:

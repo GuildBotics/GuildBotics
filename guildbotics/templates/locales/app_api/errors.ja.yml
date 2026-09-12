@@ -1,4 +1,5 @@
 ja:
+  cli_agent_usage_failed: "%{label} の利用レートを取得できませんでした。原因はまだ特定できていません。対象ツールの設定で再確認するか、エラー詳細を開いてください。"
   command_workspace_changing: "Desktop のワークスペースを切り替えています。完了後にもう一度実行してください。"
   # errors.en.yml と 1 key = 1 文で対応する。片方だけの変更は
   # tests/guildbotics/app_api/test_api_error_messages.py が検出する。

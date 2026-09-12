@@ -941,7 +941,7 @@ def test_build_agent_environment_runs_in_the_background_and_reports_its_lines(
     monkeypatch.setattr(
         runtime_module,
         "agent_environment_status",
-        lambda ids, *, build_output, building_here: SimpleNamespace(
+        lambda ids, *, build_output, building_here, usage_checks: SimpleNamespace(
             output=list(build_output), building=building_here
         ),
     )

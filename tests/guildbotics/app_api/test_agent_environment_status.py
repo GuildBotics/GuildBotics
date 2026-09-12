@@ -512,3 +512,124 @@ def test_card_and_guidance_share_the_login_command(monkeypatch, home, failed):
     for tool in agent_environment_status([]).tools:
         if tool.provisioned:
             assert f"`{tool.login_command}`" in tool.problem
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent", ["codex", "claude", "grok"])
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_usage_result_is_shared_by_card_and_alerts(
+    monkeypatch, home, agent, language
+):
+    from dataclasses import replace
+
+    from guildbotics.app_api.events import EventBus
+    from guildbotics.app_api.runtime import AppRuntime
+    from guildbotics.intelligences.agent_runtime import usage
+    from guildbotics.observability.diagnostics_store import DiagnosticsStore
+    from guildbotics.utils.i18n_tool import set_language
+
+    set_language(language)
+    _device(monkeypatch, credentials_saved=frozenset({agent}))
+    store = DiagnosticsStore()
+    store.start_system_session("usage-test")
+    runtime = AppRuntime(EventBus(), diagnostics_store=store)
+    monkeypatch.setattr(runtime, "_active_agent_ids", lambda: [])
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.has_credentials", lambda tool: tool.name == agent
+    )
+    failed = True
+    calls = 0
+
+    async def read():
+        nonlocal calls
+        calls += 1
+        if failed:
+            raise usage.CliAgentUsageError(
+                "provider detail belongs only in diagnostics"
+            )
+        return usage.CliAgentUsageSnapshot(
+            agent=agent, windows=[usage.CliAgentUsageWindow("primary", 12)]
+        )
+
+    monkeypatch.setitem(usage.CLI_AGENT_USAGE_READERS, agent, read)
+
+    def tool():
+        return next(
+            t for t in runtime.get_agent_environment_status().tools if t.name == agent
+        )
+
+    assert runtime.get_system_alerts().alerts == []
+    assert tool().usage_check is None
+    assert (await runtime.get_cli_agent_usage()).usages == []
+    check = tool().usage_check
+    assert check.status == "failed"
+    assert check.checked_at
+    assert check.trace_id == store.latest_system_trace_id()
+    alerts = runtime.get_system_alerts().alerts
+    assert [(a.command, a.reason) for a in alerts] == [(agent, tool().problem)]
+    assert alerts[0].reason == t(
+        "app_api.errors.cli_agent_usage_failed", label=tool().label
+    )
+    assert "provider detail" not in tool().problem
+    assert tool().usage_supported
+    await runtime.get_cli_agent_usage()
+    assert calls == 1
+
+    original = module.device_status()
+    monkeypatch.setattr(
+        module,
+        "device_status",
+        lambda **_: replace(
+            original,
+            tools=tuple(
+                replace(item, authentication_failed=item.name == agent)
+                for item in original.tools
+            ),
+        ),
+    )
+    assert tool().authentication_failed
+    assert len(runtime.get_system_alerts().alerts) == 1
+    assert runtime.get_system_alerts().alerts[0].reason == tool().problem
+    assert tool().problem != t(
+        "app_api.errors.cli_agent_usage_failed", label=tool().label
+    )
+
+    monkeypatch.setattr(module, "device_status", lambda **_: original)
+    failed = False
+    await runtime.get_cli_agent_usage(refresh=True, agent_name=agent)
+    assert calls == 2
+    assert tool().usage_check.status == "succeeded"
+    assert tool().problem == ""
+    assert runtime.get_system_alerts().alerts == []
+
+
+@pytest.mark.asyncio
+async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
+    from guildbotics.app_api.events import EventBus
+    from guildbotics.app_api.errors import AppApiError
+    from guildbotics.app_api.runtime import AppRuntime
+    from guildbotics.intelligences.agent_runtime import usage
+
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr("guildbotics.app_api.runtime.has_credentials", lambda _: True)
+    calls = []
+    for name in usage.CLI_AGENT_USAGE_READERS:
+
+        async def read(name=name):
+            calls.append(name)
+            return usage.CliAgentUsageSnapshot(
+                agent=name, windows=[usage.CliAgentUsageWindow("primary", 12)]
+            )
+
+        monkeypatch.setitem(usage.CLI_AGENT_USAGE_READERS, name, read)
+
+    first = await runtime.get_cli_agent_usage()
+    calls.clear()
+    second = await runtime.get_cli_agent_usage(refresh=True, agent_name="claude")
+    assert calls == ["claude"]
+    assert second == first
+    await runtime.get_cli_agent_usage()
+    assert calls == ["claude"]
+    with pytest.raises(AppApiError):
+        await runtime.get_cli_agent_usage(refresh=True, agent_name="unknown")
+    assert calls == ["claude"]

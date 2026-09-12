@@ -50,6 +50,8 @@ it.each([
       provisioned: Boolean(provisioned),
       credentials_saved: Boolean(credentials_saved),
       authentication_failed: Boolean(authentication_failed),
+      usage_supported: false,
+      usage_check: null,
       login_command: "guildbotics environment login codex",
       problem: "",
     };

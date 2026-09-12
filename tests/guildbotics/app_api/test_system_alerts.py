@@ -505,7 +505,8 @@ def test_worker_failure_persists_until_scheduler_restarts(tmp_path: Path) -> Non
 def _environment_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     """The device can run AI CLI turns, so no environment alert joins the band."""
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.agent_environment_problems", lambda ids: []
+        "guildbotics.app_api.runtime.agent_environment_problems",
+        lambda ids, *, usage_checks: [],
     )
 
 

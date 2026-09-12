@@ -4,6 +4,31 @@ import { expect, test } from "@playwright/test";
 
 import { readStackContext } from "./stack-context";
 
+test("shows usage checks from the real backend without probing missing credentials", async ({
+  page,
+}) => {
+  const usageRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/intelligences/cli-agents/usage"))
+      usageRequests.push(request.url());
+  });
+  await page.goto("/#/setup?section=intelligence&focus=agent-environment-tool-codex");
+  const row = page.locator("#agent-environment-tool-codex");
+  await expect(row).toBeVisible();
+  await expect(row.getByText("No credentials saved on this device", { exact: true })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Check again", exact: true })).toBeDisabled();
+  await expect(row.getByText("Usage check succeeded", { exact: true })).toHaveCount(0);
+  await expect(row.getByRole("link", { name: "Error details", exact: true })).toHaveCount(0);
+  const before = usageRequests.length;
+  const refreshed = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/intelligences/agent-environment") && response.status() === 200,
+  );
+  await page.getByRole("button", { name: "Refresh display", exact: true }).click();
+  await refreshed;
+  expect(usageRequests.length).toBe(before);
+});
+
 // Journey ⑤: Diagnostics against the REAL backend.
 //
 // The "diagnostics" stack is seeded WITHOUT an LLM API key (offline mode), so

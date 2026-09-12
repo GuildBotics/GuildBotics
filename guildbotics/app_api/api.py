@@ -1057,9 +1057,10 @@ def create_app(
     )
     async def cli_agent_usage(
         refresh: bool = False,
+        agent: str | None = None,
         _: None = Depends(require_token),
     ) -> CliAgentUsagesResponse:
-        return await app_runtime.get_cli_agent_usage(refresh=refresh)
+        return await app_runtime.get_cli_agent_usage(refresh=refresh, agent_name=agent)
 
     @app.get(
         "/intelligences/agent-environment",

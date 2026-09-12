@@ -609,3 +609,34 @@ def test_usage_reader_registry_covers_supported_tools() -> None:
         "codex": read_codex_usage,
         "grok": read_grok_usage,
     } == CLI_AGENT_USAGE_READERS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
+@pytest.mark.parametrize("outcome", ["windows", "empty", "error"])
+async def test_usage_recovery_only_clears_authentication_on_usable_data(
+    monkeypatch, name, outcome
+):
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    tool = cli_agent_info(name)
+    provider_state.record_authentication_outcome(tool, failed=True)
+
+    async def read():
+        if outcome == "error":
+            raise CliAgentUsageError("connection failed")
+        return usage_module.CliAgentUsageSnapshot(
+            agent=name,
+            windows=[usage_module.CliAgentUsageWindow("primary", 12)]
+            if outcome == "windows"
+            else [],
+        )
+
+    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
+    if outcome != "windows":
+        with pytest.raises(CliAgentUsageError):
+            await usage_module.read_cli_agent_usage(name)
+    else:
+        await usage_module.read_cli_agent_usage(name)
+    assert provider_state.authentication_failed(tool) is (outcome != "windows")

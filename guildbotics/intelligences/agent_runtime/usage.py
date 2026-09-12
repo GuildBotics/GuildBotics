@@ -24,6 +24,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from guildbotics.intelligences.agent_environment.provider_state import (
+    record_authentication_outcome,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
@@ -34,6 +37,7 @@ from guildbotics.intelligences.agent_runtime.environment import (
     start_probe_environment,
 )
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+from guildbotics.intelligences.cli_agents import cli_agent_info
 
 LIMIT_REACHED_PERCENT = 100.0
 
@@ -551,3 +555,14 @@ CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]
     "codex": read_codex_usage,
     "grok": read_grok_usage,
 }
+
+
+async def read_cli_agent_usage(name: str) -> CliAgentUsageSnapshot:
+    """Read usage and clear a known authentication failure only on usable data."""
+    snapshot = await CLI_AGENT_USAGE_READERS[name]()
+    if not snapshot.windows:
+        raise CliAgentUsageError(
+            f"{cli_agent_info(name).label} reported no usage windows."
+        )
+    record_authentication_outcome(cli_agent_info(name), failed=False)
+    return snapshot

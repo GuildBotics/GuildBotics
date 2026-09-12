@@ -1023,6 +1023,12 @@ export type EnvironmentToolStatus = {
   login_command: string;
   // Current guidance, including a past authentication failure that does not block retries.
   problem: string;
+  usage_supported: boolean;
+  usage_check: {
+    status: "succeeded" | "failed";
+    checked_at: string;
+    trace_id: string;
+  } | null;
 };
 
 // The shared declaration of the agent environment: what every device builds.
@@ -1657,6 +1663,10 @@ export async function getMemoryEvents(params?: {
 
 export async function getCliAgentUsage(): Promise<CliAgentUsagesResponse> {
   return request("/intelligences/cli-agents/usage");
+}
+
+export async function recheckCliAgentUsage(agent: string): Promise<CliAgentUsagesResponse> {
+  return request(`/intelligences/cli-agents/usage?refresh=true&agent=${encodeURIComponent(agent)}`);
 }
 
 export async function getLlmProviders(): Promise<LlmProviderInfo[]> {
