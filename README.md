@@ -671,11 +671,6 @@ including status checks, use its authenticated loopback API to access the keycha
 in the GUI session. If Desktop is unavailable, the transfer asks you to start it.
 Windows and Linux hubs access their OS secret stores directly.
 
-**Existing hubs must receive their credentials again after this update.** Hub
-keychain entries now hold the value and its generation together. On a device that
-holds the desired value, use **Send** on each key or `guildbotics secrets push KEY`.
-The workspace's own stored credentials are unchanged; old Hub entries are not read.
-
 **On a machine you have just added**, choose **Fetch all credentials** once. Everything
 this machine lacks or holds an older value for arrives in a single exchange and goes
 straight into this machine's OS secret store. Nothing is retyped.

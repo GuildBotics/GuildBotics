@@ -270,12 +270,16 @@ def _run_transfer(
     action: Callable[[], list[SecretTransferOutcome]],
 ) -> list[SecretTransferOutcome]:
     """Run one transfer, reporting a hub failure as a command error."""
+    desktop_help = t("app_api.errors.hub_desktop_required")
     try:
-        return action()
+        outcomes = action()
     except HubDesktopRequiredError as exc:
-        raise click.ClickException(t("app_api.errors.hub_desktop_required")) from exc
+        raise click.ClickException(desktop_help) from exc
     except (HubSecretError, HubUnreachableError, OpenSshNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
+    if any(outcome.status == "desktop_required" for outcome in outcomes):
+        click.echo(desktop_help, err=True)
+    return outcomes
 
 
 def _report(outcomes: list[SecretTransferOutcome]) -> None:
@@ -284,12 +288,7 @@ def _report(outcomes: list[SecretTransferOutcome]) -> None:
         generation = (
             "" if outcome.generation is None else f" (generation {outcome.generation})"
         )
-        status = (
-            t("app_api.errors.hub_desktop_required")
-            if outcome.status == "desktop_required"
-            else outcome.status
-        )
-        click.echo(f"{outcome.key}: {status}{generation}")
+        click.echo(f"{outcome.key}: {outcome.status}{generation}")
 
 
 def _refresh() -> None:

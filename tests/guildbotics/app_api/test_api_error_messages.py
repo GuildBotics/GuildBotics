@@ -25,6 +25,7 @@ LOCALES = Path("guildbotics/templates/locales/app_api")
 #: the literal scan below cannot see.
 KEYS_BEHIND_CONSTANTS = {
     "config_changed",  # config_revisions.CONFIG_CHANGED
+    "hub_desktop_required",  # workspace_secrets._hub_error_code / _reporting
 }
 
 _CALL_NAMES = {"AppApiError", "_error", "_reporting", "api_error_message"}

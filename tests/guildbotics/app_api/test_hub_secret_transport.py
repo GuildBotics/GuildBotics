@@ -27,6 +27,28 @@ HEADERS = {"X-GuildBotics-Session-Token": TOKEN}
 VALUE = "synthetic-credential\r\n日本語\n"
 
 
+@pytest.mark.parametrize("operation", ["list", "send", "receive"])
+@pytest.mark.parametrize(
+    "workspace_id",
+    [
+        "../../workspace/secrets",
+        "../commands",
+        "not-a-uuid",
+        "urn:uuid:11111111-2222-3333-4444-555555555555",
+    ],
+)
+def test_invalid_workspace_is_refused_before_discovery(
+    monkeypatch, operation, workspace_id
+):
+    def forbidden():
+        pytest.fail("an invalid ID must not reach Desktop discovery or HTTP")
+
+    monkeypatch.setattr(secret_transport, "read_endpoint", forbidden)
+    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
+    with pytest.raises(host.InvalidWorkspaceIdError):
+        secret_transport.execute(operation, workspace_id)
+
+
 @pytest.fixture
 def desktop(monkeypatch):
     host.create_hub()
@@ -42,7 +64,7 @@ def desktop(monkeypatch):
         ],
         workspace=None,
     )
-    monkeypatch.setattr(secret_transport, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
     monkeypatch.setattr(secret_transport, "read_endpoint", lambda: endpoint)
     requests = []
 

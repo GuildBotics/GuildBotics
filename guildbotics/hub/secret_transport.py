@@ -7,9 +7,11 @@ from http import HTTPStatus
 
 import httpx
 
-from guildbotics.hub import secret_service
+from guildbotics.hub import host, secret_service
 from guildbotics.hub.secret_host import HubSecretError
 from guildbotics.utils.local_api import read_endpoint
+
+DELEGATES_TO_DESKTOP = sys.platform == "darwin"
 
 
 def execute(
@@ -23,7 +25,8 @@ def execute(
     Values stay in framed bytes in memory. Neither failed responses nor HTTP
     exceptions are quoted, and a submitted request is never retried.
     """
-    if sys.platform != "darwin":
+    host.require_workspace_id(workspace_id)
+    if not DELEGATES_TO_DESKTOP:
         return secret_service.handle(operation, workspace_id, payload, keys)
     endpoint = read_endpoint()
     if endpoint is not None:

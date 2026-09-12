@@ -268,11 +268,10 @@ def _reporting(message_key: str) -> Iterator[None]:
     try:
         yield
     except _HUB_FAILURES as exc:
+        code = _hub_error_code(exc)
         raise AppApiError(
-            _hub_error_code(exc),
-            "hub_desktop_required"
-            if isinstance(exc, HubDesktopRequiredError)
-            else message_key,
+            code,
+            code if code == "hub_desktop_required" else message_key,
             context={"detail": str(exc)},
             status_code=409,
         ) from exc

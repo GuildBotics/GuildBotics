@@ -425,6 +425,15 @@ def test_desktop_requirement_is_localized(monkeypatch):
 
     @click.command()
     def report():
-        _report([SecretTransferOutcome("A_TOKEN", "desktop_required")])
+        _report(
+            _run_transfer(
+                lambda: [
+                    SecretTransferOutcome("A_TOKEN", "desktop_required"),
+                    SecretTransferOutcome("B_TOKEN", "desktop_required"),
+                ]
+            )
+        )
 
-    assert t("app_api.errors.hub_desktop_required") in CliRunner().invoke(report).output
+    result = CliRunner().invoke(report)
+    assert result.stdout == "A_TOKEN: desktop_required\nB_TOKEN: desktop_required\n"
+    assert result.stderr == t("app_api.errors.hub_desktop_required") + "\n"
