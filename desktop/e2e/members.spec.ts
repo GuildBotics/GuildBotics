@@ -18,15 +18,27 @@ test("adds a second member through the UI and persists it to the backend", async
   const ctx = readStackContext("members");
   expect(ctx.seeded).toBe(true);
 
+  let releaseSave = () => {};
+  const saveMayContinue = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  await page.route("**/config/members", async (route) => {
+    if (route.request().method() === "POST") {
+      await saveMayContinue;
+    }
+    await route.continue();
+  });
+
   // The Members section of the configured Settings screen (deep link, mirroring
   // SetupPage.test.tsx `?section=members`).
   await page.goto("/#/setup?section=members");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
-  // The seeded member is already listed. Rows are matched by their own text
-  // element: the default-executor select repeats the same labels in its
-  // options, so an unscoped text match would resolve to several nodes.
-  const memberRow = (label: string) => page.locator("p").filter({ hasText: label });
+  // The seeded member is already listed. Scope rows to the list: both the
+  // default-executor select and the add-form preview repeat member labels.
+  const memberList = page.getByRole("list", { name: "Members" });
+  const memberRow = (label: string) =>
+    memberList.getByRole("listitem").filter({ hasText: label });
 
   await expect(memberRow("Local Agent (local-agent)")).toBeVisible({ timeout: 30_000 });
 
@@ -44,12 +56,19 @@ test("adds a second member through the UI and persists it to the backend", async
   // list row, so a row match alone cannot tell the saved member from the
   // draft: wait for the wire to answer and the form to close before reading
   // the list and the disk.
+  const saveStarted = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).pathname === "/config/members" && request.method() === "POST",
+  );
   const saved = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/config/members" &&
       response.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Add member" }).click();
+  await saveStarted;
+  await expect(memberRow("Second Agent (local-agent-2)")).toHaveCount(0);
+  releaseSave();
   expect((await saved).status()).toBe(200);
   await expect(page.getByRole("button", { name: "Add new member" })).toBeVisible();
 
