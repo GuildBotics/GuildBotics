@@ -98,7 +98,7 @@ Launching the desktop app opens **Project** setup, where you configure:
 - **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
 
-In GuildBotics, the folder you choose as the project's working location is called the **workspace**. Plain text configuration files are written there:
+In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
 - `.guildbotics/local/debug.env`: device-local, non-secret debug settings (log level)
 - `.guildbotics/config/secrets.yml`: index of key names stored in the OS keychain (never the values)
