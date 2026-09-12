@@ -160,6 +160,14 @@ The AI CLI tool loads the member's profile (roles, judgment criteria, speaking s
 
 If you say "remember this" during the session, it is saved as the member's memory. That memory is also used when you delegate work through tickets or Slack.
 
+You can also ask another member for a one-off task during the session:
+
+```text
+Ask bob to review the current changes, including uncommitted edits.
+```
+
+The active member runs the built-in `ask` command and relays bob's result. Bob sees the same working tree; if you ask him to fix something, his edits appear there too. Select the workspace in GuildBotics first, and prepare bob's isolated agent environment and AI CLI login on this machine under **Setup → LLM / AI CLI tools**. The host CLI login used for your interactive session is separate. Reviews can take several minutes; an unavailable environment or login is reported back in the session.
+
 ## Delegate GitHub Tickets
 
 This is the flow where you ask a member for work through a GitHub Projects ticket and delegate investigation, implementation, and PR creation (using the default `ticket_driven_workflow`).

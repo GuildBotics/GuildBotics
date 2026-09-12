@@ -246,7 +246,17 @@ AI CLIツールでは、`cwd` パラメータでAI CLIツールがシステム�
 
 
 ## 4. 組み込みコマンドの利用
-GuildBotics内に存在する[組み込みコマンド](../guildbotics/templates/commands/functions/)を利用することも可能です。
+GuildBotics内に存在する[組み込みコマンド](../guildbotics/templates/commands/)を利用することも可能です。
+
+`ask` は、標準入力の依頼を `--cwd` で指定したディレクトリ上でメンバーに実行させます。たとえば alice に現在の作業ツリーのレビューを頼むには、依頼文を OS の一時ディレクトリに UTF-8 ファイルとして保存し、macOS/Linux では次を実行します。
+
+```shell
+"$HOME/.guildbotics/bin/guildbotics" run ask --person alice --cwd "/path/to/repo" < "/path/to/temporary-request.txt"
+```
+
+Windows では `guildbotics` を使い、ファイルの UTF-8 テキストを標準入力へパイプで渡します。コマンドの終了後は、失敗時も含めて一時ファイルを削除してください。スキルで対話中なら、この呼び出しは対話中のメンバーが行います。
+
+`ask` は `brain: agent` を使い、message は必須です。同じ作業ツリーの未コミット変更を読み、結果を標準出力のテキストで返します。レビュー依頼なら読み取りのみ、修正依頼なら依頼された編集と検証を行います。公開は依頼に含める必要があります。先に GuildBotics のワークスペースを選び（`--cwd` が選ぶのは作業ツリーであり、設定を読むワークスペースではありません）、このマシン上の委任先メンバーのエージェント隔離環境と AI CLI のログインを準備してください。host から実行し、呼び出し元の timeout を長めにするかバックグラウンドで起動して、数分かかる結果を待ちます。隔離環境やログインが使えない場合は、既存 runtime の拒否理由が返ります。
 
 コマンド呼び出し例:
 

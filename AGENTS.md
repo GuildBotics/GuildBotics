@@ -374,6 +374,7 @@ member 向けエージェント指示（SKILL / workflow プロンプト）は�
 - workflow 共通の封筒（実行モードマーカー、isolated workspace、complete 必須、AgentResponse 規定）は `guildbotics/templates/locales/commands/workflows/common.{en,ja}.yml` の `workflow_contract` に置き、各 workflow が `{workflow_contract}` としてテンプレートへ注入する
 - trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_github_ticket` / `functions/handle_chat_event` に書く
 - 対話封筒（共有ワークスペース、`--workspace-mode current`、対話 DOD）だけを `skills/guildbotics/SKILL.md` に書く
+- 単発委任の封筒（現在の cwd、依頼範囲内だけの作業、stdout での結果返却）は `guildbotics/templates/commands/ask.{en,ja}.md` に置く。host から委任を起動する案内は対話スキルに置き、workflow や member 共通カタログには置かない
 - 同じ文が 2 ファイル以上に現れたら、より深い層へ移す。層境界と en/ja 整合は `tests/guildbotics/templates/commands/functions/test_prompt_layer_boundaries.py` が担保する
 
 ## 開発時の基本コマンド（CI 準拠）

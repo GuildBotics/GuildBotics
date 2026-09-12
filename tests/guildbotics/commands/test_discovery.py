@@ -180,3 +180,15 @@ def test_reserved_metadata_files_are_not_command_candidates(
     )
 
     assert result == []
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_ask_resolves_from_bundled_template(tmp_path, monkeypatch, language):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+
+    path = discovery.resolve_command_path("ask", language, person_id="alice")
+
+    assert path == fileio.get_template_path() / "commands" / f"ask.{language}.md"
+    metadata = fileio.load_markdown_with_frontmatter(path)
+    assert metadata["brain"] == "agent"
+    assert metadata["inputs"] == {"message": "required"}
