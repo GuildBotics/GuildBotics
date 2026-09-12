@@ -282,3 +282,32 @@ def test_the_environment_is_exactly_what_the_caller_states(
     )
 
     assert spec.env == {"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+
+
+def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "ws"
+    (home / "Documents/GuildBotics").mkdir(parents=True)
+    (workspace / ".guildbotics/local/clones/aiko").mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+
+    spec = build_environment_spec(
+        AccessContract(network=NetworkPolicy(), access=access),
+        workspace,
+        nameservers=_NAMESERVERS,
+        home=home,
+    )
+
+    state = (workspace / ".guildbotics").resolve().as_posix()
+    assert EnvironmentMount(state, None, readonly=True) in spec.mounts
+    # A turn in a member's clone below it is not affected: the deny is
+    # outside the opened tree.
+    below = build_environment_spec(
+        AccessContract(network=NetworkPolicy(), access=access),
+        workspace / ".guildbotics/local/clones/aiko",
+        nameservers=_NAMESERVERS,
+        home=home,
+    )
+    assert all(mount.host is not None for mount in below.mounts)

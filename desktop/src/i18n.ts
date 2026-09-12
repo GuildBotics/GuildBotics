@@ -827,7 +827,8 @@ const resources = {
           description: "Project description",
           descriptionHint: "Describe the purpose and contents of this project.",
           workspace: "Workspace",
-          workspaceDescription: "This folder is used as the project workspace.",
+          workspaceDescription:
+            "GuildBotics keeps this project's settings and state here (.guildbotics/).",
           choose: "Choose",
         },
         intelligence: {
@@ -2491,7 +2492,8 @@ const resources = {
           description: "プロジェクトの説明",
           descriptionHint: "このプロジェクトの目的や内容を入力します。",
           workspace: "ワークスペース",
-          workspaceDescription: "このフォルダをプロジェクトの作業場所として使います。",
+          workspaceDescription:
+            "このフォルダに GuildBotics の設定と状態（.guildbotics/）を置きます。",
           choose: "選択",
         },
         intelligence: {

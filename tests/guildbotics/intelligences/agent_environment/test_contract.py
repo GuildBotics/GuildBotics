@@ -7,11 +7,11 @@ import pytest
 import yaml
 
 from guildbotics.intelligences.agent_environment.contract import (
-    FILESYSTEM_GRANTS_PATH,
-    LOCAL_GRANTS_FILENAME,
     AccessContract,
     AccessContractError,
     DocumentGrant,
+    FILESYSTEM_GRANTS_PATH,
+    LOCAL_GRANTS_FILENAME,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
@@ -26,6 +26,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_shared_grants,
     redact_path,
     resolve_access,
+    sensitive_grant_reason,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -439,3 +440,32 @@ def test_redaction_leaves_unrelated_paths_alone(tmp_path: Path) -> None:
     assert redact_path(home, home) == "$HOME"
     # A sibling whose name merely starts with the home path is not inside it.
     assert redact_path(Path(str(home) + "2/x"), home) == str(home) + "2/x"
+
+
+def test_the_workspace_state_directory_is_a_builtin_deny(tmp_path: Path) -> None:
+    """The selected workspace's `.guildbotics` closes like a credential
+    directory, so a turn run in the workspace root cannot read the shared
+    configuration or the other members' clones; a workspace without one
+    (or none selected) adds nothing."""
+    home = _home(tmp_path)
+    workspace = tmp_path / "ws"
+    (workspace / ".guildbotics" / "local" / "clones" / "kenji").mkdir(parents=True)
+
+    denied = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+    assert [(d.path, d.builtin) for d in denied.denied] == [
+        ((workspace / ".guildbotics").resolve(), True)
+    ]
+    assert not denied.reaches(workspace / ".guildbotics/config/team.yml", workspace)
+    assert denied.reaches(workspace / "README.md", workspace)
+    assert (
+        resolve_access(
+            SharedGrants(), LocalGrants(), home, workspace=tmp_path / "bare"
+        ).denied
+        == ()
+    )
+
+    assert (
+        sensitive_grant_reason(str(workspace / ".guildbotics/local"), home, workspace)
+        == "<workspace>/.guildbotics"
+    )
+    assert sensitive_grant_reason(str(workspace / "docs"), home, workspace) == ""

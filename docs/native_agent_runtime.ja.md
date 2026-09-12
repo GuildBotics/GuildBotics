@@ -82,7 +82,8 @@ bindします）。
   （Windowsでは`C:\...`ではなく`/c/...`）で、エージェントはそれをそのまま開けます。**この端末の設定**: 追加パス
   （絶対パス可、存在が必要）と、開いている場所の一部を閉じる`deny`。
   `local/cli_agent_filesystem_grants.yml`に置き、同期しません。認証情報のディレクトリ
-  （`~/.ssh`、プロバイダ自身のディレクトリ）は同梱のdenyで常に閉じます。それ以外のhostのもの
+  （`~/.ssh`、プロバイダ自身のディレクトリ）とワークスペース自身の`.guildbotics`は同梱のdenyで
+  常に閉じます。それ以外のhostのもの
   （PATH、他のclone、キーチェーン）は中に存在しません。エージェントの道具は隔離環境自身のもので、
   `config/intelligences/agent_environment.yml`に宣言します
   （[`guildbotics environment`](cli_reference.md#guildbotics-environment)を参照）。

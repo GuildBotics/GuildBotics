@@ -103,8 +103,8 @@ in the same words in the alert band at the top of the screen.
   **This device's own settings**: extra paths (absolute paths allowed, must
   exist) and `deny` entries that close a corner of what is open, in
   `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential
-  directories (`~/.ssh`, a provider's own directory) are always closed by a
-  built-in deny. Nothing else of the host exists inside: not its PATH, not
+  directories (`~/.ssh`, a provider's own directory) and the workspace's own
+  `.guildbotics` are always closed by a built-in deny. Nothing else of the host exists inside: not its PATH, not
   its other clones, not its keychain. The agent's tools are the environment's
   own, declared in `config/intelligences/agent_environment.yml` (see
   [`guildbotics environment`](cli_reference.md#guildbotics-environment)).

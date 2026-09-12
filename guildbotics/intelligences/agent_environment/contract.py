@@ -26,8 +26,10 @@ from pydantic import (
 )
 
 from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
     get_config_path,
     get_workspace_local_path,
+    get_workspace_root,
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
@@ -340,6 +342,7 @@ def resolve_access(
     home: Path | None = None,
     *,
     create: bool = True,
+    workspace: Path | None = None,
 ) -> ResolvedAccess:
     """Resolve the shared and local grants against this device.
 
@@ -350,9 +353,12 @@ def resolve_access(
     path must exist here, because this file describes this machine: a turn
     refuses to start over one that does not, and a preview reports it absent
     so the row can be pointed at. The exchange directory comes first, built
-    in, ahead of whatever the grants file adds.
+    in, ahead of whatever the grants file adds. ``workspace`` is the selected
+    workspace, whose own ``.guildbotics`` is closed like a credential
+    directory; it is read from the selection when not given.
     """
     home_root = (home or Path.home()).resolve()
+    workspace = workspace or _selected_workspace()
     documents = (
         _resolve_document(EXCHANGE_GRANT, home_root, create, builtin=True),
         *(
@@ -363,7 +369,10 @@ def resolve_access(
     )
     paths = tuple(_resolve_local(grant, home_root, create) for grant in local.paths)
     denied = (
-        *(DeniedPath(path, builtin=True) for path in builtin_denied_paths(home_root)),
+        *(
+            DeniedPath(path, builtin=True)
+            for path in builtin_denied_paths(home_root, workspace)
+        ),
         *(
             DeniedPath(_resolve_deny(path, home_root), builtin=False)
             for path in local.deny
@@ -505,18 +514,49 @@ SENSITIVE_HOME_DIRECTORIES: tuple[str, ...] = (
 )
 
 
-def builtin_denied_paths(home: Path | None = None) -> tuple[Path, ...]:
-    """The sensitive directories that exist on this device, to be closed."""
+#: The workspace's own directory: its shared configuration and state, and
+#: this device's clones of every member. A turn run in the workspace root
+#: (the Desktop names it, or the CLI is used there) would otherwise open all
+#: of it; a turn run in a member's clone below it is not affected, since a
+#: deny outside an opened tree closes nothing.
+WORKSPACE_STATE_DIRECTORY = ".guildbotics"
+
+
+def _selected_workspace() -> Path | None:
+    try:
+        return get_workspace_root()
+    except WorkspaceNotConfiguredError:
+        return None
+
+
+def _sensitive_directories(
+    home: Path | None, workspace: Path | None
+) -> dict[Path, str]:
+    """Every sensitive directory, resolved, with the name a warning gives it."""
     home_root = (home or Path.home()).resolve()
+    named = {
+        (home_root / name).resolve(): f"~/{name}" for name in SENSITIVE_HOME_DIRECTORIES
+    }
+    if workspace is not None:
+        state = (workspace / WORKSPACE_STATE_DIRECTORY).resolve()
+        named.setdefault(state, f"{_WORKSPACE_TOKEN}/{WORKSPACE_STATE_DIRECTORY}")
+    return named
+
+
+def builtin_denied_paths(
+    home: Path | None = None, workspace: Path | None = None
+) -> tuple[Path, ...]:
+    """The sensitive directories that exist on this device, to be closed."""
     return tuple(
-        path
-        for name in SENSITIVE_HOME_DIRECTORIES
-        if (path := (home_root / name).resolve()).is_dir()
+        path for path in _sensitive_directories(home, workspace) if path.is_dir()
     )
 
 
-def sensitive_grant_reason(path: str, home: Path | None = None) -> str:
-    """Why a grant would expose credentials or provider state, or ""."""
+def sensitive_grant_reason(
+    path: str, home: Path | None = None, workspace: Path | None = None
+) -> str:
+    """Why a grant would expose credentials, provider state, or the
+    workspace's own state, or ""."""
     home_root = (home or Path.home()).resolve()
     if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
         target = Path(path).resolve()
@@ -524,10 +564,11 @@ def sensitive_grant_reason(path: str, home: Path | None = None) -> str:
         target = (home_root / path).resolve()
     if target == home_root or home_root.is_relative_to(target):
         return t("intelligences.agent_environment.grants.sensitive_home")
-    for name in SENSITIVE_HOME_DIRECTORIES:
-        sensitive = (home_root / name).resolve()
+    for sensitive, name in _sensitive_directories(
+        home_root, workspace or _selected_workspace()
+    ).items():
         if target.is_relative_to(sensitive) or sensitive.is_relative_to(target):
-            return f"~/{name}"
+            return name
     return ""
 
 
