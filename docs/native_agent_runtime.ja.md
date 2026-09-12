@@ -372,7 +372,7 @@ Antigravityでは、終端の`result`イベントで判定します。`status`�
 ありません。
 
 診断記録には`agent_runtime.*`、`workflow.rate_limited`、`credential.failed`、`credential.verified`
-（プロバイダが応答したturn。拒否で開いた資格情報のalertはこれで閉じる）というイベント名を使用します。メンバー、実行、会話識別子、セッションの世代、AI CLIツールのセッションIDとturn ID、
+というイベント名を使用します。メンバー、実行、会話識別子、セッションの世代、AI CLIツールのセッションIDとturn ID、
 cursor、実行権を記録し、同じ作業に属するイベントを対応付けます。機密情報を含む可能性がある項目は
 伏せ字にし、長い文章は上限を設けて切り詰めます。記録はDesktopの診断画面、または
 `<workspace-data-root>/run/diagnostics.jsonl`から確認できます。
