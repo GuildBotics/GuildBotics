@@ -85,6 +85,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
+from guildbotics.capabilities.completion_retry import find_cli_agent_execution_error
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
@@ -133,7 +134,7 @@ from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.agent_environment.contract import exchange_dir
-from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
+from guildbotics.intelligences.agent_environment.provider_state import has_credentials
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     doctor,
@@ -1003,7 +1004,9 @@ class AppRuntime:
                 "command.failed",
                 {
                     "command": request.command,
-                    "code": "command_error",
+                    "code": "cli_agent_authentication"
+                    if find_cli_agent_execution_error(exc, category="authentication")
+                    else "command_error",
                     "message": str(exc),
                 },
             )
@@ -1011,7 +1014,13 @@ class AppRuntime:
         except Exception as exc:
             self._event_bus.publish_event(
                 "command.failed",
-                {"command": request.command, "error_type": type(exc).__name__},
+                {
+                    "command": request.command,
+                    "error_type": type(exc).__name__,
+                    "code": "cli_agent_authentication"
+                    if find_cli_agent_execution_error(exc, category="authentication")
+                    else "",
+                },
             )
             raise
         self._event_bus.publish_event(
@@ -1766,7 +1775,7 @@ class AppRuntime:
             usages: list[CliAgentUsage] = []
             for agent in CLI_AGENTS:
                 reader = CLI_AGENT_USAGE_READERS.get(agent.name)
-                if reader is None or not is_logged_in(agent):
+                if reader is None or not has_credentials(agent):
                     continue
                 try:
                     snapshot = await reader()

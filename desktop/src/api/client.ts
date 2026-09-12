@@ -201,7 +201,6 @@ export type SystemAlert = {
   code:
     | "credential_github"
     | "credential_slack"
-    | "credential_cli_agent"
     | "credential_llm"
     | "command_failed"
     | "rate_limited"
@@ -1019,8 +1018,10 @@ export type EnvironmentToolStatus = {
   label: string;
   config_reference: string;
   provisioned: boolean;
-  logged_in: boolean;
-  // Why a turn of this tool cannot start here, or "" when it can.
+  credentials_saved: boolean;
+  authentication_failed: boolean;
+  login_command: string;
+  // Current guidance, including a past authentication failure that does not block retries.
   problem: string;
 };
 

@@ -31,18 +31,17 @@ _DIAGNOSTIC_CREDENTIAL_CODES = {
         "slack_app_token_invalid",
         "slack_bot_auth",
     },
-    "cli_agent": {"cli_agent_brain"},
     "llm": {"llm_api_key", "llm_live_call"},
 }
 _VERIFY_CREDENTIAL_CODES = {"llm_api_key": "llm"}
 _CREDENTIAL_ALERT_CODES: dict[str, SystemAlertCode] = {
     "github": "credential_github",
     "slack": "credential_slack",
-    "cli_agent": "credential_cli_agent",
     "llm": "credential_llm",
 }
 _IGNORED_COMMAND_FAILURES = {
     "cancelled",
+    "cli_agent_authentication",
     "person_not_found",
     "person_selection_required",
 }
@@ -331,11 +330,6 @@ class SystemAlertService:
         provider = str(_payload(record).get("provider") or "")
         if provider not in _CREDENTIAL_ALERT_CODES:
             return
-        cli_agent = (
-            str(_payload(record).get("cli_agent") or "")
-            if provider == "cli_agent"
-            else ""
-        )
         person_id = str(record.get("person_id") or "")
         trace_id = str(record.get("trace_id") or "")
         self._remove_execution_alerts_for_cause(alerts, person_id, trace_id)
@@ -349,7 +343,6 @@ class SystemAlertService:
             severity="critical",
             record=record,
             person_id=person_id,
-            command=cli_agent,
             trace_id=trace_id,
             actions=actions,
         )

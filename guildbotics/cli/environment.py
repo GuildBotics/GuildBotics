@@ -34,6 +34,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     load_toolchain,
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, cli_agent_info
+from guildbotics.utils.i18n_tool import t
 
 _PROVISIONED = [agent.name for agent in CLI_AGENTS if agent.provision.provisioned]
 
@@ -105,11 +106,13 @@ def login_command(tool: str) -> None:
         raise click.ClickException(str(exc)) from exc
     if code != 0:
         raise click.ClickException(f"{info.label} login exited with code {code}.")
-    if not provider_state.is_logged_in(info):
+    if not provider_state.has_credentials(info):
         raise click.ClickException(
             f"{info.label} login finished but stored no credentials."
         )
-    click.echo(f"{info.label} is logged in on this device.")
+    click.echo(
+        t("intelligences.agent_environment.tool.credentials_saved", tool=info.label)
+    )
 
 
 def _read_stdin_line() -> str | None:
@@ -152,15 +155,9 @@ def status_command(output_format: str) -> None:
         f"dns: {dns['declared']} -> {', '.join(dns['nameservers']) or dns['problem']}"
     )
     for tool in payload["tools"]:
-        if not tool["provisioned"]:
-            login = "not provisioned"
-        elif tool["logged_in"]:
-            login = "logged in"
-        else:
-            login = (
-                f"not logged in (run `guildbotics environment login {tool['name']}`)"
-            )
-        click.echo(f"{tool['name']}: {login}")
+        click.echo(
+            f"{tool['name']}: {tool['problem'] or t('intelligences.agent_environment.tool.credentials_saved', tool=tool['label'])}"
+        )
 
 
 def _status_payload() -> dict[str, Any]:
@@ -191,7 +188,9 @@ def _status_payload() -> dict[str, Any]:
                 "name": tool.name,
                 "label": tool.label,
                 "provisioned": tool.provisioned,
-                "logged_in": tool.logged_in,
+                "credentials_saved": tool.credentials_saved,
+                "authentication_failed": tool.authentication_failed,
+                "problem": tool.problem,
             }
             for tool in status.tools
         ],

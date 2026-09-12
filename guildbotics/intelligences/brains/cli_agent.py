@@ -23,6 +23,9 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_network_policy,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment.provider_state import (
+    record_authentication_outcome,
+)
 from guildbotics.intelligences.agent_environment.status import (
     filesystem_permission_problem,
 )
@@ -39,6 +42,7 @@ from guildbotics.intelligences.brains.util import (
     to_plain_text,
     to_response_class,
 )
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -991,10 +995,9 @@ class CliAgentBrain(Brain):
     def _record_credential_outcome(self, result: CliAgentExecutionResult) -> None:
         """Record what the turn proved about the tool's credentials here.
 
-        A refusal to authenticate opens the credential alert; a turn the
-        provider answered closes it again. Both carry the member and the tool
-        explicitly, because a CLI run has no trace context to attribute them
-        from. Any other failure says nothing about the credentials.
+        All members share the device/tool outcome used by the status card and
+        alerts. Diagnostics retain the member and tool for attribution even
+        outside a trace context. Other failures say nothing about credentials.
         """
         if result.error_category == "authentication":
             event_type, code = "credential.failed", "authentication"
@@ -1003,6 +1006,7 @@ class CliAgentBrain(Brain):
         else:
             event_type, code = "credential.verified", ""
         agent_name = self._agent_name(result)
+        record_authentication_outcome(cli_agent_info(agent_name), failed=bool(code))
         record_correlated_event(
             event_type=event_type,
             default_source="cli_agent",

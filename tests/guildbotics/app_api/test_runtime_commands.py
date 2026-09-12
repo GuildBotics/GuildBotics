@@ -1364,7 +1364,11 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
         for event in event_bus.snapshot_events()
         if event["type"] == "command.failed"
     ]
-    assert failed[0]["payload"] == {"command": "demo", "error_type": "ValueError"}
+    assert failed[0]["payload"] == {
+        "command": "demo",
+        "error_type": "ValueError",
+        "code": "",
+    }
 
 
 @pytest.mark.asyncio

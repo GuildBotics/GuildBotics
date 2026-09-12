@@ -44,7 +44,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
     sensitive_grant_reason,
 )
-from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_environment.status import (
+    device_status,
+    login_command,
+)
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
 from guildbotics.intelligences.cli_agents import cli_agent_info
 
@@ -115,8 +118,10 @@ def agent_environment_status(
                 label=tool.label,
                 config_reference=cli_agent_info(tool.name).config_reference,
                 provisioned=tool.provisioned,
-                logged_in=tool.logged_in,
-                problem=tool.refusal,
+                credentials_saved=tool.credentials_saved,
+                authentication_failed=tool.authentication_failed,
+                login_command=login_command(tool.name, platform=platform),
+                problem=tool.problem,
             )
             for tool in device.tools
         ],

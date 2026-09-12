@@ -10,6 +10,7 @@ set of words.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,7 +25,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_shared_grants,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
+from guildbotics.intelligences.agent_environment.provider_state import (
+    authentication_failed,
+    has_credentials,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
 )
@@ -61,7 +65,21 @@ class ToolStatus:
     name: str
     label: str
     provisioned: bool
-    logged_in: bool
+    credentials_saved: bool
+    authentication_failed: bool = False
+
+    @property
+    def problem(self) -> str:
+        """Current guidance; a past failure does not prevent another attempt."""
+        if self.refusal:
+            return self.refusal
+        if self.authentication_failed:
+            return t(
+                "intelligences.agent_environment.tool.authentication_failed",
+                tool=self.label,
+                command=login_command(self.name),
+            )
+        return ""
 
     @property
     def refusal(self) -> str:
@@ -70,11 +88,11 @@ class ToolStatus:
             return t(
                 "intelligences.agent_environment.tool.not_provisioned", tool=self.label
             )
-        if not self.logged_in:
+        if not self.credentials_saved:
             return t(
-                "intelligences.agent_environment.tool.not_logged_in",
+                "intelligences.agent_environment.tool.credentials_missing",
                 tool=self.label,
-                name=self.name,
+                command=login_command(self.name),
             )
         return ""
 
@@ -227,12 +245,31 @@ def filesystem_permission_problem(path: Path) -> str:
     return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
+def login_command(name: str, *, platform: str | None = None) -> str:
+    """The terminal login instruction shared by status, alerts, and Desktop.
+
+    Windows installers put the CLI on PATH. Unix Desktop installs it under
+    home; quote its absolute path so spaces and shell metacharacters survive.
+    """
+    if (platform or sys.platform) == "win32":
+        return f"guildbotics environment login {name}"
+    return shlex.join(
+        [
+            str(Path.home() / ".guildbotics/bin/guildbotics"),
+            "environment",
+            "login",
+            name,
+        ]
+    )
+
+
 def _tool_status(agent: CliAgentInfo) -> ToolStatus:
     return ToolStatus(
         name=agent.name,
         label=agent.label,
         provisioned=agent.provision.provisioned,
-        logged_in=is_logged_in(agent),
+        credentials_saved=has_credentials(agent),
+        authentication_failed=authentication_failed(agent),
     )
 
 

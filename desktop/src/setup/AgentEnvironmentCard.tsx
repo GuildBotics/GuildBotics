@@ -12,9 +12,11 @@ import {
   Text,
 } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Hammer } from "lucide-react";
+import { Check, Copy, Hammer, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+
+import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 
 import {
   buildAgentEnvironment,
@@ -26,7 +28,8 @@ import {
 
 /** Anchor for a system alert to scroll to. */
 export const AGENT_ENVIRONMENT_CARD_ID = "agent-environment";
-/** Status is re-read this often while a build runs here. */
+/** Read local state so external login and completed turns update the card. */
+const STATUS_REFRESH_MS = 10000;
 const BUILDING_REFRESH_MS = 2000;
 /** The snapshot states in which pressing "build" does something. */
 const BUILDABLE: SnapshotState[] = ["missing", "stale", "failed"];
@@ -57,7 +60,7 @@ export function AgentEnvironmentCard({
     queryKey: ["agent-environment-status"],
     queryFn: getAgentEnvironmentStatus,
     refetchInterval: (query) =>
-      query.state.data?.snapshot.state === "building" ? BUILDING_REFRESH_MS : false,
+      query.state.data?.snapshot.state === "building" ? BUILDING_REFRESH_MS : STATUS_REFRESH_MS,
   });
   const build = useMutation({
     mutationFn: buildAgentEnvironment,
@@ -98,6 +101,17 @@ export function AgentEnvironmentCard({
             {t("setup.intelligence.environment.description")}
           </Text>
         </div>
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          leftSection={<RefreshCw size={12} />}
+          onClick={() => {
+            void status.refetch();
+            void queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
+          }}
+        >
+          {t("setup.intelligence.environment.refresh")}
+        </Button>
         {status.isError ? (
           <Text size="sm" c="danger">
             {t("setup.intelligence.environment.loadError")}
@@ -228,18 +242,11 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
       </Badge>
     );
   }
-  if (tool.logged_in) {
-    return (
-      <Badge color="success" variant="light" size="sm">
-        {t("setup.intelligence.environment.toolLoggedIn")}
-      </Badge>
-    );
-  }
-  const command = `guildbotics environment login ${tool.name}`;
+  const command = tool.login_command;
   return (
     <Stack gap={4}>
-      <Badge color="warning" variant="light" size="sm">
-        {t("setup.intelligence.environment.toolNotLoggedIn")}
+      <Badge color={cliToolStatusColor(tool)} variant="light" size="sm">
+        {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
       </Badge>
       <Text size="xs" c="dimmed">
         {t("setup.intelligence.environment.loginHint")}

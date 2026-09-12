@@ -318,7 +318,7 @@ def test_credential_failure_replaces_command_warning_for_same_trace(
     assert [alert.code for alert in alerts] == ["credential_github"]
 
 
-def test_cli_agent_credential_failure_identifies_member_and_tool(
+def test_cli_agent_diagnostics_do_not_create_member_credential_alerts(
     tmp_path: Path,
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
@@ -332,10 +332,7 @@ def test_cli_agent_credential_failure_identifies_member_and_tool(
 
     alerts = SystemAlertService(store).list_alerts(_runtime()).alerts
 
-    assert len(alerts) == 1
-    assert alerts[0].code == "credential_cli_agent"
-    assert alerts[0].person_id == "alice"
-    assert alerts[0].command == "codex"
+    assert alerts == []
 
 
 def test_dismiss_hides_current_occurrence_and_later_failure_reopens(
@@ -631,7 +628,7 @@ def test_credential_alert_closes_when_the_same_credential_is_verified_again(
     finished command closes an execution alert; the next refusal reopens it,
     even after a dismissal."""
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
-    failed = {"provider": "cli_agent", "cli_agent": "codex", "person_id": "alice"}
+    failed = {"provider": "github", "person_id": "alice"}
     store.record(
         _event(
             "credential.failed",
@@ -641,7 +638,7 @@ def test_credential_alert_closes_when_the_same_credential_is_verified_again(
     )
     service = SystemAlertService(store)
     (alert,) = service.list_alerts(_runtime()).alerts
-    assert (alert.code, alert.person_id) == ("credential_cli_agent", "alice")
+    assert (alert.code, alert.person_id) == ("credential_github", "alice")
     service.dismiss(alert.id)
 
     store.record(
@@ -668,4 +665,21 @@ def test_credential_alert_closes_when_the_same_credential_is_verified_again(
         )
     )
     (reopened,) = service.list_alerts(_runtime()).alerts
-    assert (reopened.code, reopened.person_id) == ("credential_cli_agent", "alice")
+    assert (reopened.code, reopened.person_id) == ("credential_github", "alice")
+
+
+def test_cli_authentication_command_failure_does_not_leave_an_execution_alert(tmp_path):
+    store = DiagnosticsStore(tmp_path / "diagnostics.jsonl")
+    store.record(
+        _event(
+            "command.failed",
+            timestamp="2026-09-12T14:00:00+09:00",
+            payload={"code": "cli_agent_authentication"},
+        )
+    )
+    service = SystemAlertService(store)
+    problems = [("", "codex", "tool", "Log in again")]
+    assert [a.id for a in service.list_alerts(_runtime(), problems).alerts] == [
+        "agent-environment:tool:codex"
+    ]
+    assert service.list_alerts(_runtime(), []).alerts == []

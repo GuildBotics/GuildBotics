@@ -1,3 +1,4 @@
+import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import {
   Avatar,
   FileButton,
@@ -1579,7 +1580,7 @@ function OptionCard({
   label,
   active,
   enabled,
-  statusOk,
+  statusColor,
   statusText,
   disabledTooltip,
   onSelect,
@@ -1588,7 +1589,7 @@ function OptionCard({
   label: string;
   active: boolean;
   enabled: boolean;
-  statusOk: boolean;
+  statusColor: string;
   statusText: string;
   disabledTooltip: string;
   onSelect: () => void;
@@ -1609,7 +1610,10 @@ function OptionCard({
         <span className="title" style={{ userSelect: "none" }}>
           {label}
         </span>
-        <span className={`detection ${statusOk ? "ok" : "ng"}`} style={{ userSelect: "none" }}>
+        <span
+          className="detection"
+          style={{ userSelect: "none", color: `var(--mantine-color-${statusColor}-6)` }}
+        >
           <i />
           {statusText}
         </span>
@@ -1658,7 +1662,7 @@ function DefaultProviderCards({
             label={option.label}
             active={isActive(option.provider)}
             enabled={available}
-            statusOk={available}
+            statusColor={available ? "success" : "danger"}
             statusText={
               available
                 ? t("setup.intelligence.apiKeyConfigured")
@@ -1672,17 +1676,6 @@ function DefaultProviderCards({
       })}
     </div>
   );
-}
-
-/**
- * Which tool a card is, on two layers that must not be confused: whether it can
- * be chosen at all is the catalog's and the same on every device (the
- * environment provisions it or does not); whether it is logged in is this
- * device's, and the badge says so.
- */
-function cliToolStatusKey(tool: EnvironmentToolStatus): string {
-  if (!tool.provisioned) return "toolNotProvisioned";
-  return tool.logged_in ? "toolLoggedIn" : "toolNotLoggedIn";
 }
 
 // The "default AI CLI tool" card grid, shared by the team and member scopes.
@@ -1706,7 +1699,7 @@ function DefaultCliAgentCards({
           label={tool.label}
           active={isActive(tool)}
           enabled={tool.provisioned}
-          statusOk={tool.provisioned && tool.logged_in}
+          statusColor={cliToolStatusColor(tool)}
           statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={() => onSelect(tool)}
@@ -2525,16 +2518,7 @@ function IntelligenceEditor({
                             </Group>
                             <Group gap="xs" wrap="nowrap">
                               {tool ? (
-                                <Badge
-                                  color={
-                                    !tool.provisioned
-                                      ? "gray"
-                                      : tool.logged_in
-                                        ? "success"
-                                        : "warning"
-                                  }
-                                  variant="light"
-                                >
+                                <Badge color={cliToolStatusColor(tool)} variant="light">
                                   {t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
                                 </Badge>
                               ) : null}

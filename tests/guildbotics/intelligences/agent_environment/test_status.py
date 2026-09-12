@@ -7,6 +7,7 @@ import errno
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.intelligences.agent_environment import status as module
 from guildbotics.intelligences.agent_runtime.environment import _ready
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
@@ -38,7 +39,7 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
         "declaration": ToolchainDeclaration(dns=DnsSettings(nameservers="host")),
         "snapshot": SnapshotStatus("ready", "guildbotics-abc", Path("/snap")),
         "nameservers": ("192.168.3.1",),
-        "logged_in": {"codex"},
+        "credentials_saved": {"codex"},
     }
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -63,7 +64,9 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
     monkeypatch.setattr(module.snapshot, "snapshot_status", lambda d: parts["snapshot"])
     monkeypatch.setattr(module, "upstream_nameservers", resolvers)
     monkeypatch.setattr(
-        module, "is_logged_in", lambda agent: agent.name in parts["logged_in"]
+        module,
+        "has_credentials",
+        lambda agent: agent.name in parts["credentials_saved"],
     )
     return parts
 
@@ -75,14 +78,14 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
     assert (status.dns.declared, status.dns.nameservers) == ("host", ("192.168.3.1",))
     assert status.tool("codex").refusal == ""
     assert status.tool("claude").refusal == t(
-        "intelligences.agent_environment.tool.not_logged_in",
+        "intelligences.agent_environment.tool.credentials_missing",
         tool="Claude Code",
-        name="claude",
+        command=login_command("claude"),
     )
     assert status.tool("grok").refusal == t(
-        "intelligences.agent_environment.tool.not_logged_in",
+        "intelligences.agent_environment.tool.credentials_missing",
         tool="Grok Build",
-        name="grok",
+        command=login_command("grok"),
     )
     with pytest.raises(ValueError):
         status.tool("nope")
@@ -312,3 +315,31 @@ def test_preflight_reports_filesystem_changes_during_enumeration(
         path=target,
         error=error,
     )
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+@pytest.mark.parametrize("language", ["en", "ja"])
+def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
+    monkeypatch, tmp_path, platform, language
+):
+    import shlex
+    from guildbotics.intelligences.agent_environment.status import ToolStatus
+    from guildbotics.utils.i18n_tool import set_language
+
+    home = tmp_path / "A user's home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(module.sys, "platform", platform)
+    set_language(language)
+    command = login_command("codex")
+    if platform == "win32":
+        assert command == "guildbotics environment login codex"
+    else:
+        assert shlex.split(command) == [
+            str(home / ".guildbotics/bin/guildbotics"),
+            "environment",
+            "login",
+            "codex",
+        ]
+    for saved in (False, True):
+        tool = ToolStatus("codex", "Codex", True, saved, authentication_failed=True)
+        assert f"`{command}`" in tool.problem

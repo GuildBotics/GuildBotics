@@ -987,7 +987,6 @@ class ScenarioDiagnosticsResponse(BaseModel):
 SystemAlertCode = Literal[
     "credential_github",
     "credential_slack",
-    "credential_cli_agent",
     "credential_llm",
     "command_failed",
     "rate_limited",
@@ -1217,8 +1216,10 @@ class EnvironmentToolStatus(BaseModel):
     label: str
     config_reference: str
     provisioned: bool
-    logged_in: bool
-    #: Why a turn of this tool cannot start here, or "" when it can.
+    credentials_saved: bool
+    authentication_failed: bool
+    login_command: str
+    #: Current guidance, including a past failure that does not block retries.
     problem: str = ""
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.app_api import agent_environment_status as module
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_problems,
@@ -56,7 +57,7 @@ def _device(
     *,
     runtime_ok: bool = True,
     snapshot_state: str = "ready",
-    logged_in: frozenset[str] = frozenset({"codex", "claude"}),
+    credentials_saved: frozenset[str] = frozenset({"codex", "claude"}),
     filesystem_problem: str = "",
 ) -> None:
     """Stand in for the device: its runtime, snapshot, DNS, and logins."""
@@ -75,7 +76,7 @@ def _device(
             name=agent.name,
             label=agent.label,
             provisioned=agent.provision.provisioned,
-            logged_in=agent.name in logged_in,
+            credentials_saved=agent.name in credentials_saved,
         )
         for agent in CLI_AGENTS
     )
@@ -124,7 +125,7 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     monkeypatch, home: Path
 ) -> None:
     _codex_slot(monkeypatch)
-    _device(monkeypatch, snapshot_state="failed", logged_in=frozenset())
+    _device(monkeypatch, snapshot_state="failed", credentials_saved=frozenset())
 
     status = agent_environment_status(
         ["aiko"], platform="darwin", build_output=["[apt]", "E: boom"]
@@ -144,22 +145,27 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     )
     tools = {tool.name: tool for tool in status.tools}
     assert tools["codex"].config_reference == "cli_agents/codex/default.yml"
-    assert (tools["codex"].provisioned, tools["codex"].logged_in) == (True, False)
+    assert (tools["codex"].provisioned, tools["codex"].credentials_saved) == (
+        True,
+        False,
+    )
     assert tools["codex"].problem == t(
-        "intelligences.agent_environment.tool.not_logged_in", tool="Codex", name="codex"
+        "intelligences.agent_environment.tool.credentials_missing",
+        tool="Codex",
+        command=login_command("codex"),
     )
     assert (tools["grok"].provisioned, tools["grok"].problem) == (
         True,
         t(
-            "intelligences.agent_environment.tool.not_logged_in",
+            "intelligences.agent_environment.tool.credentials_missing",
             tool="Grok Build",
-            name="grok",
+            command=login_command("grok"),
         ),
     )
     assert tools["claude"].problem == t(
-        "intelligences.agent_environment.tool.not_logged_in",
+        "intelligences.agent_environment.tool.credentials_missing",
         tool="Claude Code",
-        name="claude",
+        command=login_command("claude"),
     )
 
 
@@ -167,7 +173,7 @@ def test_problems_name_the_device_once_and_only_the_tools_in_use(
     monkeypatch, home: Path
 ) -> None:
     _codex_slot(monkeypatch)
-    _device(monkeypatch, runtime_ok=False, logged_in=frozenset())
+    _device(monkeypatch, runtime_ok=False, credentials_saved=frozenset())
 
     problems = agent_environment_problems(["aiko", "kenji"])
 
@@ -181,9 +187,9 @@ def test_problems_name_the_device_once_and_only_the_tools_in_use(
             "codex",
             "tool",
             t(
-                "intelligences.agent_environment.tool.not_logged_in",
+                "intelligences.agent_environment.tool.credentials_missing",
                 tool="Codex",
-                name="codex",
+                command=login_command("codex"),
             ),
         ),
     ]
@@ -265,9 +271,9 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
             "grok",
             "tool",
             t(
-                "intelligences.agent_environment.tool.not_logged_in",
+                "intelligences.agent_environment.tool.credentials_missing",
                 tool="Grok Build",
-                name="grok",
+                command=login_command("grok"),
             ),
         )
     ]
@@ -409,3 +415,100 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     assert evaluation.json()["scope"] == "deny"
     assert bad_scope.status_code == 422
     assert unauthorized.status_code == 401
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_login_instructions_use_desktop_managed_cli(monkeypatch, home, platform):
+    import shlex
+
+    special_home = home / "A user's home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: special_home))
+    for tool in agent_environment_status([], platform=platform).tools:
+        if platform == "win32":
+            assert tool.login_command == f"guildbotics environment login {tool.name}"
+        else:
+            assert shlex.split(tool.login_command) == [
+                str(special_home / ".guildbotics/bin/guildbotics"),
+                "environment",
+                "login",
+                tool.name,
+            ]
+
+
+def test_device_authentication_failure_drives_card_and_alert_then_recovers(
+    monkeypatch, home
+):
+    from guildbotics.app_api.models import RuntimeStatus, RuntimeUnitStatus
+    from guildbotics.app_api.system_alerts import SystemAlertService
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    _codex_slot(monkeypatch)
+    original = module.device_status()
+    tool = cli_agent_info("codex")
+    store = provider_state.provider_state_dir(tool)
+    store.mkdir(parents=True)
+    (store / tool.provision.auth).write_text("{}")
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        module,
+        "device_status",
+        lambda **_: replace(
+            original,
+            tools=tuple(device_module._tool_status(agent) for agent in CLI_AGENTS),
+        ),
+    )
+    service = SystemAlertService(None)
+    persons = ["alice", "bob"]
+    for failed in (True, False, True, False):
+        provider_state.record_authentication_outcome(tool, failed=failed)
+        status = agent_environment_status(persons)
+        codex = next(item for item in status.tools if item.name == "codex")
+        assert codex.authentication_failed is failed
+        assert codex.credentials_saved
+        assert {member.slots[0].tool for member in status.members} == {"codex"}
+        problems = agent_environment_problems(persons)
+        alerts = service.list_alerts(
+            RuntimeStatus(
+                scheduler=RuntimeUnitStatus(
+                    target="scheduler", state="stopped", running=False
+                ),
+                events=RuntimeUnitStatus(
+                    target="events", state="stopped", running=False
+                ),
+            ),
+            problems,
+        ).alerts
+        if failed:
+            reason = t(
+                "intelligences.agent_environment.tool.authentication_failed",
+                tool="Codex",
+                command=login_command("codex"),
+            )
+            assert codex.problem == reason
+            assert problems == [("", "codex", "tool", reason)]
+            assert [(a.person_id, a.command, a.reason) for a in alerts] == [
+                ("", "codex", reason)
+            ]
+        else:
+            assert codex.problem == ""
+            assert problems == []
+            assert alerts == []
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_card_and_guidance_share_the_login_command(monkeypatch, home, failed):
+    from dataclasses import replace
+
+    original = module.device_status()
+    tools = tuple(
+        replace(tool, credentials_saved=failed, authentication_failed=failed)
+        for tool in original.tools
+    )
+    monkeypatch.setattr(
+        module, "device_status", lambda **_: replace(original, tools=tools)
+    )
+    for tool in agent_environment_status([]).tools:
+        if tool.provisioned:
+            assert f"`{tool.login_command}`" in tool.problem
