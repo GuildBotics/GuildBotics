@@ -60,7 +60,9 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
 
   // Browser-preview mode cannot expose native dropped paths, but it exercises
   // the other half of the attachment contract: a pasted clipboard image is
-  // persisted by the REAL Local API and its absolute path enters the message.
+  // persisted by the REAL Local API in the exchange directory's tmp/ (under
+  // the stack's own HOME) and its path, as the environment spells it, enters
+  // the message.
   const message = page.getByRole("textbox", { name: "Input text" });
   await message.evaluate((element) => {
     const clipboard = new DataTransfer();
@@ -74,7 +76,7 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
     );
   });
   await expect(message).toHaveValue(
-    /guildbotics-command-inputs[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
+    /[/\\]Documents[/\\]GuildBotics[/\\]tmp[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
   );
   const pastedImage = await message.inputValue();
   expect(readFileSync(pastedImage, "utf-8")).toBe("e2e-image");
