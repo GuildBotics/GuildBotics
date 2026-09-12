@@ -173,7 +173,8 @@ environment's kernel lacks, and Grok refuses to start with a profile it cannot e
 request is declined), Antigravity with `--dangerously-skip-permissions`; none of
 them takes a flag from configuration. Which providers' inner sandboxes run on
 the microVM's kernel is confirmed per provider as each is provisioned; Codex
-(Landlock and bubblewrap) is.
+is, through the bubblewrap it bundles (a bubblewrap installed in the image is
+preferred to it and cannot exec Codex's helper, so the image ships none).
 
 Only the provider's persisted state -- its credentials and its sessions --
 survives a turn, bound from this device's store

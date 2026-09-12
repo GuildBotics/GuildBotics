@@ -139,14 +139,9 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # Grok Build ships as a native binary through its own installer, which
         # takes the version to install and the directory to link it from; the
         # binary itself lands under the home, so it is copied into place and
-        # the installer's leftovers are removed from the snapshot's home. Its
-        # own sandbox refuses to start on Linux without bubblewrap.
+        # the installer's leftovers are removed from the snapshot's home.
         provision=CliAgentProvision(
             install=(
-                "apt-get update\n"
-                "apt-get install -y --no-install-recommends bubblewrap\n"
-                "apt-get clean\n"
-                "rm -rf /var/lib/apt/lists/*\n"
                 "curl -fsSL https://x.ai/cli/install.sh"
                 " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.13\n"
                 "cp -L /usr/local/bin/grok /usr/local/bin/grok.bin\n"

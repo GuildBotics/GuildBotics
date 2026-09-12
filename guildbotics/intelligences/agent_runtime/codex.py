@@ -631,6 +631,12 @@ def _sandbox_overrides(home: str) -> dict[str, Any]:
     ``workspace-write`` default would instead close the network and ask
     for approvals, which no headless turn can give, and a profile that
     names ``/`` as writable loses ``/dev/null`` (measured on 0.153.4).
+
+    Codex enforces the profile -- and reads the working directory's
+    instructions through it -- with the bubblewrap it bundles. A bubblewrap
+    installed in the image is preferred to the bundled one and cannot exec
+    Codex's helper (Debian's 0.8.0 on 0.153.4: every session fails to
+    start), so the image ships none.
     """
     profile = f"permissions.{_PERMISSION_PROFILE}"
     return {

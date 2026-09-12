@@ -138,7 +138,8 @@ rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡しま�
 `--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
 `off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
 フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
-provisionするたびに実機で確認し、Codex（Landlockとbubblewrap）は確認済みです。
+provisionするたびに実機で確認し、Codexは同梱のbubblewrapで動くことを確認済みです（imageに
+bubblewrapを入れると同梱のものより優先され、Codexのhelperを起動できないため、imageには入れません）。
 
 ターンをまたいで残るのはプロバイダの永続状態（認証情報とセッション）だけで、この端末の
 store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
