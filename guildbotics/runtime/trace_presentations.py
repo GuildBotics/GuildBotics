@@ -36,6 +36,7 @@ _EXACT_EVENT_LABELS = {
     "chat_dispatch.retry_scheduled": "chat_dispatch_retry_scheduled",
     "chat_dispatch.abandoned": "chat_dispatch_abandoned",
     "credential.failed": "credential_failed",
+    "credential.verified": "credential_verified",
     "diagnostics.completed": "diagnostics_completed",
     "verify.completed": "verify_completed",
     "system.started": "system_started",
@@ -100,10 +101,19 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
         return _workflow_presentation(item, payload, event_type)
     if event_type.startswith("chat_dispatch."):
         return _chat_dispatch_presentation(payload, event_type)
-    if event_type == "credential.failed":
+    if event_type in {"credential.failed", "credential.verified"}:
         provider = _first_text(payload, "provider") or "provider"
         if provider == "cli_agent":
             provider = _first_text(payload, "cli_agent") or provider
+        if event_type == "credential.verified":
+            return _presentation(
+                label_key=_event_key("credential_verified"),
+                label=event_type,
+                message_key=_message_key("credential_verified"),
+                message=provider,
+                params={"provider": provider},
+                tone="success",
+            )
         code = _first_text(payload, "code") or "authentication"
         return _presentation(
             label_key=_event_key("credential_failed"),

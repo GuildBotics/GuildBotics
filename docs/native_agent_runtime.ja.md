@@ -371,8 +371,8 @@ Antigravityでは、終端の`result`イベントで判定します。`status`�
 延期します。この待機によって、同じプロセス内で行う完了条件未達時の再試行回数を消費することは
 ありません。
 
-診断記録には`agent_runtime.*`、`workflow.rate_limited`、`credential.failed`というイベント名を
-使用します。メンバー、実行、会話識別子、セッションの世代、AI CLIツールのセッションIDとturn ID、
+診断記録には`agent_runtime.*`、`workflow.rate_limited`、`credential.failed`、`credential.verified`
+というイベント名を使用します。メンバー、実行、会話識別子、セッションの世代、AI CLIツールのセッションIDとturn ID、
 cursor、実行権を記録し、同じ作業に属するイベントを対応付けます。機密情報を含む可能性がある項目は
 伏せ字にし、長い文章は上限を設けて切り詰めます。記録はDesktopの診断画面、または
 `<workspace-data-root>/run/diagnostics.jsonl`から確認できます。

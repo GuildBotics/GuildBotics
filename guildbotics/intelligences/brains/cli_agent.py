@@ -606,6 +606,7 @@ class CliAgentBrain(Brain):
                 raise
             output: Any = result.stdout
             self._write_response_io(result)
+            self._record_credential_outcome(result)
             self._record_summary(
                 status="finished" if result.returncode == 0 else "failed",
                 started=started,
@@ -642,6 +643,7 @@ class CliAgentBrain(Brain):
                 self._record_summary(status="failed", started=started)
                 raise
             self._write_response_io(result)
+            self._record_credential_outcome(result)
             self._record_summary(
                 status="finished" if result.returncode == 0 else "failed",
                 started=started,
@@ -979,33 +981,49 @@ class CliAgentBrain(Brain):
             effort=terminal.effort,
         )
 
+    def _record_credential_outcome(self, result: CliAgentExecutionResult) -> None:
+        """Record what the turn proved about the tool's credentials here.
+
+        A refusal to authenticate opens the credential alert; a turn the
+        provider answered closes it again. Both carry the member and the tool
+        explicitly, because a CLI run has no trace context to attribute them
+        from. Any other failure says nothing about the credentials.
+        """
+        if result.error_category == "authentication":
+            event_type, code = "credential.failed", "authentication"
+        elif result.error_category or result.returncode != 0:
+            return
+        else:
+            event_type, code = "credential.verified", ""
+        agent_name = self._agent_name(result)
+        record_correlated_event(
+            event_type=event_type,
+            default_source="cli_agent",
+            attributes={
+                "credential.provider": "cli_agent",
+                "credential.cli_agent": agent_name,
+                **({"error.category": code} if code else {}),
+            },
+            person_id=self.person_id,
+            payload={
+                "provider": "cli_agent",
+                "cli_agent": agent_name,
+                "person_id": self.person_id,
+                **({"code": code} if code else {}),
+            },
+        )
+
+    def _agent_name(self, result: CliAgentExecutionResult) -> str:
+        return (
+            result.error_details.get("cli_agent")
+            or self.executable_info.adapter
+            or self.cli_agent
+        )
+
     def _raise_if_execution_failed(self, result: CliAgentExecutionResult) -> None:
         if result.error_category in {"authentication", "rate_limited"}:
-            agent_name = (
-                result.error_details.get("cli_agent")
-                or self.executable_info.adapter
-                or self.cli_agent
-            )
-            if result.error_category == "authentication":
-                record_correlated_event(
-                    event_type="credential.failed",
-                    default_source="cli_agent",
-                    attributes={
-                        "credential.provider": "cli_agent",
-                        "credential.cli_agent": agent_name,
-                        "error.category": "authentication",
-                    },
-                    person_id=self.person_id,
-                    payload={
-                        "provider": "cli_agent",
-                        "cli_agent": agent_name,
-                        "person_id": self.person_id,
-                        "code": "authentication",
-                    },
-                )
             raise CliAgentExecutionError(
-                cli_agent=agent_name,
-                result=result,
+                cli_agent=self._agent_name(result), result=result
             )
         if result.returncode != 0:
             raise CliAgentExecutionError(cli_agent=self.cli_agent, result=result)

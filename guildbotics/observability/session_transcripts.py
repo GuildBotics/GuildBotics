@@ -42,6 +42,7 @@ INDEX_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
         "chat_dispatch.abandoned",
         "workflow.rate_limited",
         "credential.failed",
+        "credential.verified",
     }
 )
 
