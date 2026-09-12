@@ -41,6 +41,7 @@ dependencies = [
   "GitPython>=3.1.59",
   "python-i18n>=0.3",
   "langcodes[data]>=3.3",
+  "tzdata>=2025.2",
   # Engines/brains
   "agno>=2.8,<3.0",
   "requests>=2.32",
