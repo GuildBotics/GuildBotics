@@ -134,6 +134,7 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
               resize="vertical"
               value={props.message}
               onChange={props.onMessageChange}
+              cwd={props.cwd.trim() || undefined}
             />
           ) : null}
 

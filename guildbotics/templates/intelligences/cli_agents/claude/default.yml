@@ -24,3 +24,13 @@ effort_fields:
     values: [low, medium, high, xhigh, max]
   - key: model
     type: model_id
+
+# Where the tool may connect, whether through a command it runs or its own
+# web features: one rule, because the boundary enforcing it cannot tell them
+# apart. It starts closed; open it only to the domains a workflow needs.
+# `mode` is one of deny / allowlist / unrestricted (`off` would read as a YAML
+# boolean). A slot that states `network` states the whole block.
+network:
+  mode: deny
+  allowed_domains: []
+  allow_local_network: false

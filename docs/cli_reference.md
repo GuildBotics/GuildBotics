@@ -22,6 +22,11 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics diagnostics system`](#guildbotics-diagnostics-system) | Show service-wide records that belong to no single execution. |
 | [`guildbotics diagnostics trace`](#guildbotics-diagnostics-trace) | Show one execution's summary and records. |
 | [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
+| [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
+| [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
+| [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
+| [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
+| [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics hub create`](#guildbotics-hub-create) | Make this machine a hub, or show the hub it already hosts. |
 | [`guildbotics hub live`](#guildbotics-hub-live) | Publish and watch transient workspace live state. |
@@ -123,6 +128,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics diagnostics`](#guildbotics-diagnostics) | Read recorded diagnostics for a workspace (read-only). |
+| [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
@@ -200,6 +206,84 @@ guildbotics diagnostics traces [OPTIONS]
 | `--limit INTEGER RANGE` | Maximum entries. [default: 50; 1\<=x\<=1000] |
 | `--include-assistant / --no-include-assistant` | Include the Desktop AI assistants' own traces. [default: no-include-assistant] |
 | `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment`
+
+Build and log in to the isolated agent environment on this device.
+
+```text
+guildbotics environment [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--workspace DIRECTORY` | Workspace root to use instead of the persisted active workspace. |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
+| [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
+| [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
+| [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
+
+## `guildbotics environment build`
+
+Build the environment the shared declaration asks for.
+
+The build installs packages and nothing else, so it needs no input. A
+build that fails is remembered until the declaration changes or this
+command runs again.
+
+```text
+guildbotics environment build [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--force` | Rebuild even when the snapshot already matches the declaration. |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment login`
+
+Log in to an AI CLI tool inside the environment.
+
+The tool's own login command runs in the environment and talks you
+through it here; what it stores stays on this device, outside the
+snapshot, and every member uses it.
+
+```text
+guildbotics environment login [OPTIONS] {codex|claude|grok|copilot|antigravity}
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment remove`
+
+Remove the workspace's snapshots from this device (logins are kept).
+
+```text
+guildbotics environment remove [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment status`
+
+Show the environment's runtime, snapshot, and logins on this device.
+
+```text
+guildbotics environment status [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics hub`

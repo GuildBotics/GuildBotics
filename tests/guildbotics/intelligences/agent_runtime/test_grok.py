@@ -16,11 +16,11 @@ from acp_fake_peer import (
 )
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
     _launch_argv,
-    _sandbox_profile,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
@@ -36,7 +36,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
     settings_fingerprint,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -284,7 +283,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
-    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["url"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"][0]["name"] == "Authorization"
     assert server["headers"][0]["value"].startswith("Bearer ")
     prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
@@ -299,7 +298,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
         "grok",
         "--no-auto-update",
         "--sandbox",
-        "workspace",
+        "off",
         "agent",
         "--always-approve",
         "stdio",
@@ -1194,45 +1193,14 @@ async def test_initialize_declares_no_client_capabilities(
 
 
 @pytest.mark.asyncio
-async def test_host_policy_disables_the_sandbox(monkeypatch, tmp_path) -> None:
+async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> None:
     peer = _Peer()
     launched = install(monkeypatch, peer)
-    adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
 
-    await _run(adapter, tmp_path)
+    await _run(GrokAcpAdapter(), tmp_path, read_only=True)
 
+    # The environment is the boundary; Grok's Landlock profiles cannot run there.
     assert launched[0][0][2:4] == ("--sandbox", "off")
-
-
-@pytest.mark.asyncio
-async def test_read_only_turns_keep_the_confined_sandbox(monkeypatch, tmp_path) -> None:
-    peer = _Peer()
-    launched = install(monkeypatch, peer)
-    adapter = GrokAcpAdapter(policy=AdapterFilesystemPolicy(filesystem_access="host"))
-
-    await _run(adapter, tmp_path, read_only=True)
-
-    assert launched[0][0][2:4] == ("--sandbox", "workspace")
-
-
-@pytest.mark.asyncio
-async def test_write_credentials_are_not_inherited(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("GH_TOKEN", "ghp-secret")
-    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
-    # Set, not deleted: the parent of a workflow run really does carry these,
-    # so asserting their absence only proves isolation when they start present.
-    for key in _AMBIENT_EXECUTION_ENV:
-        monkeypatch.setenv(key, "stale-parent-value")
-    peer = _Peer()
-    launched = install(monkeypatch, peer)
-
-    await _run(GrokAcpAdapter(), tmp_path)
-
-    env = launched[0][1]["env"]
-    assert "GH_TOKEN" not in env
-    assert "SSH_AUTH_SOCK" not in env
-    assert all(key not in env for key in _AMBIENT_EXECUTION_ENV)
-    assert launched[0][1]["start_new_session"] is True
 
 
 @pytest.mark.asyncio
@@ -1246,10 +1214,7 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter._transport._process = peer  # type: ignore[assignment]
     adapter._active_session_id = _Peer.SESSION_ID
 
@@ -1262,16 +1227,8 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
 # --- pure helpers ------------------------------------------------------------
 
 
-def test_sandbox_profile_maps_the_public_policy_values() -> None:
-    assert _sandbox_profile(AdapterFilesystemPolicy("workspace")) == "workspace"
-    assert _sandbox_profile(AdapterFilesystemPolicy("host")) == "off"
-    assert _sandbox_profile(AdapterFilesystemPolicy("host"), read_only=True) == (
-        "workspace"
-    )
-
-
 def test_launch_argv_places_options_in_their_parser_scopes() -> None:
-    argv = _launch_argv("grok", AdapterFilesystemPolicy("workspace"), False)
+    argv = _launch_argv("grok")
 
     assert argv.index("--no-auto-update") < argv.index("agent")
     assert argv.index("--sandbox") < argv.index("agent")
@@ -1591,10 +1548,7 @@ async def test_the_turn_timeout_bounds_a_stalled_prompt(monkeypatch, tmp_path) -
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter = GrokAcpAdapter(timeout=0.15)
 
     with pytest.raises(AgentRuntimeError) as excinfo:
@@ -1692,3 +1646,20 @@ async def test_disabled_resume_without_load_session_is_unsupported(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
+
+
+@pytest.mark.asyncio
+async def test_the_session_names_the_working_directory_as_the_guest_spells_it(
+    monkeypatch, tmp_path
+) -> None:
+    """``session/new`` names the directory inside the environment (``/c/...``
+    on Windows), never the host's own spelling."""
+    monkeypatch.setattr(
+        acp_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
+    )
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
+
+    await _run(GrokAcpAdapter(), tmp_path)
+
+    assert peer.sent("session/new")["params"]["cwd"] == f"/guest{tmp_path.as_posix()}"

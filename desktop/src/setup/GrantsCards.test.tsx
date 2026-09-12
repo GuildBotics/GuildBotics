@@ -1,0 +1,408 @@
+import { MantineProvider } from "@mantine/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  evaluateGrant,
+  type GrantEvaluation,
+  type LocalGrants,
+  type EnvironmentAccessStatus,
+  type SharedGrants,
+} from "../api/client";
+import i18n from "../i18n";
+import "../i18n";
+import { GrantsCards, type GrantPrefill } from "./GrantsCards";
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/api/path", () => ({ homeDir: vi.fn(async () => "/Users/me/") }));
+vi.mock("../api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/client")>()),
+  evaluateGrant: vi.fn(),
+}));
+
+const t = i18n.getFixedT("en");
+
+/** How the device reports the saved grants: display form beside the grant file's spelling. */
+const macStatus: EnvironmentAccessStatus = {
+  documents: [
+    {
+      path: "$HOME/Documents/GuildBotics",
+      grant: "Documents/GuildBotics",
+      access: "read_write",
+      present: true,
+      builtin: true,
+    },
+    { path: "$HOME/Documents", grant: "Documents", access: "read", present: true, builtin: false },
+  ],
+  paths: [
+    { path: "/opt/nowhere", grant: "/opt/nowhere", access: "read", present: false, builtin: false },
+  ],
+  denied: [{ path: "$HOME/.ssh", builtin: true }],
+  problem: "",
+};
+
+/** A Windows device spells the same rows with backslashes after `$HOME`. */
+const windowsStatus: EnvironmentAccessStatus = {
+  documents: [],
+  paths: [],
+  denied: [{ path: "$HOME\\.ssh", builtin: true }],
+  problem: "",
+};
+
+function Harness({
+  shared: initialShared = { documents: [] },
+  local: initialLocal = { paths: [], deny: [] },
+  status = macStatus,
+  prefill,
+  onShared,
+  onLocal,
+}: {
+  shared?: SharedGrants;
+  local?: LocalGrants;
+  status?: EnvironmentAccessStatus;
+  prefill?: GrantPrefill;
+  onShared?: (shared: SharedGrants) => void;
+  onLocal?: (local: LocalGrants) => void;
+}) {
+  const [shared, setShared] = useState(initialShared);
+  const [local, setLocal] = useState(initialLocal);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={client}>
+      <MantineProvider env="test">
+        <GrantsCards
+          shared={shared}
+          local={local}
+          status={status}
+          prefill={prefill}
+          onSharedChange={(next) => {
+            setShared(next);
+            onShared?.(next);
+          }}
+          onLocalChange={(next) => {
+            setLocal(next);
+            onLocal?.(next);
+          }}
+        />
+      </MantineProvider>
+    </QueryClientProvider>
+  );
+}
+
+function evaluation(overrides: Partial<GrantEvaluation>): GrantEvaluation {
+  return {
+    scope: "document",
+    path: "",
+    access: "read",
+    valid: true,
+    reason: "",
+    present: true,
+    sensitive: "",
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.mocked(evaluateGrant).mockImplementation(async ({ scope, path, access }) => {
+    if (path === "..") {
+      return evaluation({
+        scope,
+        path,
+        access,
+        valid: false,
+        reason: "'..' must name a directory",
+      });
+    }
+    if (scope === "deny") {
+      return evaluation({ scope, path, access: "" });
+    }
+    return evaluation({
+      scope,
+      path,
+      access,
+      present: path !== "Projects/new",
+      sensitive: path.startsWith(".ssh") ? "~/.ssh" : "",
+    });
+  });
+});
+
+describe("GrantsCards", () => {
+  it("lists documents and, for this device, PATH directories, added paths, denies, and what stays closed", () => {
+    render(
+      <Harness
+        shared={{ documents: [{ path: "Documents", access: "read" }] }}
+        local={{
+          paths: [
+            { path: ".cache/uv", access: "read_write" },
+            { path: "/opt/nowhere", access: "read" },
+          ],
+          deny: ["/opt/homebrew/etc"],
+        }}
+      />,
+    );
+
+    const documents = screen.getByTestId("grants:document");
+    expect(documents).toHaveTextContent("Documents");
+    expect(documents).toHaveTextContent(t("setup.intelligence.grants.presentHere"));
+    expect(
+      within(documents).getByRole("combobox", {
+        name: t("setup.intelligence.grants.accessFor", { path: "Documents" }),
+      }),
+    ).toHaveValue(t("setup.intelligence.grants.accessLabels.read"));
+    const device = screen.getByTestId("grants:device");
+    expect(device).toHaveTextContent(".cache/uv");
+    // A path this device lacks is marked on its row, where it can be fixed.
+    expect(device).toHaveTextContent(`/opt/nowhere${t("setup.intelligence.grants.absentHere")}`);
+    expect(device).toHaveTextContent("/opt/homebrew/etc");
+    expect(device).toHaveTextContent(`$HOME/.ssh${t("setup.intelligence.deviceAccess.builtin")}`);
+  });
+
+  it("adds a typed path as read/write or as a deny once the keystrokes settle, and removes them", async () => {
+    const user = userEvent.setup();
+    const onLocal = vi.fn();
+    render(<Harness onLocal={onLocal} />);
+    const device = within(screen.getByTestId("grants:device"));
+    const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+    const kind = device.getByRole("combobox", { name: t("setup.intelligence.grants.access") });
+    const add = device.getByRole("button", { name: t("setup.intelligence.grants.add") });
+
+    await user.type(path, "..");
+    await device.findByText("'..' must name a directory");
+    expect(add).toBeDisabled();
+
+    await user.clear(path);
+    await user.type(path, ".cache/uv");
+    await user.click(kind);
+    await user.click(
+      await screen.findByRole("option", {
+        name: t("setup.intelligence.grants.accessLabels.read_write"),
+      }),
+    );
+    await waitFor(() => expect(add).toBeEnabled());
+    await user.click(add);
+    expect(onLocal).toHaveBeenLastCalledWith({
+      paths: [{ path: ".cache/uv", access: "read_write" }],
+      deny: [],
+    });
+    expect(screen.queryByText(t("setup.intelligence.grants.duplicate"))).not.toBeInTheDocument();
+
+    await user.type(path, "/opt/homebrew/etc");
+    await user.click(kind);
+    await user.click(
+      await screen.findByRole("option", { name: t("setup.intelligence.deviceAccess.deny") }),
+    );
+    await waitFor(() => expect(add).toBeEnabled());
+    const judged = vi.mocked(evaluateGrant).mock.calls.map(([args]) => [args.scope, args.path]);
+    expect(judged.filter(([, p]) => p.startsWith("/opt"))).toEqual([["deny", "/opt/homebrew/etc"]]);
+    await user.click(add);
+    expect(onLocal).toHaveBeenLastCalledWith({
+      paths: [{ path: ".cache/uv", access: "read_write" }],
+      deny: ["/opt/homebrew/etc"],
+    });
+
+    // A deny row carries the same select: turning it into a read grant moves
+    // it between the two lists in place.
+    const etc = device.getByRole("combobox", {
+      name: t("setup.intelligence.grants.accessFor", { path: "/opt/homebrew/etc" }),
+    });
+    expect(etc).toHaveValue(t("setup.intelligence.deviceAccess.deny"));
+    await user.click(etc);
+    await user.click(
+      await screen.findByRole("option", { name: t("setup.intelligence.grants.accessLabels.read") }),
+    );
+    expect(onLocal).toHaveBeenLastCalledWith({
+      paths: [
+        { path: ".cache/uv", access: "read_write" },
+        { path: "/opt/homebrew/etc", access: "read" },
+      ],
+      deny: [],
+    });
+    await user.click(
+      device.getByRole("button", {
+        name: t("setup.intelligence.grants.remove", { path: "/opt/homebrew/etc" }),
+      }),
+    );
+    expect(onLocal).toHaveBeenLastCalledWith({
+      paths: [{ path: ".cache/uv", access: "read_write" }],
+      deny: [],
+    });
+    await user.click(
+      device.getByRole("button", {
+        name: t("setup.intelligence.grants.remove", { path: ".cache/uv" }),
+      }),
+    );
+    expect(onLocal).toHaveBeenLastCalledWith({ paths: [], deny: [] });
+  });
+
+  it("starts the path field of the card another screen pointed at with the directory it sent", () => {
+    render(<Harness prefill={{ card: "grants-device", path: "/Volumes/data" }} />);
+
+    const documents = within(screen.getByTestId("grants:document"));
+    const device = within(screen.getByTestId("grants:device"));
+    expect(
+      documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") }),
+    ).toHaveValue("");
+    expect(device.getByRole("textbox", { name: t("setup.intelligence.grants.path") })).toHaveValue(
+      "/Volumes/data",
+    );
+  });
+
+  it("changes a shared document's access in place", async () => {
+    const user = userEvent.setup();
+    const onShared = vi.fn();
+    render(
+      <Harness
+        shared={{ documents: [{ path: "Documents", access: "read" }] }}
+        onShared={onShared}
+      />,
+    );
+    const access = within(screen.getByTestId("grants:document")).getByRole("combobox", {
+      name: t("setup.intelligence.grants.accessFor", { path: "Documents" }),
+    });
+
+    await user.click(access);
+    await user.click(
+      await screen.findByRole("option", {
+        name: t("setup.intelligence.grants.accessLabels.read_write"),
+      }),
+    );
+
+    expect(onShared).toHaveBeenLastCalledWith({
+      documents: [{ path: "Documents", access: "read_write" }],
+    });
+  });
+
+  it("picks a shared document directory inside the home and shows it relative to it", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/Users/me/Documents/shared");
+    Object.assign(window, { __TAURI_INTERNALS__: {} });
+    try {
+      const user = userEvent.setup();
+      render(<Harness />);
+      const documents = within(screen.getByTestId("grants:document"));
+      const path = documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+
+      await user.click(
+        documents.getByRole("button", { name: t("setup.intelligence.grants.choose") }),
+      );
+      await waitFor(() => expect(path).toHaveValue("Documents/shared"));
+      expect(open).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        defaultPath: "/Users/me",
+      });
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it("fills the path from the directory picker, relative to the home when under it", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValueOnce("/Users/me/.cache/pnpm").mockResolvedValueOnce("/opt/x");
+    Object.assign(window, { __TAURI_INTERNALS__: {} });
+    try {
+      const user = userEvent.setup();
+      render(<Harness />);
+      const device = within(screen.getByTestId("grants:device"));
+      const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+      const choose = device.getByRole("button", {
+        name: t("setup.intelligence.grants.choose"),
+      });
+
+      await user.click(choose);
+      await waitFor(() => expect(path).toHaveValue(".cache/pnpm"));
+      await user.click(choose);
+      await waitFor(() => expect(path).toHaveValue("/opt/x"));
+      expect(open).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        defaultPath: undefined,
+      });
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it("relativizes a picked directory to a Windows home directory", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { homeDir } = await import("@tauri-apps/api/path");
+    vi.mocked(homeDir).mockResolvedValueOnce("C:\\Users\\me\\");
+    vi.mocked(open).mockResolvedValueOnce("C:\\Users\\me\\AppData\\Local\\uv\\cache");
+    Object.assign(window, { __TAURI_INTERNALS__: {} });
+    try {
+      const user = userEvent.setup();
+      render(<Harness status={windowsStatus} />);
+      const device = within(screen.getByTestId("grants:device"));
+      const path = device.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+
+      await user.click(device.getByRole("button", { name: t("setup.intelligence.grants.choose") }));
+      await waitFor(() => expect(path).toHaveValue("AppData\\Local\\uv\\cache"));
+    } finally {
+      delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    }
+  });
+
+  it("lists the exchange directory GuildBotics grants itself, fixed and not addable again", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const documents = within(screen.getByTestId("grants:document"));
+
+    // Shown first in the device's spelling, with its access as a label rather
+    // than a control, and no remove button.
+    const row = within(documents.getByText("Documents/GuildBotics").closest("tr") as HTMLElement);
+    expect(row.getByText(t("setup.intelligence.documents.builtin"))).toBeInTheDocument();
+    expect(
+      row.getByText(t("setup.intelligence.grants.accessLabels.read_write")),
+    ).toBeInTheDocument();
+    expect(
+      documents.queryByRole("combobox", {
+        name: t("setup.intelligence.grants.accessFor", { path: "Documents/GuildBotics" }),
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      documents.queryByRole("button", {
+        name: t("setup.intelligence.grants.remove", { path: "Documents/GuildBotics" }),
+      }),
+    ).not.toBeInTheDocument();
+
+    // Typing it again is a duplicate, not a second row.
+    await user.type(
+      documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") }),
+      "Documents/GuildBotics",
+    );
+    expect(
+      await documents.findByText(t("setup.intelligence.grants.duplicate")),
+    ).toBeInTheDocument();
+    expect(
+      documents.getByRole("button", { name: t("setup.intelligence.grants.add") }),
+    ).toBeDisabled();
+  });
+
+  it("judges a typed document path, warns on sensitive ones, and adds it", async () => {
+    const user = userEvent.setup();
+    const onShared = vi.fn();
+    render(<Harness onShared={onShared} />);
+    const documents = within(screen.getByTestId("grants:document"));
+    const path = documents.getByRole("textbox", { name: t("setup.intelligence.grants.path") });
+    const add = documents.getByRole("button", { name: t("setup.intelligence.grants.add") });
+
+    await user.type(path, "..");
+    await documents.findByText("'..' must name a directory");
+
+    await user.clear(path);
+    await user.type(path, ".ssh");
+    await documents.findByText(t("setup.intelligence.grants.sensitiveTitle"));
+    await waitFor(() => expect(add).toBeEnabled());
+    await user.click(add);
+
+    expect(onShared).toHaveBeenLastCalledWith({
+      documents: [{ path: ".ssh", access: "read" }],
+    });
+    // The emptied field does not flash "already added" while the old text settles.
+    expect(path).toHaveValue("");
+    expect(screen.queryByText(t("setup.intelligence.grants.duplicate"))).not.toBeInTheDocument();
+  });
+});

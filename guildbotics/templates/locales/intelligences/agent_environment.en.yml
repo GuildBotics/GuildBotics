@@ -1,0 +1,51 @@
+en:
+  # Every sentence the isolated agent environment gives a person: why a turn
+  # cannot start on this device (the status card, the alert band, the CLI's
+  # `environment status`, a refused turn), why a grant cannot be honoured,
+  # and why a build or a start failed. Dynamic text from below -- a
+  # validator's own explanation, the runtime's error -- is passed through
+  # as %{error} / %{detail}, never restated.
+  runtime:
+    sdk_missing: "The microsandbox SDK is not installed for this platform."
+    not_placed: "The microsandbox runtime could not be placed under %{home}: %{error}"
+    not_installed: "The microsandbox runtime (msb and libkrunfw) is not installed."
+    start_failed: "Could not start the environment: %{error}"
+    ipv4_only_failed: "Could not switch the environment to IPv4 only: %{error}"
+    exit_code: "exit code %{code}"
+    exec_failed: "Could not start '%{command}' in the environment: %{error}"
+    build_start_failed: "Could not start the build environment: %{error}"
+    build_step_failed: "Build step '%{step}' failed with exit code %{code}."
+    build_failed: "Could not build the snapshot: %{error}"
+    remove_failed: "Could not remove the snapshot at %{path}: %{error}"
+  declaration:
+    not_a_package: "'%{spec}' is not a package specification"
+    no_nameservers: "name at least one nameserver, or '%{host}'"
+    not_ipv4: "'%{nameserver}' is not an IPv4 address"
+    not_a_mapping: "%{where}: the declaration must be a mapping"
+    no_device_resolver: "%{where}: dns.nameservers is '%{host}' but this device has no IPv4 resolver; name the nameservers explicitly"
+  snapshot:
+    missing: "The agent environment is missing on this device."
+    stale: "The agent environment on this device is older than the declaration."
+    building: "The agent environment is being built on this device; try again when it is ready."
+    failed: "The agent environment failed to build on this device: %{detail}"
+    build_timeout: "The build did not finish within %{minutes} minutes."
+    build_running: "Another build of this workspace's agent environment is already running."
+  tool:
+    not_provisioned: "%{tool} is not provisioned in the agent environment yet."
+    not_logged_in: "%{tool} is not logged in on this device; run `guildbotics environment login %{name}`."
+  grants:
+    not_a_domain: "'%{domain}' is not a domain name"
+    allowlist_needs_domain: "mode 'allowlist' needs at least one allowed domain"
+    domains_need_allowlist: "allowed_domains is only used with mode 'allowlist'"
+    path_not_relative: "'%{path}' must be relative to the home directory"
+    path_not_a_directory_name: "'%{path}' must name a directory"
+    local_path_missing: "local path '%{path}' does not exist on this device"
+    local_path_too_broad: "local path '%{path}' would grant the whole home directory or root"
+    deny_too_broad: "deny '%{path}' would close the whole home directory or root"
+    document_not_a_directory: "document grant '%{path}' exists but is not a directory"
+    document_outside_home: "document grant '%{path}' must stay below the home directory"
+    network_not_a_mapping: "%{where}: 'network' must be a mapping"
+    network_invalid: "%{where}: invalid 'network': %{error}"
+    not_a_mapping: "%{where}: must be a mapping"
+    invalid: "%{where}: invalid grants: %{error}"
+    sensitive_home: "the home directory"

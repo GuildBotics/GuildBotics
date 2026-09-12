@@ -112,6 +112,10 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
+    # Where a hand-over from the Desktop arrives, and where results go.
+    assert "`~/Documents/GuildBotics/tmp/`" in text
+    assert "never leave a result there" in text
+    assert "under `~/Documents/GuildBotics/`" in text
 
 
 def test_reference_states_which_github_writes_stay_human_decisions():

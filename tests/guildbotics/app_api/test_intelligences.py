@@ -13,15 +13,25 @@ from guildbotics.app_api.intelligences import (
     IntelligenceConfigService,
 )
 from guildbotics.app_api.models import (
-    AdapterNativeAgentPolicySettings,
     BrainAssignment,
     CliAgentDefinition,
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
-    NativeAgentPolicySettings,
 )
 from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
+from guildbotics.intelligences.agent_environment.toolchain import (
+    DnsSettings,
+    Packages,
+    ToolchainDeclaration,
+)
+from guildbotics.intelligences.agent_environment.contract import (
+    DocumentGrant,
+    LocalGrants,
+    LocalPathGrant,
+    NetworkPolicy,
+    SharedGrants,
+)
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 
@@ -107,42 +117,6 @@ def test_read_config_template_fallback_when_team_config_absent(tmp_path: Path) -
     assert response.models, "template models should be read via fallback"
     assert all(model.path.startswith("models/") for model in response.models)
     assert response.brain_mapping, "template brain mapping should be parsed"
-    assert response.native_agent_policy.codex.filesystem_access == "workspace"
-    assert response.native_agent_policy.grok.filesystem_access == "workspace"
-
-
-def test_policy_update_model_rejects_coercion_and_unknown_keys(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError):
-        IntelligenceConfigUpdateRequest(
-            config_dir=tmp_path,
-            native_agent_policy={
-                "codex": {
-                    "filesystem_access": "workspace",
-                    "network_access": True,
-                }
-            },
-        )
-
-
-def test_read_config_member_policy_uses_member_then_team_scope(tmp_path: Path) -> None:
-    _write_yaml(
-        _team_intelligences(tmp_path) / "native_agent_policy.yml",
-        {"codex": {"filesystem_access": "host"}},
-    )
-
-    inherited = IntelligenceConfigService().read_config(
-        config_dir=tmp_path, person_id="alice"
-    )
-    assert inherited.native_agent_policy.codex.filesystem_access == "host"
-
-    _write_yaml(
-        _member_intelligences(tmp_path, "alice") / "native_agent_policy.yml",
-        {"codex": {"filesystem_access": "workspace"}},
-    )
-    overridden = IntelligenceConfigService().read_config(
-        config_dir=tmp_path, person_id="alice"
-    )
-    assert overridden.native_agent_policy.codex.filesystem_access == "workspace"
 
 
 def test_read_config_member_without_override_is_inherited(tmp_path: Path) -> None:
@@ -325,31 +299,6 @@ def test_read_config_cli_agent_malformed_definition_falls_back(tmp_path: Path) -
     assert agent.parameters == {}
 
 
-def test_read_config_cli_agent_detected_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    base = _team_intelligences(tmp_path)
-    _write_yaml(base / "model_mapping.yml", {})
-    _write_yaml(
-        base / "cli_agent_mapping.yml", {"default": "cli_agents/codex/default.yml"}
-    )
-    _write_yaml(base / "brain_mapping.yml", {})
-
-    def fake_resolve_cli_agent_path(executable: str) -> str:
-        # The tool is the directory in the definition path.
-        return "/usr/local/bin/codex" if executable == "codex" else ""
-
-    monkeypatch.setattr(
-        intelligences_module, "resolve_cli_agent_path", fake_resolve_cli_agent_path
-    )
-
-    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
-
-    agent = response.cli_agents[0]
-    assert agent.detected is True
-    assert agent.detected_path == "/usr/local/bin/codex"
-
-
 def test_read_config_brain_mapping_engine_classification(tmp_path: Path) -> None:
     base = _team_intelligences(tmp_path)
     _write_yaml(base / "model_mapping.yml", {})
@@ -454,28 +403,6 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     assert brain_data["agent"] == {
         "class": CLI_BRAIN_CLASS,
         "args": {"cli_agent": "codex"},
-    }
-
-
-def test_team_update_writes_native_agent_policy(tmp_path: Path) -> None:
-    request = _team_update_request(tmp_path).model_copy(
-        update={
-            "native_agent_policy": NativeAgentPolicySettings(
-                codex=AdapterNativeAgentPolicySettings(filesystem_access="host"),
-                grok=AdapterNativeAgentPolicySettings(filesystem_access="workspace"),
-                copilot=AdapterNativeAgentPolicySettings(filesystem_access="host"),
-            )
-        }
-    )
-
-    result = IntelligenceConfigService().update_config(request)
-
-    policy_file = _team_intelligences(tmp_path) / "native_agent_policy.yml"
-    assert policy_file in {item.path for item in result.files}
-    assert load_yaml_file(policy_file) == {
-        "codex": {"filesystem_access": "host"},
-        "grok": {"filesystem_access": "workspace"},
-        "copilot": {"filesystem_access": "host"},
     }
 
 
@@ -629,31 +556,6 @@ def test_member_override_writes_changed_brain_assignment_only(tmp_path: Path) ->
     assert stored["translate"]["args"] == {"model": "openai"}
 
 
-def test_member_override_update_writes_native_agent_policy(tmp_path: Path) -> None:
-    policy = NativeAgentPolicySettings(
-        codex=AdapterNativeAgentPolicySettings(filesystem_access="host"),
-        grok=AdapterNativeAgentPolicySettings(filesystem_access="host"),
-    )
-    request = IntelligenceConfigUpdateRequest(
-        config_dir=tmp_path,
-        person_id="alice",
-        model_mapping={},
-        cli_agent_mapping={},
-        native_agent_policy=policy,
-    )
-
-    IntelligenceConfigService().update_config(request)
-
-    stored = load_yaml_file(
-        _member_intelligences(tmp_path, "alice") / "native_agent_policy.yml"
-    )
-    assert stored == {
-        "codex": {"filesystem_access": "host"},
-        "grok": {"filesystem_access": "host"},
-        "copilot": {"filesystem_access": "workspace"},
-    }
-
-
 def test_member_override_prunes_reverted_slot(tmp_path: Path) -> None:
     """Reverting a slot back to the team value removes the stale override file."""
     _write_team_config(tmp_path)
@@ -719,25 +621,6 @@ def test_member_override_preserves_unsurfaced_def_fields(tmp_path: Path) -> None
 
     stored = load_yaml_file(base / "models/openai/gpt.yml")
     assert stored["rate_limit"] == {"max_requests_per_minute": 3}
-
-
-def test_member_override_update_preserves_policy_when_request_omits_it(
-    tmp_path: Path,
-) -> None:
-    base = _member_intelligences(tmp_path, "alice")
-    existing = {"codex": {"filesystem_access": "host"}}
-    _write_yaml(base / "native_agent_policy.yml", existing)
-
-    IntelligenceConfigService().update_config(
-        IntelligenceConfigUpdateRequest(
-            config_dir=tmp_path,
-            person_id="alice",
-            model_mapping={},
-            cli_agent_mapping={},
-        )
-    )
-
-    assert load_yaml_file(base / "native_agent_policy.yml") == existing
 
 
 def test_member_override_update_clears_only_member_cache(tmp_path: Path) -> None:
@@ -1290,3 +1173,274 @@ def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(
     assert written["id"] == "new"
     # `reasoning_effort` is described, so its absence from the request clears it.
     assert "reasoning_effort" not in written
+
+
+# --- network block of an AI CLI tool definition -------------------------------
+
+_NETWORK = {
+    "mode": "allowlist",
+    "allowed_domains": ["registry.npmjs.org"],
+    "allow_local_network": False,
+}
+
+
+def test_read_config_returns_a_definitions_own_network_block(tmp_path: Path) -> None:
+    _write_team_config(tmp_path)
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {}, "network": _NETWORK},
+    )
+
+    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    codex = next(agent for agent in response.cli_agents if agent.name == "codex")
+    assert codex.network is not None
+    assert codex.network.model_dump(mode="json") == _NETWORK
+
+
+def test_a_save_that_omits_network_keeps_the_files_block(tmp_path: Path) -> None:
+    """The editor may not surface the block yet; a save must not drop it."""
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {}, "network": _NETWORK},
+    )
+
+    IntelligenceConfigService().update_config(_team_update_request(tmp_path))
+
+    stored = load_yaml_file(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
+    )
+    assert stored["network"] == _NETWORK
+
+
+def test_a_save_writes_the_network_block_it_was_given(tmp_path: Path) -> None:
+    request = _team_update_request(tmp_path).model_copy(
+        update={
+            "cli_agents": [
+                CliAgentDefinition(
+                    path="cli_agents/codex/default.yml",
+                    name="codex",
+                    network=NetworkPolicy.model_validate(_NETWORK),
+                )
+            ]
+        }
+    )
+
+    IntelligenceConfigService().update_config(request)
+
+    stored = load_yaml_file(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
+    )
+    assert stored["network"] == _NETWORK
+
+
+# --- shared filesystem grants -----------------------------
+
+
+def test_read_config_returns_the_grants(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+    _write_yaml(
+        _team_intelligences(config_dir) / "cli_agent_filesystem_grants.yml",
+        {"documents": [{"path": "Documents/shared", "access": "read"}]},
+    )
+    _write_yaml(
+        tmp_path / "local/cli_agent_filesystem_grants.yml",
+        {
+            "paths": [{"path": "/opt/homebrew", "access": "read"}],
+            "deny": ["/opt/homebrew/etc"],
+        },
+    )
+
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+
+    assert response.filesystem_grants.model_dump() == {
+        "documents": [{"path": "Documents/shared", "access": "read"}],
+    }
+    assert response.local_grants.model_dump() == {
+        "paths": [{"path": "/opt/homebrew", "access": "read"}],
+        "deny": ["/opt/homebrew/etc"],
+    }
+    assert response.platform
+    # A member scope reads the same grants: they are the workspace's.
+    member = IntelligenceConfigService().read_config(
+        config_dir=config_dir, person_id="alice"
+    )
+    assert member.filesystem_grants == response.filesystem_grants
+
+
+def test_read_config_returns_no_shared_grants_when_no_file_exists(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+
+    # The exchange directory is granted by GuildBotics itself, so the list the
+    # workspace edits starts empty rather than carrying it.
+    assert response.filesystem_grants.model_dump() == {"documents": []}
+
+
+def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+    # Without a file of its own the workspace inherits the packaged declaration.
+    assert response.agent_environment is not None
+    assert response.agent_environment.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
+    assert response.agent_environment.packages.npm == []
+
+    _write_yaml(
+        _team_intelligences(config_dir) / "agent_environment.yml",
+        {
+            "packages": {"npm": ["typescript@5.6.3"]},
+            "dns": {"nameservers": ["1.1.1.1"]},
+        },
+    )
+    response = IntelligenceConfigService().read_config(config_dir=config_dir)
+    assert response.agent_environment is not None
+    assert response.agent_environment.packages.npm == ["typescript@5.6.3"]
+    assert response.agent_environment.dns.nameservers == ["1.1.1.1"]
+    # A member scope reads the same declaration: it is the workspace's.
+    member = IntelligenceConfigService().read_config(
+        config_dir=config_dir, person_id="alice"
+    )
+    assert member.agent_environment == response.agent_environment
+
+
+def test_a_malformed_declaration_is_reported_where_it_is_edited(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    _write_team_config(config_dir)
+    _write_yaml(
+        _team_intelligences(config_dir) / "agent_environment.yml",
+        {"packages": {"npm": ["--bad"]}, "dns": {"nameservers": "host"}},
+    )
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().read_config(config_dir=config_dir)
+
+    assert excinfo.value.code == "invalid_agent_environment"
+
+
+def test_a_team_save_replaces_the_declaration_and_an_omitted_value_keeps_it(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    declaration_file = _team_intelligences(config_dir) / "agent_environment.yml"
+
+    IntelligenceConfigService().update_config(_team_update_request(config_dir))
+    assert not declaration_file.exists()
+
+    request = _team_update_request(config_dir).model_copy(
+        update={
+            "agent_environment": ToolchainDeclaration(
+                packages=Packages(apt=["ripgrep=14.1.0-1"]),
+                dns=DnsSettings(nameservers=["10.0.0.53"]),
+            )
+        }
+    )
+    result = IntelligenceConfigService().update_config(request)
+
+    assert declaration_file in {item.path for item in result.files}
+    assert load_yaml_file(declaration_file) == {
+        "packages": {"apt": ["ripgrep=14.1.0-1"], "npm": [], "uv": []},
+        "dns": {"nameservers": ["10.0.0.53"]},
+    }
+    # A member scope never writes it, even when the payload carries one.
+    member = _team_update_request(config_dir).model_copy(
+        update={"person_id": "alice", "agent_environment": request.agent_environment}
+    )
+    IntelligenceConfigService().update_config(
+        member.model_copy(
+            update={
+                "agent_environment": ToolchainDeclaration(
+                    dns=DnsSettings(nameservers="host")
+                )
+            }
+        )
+    )
+    assert load_yaml_file(declaration_file)["dns"] == {"nameservers": ["10.0.0.53"]}
+
+
+def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    grants_file = _team_intelligences(config_dir) / "cli_agent_filesystem_grants.yml"
+    local_file = tmp_path / "local/cli_agent_filesystem_grants.yml"
+    _write_yaml(grants_file, {"documents": [{"path": "Documents", "access": "read"}]})
+
+    IntelligenceConfigService().update_config(_team_update_request(config_dir))
+    assert load_yaml_file(grants_file) == {
+        "documents": [{"path": "Documents", "access": "read"}]
+    }
+    assert not local_file.exists()
+
+    request = _team_update_request(config_dir).model_copy(
+        update={
+            "filesystem_grants": SharedGrants(
+                documents=[DocumentGrant(path="Projects/out", access="read_write")]
+            ),
+            "local_grants": LocalGrants(
+                paths=[LocalPathGrant(path=".cache/uv", access="read_write")],
+                deny=["/opt/homebrew/etc"],
+            ),
+        }
+    )
+    result = IntelligenceConfigService().update_config(request)
+
+    assert {grants_file, local_file} <= {item.path for item in result.files}
+    assert load_yaml_file(grants_file) == {
+        "documents": [{"path": "Projects/out", "access": "read_write"}]
+    }
+    # The device's own file lives beside the shared config, never inside it.
+    assert load_yaml_file(local_file) == {
+        "paths": [{"path": ".cache/uv", "access": "read_write"}],
+        "deny": ["/opt/homebrew/etc"],
+    }
+
+
+def test_a_malformed_grants_file_is_reported_where_it_is_edited(tmp_path: Path) -> None:
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_filesystem_grants.yml",
+        {"documents": [{"path": "/etc", "access": "read_write"}]},
+    )
+
+    with pytest.raises(SetupServiceError) as excinfo:
+        IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    assert excinfo.value.code == "invalid_filesystem_grants"
+
+
+def test_a_slot_without_a_network_block_reports_what_it_inherits(
+    tmp_path: Path,
+) -> None:
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
+        {"effort": {}, "network": _NETWORK},
+    )
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agents/codex/writer.yml", {"effort": {}}
+    )
+    _write_yaml(
+        _team_intelligences(tmp_path) / "cli_agent_mapping.yml",
+        {
+            "default": "cli_agents/codex/default.yml",
+            "writer": "cli_agents/codex/writer.yml",
+        },
+    )
+
+    response = IntelligenceConfigService().read_config(config_dir=tmp_path)
+
+    writer = next(a for a in response.cli_agents if a.path.endswith("writer.yml"))
+    assert writer.network is None
+    assert writer.inherited_network.model_dump(mode="json") == _NETWORK
+    # With no block anywhere, the packaged default (closed) is what is inherited.
+    claude = IntelligenceConfigService().read_config(config_dir=tmp_path)
+    assert all(a.inherited_network for a in claude.cli_agents)

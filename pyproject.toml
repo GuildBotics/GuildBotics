@@ -51,6 +51,7 @@ dependencies = [
   "markdown-it-py>=4.0.0",
   "weasyprint>=70.0",
   "websockets>=15.0.1",
+  "microsandbox==0.6.17",
 ]
 
 [project.urls]

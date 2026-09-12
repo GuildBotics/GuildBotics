@@ -315,6 +315,11 @@ _CROSS_CUTTING_RULES: list[str] = [
     "file-editing capability instead of an inline shell literal, pass the path as one argv value, "
     "and delete the file even when the command fails. Titles are single-line `--title` values "
     "and never belong in the content file.",
+    "Files the user hands over from the Desktop arrive under "
+    "`~/Documents/GuildBotics/tmp/`, which GuildBotics empties when the app session ends, so "
+    "never leave a result there. Unless the request names a destination, put what you "
+    "produce for the user -- a converted document, a resized image, anything that does not "
+    "belong in the repository you are working in -- under `~/Documents/GuildBotics/`.",
     "Local-only git is the opposite: run `git add` and `git switch -c` yourself as plain git. "
     "`member git commit` / `publish` commit only what you staged and apply the member name/email "
     "to that one commit without changing the repository git config.",

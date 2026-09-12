@@ -1,92 +1,164 @@
-"""Process environment and termination policy shared by native adapters."""
+"""Where a provider process runs: inside the isolated agent environment.
+
+Every adapter starts its provider CLI the same way, through
+:func:`start_turn_environment`: a microVM booted from this device's snapshot
+for the one turn, shaped by the turn's access contract, with the provider's
+persisted state bound in and the member broker's port opened. The adapter
+runs the CLI inside it and speaks its protocol over the bridged stdio; when
+the turn ends the microVM is discarded. Nothing of the host -- its
+environment variables, its credentials, its PATH -- reaches the provider,
+because the provider does not run on the host.
+
+What GuildBotics still runs on the host is its own: the member CLI the broker
+spawns for the agent, under the process-tree policy below.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import os
-import shutil
-import tempfile
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
+from guildbotics.intelligences.agent_environment.provider_state import state_mounts
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+)
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    EnvironmentMount,
+    EnvironmentNetwork,
+    build_environment_spec,
+    guest_home,
+)
+from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime.models import (
+    AgentExecutionContext,
+    AgentRuntimeError,
+    AgentRuntimeErrorCategory,
+)
 from guildbotics.intelligences.agent_runtime.windows_job import (
     WindowsJob,
     creation_flags,
     register_process_job,
     terminate_process_job,
 )
-from guildbotics.intelligences.cli_agents import get_cli_agent_search_path
-from guildbotics.runtime.person_lease import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-)
+from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.processes import terminate_posix_process_group
-from guildbotics.utils.secret_store import is_secret_env_key
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 _WINDOWS = os.name == "nt"
-
-#: Ambient parent values an AI CLI process must never inherit even though their
-#: names do not read as credentials: the helpers and sockets that hand out a
-#: credential on demand, and the execution metadata that authorises a nested
-#: member CLI call. A live lease is a usable grant, so inheriting it lets the
-#: provider process bypass the boundary its own transport was given. Only the
-#: host-side member broker receives that metadata; provider processes never do.
-#: Variables that hold a credential *value* are
-#: not listed here: they are removed by name pattern, because an enumeration
-#: only ever holds the secrets somebody remembered to add to it.
-_STRIPPED_PARENT_ENV = (
-    "GH_CONFIG_DIR",
-    "GIT_ASKPASS",
-    "SSH_ASKPASS",
-    "SSH_AUTH_SOCK",
-    RUN_ENV,
-    TASK_RUN_ENV,
-    GUILDBOTICS_WORKSPACE_ROOT,
-    LEASE_ID_ENV,
-    DELEGATION_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-)
 
 # asyncio's default 64 KiB StreamReader limit aborts readline() on single-line
 # JSON payloads such as replayed tool results or aggregated command output.
 STREAM_READ_LIMIT = 10 * 1024 * 1024
 
+#: What every provider process starts with, beside the tool's own state
+#: variables: git must never wait for a terminal that is not there.
+_PROVIDER_ENV = {"GIT_TERMINAL_PROMPT": "0"}
 
-def isolated_agent_environment() -> tuple[dict[str, str], str]:
-    """Return an AI CLI environment with inherited credentials and grants removed.
 
-    Every variable whose name marks it as a credential is dropped, which covers
-    the member's own ``{PERSON_ID}_GITHUB_ACCESS_TOKEN`` / ``_SLACK_BOT_TOKEN``
-    / ``_SLACK_APP_TOKEN`` and the LLM provider API keys. Those are consumed
-    inside the GuildBotics process (and by the member CLI, which loads them
-    from the keychain itself), so an AI CLI tool has no use for them beyond
-    calling the provider APIs directly and bypassing the member entrypoint.
+async def start_turn_environment(
+    context: AgentExecutionContext,
+    tool_name: str,
+    *,
+    host_ports: Iterable[int],
+    env: Mapping[str, str],
+    mounts: Iterable[EnvironmentMount] = (),
+) -> AgentEnvironment:
+    """Boot the environment one turn of ``tool_name`` runs in.
 
-    The workspace is identified only by explicit environment variables the
-    caller already holds; the agent cwd is never used to guess one.
+    Args:
+        context: The turn: its working directory and access contract.
+        tool_name: The catalog name of the AI CLI tool.
+        host_ports: Host ports the turn must reach (the member broker's).
+        env: What the provider process starts with beyond the tool's own
+            state variables (the broker's bearer token).
+        mounts: An adapter's own binds beyond the contract and the tool's
+            persisted state.
+
+    Raises:
+        AgentRuntimeError: ``configuration`` when this device cannot run the
+            environment or holds no snapshot for the declaration;
+            ``authentication`` when the tool is not logged in here;
+            ``process`` when the microVM does not start. Nothing is widened:
+            a turn that cannot be confined does not run.
     """
-    env = {
-        key: value for key, value in os.environ.items() if not is_secret_env_key(key)
-    }
-    env["PATH"] = get_cli_agent_search_path(env.get("PATH"))
-    gh_config_dir = tempfile.mkdtemp(prefix="guildbotics-gh-config-")
-    for key in _STRIPPED_PARENT_ENV:
-        env.pop(key, None)
-    env["GH_CONFIG_DIR"] = gh_config_dir
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_CONFIG_GLOBAL"] = os.devnull
-    env["GIT_SSH_COMMAND"] = (
-        "ssh -F /dev/null -o BatchMode=yes "
-        "-o IdentitiesOnly=yes -o IdentityFile=/dev/null"
+    tool, status, nameservers = _ready(tool_name)
+    home = guest_home()
+    spec = build_environment_spec(
+        context.contract,
+        context.cwd,
+        host_ports=host_ports,
+        provider_domains=tool.provision.api_domains,
+        env={**_PROVIDER_ENV, **tool.provision.environment(home), **env},
+        nameservers=nameservers,
+        mounts=(*state_mounts(tool), *mounts),
     )
-    return env, gh_config_dir
+    return await _start(spec, status)
+
+
+async def start_probe_environment(tool_name: str) -> AgentEnvironment:
+    """Boot an environment for asking the tool about itself: its usage, its
+    model catalog. Only the tool's state is bound, and only its API is open."""
+    tool, status, nameservers = _ready(tool_name)
+    home = guest_home()
+    spec = AgentEnvironmentSpec(
+        cwd=home,
+        home=home,
+        mounts=state_mounts(tool),
+        network=EnvironmentNetwork(
+            unrestricted=False,
+            domains=tool.provision.api_domains,
+            host_ports=(),
+            local_network=False,
+            nameservers=nameservers,
+        ),
+        env={**_PROVIDER_ENV, **tool.provision.environment(home)},
+    )
+    return await _start(spec, status)
+
+
+def _ready(tool_name: str) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...]]:
+    """Everything a start needs from this device, or the reason it cannot start.
+
+    The reasons are the device's own words (:mod:`..agent_environment.status`),
+    the same ones the CLI and the Desktop show, so a refused turn and the
+    status beside it never disagree.
+    """
+    tool = cli_agent_info(tool_name)
+    status = device_status()
+    if status.snapshot is None or status.refusal:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.CONFIGURATION,
+            status.refusal,
+            details={"snapshot": status.snapshot.state} if status.snapshot else {},
+        )
+    tool_status = status.tool(tool_name)
+    if tool_status.refusal:
+        raise AgentRuntimeError(
+            (
+                AgentRuntimeErrorCategory.AUTHENTICATION
+                if tool_status.provisioned
+                else AgentRuntimeErrorCategory.CONFIGURATION
+            ),
+            tool_status.refusal,
+        )
+    return tool, status.snapshot, status.dns.nameservers
+
+
+async def _start(
+    spec: AgentEnvironmentSpec, status: SnapshotStatus
+) -> AgentEnvironment:
+    try:
+        return await AgentEnvironment.start(spec, snapshot=str(status.path))
+    except AgentEnvironmentError as exc:
+        raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 
 
 def member_command_environment(context: AgentExecutionContext) -> dict[str, str]:
@@ -104,7 +176,7 @@ def member_command_environment(context: AgentExecutionContext) -> dict[str, str]
 async def terminate_process_tree(
     process: asyncio.subprocess.Process, *, grace_seconds: float = 2.0
 ) -> None:
-    """Terminate the process group and reap the owned subprocess."""
+    """Terminate the process group and reap the owned host subprocess."""
     pid = getattr(process, "pid", None)
     if _WINDOWS:
         if process.returncode is None:
@@ -153,7 +225,7 @@ async def create_agent_subprocess(
     *program: str,
     **kwargs: Any,
 ) -> asyncio.subprocess.Process:
-    """Create an agent subprocess under the platform's process-tree policy."""
+    """Create a host subprocess of GuildBotics' own under the process-tree policy."""
     if not _WINDOWS:
         return await asyncio.create_subprocess_exec(*program, **kwargs)
 
@@ -179,7 +251,3 @@ async def create_agent_subprocess(
         raise
     register_process_job(process, job)
     return process
-
-
-def remove_isolated_config(path: str) -> None:
-    shutil.rmtree(path, ignore_errors=True)

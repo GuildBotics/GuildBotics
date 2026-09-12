@@ -1128,6 +1128,65 @@ async def test_run_command_passes_cwd_and_args_into_execution(
 
 
 @pytest.mark.asyncio
+async def test_run_command_without_cwd_runs_in_the_exchange_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    runtime = AppRuntime(EventBus())
+    captured: dict[str, Any] = {}
+
+    async def fake_run_command(self: object, context: object, **kwargs: Any) -> str:
+        del self, context
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
+    )
+
+    await runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+
+    # What the command produces lands where the user looks for it, and the
+    # directory exists before a shell or Python command needs it as cwd.
+    assert captured["cwd"] == home / "Documents/GuildBotics"
+    assert captured["cwd"].is_dir()
+
+
+@pytest.mark.asyncio
+async def test_run_command_expands_the_home_in_the_working_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    runtime = AppRuntime(EventBus())
+    captured: dict[str, Any] = {}
+
+    async def fake_run_command(self: object, context: object, **kwargs: Any) -> str:
+        del self, context
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
+    )
+
+    await runtime.run_command(
+        CommandRunRequest(command="demo", person="bot", cwd=Path("~/work/clone"))
+    )
+
+    assert captured["cwd"] == home / "work/clone"
+
+
+@pytest.mark.asyncio
 async def test_logs_during_run_command_carry_the_trace_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.runtime import EnvironmentProcess
 from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
@@ -71,7 +72,7 @@ class LineJsonRpcTransport:
         self._include_version = include_version
         self._request_timeout = request_timeout
         self._on_reverse_request = on_reverse_request
-        self._process: asyncio.subprocess.Process | None = None
+        self._process: EnvironmentProcess | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._pending: dict[int, asyncio.Future[Any]] = {}
@@ -81,7 +82,7 @@ class LineJsonRpcTransport:
         self._fatal_error: AgentRuntimeError | None = None
 
     @property
-    def process(self) -> asyncio.subprocess.Process | None:
+    def process(self) -> EnvironmentProcess | None:
         return self._process
 
     @property
@@ -99,7 +100,7 @@ class LineJsonRpcTransport:
             and self._fatal_error is None
         )
 
-    def start(self, process: asyncio.subprocess.Process) -> None:
+    def start(self, process: EnvironmentProcess) -> None:
         """Adopt a freshly spawned process and begin reading its streams."""
         self._process = process
         self._fatal_error = None

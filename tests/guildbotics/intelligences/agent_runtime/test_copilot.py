@@ -29,7 +29,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -302,37 +301,11 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
-    assert server["url"] == "http://127.0.0.1:43123/mcp"
+    assert server["url"] == "http://host.microsandbox.internal:43123/mcp"
     assert server["headers"][0]["value"].startswith("Bearer ")
     prompt = peer.sent("session/prompt")["params"]["prompt"][0]["text"]
     assert "never run those commands" in prompt
     assert prompt.endswith("\n\ndo the thing")
-
-
-def test_host_filesystem_access_is_the_only_launch_flag_it_changes() -> None:
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-
-    argv = adapter._launch_argv(_context(Path("/tmp")))
-
-    assert argv[-1] == "--allow-all-paths"
-
-
-def test_a_read_only_turn_stays_in_the_workspace_whatever_the_member_configured(
-    tmp_path,
-) -> None:
-    """Declining its writes is not enough: an unrestricted read leaves in the reply."""
-    host = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-    workspace = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("workspace"))
-    context = _context(tmp_path, read_only=True)
-
-    assert "--allow-all-paths" not in host._launch_argv(context)
-    # A host-access member's read-only turn is launched exactly like a
-    # workspace-access one, apart from the intentionally random broker name.
-    host_argv = host._launch_argv(context)
-    workspace_argv = workspace._launch_argv(context)
-    assert host_argv[:5] == workspace_argv[:5]
-    assert host_argv[5].endswith("(guildbotics_member)")
-    assert workspace_argv[5].endswith("(guildbotics_member)")
 
 
 @pytest.mark.asyncio
@@ -526,26 +499,6 @@ async def test_a_read_only_turn_makes_copilot_ask_before_acting(
     policy = _named(events, AgentEventKind.APPROVAL, "policy")
     assert policy.approval == "never"
     assert policy.details == {
-        "filesystem_access": "workspace",
-        "allowed_paths": "workspace",
-        "allow_all": "off",
-        "read_only": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_a_read_only_turn_reports_the_scope_it_really_got(
-    monkeypatch, tmp_path
-) -> None:
-    """The member configured host access, but this turn does not have it."""
-    peer = _Peer()
-    install(monkeypatch, peer)
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-
-    _result, events = await _run(adapter, tmp_path, read_only=True)
-
-    assert _named(events, AgentEventKind.APPROVAL, "policy").details == {
-        "filesystem_access": "host",
         "allowed_paths": "workspace",
         "allow_all": "off",
         "read_only": True,
@@ -694,78 +647,11 @@ async def test_a_session_copilot_no_longer_has_is_rotated(
 
 
 @pytest.mark.asyncio
-async def test_a_session_this_process_still_holds_is_never_reloaded(
-    monkeypatch, tmp_path
+async def test_every_turn_boots_its_own_environment_and_reloads_the_session(
+    monkeypatch, tmp_path, fake_environment
 ) -> None:
-    """Copilot answers a second load with "already loaded", and it is right to.
-
-    The conversation never left the process, so there is nothing to rehydrate.
-    """
-    peer = _Peer(updates=[text_chunk("first")])
-    install(monkeypatch, peer)
-    adapter = CopilotAcpAdapter()
-    context = _context(tmp_path, provider_options={"reasoning_effort": "high"})
-    conversation = ConversationRecord(key=context.conversation_key)
-    events: list[AgentEvent] = []
-
-    first = await adapter.run_turn("one", context, conversation, events.append)
-    conversation.provider_session_id = first.provider_session_id
-    peer.updates = [text_chunk("second")]
-    second_events: list[AgentEvent] = []
-    second = await adapter.run_turn("two", context, conversation, second_events.append)
-    await adapter.close()
-
-    assert second.output == "second"
-    assert "session/load" not in peer.methods()
-    assert not [event for event in second_events if event.name == "history_rehydrated"]
-    # Settings are still imposed on the turn, from no assumed current state.
-    assert (
-        _named(second_events, AgentEventKind.PROCESS, "settings").details[
-            "reasoning_effort"
-        ]
-        == "high"
-    )
-
-
-@pytest.mark.asyncio
-async def test_a_narrower_turn_restarts_the_process_it_cannot_reuse(
-    monkeypatch, tmp_path
-) -> None:
-    """`--allow-all-paths` is fixed at startup, so a read-only turn needs its own.
-
-    Reusing the running process would leave host-wide reads available while the
-    turn reports the workspace scope.
-    """
-    first = _Peer(updates=[text_chunk("wrote")])
-    second = _Peer(updates=[text_chunk("looked")])
-    launched = install(monkeypatch, first, second)
-    adapter = CopilotAcpAdapter(policy=AdapterFilesystemPolicy("host"))
-    conversation = ConversationRecord(
-        key=ConversationKey("aiko", "copilot", "ticket", "issue-364")
-    )
-
-    normal = await adapter.run_turn(
-        "one", _context(tmp_path), conversation, lambda _event: None
-    )
-    conversation.provider_session_id = normal.provider_session_id
-    events: list[AgentEvent] = []
-    read_only = await adapter.run_turn(
-        "two", _context(tmp_path, read_only=True), conversation, events.append
-    )
-    await adapter.close()
-
-    assert "--allow-all-paths" in launched[0][0]
-    assert "--allow-all-paths" not in launched[1][0]
-    assert read_only.output == "looked"
-    # The restarted process holds nothing, so the session is reloaded into it.
-    assert "session/load" in second.methods()
-    assert second.current["allow_all"] == "off"
-
-
-@pytest.mark.asyncio
-async def test_an_unchanged_launch_command_keeps_the_running_process(
-    monkeypatch, tmp_path
-) -> None:
+    """Nothing of a turn outlives it: the next turn boots a fresh environment
+    and a fresh process, and rehydrates the session it names by id."""
     peer = _Peer(updates=[text_chunk("first")])
     launched = install(monkeypatch, peer)
     adapter = CopilotAcpAdapter()
@@ -773,12 +659,19 @@ async def test_an_unchanged_launch_command_keeps_the_running_process(
         key=ConversationKey("aiko", "copilot", "ticket", "issue-364")
     )
 
-    await adapter.run_turn("one", _context(tmp_path), conversation, lambda _e: None)
-    peer.updates = [text_chunk("second")]
+    first = await adapter.run_turn(
+        "one", _context(tmp_path), conversation, lambda _e: None
+    )
+    conversation.provider_session_id = first.provider_session_id
+    second_peer = _Peer(updates=[text_chunk("second")])
+    launched_again = install(monkeypatch, second_peer)
     await adapter.run_turn("two", _context(tmp_path), conversation, lambda _e: None)
     await adapter.close()
 
-    assert len(launched) == 1
+    assert len(launched) == 1 and len(launched_again) == 1
+    assert [env.tool for env in fake_environment.started] == ["copilot", "copilot"]
+    assert all(env.closed for env in fake_environment.started)
+    assert "session/load" in second_peer.methods()
 
 
 @pytest.mark.asyncio
@@ -1059,10 +952,7 @@ async def test_a_stalled_turn_is_bounded_by_the_turn_deadline(
         terminated.append(process)
         process.returncode = -15
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.acp.terminate_process_tree",
-        terminate,
-    )
+    peer.kill = lambda: terminate(peer)
     adapter = CopilotAcpAdapter(timeout=0.05)
 
     with pytest.raises(AgentRuntimeError) as error:

@@ -9,6 +9,7 @@ from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import set_language
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +72,17 @@ def _isolate_secret_key_registry():
     secret_store._KNOWN_SECRET_ENV_KEYS.clear()
     yield
     secret_store._KNOWN_SECRET_ENV_KEYS.clear()
+
+
+@pytest.fixture(autouse=True)
+def english_locale():
+    """Start every test in English, whatever the previous test switched to.
+
+    The i18n locale is process-global; a test that sets it to ``ja`` and
+    stops would leave every later sentence rendered in Japanese.
+    """
+    set_language("en")
+    yield
 
 
 @pytest.fixture(autouse=True)

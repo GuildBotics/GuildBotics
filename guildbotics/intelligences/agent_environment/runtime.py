@@ -1,0 +1,629 @@
+"""One microVM per turn, driven through the microsandbox SDK.
+
+This is the only module that talks to the runtime. A :class:`AgentEnvironment` is
+created from a snapshot for one turn -- boot from a snapshot takes a fraction
+of a second -- with the mounts and network policy a :class:`AgentEnvironmentSpec`
+states, runs the provider CLI inside with its stdio bridged to the host, and
+is discarded when the turn ends. Cancelling a turn stops the microVM, so no
+process survives it.
+
+The SDK is imported when an environment is needed rather than when this module
+is: a device without a wheel for its platform must still start GuildBotics
+and be told, through :func:`doctor`, why no agent can run there.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
+from importlib.resources import as_file, files
+from pathlib import Path
+from typing import Any
+
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    EnvironmentNetwork,
+)
+from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.i18n_tool import t
+
+#: How a sandbox GuildBotics created is named, so a stale one is recognisable.
+_NAME_PREFIX = "guildbotics-"
+#: The one sandbox a snapshot is built in; a device builds one at a time.
+_BUILD_NAME = _NAME_PREFIX + "build"
+#: Size of the empty mount that covers a denied directory.
+_COVER_MIB = 1
+#: The exit code reported when the guest process ended without one: the
+#: runtime killed it, or its exec session broke.
+_KILLED = -1
+_STOP_TIMEOUT = 5.0
+#: Longest output line a build step may print before its reader gives up.
+_BUILD_LINE_LIMIT = 1 << 20
+#: The environment's network is IPv4: the declaration names IPv4 resolvers,
+#: the policy is written for IPv4, and the gateway forwards over IPv4. The
+#: guest nevertheless boots with an IPv6 address and an IPv6 gateway resolver
+#: in ``/etc/resolv.conf``, and a stub resolver that consults both (Codex's)
+#: never answers; so IPv6 is switched off before anything else runs, in a
+#: turn's environment and in the build's alike.
+_IPV4_ONLY = "echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6"
+#: The SDK reads where the runtime and its state live from these variables.
+RUNTIME_HOME_ENV = "MSB_HOME"
+RUNTIME_BINARY_ENV = "MSB_PATH"
+#: Written beside the placed runtime, so a newer SDK replaces an older copy.
+_RUNTIME_VERSION_FILE = "version"
+#: The Windows Defender Firewall rule for the runtime, created once for its
+#: fixed path (the runtime binds a listening socket, which Windows asks about
+#: per program path; a path that changed on every launch asked every time).
+FIREWALL_RULE_NAME = "GuildBotics agent environment (msb)"
+
+
+class AgentEnvironmentError(RuntimeError):
+    """The environment could not be created or the runtime refused a step."""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentEnvironmentHealth:
+    """Whether this device can create an environment, and if not, why."""
+
+    available: bool
+    reason: str = ""
+    runtime_version: str = ""
+    #: Where the runtime and its state (images, sandboxes) live on this device.
+    home: str = ""
+
+
+def runtime_home() -> Path:
+    """The fixed directory the runtime lives in on this device.
+
+    GuildBotics places the runtime here itself, from the copy the SDK wheel
+    carries, so nothing outside GuildBotics decides which runtime runs and
+    the path is the same on every launch. The path is kept short: the
+    runtime opens unix sockets under it, and those have a length limit.
+    """
+    return get_machine_state_path("msb")
+
+
+def runtime_binary(home: Path) -> Path:
+    """The ``msb`` binary under a runtime home."""
+    return home / "bin" / ("msb.exe" if os.name == "nt" else "msb")
+
+
+def doctor() -> AgentEnvironmentHealth:
+    """Check that the SDK and its runtime are present on this device.
+
+    The runtime is placed under :func:`runtime_home` when it is missing or
+    older than the SDK, and the SDK is pointed at it; nothing is fetched from
+    the network. Absent the SDK, or a runtime the device cannot hold, no
+    agent may start here (fail-closed), and the reason is what the Desktop
+    shows beside that refusal.
+    """
+    home = runtime_home()
+    os.environ[RUNTIME_HOME_ENV] = str(home)
+    os.environ.setdefault(RUNTIME_BINARY_ENV, str(runtime_binary(home)))
+    try:
+        import microsandbox
+    except ImportError:
+        return AgentEnvironmentHealth(
+            False, t("intelligences.agent_environment.runtime.sdk_missing")
+        )
+    version = microsandbox.version()
+    try:
+        _place_runtime(home, version)
+    except OSError as exc:
+        return AgentEnvironmentHealth(
+            False,
+            t(
+                "intelligences.agent_environment.runtime.not_placed",
+                home=home,
+                error=exc,
+            ),
+            home=str(home),
+        )
+    if not microsandbox.is_installed():
+        return AgentEnvironmentHealth(
+            False,
+            t("intelligences.agent_environment.runtime.not_installed"),
+            home=str(home),
+        )
+    return AgentEnvironmentHealth(True, runtime_version=version, home=str(home))
+
+
+def _place_runtime(home: Path, version: str) -> None:
+    """Copy the SDK's bundled ``msb`` and ``libkrunfw`` under ``home`` once per version.
+
+    The wheel carries both; a packaged GuildBotics unpacks them to a fresh
+    temporary directory on every launch, so they are copied to the fixed
+    home the SDK is pointed at. On Windows the firewall rule for that fixed
+    path is created at the same time.
+    """
+    marker = home / _RUNTIME_VERSION_FILE
+    if runtime_binary(home).is_file() and _read(marker) == version:
+        return
+    bundled = files("microsandbox._bundled")
+    for part in ("bin", "lib"):
+        target_dir = home / part
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for entry in bundled.joinpath(part).iterdir():
+            if not entry.is_file():
+                continue
+            target = target_dir / entry.name
+            with as_file(entry) as source:
+                shutil.copyfile(source, target)
+            if part == "bin":
+                target.chmod(0o755)
+    marker.write_text(version, encoding="utf-8")
+    _ensure_firewall_rule(runtime_binary(home))
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _ensure_firewall_rule(binary: Path) -> None:
+    """Create the Windows Defender Firewall rule for the runtime, once, elevated.
+
+    Best effort: a declined elevation leaves Windows to ask on the runtime's
+    first listen, which for a fixed path it does once.
+    """
+    if sys.platform != "win32":
+        return
+    # Only the exit status says whether the rule exists; the text netsh
+    # prints is in the console code page and is not read at all (decoding it
+    # as text has failed on a Japanese Windows).
+    shown = subprocess.run(
+        [
+            "netsh",
+            "advfirewall",
+            "firewall",
+            "show",
+            "rule",
+            f"name={FIREWALL_RULE_NAME}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if shown.returncode == 0:
+        return
+    arguments = (
+        f'advfirewall firewall add rule name="{FIREWALL_RULE_NAME}" dir=in '
+        f'action=allow program="{binary}" enable=yes profile=any'
+    )
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"Start-Process -FilePath netsh -Verb RunAs -Wait -ArgumentList '{arguments}'",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+class EnvironmentStdin:
+    """The guest process' stdin, with the surface of an asyncio stream writer."""
+
+    def __init__(self, sink: Any) -> None:
+        self._sink = sink
+        self._buffer = bytearray()
+        self._closed = False
+
+    def write(self, data: bytes) -> None:
+        self._buffer += data
+
+    async def drain(self) -> None:
+        data = bytes(self._buffer)
+        self._buffer.clear()
+        if not data:
+            return
+        try:
+            await self._sink.write(data)
+        except Exception as exc:
+            raise ConnectionError(f"environment stdin closed: {exc}") from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        asyncio.get_running_loop().create_task(self._aclose())
+
+    def is_closing(self) -> bool:
+        return self._closed
+
+    async def _aclose(self) -> None:
+        with suppress(Exception):
+            await self._sink.close()
+
+
+class EnvironmentProcess:
+    """A process inside the environment, with the surface of an asyncio subprocess.
+
+    ``stdout`` and ``stderr`` are stream readers fed from the runtime's event
+    stream, so the line-oriented transports the adapters already use read
+    them unchanged. ``returncode`` is set when the process ends; ``kill``
+    ends it now.
+    """
+
+    def __init__(self, handle: Any, *, limit: int) -> None:
+        self._handle = handle
+        self.stdin = EnvironmentStdin(handle.take_stdin())
+        self.stdout = asyncio.StreamReader(limit=limit)
+        self.stderr = asyncio.StreamReader(limit=limit)
+        self.pid: int | None = None
+        self.returncode: int | None = None
+        self._exited = asyncio.Event()
+        self._pump = asyncio.create_task(self._pump_events())
+
+    async def wait(self) -> int:
+        await self._exited.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    async def kill(self) -> None:
+        if self.returncode is None:
+            with suppress(Exception):
+                await self._handle.kill()
+        await self.wait()
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        """Close stdin, read both streams to their end, and wait; as asyncio does."""
+        self.stdin.close()
+        stdout, stderr = await asyncio.gather(self.stdout.read(), self.stderr.read())
+        await self.wait()
+        return stdout, stderr
+
+    async def _pump_events(self) -> None:
+        try:
+            async for event in self._handle:
+                self._apply(event)
+        except Exception as exc:  # the exec session itself broke
+            if self.returncode is None:
+                self.stderr.feed_data(f"{exc}\n".encode())
+        finally:
+            if self.returncode is None:
+                self.returncode = _KILLED
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._exited.set()
+
+    def _apply(self, event: Any) -> None:
+        kind = str(event.event_type)
+        if kind == "started":
+            self.pid = event.pid
+        elif kind == "stdout":
+            self.stdout.feed_data(event.data or b"")
+        elif kind == "stderr":
+            self.stderr.feed_data(event.data or b"")
+        elif kind == "exited":
+            self.returncode = _KILLED if event.code is None else int(event.code)
+        elif kind == "failed":
+            # The runtime could not spawn the command; its reason is the
+            # process' only output.
+            self.stderr.feed_data((event.data or b"") + b"\n")
+            self.returncode = int(event.code or 1)
+
+
+class AgentEnvironment:
+    """One turn's microVM."""
+
+    def __init__(self, sandbox: Any, spec: AgentEnvironmentSpec) -> None:
+        self._sandbox = sandbox
+        self._closed = False
+        self.spec = spec
+
+    @classmethod
+    async def start(
+        cls, spec: AgentEnvironmentSpec, *, snapshot: str
+    ) -> AgentEnvironment:
+        """Boot a microVM from ``snapshot`` shaped by ``spec``.
+
+        The sandbox is ephemeral: stopping it removes it, so nothing of a
+        turn outlives the turn.
+        """
+        import microsandbox
+
+        name = _NAME_PREFIX + secrets.token_hex(6)
+        try:
+            sandbox = await microsandbox.Sandbox.create(
+                name,
+                from_snapshot=snapshot,
+                ephemeral=True,
+                workdir=spec.cwd,
+                volumes=_volumes(spec),
+                network=_network(spec),
+            )
+        except Exception as exc:
+            raise AgentEnvironmentError(
+                t("intelligences.agent_environment.runtime.start_failed", error=exc)
+            ) from exc
+        environment = cls(sandbox, spec)
+        try:
+            await _ipv4_only(sandbox)
+        except AgentEnvironmentError:
+            await environment.close()
+            raise
+        return environment
+
+    async def run(
+        self, command: str, *args: str, limit: int, tty: bool = False
+    ) -> EnvironmentProcess:
+        """Start ``command`` inside the environment with its stdio bridged.
+
+        Args:
+            command: The program, resolved on the guest's PATH.
+            args: Its arguments.
+            limit: Buffer limit of the stdout / stderr readers; a transport
+                that reads long single lines sets it high enough for them.
+            tty: Give the command a terminal, for a dialogue that only asks
+                its questions on one (a login's confirmation prompt).
+        """
+        from microsandbox import Stdin
+
+        try:
+            handle = await self._sandbox.exec_stream(
+                command,
+                list(args),
+                stdin=Stdin.pipe(),
+                cwd=self.spec.cwd,
+                env={"HOME": self.spec.home, **self.spec.env},
+                tty=tty,
+            )
+        except Exception as exc:
+            raise AgentEnvironmentError(
+                t(
+                    "intelligences.agent_environment.runtime.exec_failed",
+                    command=command,
+                    error=exc,
+                )
+            ) from exc
+        return EnvironmentProcess(handle, limit=limit)
+
+    async def close(self) -> None:
+        """Stop the microVM; every process inside it ends with it."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._sandbox.stop(timeout=_STOP_TIMEOUT)
+        except Exception:
+            with suppress(Exception):
+                await self._sandbox.destroy(force=True)
+
+
+@dataclass(frozen=True, slots=True)
+class BuildStep:
+    """One shell script of a snapshot build, named for the build log."""
+
+    label: str
+    script: str
+
+
+async def build_snapshot(
+    name: str,
+    *,
+    dest_dir: Path,
+    image: str,
+    home: str,
+    steps: Sequence[BuildStep],
+    nameservers: Iterable[str],
+    on_line: Callable[[str], None],
+) -> Path:
+    """Run ``steps`` on ``image`` and keep the result as the snapshot ``name``.
+
+    The build sandbox has all egress open: it fetches packages from wherever
+    they live, and nothing of the user's is mounted into it. Every line the
+    steps print goes to ``on_line``. The sandbox is removed whether the
+    build succeeds or not; only the snapshot under ``dest_dir`` remains.
+
+    Raises:
+        AgentEnvironmentError: When the sandbox cannot start, a step exits
+            non-zero, or the snapshot cannot be written.
+    """
+    from microsandbox import Sandbox, Snapshot
+
+    network = EnvironmentNetwork(
+        unrestricted=True,
+        domains=(),
+        host_ports=(),
+        local_network=False,
+        nameservers=tuple(nameservers),
+    )
+    try:
+        with _anonymous_registry():
+            sandbox = await Sandbox.create(
+                _BUILD_NAME,
+                image=image,
+                replace=True,
+                workdir="/",
+                network=_network_of(network),
+            )
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
+        ) from exc
+    try:
+        await _ipv4_only(sandbox)
+        for step in steps:
+            on_line(f"[{step.label}]")
+            handle = await sandbox.exec_stream(
+                "sh",
+                ["-ec", step.script],
+                env={"HOME": home, "DEBIAN_FRONTEND": "noninteractive"},
+            )
+            process = EnvironmentProcess(handle, limit=_BUILD_LINE_LIMIT)
+            await _relay_lines(process, on_line)
+            code = await process.wait()
+            if code != 0:
+                raise AgentEnvironmentError(
+                    t(
+                        "intelligences.agent_environment.runtime.build_step_failed",
+                        step=step.label,
+                        code=code,
+                    )
+                )
+        await sandbox.stop(timeout=_STOP_TIMEOUT)
+        snapshot = await Snapshot.create(
+            name, from_sandbox=_BUILD_NAME, dest_dir=str(dest_dir), force=True
+        )
+        return Path(snapshot.path)
+    except AgentEnvironmentError:
+        raise
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.build_failed", error=exc)
+        ) from exc
+    finally:
+        with suppress(Exception):
+            await (await Sandbox.get(_BUILD_NAME)).destroy(force=True)
+
+
+@contextmanager
+def _anonymous_registry() -> Iterator[None]:
+    """Pull the base image without the Docker client's configuration.
+
+    The runtime reads ``~/.docker/config.json`` the way the Docker client
+    does and runs the credential helper it names. Docker Desktop's helper
+    blocks for as long as Desktop is unwell, and a build with it, silently.
+    The base image needs no credentials, and Docker Desktop's state is no
+    setting of GuildBotics', so the pull sees an empty configuration
+    directory instead of the user's.
+    """
+    previous = os.environ.get("DOCKER_CONFIG")
+    with tempfile.TemporaryDirectory(prefix="guildbotics-registry-") as empty:
+        os.environ["DOCKER_CONFIG"] = empty
+        try:
+            yield
+        finally:
+            if previous is None:
+                del os.environ["DOCKER_CONFIG"]
+            else:
+                os.environ["DOCKER_CONFIG"] = previous
+
+
+async def remove_snapshot(path: Path) -> None:
+    """Delete the snapshot at ``path`` and forget it."""
+    from microsandbox import Snapshot
+
+    try:
+        await Snapshot.remove(str(path), force=True)
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t(
+                "intelligences.agent_environment.runtime.remove_failed",
+                path=path,
+                error=exc,
+            )
+        ) from exc
+
+
+async def _ipv4_only(sandbox: Any) -> None:
+    """Switch off IPv6 in a sandbox that just booted (see ``_IPV4_ONLY``)."""
+    try:
+        handle = await sandbox.exec_stream("sh", ["-ec", _IPV4_ONLY])
+        code = await EnvironmentProcess(handle, limit=_BUILD_LINE_LIMIT).wait()
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.ipv4_only_failed", error=exc)
+        ) from exc
+    if code != 0:
+        raise AgentEnvironmentError(
+            t(
+                "intelligences.agent_environment.runtime.ipv4_only_failed",
+                error=t("intelligences.agent_environment.runtime.exit_code", code=code),
+            )
+        )
+
+
+async def _relay_lines(
+    process: EnvironmentProcess, on_line: Callable[[str], None]
+) -> None:
+    async def pump(reader: asyncio.StreamReader) -> None:
+        while line := await reader.readline():
+            on_line(line.decode(errors="replace").rstrip("\r\n"))
+
+    await asyncio.gather(pump(process.stdout), pump(process.stderr))
+
+
+def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+    """The SDK volumes for the spec's mounts.
+
+    The host side is bound by its resolved path: the runtime cannot bind
+    through a symlinked component (macOS spells its temporary directories
+    under `/var`, a link to `/private/var`). The guest side keeps the spelling
+    the spec gave it, so what the agent is told is where it is.
+    """
+    from microsandbox import Volume
+
+    return {
+        mount.guest: (
+            Volume.tmpfs(size_mib=_COVER_MIB, readonly=True)
+            if mount.host is None
+            else Volume.bind(str(mount.host.resolve()), readonly=mount.readonly)
+        )
+        for mount in spec.mounts
+    }
+
+
+def _network(spec: AgentEnvironmentSpec) -> Any:
+    return _network_of(spec.network)
+
+
+def _network_of(network: EnvironmentNetwork) -> Any:
+    from microsandbox import (
+        Action,
+        DestGroup,
+        Destination,
+        Network,
+        NetworkPolicy,
+        Protocol,
+        Rule,
+    )
+    from microsandbox.types import DnsConfig
+
+    rules: list[Any] = []
+    if not network.unrestricted:
+        rules.extend(Rule.allow_dns())
+        rules.extend(
+            Rule.allow(
+                destination=Destination.group(DestGroup.HOST),
+                protocol=Protocol.TCP,
+                port=port,
+            )
+            for port in network.host_ports
+        )
+        rules.extend(
+            Rule.allow(
+                destination=(
+                    Destination.domain_suffix(domain[2:])
+                    if domain.startswith("*.")
+                    else Destination.domain(domain)
+                )
+            )
+            for domain in network.domains
+        )
+        if network.local_network:
+            rules.extend(
+                Rule.allow(destination=Destination.group(group))
+                for group in (DestGroup.HOST, DestGroup.PRIVATE)
+            )
+    return Network(
+        policy=NetworkPolicy(
+            default_egress=Action.ALLOW if network.unrestricted else Action.DENY,
+            default_ingress=Action.DENY,
+            rules=tuple(rules),
+        ),
+        dns=DnsConfig(nameservers=network.nameservers),
+    )

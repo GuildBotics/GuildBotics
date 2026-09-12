@@ -206,7 +206,10 @@ export type SystemAlert = {
     | "command_failed"
     | "rate_limited"
     | "scheduler_failed"
-    | "worker_stopped";
+    | "worker_stopped"
+    | "agent_environment_unavailable"
+    | "agent_environment_tool_unavailable"
+    | "agent_environment_slot_blocked";
   severity: "critical" | "warning";
   opened_at: string;
   updated_at: string;
@@ -214,24 +217,15 @@ export type SystemAlert = {
   person_id: string;
   command: string;
   trace_id: string;
+  // What the alert is about when the code alone does not say.
+  reason?: string;
+  // Which setting to open for it, when the code alone does not say.
+  setting?: string;
   actions: Array<"diagnostics" | "setup" | "trace" | "service">;
 };
 
 export type SystemAlertsResponse = {
   alerts: SystemAlert[];
-};
-
-export type CliAgentDetection = {
-  name: string;
-  label: string;
-  executable: string;
-  config_reference: string;
-  detected: boolean;
-  path: string;
-};
-
-export type CliAgentDetectionsResponse = {
-  agents: CliAgentDetection[];
 };
 
 export type CliAgentUsageWindow = {
@@ -290,6 +284,28 @@ export type CommandRunResponse = {
 
 export type CommandInputFileResponse = {
   path: string;
+  /** The path as the agent inside the environment names it: what the input field carries. */
+  guest_path: string;
+};
+
+/** The grant that would open an unreachable path, spelled for the grants screen. */
+export type CommandInputGrantSuggestion = {
+  scope: "document" | "device";
+  path: string;
+};
+
+/** A path about to enter a command's input, as a turn on this device would find it. */
+export type CommandInputPathStatus = {
+  path: string;
+  kind: "file" | "directory" | "missing";
+  reachable: boolean;
+  /** The path as the agent inside the environment names it: what the input field carries. */
+  guest_path: string;
+  grant: CommandInputGrantSuggestion | null;
+};
+
+export type CommandInputPathsResponse = {
+  paths: CommandInputPathStatus[];
 };
 
 export type TraceSummary = {
@@ -867,8 +883,6 @@ export type ModelDefinition = {
 export type CliAgentDefinition = {
   path: string;
   name: string;
-  detected: boolean;
-  detected_path: string;
   // Settings that always apply, whatever effort was asked for.
   parameters?: Record<string, unknown>;
   effort: EffortOverlay;
@@ -877,6 +891,169 @@ export type CliAgentDefinition = {
   // False when the tool's protocol has nowhere to put these settings, so the
   // editor explains rather than collecting configuration that would be dropped.
   effort_supported?: boolean;
+  // This definition's own `network` block; null when the file states none and
+  // the slot runs under `inherited_network`.
+  network?: NetworkPolicy | null;
+  inherited_network?: NetworkPolicy;
+};
+
+export type NetworkMode = "deny" | "allowlist" | "unrestricted";
+
+// One rule for the commands a tool runs and its own web tools alike.
+export type NetworkPolicy = {
+  mode: NetworkMode;
+  allowed_domains: string[];
+  allow_local_network: boolean;
+};
+
+export const CLOSED_NETWORK_POLICY: NetworkPolicy = {
+  mode: "deny",
+  allowed_domains: [],
+  allow_local_network: false,
+};
+
+export type GrantAccess = "read" | "read_write";
+
+// A directory below the home directory the workspace's agents use for their
+// work; shared, resolved on every device the same way.
+export type DocumentGrant = {
+  path: string;
+  access: GrantAccess;
+};
+
+// The workspace-shared part of what agents may reach.
+export type SharedGrants = {
+  documents: DocumentGrant[];
+};
+
+// A path this device alone grants; may be absolute, never synchronized.
+export type LocalPathGrant = {
+  path: string;
+  access: GrantAccess;
+};
+
+export type LocalGrants = {
+  paths: LocalPathGrant[];
+  // Corners of what is open that this device closes.
+  deny: string[];
+};
+
+export type GrantScope = "document" | "local" | "deny";
+
+// What a grant the user is about to add would mean on this device.
+export type GrantEvaluation = {
+  scope: GrantScope;
+  path: string;
+  access: string;
+  valid: boolean;
+  reason: string;
+  present: boolean;
+  sensitive: string;
+};
+
+// A document or local path grant as it resolves on this device. `path` is for
+// display; `grant` is the entry as the grant file spells it, which is what the
+// editor's own list holds.
+export type EnvironmentGrantStatus = {
+  path: string;
+  grant: string;
+  access: string;
+  present: boolean;
+  // Granted by GuildBotics itself (the exchange directory): shown, not editable.
+  builtin: boolean;
+};
+
+export type EnvironmentDenyStatus = {
+  path: string;
+  builtin: boolean;
+};
+
+export type EnvironmentAccessStatus = {
+  documents: EnvironmentGrantStatus[];
+  paths: EnvironmentGrantStatus[];
+  denied: EnvironmentDenyStatus[];
+  problem: string;
+};
+
+// Which part of the device keeps every turn from starting: the runtime it
+// lacks, the shared declaration (or the resolvers it names), the snapshot to
+// build, or a build to wait for.
+export type DeviceSetting = "runtime" | "declaration" | "snapshot" | "building";
+
+// Which setting an environment problem is about: a part of the device, one
+// tool's row in the environment card, or the directory grants.
+export type EnvironmentSetting = DeviceSetting | "tool" | "grants";
+
+export type EnvironmentProblem = {
+  setting: EnvironmentSetting;
+  reason: string;
+};
+
+export type EnvironmentRuntimeStatus = {
+  available: boolean;
+  reason: string;
+  version: string;
+  // Where the runtime and its state live on this device.
+  home: string;
+};
+
+export type SnapshotState = "missing" | "stale" | "building" | "failed" | "ready";
+
+export type EnvironmentSnapshotStatus = {
+  state: SnapshotState;
+  name: string;
+  detail: string;
+  // The tail of the build this backend last ran.
+  output: string[];
+};
+
+export type EnvironmentDnsStatus = {
+  declared: string;
+  nameservers: string[];
+  problem: string;
+};
+
+// One AI CLI tool of the catalog as this device can run it.
+export type EnvironmentToolStatus = {
+  name: string;
+  label: string;
+  config_reference: string;
+  provisioned: boolean;
+  logged_in: boolean;
+  // Why a turn of this tool cannot start here, or "" when it can.
+  problem: string;
+};
+
+// The shared declaration of the agent environment: what every device builds.
+export type AgentEnvironmentDeclaration = {
+  packages: { apt: string[]; npm: string[]; uv: string[] };
+  dns: { nameservers: "host" | string[] };
+};
+
+export type EnvironmentSlotStatus = {
+  slot: string;
+  tool: string;
+  network: NetworkPolicy;
+  problems: EnvironmentProblem[];
+};
+
+export type EnvironmentMemberStatus = {
+  person_id: string;
+  slots: EnvironmentSlotStatus[];
+};
+
+export type AgentEnvironmentStatusResponse = {
+  platform: string;
+  runtime: EnvironmentRuntimeStatus;
+  snapshot: EnvironmentSnapshotStatus;
+  dns: EnvironmentDnsStatus;
+  tools: EnvironmentToolStatus[];
+  // Why no turn at all can start on this device, or "" when one can.
+  problem: string;
+  // What `problem` is about, or "" when there is none.
+  problem_setting: DeviceSetting | "";
+  access: EnvironmentAccessStatus;
+  members: EnvironmentMemberStatus[];
 };
 
 export type BrainAssignment = {
@@ -885,19 +1062,6 @@ export type BrainAssignment = {
   engine: "llm" | "cli";
   target: string;
 };
-
-export type NativeAgentFilesystemAccess = "workspace" | "host";
-
-// One entry per native adapter; the backend rejects unknown keys.
-export type NativeAgentPolicySettings = {
-  codex: { filesystem_access: NativeAgentFilesystemAccess };
-  grok: { filesystem_access: NativeAgentFilesystemAccess };
-  copilot: { filesystem_access: NativeAgentFilesystemAccess };
-};
-
-export const NATIVE_POLICY_ADAPTERS = ["codex", "grok", "copilot"] as const;
-
-export type NativeAgentPolicyAdapter = (typeof NATIVE_POLICY_ADAPTERS)[number];
 
 // A selectable LLM provider, discovered server-side from
 // `models/<provider>/default.yml`. Single source of truth for the catalog.
@@ -925,7 +1089,14 @@ export type IntelligenceConfig = {
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
-  native_agent_policy: NativeAgentPolicySettings;
+  // The workspace's shared grants (the team's, whichever scope is read) and
+  // this device's own extra paths.
+  filesystem_grants?: SharedGrants;
+  local_grants?: LocalGrants;
+  // The workspace's agent environment declaration (the team's, whichever
+  // scope is read).
+  agent_environment?: AgentEnvironmentDeclaration | null;
+  platform?: string;
   // Team-owned slot/feature names. A member may override their value but cannot
   // delete or rename them. Empty for the team scope.
   inherited_model_slots?: string[];
@@ -943,7 +1114,11 @@ export type IntelligenceConfigUpdateRequest = {
   cli_agent_mapping?: Record<string, string>;
   cli_agents?: CliAgentDefinition[];
   brain_mapping?: BrainAssignment[];
-  native_agent_policy?: NativeAgentPolicySettings;
+  // Replace the shared grants / this device's paths / the declaration when
+  // given; omitted keeps them.
+  filesystem_grants?: SharedGrants;
+  local_grants?: LocalGrants;
+  agent_environment?: AgentEnvironmentDeclaration;
 };
 
 export type ConfigWriteResponse = {
@@ -1478,10 +1653,6 @@ export async function getMemoryEvents(params?: {
   return request(`/diagnostics/memory-events${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function getCliAgentDetections(): Promise<CliAgentDetectionsResponse> {
-  return request("/intelligences/cli-agents/detection");
-}
-
 export async function getCliAgentUsage(): Promise<CliAgentUsagesResponse> {
   return request("/intelligences/cli-agents/usage");
 }
@@ -1504,6 +1675,25 @@ export async function updateIntelligenceConfig(
   return request("/config/intelligences", { method: "PUT", body });
 }
 
+export async function getAgentEnvironmentStatus(): Promise<AgentEnvironmentStatusResponse> {
+  return request("/intelligences/agent-environment");
+}
+
+/** Start building this device's snapshot; the status reports its progress. */
+export async function buildAgentEnvironment(): Promise<AgentEnvironmentStatusResponse> {
+  return request("/intelligences/agent-environment/build", { method: "POST" });
+}
+
+export async function evaluateGrant(query: {
+  scope: GrantScope;
+  path: string;
+  access?: GrantAccess;
+}): Promise<GrantEvaluation> {
+  const params = new URLSearchParams({ scope: query.scope, path: query.path });
+  if (query.access) params.set("access", query.access);
+  return request(`/intelligences/grant-evaluation?${params.toString()}`);
+}
+
 export async function runCommand(body: {
   command: string;
   args?: string[];
@@ -1518,6 +1708,17 @@ export async function runCommand(body: {
 
 export async function uploadCommandInputFile(file: File): Promise<CommandInputFileResponse> {
   return uploadFile("/commands/input-files", file);
+}
+
+export async function copyCommandInputFile(path: string): Promise<CommandInputFileResponse> {
+  return request("/commands/input-files/copy", { method: "POST", body: { path } });
+}
+
+export async function checkCommandInputPaths(body: {
+  paths: string[];
+  cwd?: string;
+}): Promise<CommandInputPathsResponse> {
+  return request("/commands/input-paths", { method: "POST", body });
 }
 
 export async function authorCommand(

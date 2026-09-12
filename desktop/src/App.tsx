@@ -143,6 +143,7 @@ export function App() {
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
   const closeGuard = useAppCloseGuard();
+  useHostNavigation();
   useHotkeyRegistration();
   return (
     <main className="shell">
@@ -363,15 +364,57 @@ function SystemAlertBand() {
   );
 }
 
-function systemAlertMessage(t: TFunction, alert: SystemAlert) {
-  return t(`systemAlerts.codes.${alert.code}`, {
+// The device alert names what is wrong (the backend's words) and then what
+// to do about it, which depends on which part of the device it is: a build
+// in progress needs nothing but patience, so it gets no second sentence.
+const DEVICE_FIXES = ["runtime", "declaration", "snapshot"] as const;
+
+export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
+  const message = t(`systemAlerts.codes.${alert.code}`, {
     person: alert.person_id || t("systemAlerts.unknownMember"),
     command: alert.command || t("systemAlerts.unknownCommand"),
     count: alert.occurrence_count,
+    reason: alert.reason,
   });
+  const fix = DEVICE_FIXES.find((part) => part === alert.setting);
+  if (alert.code !== "agent_environment_unavailable" || !fix) return message;
+  return `${message} ${t(`systemAlerts.environmentFix.${fix}`)}`;
 }
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
+  if (alert.code === "agent_environment_unavailable" && alert.setting === "declaration") {
+    // The shared declaration is edited in the advanced intelligence settings.
+    const search = new URLSearchParams({
+      section: "intelligence",
+      advanced: "intelligence",
+      focus: "agent-environment-declaration",
+    });
+    return `/setup?${search.toString()}`;
+  }
+  if (
+    alert.code === "agent_environment_unavailable" ||
+    alert.code === "agent_environment_tool_unavailable"
+  ) {
+    // The device's environment card, at the row that is the problem: the
+    // runtime or the snapshot for the device, the tool's own row for a tool.
+    const focus =
+      alert.code === "agent_environment_tool_unavailable" && alert.command
+        ? `agent-environment-tool-${alert.command}`
+        : alert.setting === "runtime"
+          ? "agent-environment-runtime"
+          : "agent-environment-snapshot";
+    return `/setup?${new URLSearchParams({ section: "intelligence", focus }).toString()}`;
+  }
+  if (alert.code === "agent_environment_slot_blocked") {
+    // A grant problem sits in the workspace's directory cards under the
+    // advanced intelligence settings.
+    const search = new URLSearchParams({
+      section: "intelligence",
+      advanced: "intelligence",
+      focus: "grants-device",
+    });
+    return `/setup?${search.toString()}`;
+  }
   if (alert.code !== "credential_github" || !alert.person_id) {
     return "/setup";
   }
@@ -473,6 +516,42 @@ function runtimeHasActiveWork(status: RuntimeStatus | undefined): boolean {
  * working — so the guard hangs off the tray's Quit item instead. The user can
  * force stop the runtime and quit from the modal.
  */
+/**
+ * Follow a route the host asks for (`app://navigate`): a control in the
+ * quick-run window, a separate webview, sends the user to a settings screen
+ * this way. The navigation guard applies as it does for the sidebar.
+ */
+function useHostNavigation() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const stop = await listen<string>("app://navigate", (event) => {
+          requestNavigation(() => navigate(event.payload));
+        });
+        if (cancelled) {
+          stop();
+        } else {
+          unlisten = stop;
+        }
+      } catch {
+        // The event API is unavailable (a harness that only stubs
+        // __TAURI_INTERNALS__): nothing can ask for a route, so nothing to follow.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [navigate]);
+}
+
 function useAppCloseGuard() {
   const [blocked, setBlocked] = useState(false);
   const [forceQuitting, setForceQuitting] = useState(false);

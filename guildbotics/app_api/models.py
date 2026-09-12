@@ -13,6 +13,14 @@ from guildbotics.commands.metadata import (
 )
 from guildbotics.editions.simple.github_app_setup import GitHubAppRegistrationInfo
 from guildbotics.editions.simple.setup_service import GitHubProjectInput, LaneMapInput
+from guildbotics.intelligences.agent_environment.contract import (
+    LocalGrants,
+    NetworkPolicy,
+    SharedGrants,
+)
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
+from guildbotics.intelligences.agent_environment.status import DeviceSetting
+from guildbotics.intelligences.agent_environment.toolchain import ToolchainDeclaration
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -446,6 +454,42 @@ class CommandRunResponse(BaseModel):
 
 class CommandInputFileResponse(BaseModel):
     path: Path
+    #: The path as the agent inside the environment names it: what the
+    #: input field carries.
+    guest_path: str
+
+
+class CommandInputFileCopyRequest(BaseModel):
+    path: Path
+
+
+class CommandInputPathsRequest(BaseModel):
+    """Paths the Desktop is about to put in a command's input field."""
+
+    paths: list[Path] = Field(min_length=1)
+    cwd: Path | None = None
+
+
+class CommandInputGrantSuggestion(BaseModel):
+    """The grant that would open an unreachable path, for the grants screen."""
+
+    scope: Literal["document", "device"]
+    path: str
+
+
+class CommandInputPathStatus(BaseModel):
+    path: Path
+    kind: Literal["file", "directory", "missing"]
+    #: Whether a turn of this device's isolated agent environment sees it.
+    reachable: bool
+    #: The path as the agent inside the environment names it: what the
+    #: input field carries.
+    guest_path: str
+    grant: CommandInputGrantSuggestion | None = None
+
+
+class CommandInputPathsResponse(BaseModel):
+    paths: list[CommandInputPathStatus]
 
 
 CommandFileFormat = CommandFormat
@@ -946,6 +990,13 @@ SystemAlertCode = Literal[
     "rate_limited",
     "scheduler_failed",
     "worker_stopped",
+    #: This device cannot run any AI CLI turn: no runtime, no snapshot, or a
+    #: declaration it cannot read.
+    "agent_environment_unavailable",
+    #: One AI CLI tool cannot run here: not provisioned, or not logged in.
+    "agent_environment_tool_unavailable",
+    #: One member's slot cannot start here over a grant this device lacks.
+    "agent_environment_slot_blocked",
 ]
 SystemAlertSeverity = Literal["critical", "warning"]
 SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
@@ -961,6 +1012,11 @@ class SystemAlert(BaseModel):
     person_id: str = ""
     command: str = ""
     trace_id: str = ""
+    #: What the alert is about when the code alone does not say, such as the
+    #: setting a device cannot enforce.
+    reason: str = ""
+    #: Which setting to open for it, when the code alone does not say.
+    setting: str = ""
     actions: list[SystemAlertAction] = Field(default_factory=list)
 
 
@@ -970,19 +1026,6 @@ class SystemAlertsResponse(BaseModel):
 
 class SystemAlertDismissRequest(BaseModel):
     alert_id: str = Field(min_length=1)
-
-
-class CliAgentDetection(BaseModel):
-    name: str
-    label: str = ""
-    executable: str
-    config_reference: str
-    detected: bool
-    path: str = ""
-
-
-class CliAgentDetectionsResponse(BaseModel):
-    agents: list[CliAgentDetection]
 
 
 class CliAgentUsageWindow(BaseModel):
@@ -1050,8 +1093,6 @@ class ModelDefinition(BaseModel):
 class CliAgentDefinition(BaseModel):
     path: str
     name: str
-    detected: bool = False
-    detected_path: str = ""
     #: Settings that always apply, whatever effort was asked for. The effort
     #: overlay merges on top, mirroring a model definition's ``parameters``.
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -1071,6 +1112,140 @@ class CliAgentDefinition(BaseModel):
     #: protocol has nowhere to put these settings says so, so the editor can
     #: explain instead of collecting configuration that would be dropped.
     effort_supported: bool = True
+    #: This definition's own `network` block, or None when the file states
+    #: none. A request that omits it leaves the file's block as it is, so an
+    #: editor that does not surface the block cannot drop it.
+    network: NetworkPolicy | None = None
+    #: What the slot runs under when it states no block of its own: its tool's
+    #: default definition, or the closed policy when that states none either.
+    inherited_network: NetworkPolicy = Field(default_factory=NetworkPolicy)
+
+
+GrantScope = Literal["document", "local", "deny"]
+
+
+class GrantEvaluation(BaseModel):
+    """What a grant the user is about to add would mean on this device."""
+
+    scope: GrantScope
+    path: str
+    access: str = ""
+    valid: bool
+    reason: str = ""
+    present: bool = False
+    #: Why the path holds credentials or provider state, or "".
+    sensitive: str = ""
+
+
+class EnvironmentGrantStatus(BaseModel):
+    """A document or local path grant as it resolves on this device.
+
+    ``path`` is for display; ``grant`` is the entry as the grant file spells
+    it, which is what the editor's own list holds.
+    """
+
+    path: str
+    grant: str
+    access: str
+    present: bool
+    #: Granted by GuildBotics itself, not by the grants file, and not removable.
+    builtin: bool = False
+
+
+class EnvironmentDenyStatus(BaseModel):
+    path: str
+    builtin: bool
+
+
+class EnvironmentAccessStatus(BaseModel):
+    """The shared and local grants as they resolve on this device."""
+
+    documents: list[EnvironmentGrantStatus] = Field(default_factory=list)
+    paths: list[EnvironmentGrantStatus] = Field(default_factory=list)
+    denied: list[EnvironmentDenyStatus] = Field(default_factory=list)
+    #: Why the grants could not be resolved at all, or "".
+    problem: str = ""
+
+
+#: Which setting an environment problem is about, so the Desktop can open it
+#: and say what to do there: a part of the device (:data:`DeviceSetting`),
+#: one tool's row in it (provisioning, login), or the directory grants.
+EnvironmentSetting = Literal[DeviceSetting, "tool", "grants"]
+
+
+class EnvironmentProblem(BaseModel):
+    setting: EnvironmentSetting
+    reason: str
+
+
+class EnvironmentRuntimeStatus(BaseModel):
+    """Whether this device can create an environment at all."""
+
+    available: bool
+    reason: str = ""
+    version: str = ""
+    #: Where the runtime and its state live on this device.
+    home: str = ""
+
+
+class EnvironmentSnapshotStatus(BaseModel):
+    """The snapshot the declaration asks for, as this device holds it.
+
+    ``output`` is the tail of the build this process last ran, so the screen
+    can show what a running or failed build printed.
+    """
+
+    state: SnapshotState
+    name: str = ""
+    detail: str = ""
+    output: list[str] = Field(default_factory=list)
+
+
+class EnvironmentDnsStatus(BaseModel):
+    declared: str = ""
+    nameservers: list[str] = Field(default_factory=list)
+    problem: str = ""
+
+
+class EnvironmentToolStatus(BaseModel):
+    """One AI CLI tool of the catalog as this device can run it."""
+
+    name: str
+    label: str
+    config_reference: str
+    provisioned: bool
+    logged_in: bool
+    #: Why a turn of this tool cannot start here, or "" when it can.
+    problem: str = ""
+
+
+class EnvironmentSlotStatus(BaseModel):
+    slot: str
+    tool: str
+    network: NetworkPolicy
+    #: Everything that keeps this slot from starting on this device.
+    problems: list[EnvironmentProblem] = Field(default_factory=list)
+
+
+class EnvironmentMemberStatus(BaseModel):
+    person_id: str
+    slots: list[EnvironmentSlotStatus] = Field(default_factory=list)
+
+
+class AgentEnvironmentStatusResponse(BaseModel):
+    """This device's agent environment: what it holds and what cannot start here."""
+
+    platform: str
+    runtime: EnvironmentRuntimeStatus
+    snapshot: EnvironmentSnapshotStatus
+    dns: EnvironmentDnsStatus = Field(default_factory=EnvironmentDnsStatus)
+    tools: list[EnvironmentToolStatus] = Field(default_factory=list)
+    #: Why no turn at all can start on this device, or "" when one can.
+    problem: str = ""
+    #: What ``problem`` is about, or "" when there is none.
+    problem_setting: DeviceSetting | Literal[""] = ""
+    access: EnvironmentAccessStatus = Field(default_factory=EnvironmentAccessStatus)
+    members: list[EnvironmentMemberStatus] = Field(default_factory=list)
 
 
 class BrainAssignment(BaseModel):
@@ -1078,29 +1253,6 @@ class BrainAssignment(BaseModel):
     brain_class: str
     engine: Literal["llm", "cli"]
     target: str
-
-
-class AdapterNativeAgentPolicySettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    filesystem_access: Literal["workspace", "host"] = "workspace"
-
-
-class NativeAgentPolicySettings(BaseModel):
-    """Per-adapter policies. Each native adapter keeps its own field so one
-    adapter's sandbox choice can never be read as another's."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    codex: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
-    grok: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
-    copilot: AdapterNativeAgentPolicySettings = Field(
-        default_factory=AdapterNativeAgentPolicySettings
-    )
 
 
 class LlmProvidersResponse(BaseModel):
@@ -1117,9 +1269,15 @@ class IntelligenceConfigResponse(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
-    native_agent_policy: NativeAgentPolicySettings = Field(
-        default_factory=NativeAgentPolicySettings
-    )
+    #: The workspace's shared grants (documents). They are the team's,
+    #: whichever scope is read, and only the team scope writes them.
+    filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
+    #: This device's own extra paths and denies, never synchronized.
+    local_grants: LocalGrants = Field(default_factory=LocalGrants)
+    #: The workspace's agent environment declaration (packages and DNS). The
+    #: team's, whichever scope is read; only the team scope writes it.
+    agent_environment: ToolchainDeclaration | None = None
+    platform: str = ""
     # Slot/feature names the team owns. A member may override their value but
     # cannot delete or rename them (the runtime merge would only revive them),
     # so the editor locks these names. Empty for the team scope.
@@ -1138,7 +1296,14 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
-    native_agent_policy: NativeAgentPolicySettings | None = None
+    #: None keeps the shared grants as they are; a value replaces them. Ignored
+    #: for a member scope, which has no grants of its own.
+    filesystem_grants: SharedGrants | None = None
+    #: None keeps this device's paths as they are; a value replaces them.
+    local_grants: LocalGrants | None = None
+    #: None keeps the declaration as it is; a value replaces it. Ignored for a
+    #: member scope, which has no declaration of its own.
+    agent_environment: ToolchainDeclaration | None = None
 
 
 class ProjectConfigResponse(BaseModel):

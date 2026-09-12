@@ -8,6 +8,7 @@ import os
 import shlex
 import threading
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,8 +16,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
+from guildbotics.app_api.agent_environment_status import (
+    EnvironmentProblemEntry,
+    agent_environment_problems,
+    agent_environment_status,
+)
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
 from guildbotics.app_api.command_files import CommandFileService, file_revision
+from guildbotics.app_api.command_input_files import command_cwd
 from guildbotics.app_api.config_revisions import apply_config_write
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
 from guildbotics.app_api.errors import AppApiError
@@ -25,11 +32,10 @@ from guildbotics.app_api.intelligences import CLI_BRAIN_CLASS
 from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
+    AgentEnvironmentStatusResponse,
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentDetection,
-    CliAgentDetectionsResponse,
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
@@ -126,6 +132,18 @@ from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.intelligences.agent_environment.contract import exchange_dir
+from guildbotics.intelligences.agent_environment.provider_state import is_logged_in
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironmentError,
+    doctor,
+)
+from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
+from guildbotics.intelligences.agent_environment.toolchain import (
+    ToolchainDeclaration,
+    ToolchainError,
+    load_toolchain,
+)
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
@@ -193,6 +211,8 @@ class _UseProcessDataDir:
 _USE_PROCESS_DATA_DIR = _UseProcessDataDir()
 
 _CLI_AGENT_USAGE_TTL_SECONDS = 300.0
+#: Lines of build output the status card can show.
+ENVIRONMENT_BUILD_OUTPUT_LINES = 200
 
 
 def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
@@ -262,6 +282,12 @@ class AppRuntime:
         self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage_lock = asyncio.Lock()
         self._cli_agent_usage_cache: tuple[float, CliAgentUsagesResponse] | None = None
+        self._environment_build_lock = threading.Lock()
+        self._environment_build: threading.Thread | None = None
+        #: The tail of the build this process last ran, for the status card.
+        self._environment_build_output: deque[str] = deque(
+            maxlen=ENVIRONMENT_BUILD_OUTPUT_LINES
+        )
         self._loaded_dotenv_keys: set[str] = set()
         self._workspace_sync = WorkspaceSyncService(
             on_live_publisher=self.set_live_state,
@@ -306,7 +332,7 @@ class AppRuntime:
             config_dir / "team" / "project.yml" if config_dir is not None else None
         )
         return ConfigStatus(
-            cwd=Path.cwd(),
+            cwd=exchange_dir(),
             workspace=workspace,
             config_dir=config_dir,
             project_file=project_file,
@@ -947,7 +973,7 @@ class AppRuntime:
                 command_name=request.command,
                 command_args=request.args,
                 person_identifier=person_id,
-                cwd=request.cwd,
+                cwd=command_cwd(request.cwd) or _default_command_cwd(),
             )
         except asyncio.CancelledError:
             self._event_bus.publish_event(
@@ -1018,7 +1044,93 @@ class AppRuntime:
         return self._lifecycle.get_status()
 
     def get_system_alerts(self) -> SystemAlertsResponse:
-        return self._system_alerts.list_alerts(self.get_scheduler_status())
+        return self._system_alerts.list_alerts(
+            self.get_scheduler_status(), self._agent_environment_problems()
+        )
+
+    def _active_agent_ids(self) -> list[str]:
+        try:
+            team = self._get_context().team
+        except Exception:  # pylint: disable=broad-exception-caught
+            return []
+        return sorted(
+            member.person_id
+            for member in team.members
+            if member.is_active and member.person_type != "human"
+        )
+
+    def _agent_environment_problems(self) -> list[EnvironmentProblemEntry]:
+        try:
+            return agent_environment_problems(self._active_agent_ids())
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A broken definition is reported where it is edited; the alert
+            # band is not the place to fail.
+            return []
+
+    def get_agent_environment_status(self) -> AgentEnvironmentStatusResponse:
+        """This device's agent environment, and every active member's slots on it."""
+        with self._environment_build_lock:
+            building = (
+                self._environment_build is not None
+                and self._environment_build.is_alive()
+            )
+            output = list(self._environment_build_output)
+        return agent_environment_status(
+            self._active_agent_ids(), build_output=output, building_here=building
+        )
+
+    def build_agent_environment(self) -> AgentEnvironmentStatusResponse:
+        """Build this device's snapshot in the background and report the status.
+
+        The build is what ``guildbotics environment build`` and the service's
+        upkeep run; a build already running here or elsewhere is left to
+        finish, and the status says so.
+
+        Raises:
+            AppApiError: ``agent_environment_unavailable`` when this device
+                cannot run the environment, ``agent_environment_declaration``
+                when the declaration cannot be read.
+        """
+        health = doctor()
+        if not health.available:
+            raise AppApiError(
+                "agent_environment_unavailable", reason=health.reason, status_code=409
+            )
+        try:
+            declaration = load_toolchain()
+        except ToolchainError as exc:
+            raise AppApiError(
+                "agent_environment_declaration", reason=str(exc), status_code=400
+            ) from exc
+        with self._environment_build_lock:
+            if (
+                self._environment_build is None
+                or not self._environment_build.is_alive()
+            ):
+                self._environment_build_output.clear()
+                self._environment_build = threading.Thread(
+                    target=self._run_environment_build,
+                    args=(declaration,),
+                    name="agent-environment-build",
+                    daemon=True,
+                )
+                self._environment_build.start()
+        return self.get_agent_environment_status()
+
+    def _run_environment_build(self, declaration: ToolchainDeclaration) -> None:
+        def on_line(line: str) -> None:
+            with self._environment_build_lock:
+                self._environment_build_output.append(line)
+
+        # The outcome needs no event of its own: the status reports a failed
+        # build with its reason, and the alert band opens on it.
+        try:
+            asyncio.run(build_snapshot(declaration, on_line=on_line))
+        except (AgentEnvironmentError, ToolchainError) as exc:
+            on_line(str(exc))
+            self._event_bus.publish_log(
+                "WARNING", f"The agent environment build failed: {exc}"
+            )
 
     def dismiss_system_alert(self, alert_id: str) -> SystemAlertsResponse:
         active_ids = {alert.id for alert in self.get_system_alerts().alerts}
@@ -1621,22 +1733,6 @@ class AppRuntime:
         finally:
             await context.aclose()
 
-    def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        agents: list[CliAgentDetection] = []
-        for info in CLI_AGENTS:
-            path = resolve_cli_agent_path(info.executable)
-            agents.append(
-                CliAgentDetection(
-                    name=info.name,
-                    label=info.label,
-                    executable=info.executable,
-                    config_reference=info.config_reference,
-                    detected=bool(path),
-                    path=path,
-                )
-            )
-        return CliAgentDetectionsResponse(agents=agents)
-
     async def get_cli_agent_usage(
         self, refresh: bool = False
     ) -> CliAgentUsagesResponse:
@@ -1656,12 +1752,12 @@ class AppRuntime:
             ):
                 return cached[1]
             usages: list[CliAgentUsage] = []
-            for agent in self.detect_cli_agents().agents:
+            for agent in CLI_AGENTS:
                 reader = CLI_AGENT_USAGE_READERS.get(agent.name)
-                if reader is None or not agent.detected:
+                if reader is None or not is_logged_in(agent):
                     continue
                 try:
-                    snapshot = await reader(agent.path or agent.executable)
+                    snapshot = await reader()
                 except CliAgentUsageError as exc:
                     logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
                         "Could not read %s usage: %s", agent.name, exc
@@ -2250,3 +2346,11 @@ def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
         },
         status_code=409,
     )
+
+
+def _default_command_cwd() -> Path:
+    """Where a command runs when the screen names no directory: the exchange
+    directory, so what it produces lands where the user looks for it."""
+    cwd = exchange_dir()
+    cwd.mkdir(parents=True, exist_ok=True)
+    return cwd

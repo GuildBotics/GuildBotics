@@ -61,14 +61,15 @@ You configure, run, and monitor GuildBotics with the GuildBotics Desktop app (GU
 - **OpenSSH** (only to share one workspace across several machines):
   - Every participating machine needs an OpenSSH **client**. Windows 10 1809 and later include one, so no extra install is needed
   - The machine acting as the hub also needs an OpenSSH **server**: on Windows enable the "OpenSSH Server" optional feature, on macOS turn on Remote Login, on Linux install `openssh-server`
-- **An AI CLI tool** (install one of the following in advance, launch it once, and complete authentication):
-  - [Antigravity CLI](https://github.com/google-antigravity/antigravity-cli)
+- **Hardware virtualization** for the isolated agent environment. Every AI CLI turn runs inside a microVM that GuildBotics boots on the machine running the turn, so that machine needs: on macOS, Apple Silicon (Intel Macs are not supported); on Windows 11, the **Windows Hypervisor Platform** optional feature; on Linux, KVM (`/dev/kvm` readable by the user). The runtime itself ([microsandbox](https://microsandbox.dev/)) ships with GuildBotics and is placed under `~/.guildbotics/data/msb` on first use; nothing else needs to be installed
+- **An account for an AI CLI tool**. The tools themselves are installed by GuildBotics inside the isolated environment, so nothing has to be installed on the machine for turns. What you need is the account: after setup, log in once per machine from a terminal with `guildbotics environment login <tool>` (the **LLM / AI CLI tools** screen shows the exact command). The tools GuildBotics provisions in the environment:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (requires a Claude Pro or Max subscription)
-  - [Grok Build](https://docs.x.ai/build/overview)
-  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli)
+  - [Grok Build](https://docs.x.ai/build)
+  - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (the environment has no system keychain, so the login asks once whether to keep its token in a file under the device's store)
+  - [Antigravity CLI](https://antigravity.google/docs/cli)
 
-With Codex, Claude Code, Grok Build, GitHub Copilot CLI, or Antigravity CLI, a member can carry a session over and resume where it left off. For authentication, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
+A member can carry a session over and resume where it left off. For the isolated environment, how sessions are bound to Slack threads and tickets, and how execution permissions are configured, see [Native Agent Runtime](docs/native_agent_runtime.en.md).
 
 ### Installation
 
@@ -79,6 +80,7 @@ On first launch, the desktop app installs the following:
 - `~/.guildbotics/bin/guildbotics` on macOS/Linux, or `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` on Windows: the managed GuildBotics CLI used by AI CLI tools and skills
 - `~/.local/bin/guildbotics` on macOS/Linux: a small shim that forwards to the CLI above. On Windows the NSIS installer instead adds the managed bin directory to the user PATH and removes only its own entry during uninstall
 - The GuildBotics skill under the user skill directory of each detected Codex / Claude Code / Grok Build / Antigravity CLI / GitHub Copilot CLI. Skills you created or edited are never overwritten
+- `~/.guildbotics/data/msb`: the runtime of the isolated agent environment, placed there the first time it is needed (from the copy that ships with GuildBotics, without downloading). On Windows, the firewall rule for that fixed path is created once with an elevation prompt
 
 In environments without the desktop app (headless servers and the like), install the CLI on its own with `uv tool install guildbotics` (→ [Run on a Server](#run-on-a-server)).
 
@@ -96,7 +98,7 @@ Launching the desktop app opens **Project** setup, where you configure:
 - **GitHub**: a valid GitHub Project URL is required to finish the initial setup. Do [Create a GitHub Project](#create-a-github-project) (with the Todo / In Progress / Done statuses) and [Prepare a GitHub Account for the AI Agent](#prepare-a-github-account-for-the-ai-agent) (pick an account type and issue the token) first. Assigning a GitHub account to a member also requires that member's username, git email address, and credentials
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
 
-In GuildBotics, the folder you choose as the project's working location is called the **workspace**. Plain text configuration files are written there:
+In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
 - `.guildbotics/local/debug.env`: device-local, non-secret debug settings (log level)
 - `.guildbotics/config/secrets.yml`: index of key names stored in the OS keychain (never the values)
@@ -107,7 +109,7 @@ API keys and account tokens are stored in the OS keychain when one is available,
 
 After project setup, configure the following in the desktop app:
 
-- **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
+- **LLM / AI CLI tools**: default LLM, AI CLI tool selection, LLM API keys, and the **isolated agent environment** card: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
 - **Members**: add and configure team members (assigning a GitHub account needs the credentials above)
 - **GitHub**: task board settings (only when you use GitHub; the GitHub Project URL itself is entered in the **Project** section). Configure the [lane mapping](#task-board-conventions) when you use your own status names, and the `Agent` field
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, GitHub, Slack, and Git. It does not update GitHub or Slack data
@@ -142,8 +144,9 @@ The first launch of the desktop app installs the **guildbotics skill** into the 
 
 The skill lives in the user skill directory each tool reads (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, and so on), so the same skill is used whether you start the tool from its CLI or from its app. To check that it is installed, see each tool's skill status under **Setup → LLM / AI CLI tools** in the desktop app.
 
-There are two prerequisites:
+There are three prerequisites:
 
+- The AI CLI tool is installed on your machine and you are logged in to it there. This is the one place a host install is needed: it is you working interactively, not a member's turn, which runs inside the isolated agent environment
 - You have launched the desktop app once (this installs the guildbotics skill and the managed CLI)
 - A member is configured
 
@@ -239,10 +242,10 @@ After creating the GitHub App:
 - Register each member's GitHub credentials (the PAT, or the GitHub App settings) in GuildBotics from member settings in the desktop app. Writes to GitHub / git use the assigned member's credentials, not your local `gh auth` user
 - Ticket-driven work happens in a per-member working directory (default: `<workspace>/.guildbotics/local/clones/<person_id>`). Cloning, pushing, PR creation, and comments are executed by the member itself through the `guildbotics member` CLI
 - If you also use the AI CLI tool interactively, we recommend denying or requiring approval for `gh`, direct token / API writes, and `git push`. This is a guardrail against falling back to your own GitHub account, not a sandbox that fully contains token leakage
-- When using Codex as the AI CLI tool, check the Codex CLI's authentication and network reachability:
+- The AI CLI turn runs inside the isolated agent environment of the machine that runs the service. Check under **Setup → LLM / AI CLI tools** that the environment is **Ready** and the tool is **Logged in on this device**, or from a terminal:
 
   ```bash
-  codex doctor
+  guildbotics environment status
   ```
 
 ### Validate the Configuration
@@ -444,6 +447,15 @@ All non-secret configuration is stored as plain text files inside the workspace,
 2. Copy the workspace folder to the target machine
 3. Move the secrets: run `guildbotics secrets export --file ...` on the source and `guildbotics secrets import ...` on the target (delete the export file afterwards). Keychain entries themselves never leave the machine
 4. On servers without a keychain, set up an OS secret store or pass the secrets as environment variables at run time
+5. Build the isolated agent environment on the server and log in to the AI CLI tool there (the server needs KVM; see [What You Need](#what-you-need)):
+
+   ```bash
+   guildbotics environment status         # runtime, environment, and logins on this machine
+   guildbotics environment build          # build the environment the workspace declares
+   guildbotics environment login codex    # log in inside the environment (device code flow)
+   ```
+
+   While the service runs, a changed declaration is rebuilt automatically; the login is kept per machine under `~/.guildbotics/data/agent_environment/`
 
 **Starting and stopping the service** (equivalent to the **Service** screen in the desktop app):
 
@@ -531,7 +543,8 @@ GuildBotics stores three kinds of local data:
 
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
 - Shared workspace state — memory, chat control, task-run evidence, activity events — is stored in `<workspace>/.guildbotics/state`
-- Device-local data — diagnostics, transcripts, chat cache, member clones, AI CLI sessions — is stored in `<workspace>/.guildbotics/local`
+- Device-local data — diagnostics, transcripts, chat cache, member clones, the built agent environment (`local/agent_environment/snapshots`) — is stored in `<workspace>/.guildbotics/local`
+- The isolated agent environment's runtime and its images live in `$HOME/.guildbotics/data/msb`; the AI CLI tools' logins and sessions, shared by every member and workspace on the machine, live in `$HOME/.guildbotics/data/agent_environment/<tool>/`
 
 ### Share a Workspace Across Machines
 
@@ -862,9 +875,10 @@ discarding; the activity history record stays either way.
 **LLM / AI CLI tool settings**:
 
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
-- `intelligences/native_agent_policy.yml`: filesystem access scope for Codex, Grok Build, and GitHub Copilot CLI (`workspace` or `host`). It is created during setup of a new workspace and configured under **LLM / AI CLI tools → Advanced settings** in the desktop app, or by editing the file directly in environments without a screen. Network access and the no-confirmation execution mode are fixed inside the GuildBotics integration
-- `intelligences/cli_agents/<tool>/*.yml`: the effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `team/members/<person_id>/intelligences/`: optional per-member overrides, including the execution permissions for Codex, Grok Build, and GitHub Copilot CLI. By default they inherit the team settings
+- `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: files handed over from the desktop app and what agents make for you go there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
+- `intelligences/cli_agents/<tool>/*.yml`: the effort mapping and the `network:` block (where commands and built-in web tools may connect) for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
+- `intelligences/agent_environment.yml`: what every machine adds to its isolated agent environment on top of the base image (`packages` for apt / npm / uv, pinned) and the DNS resolvers the environment uses (`dns.nameservers`: a list of IPv4 addresses, public resolvers by default, or `host` for this device's own resolvers on networks that block outside DNS). Shared by the workspace; changing the packages rebuilds the environment on every machine
+- `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
 
@@ -883,6 +897,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |
+| AI CLI turns do not start, or an alert says this device cannot run them | Open the **Isolated agent environment** card under **Setup → LLM / AI CLI tools** (or run `guildbotics environment status`). The runtime needs hardware virtualization (Apple Silicon / Windows Hypervisor Platform / KVM), the environment must be **Ready** (press **Build**; a changed declaration rebuilds by itself while the service runs), and the tool must be logged in on this machine (`guildbotics environment login <tool>`). While the environment is building, work is deferred, not failed |
 
 **Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session.
 

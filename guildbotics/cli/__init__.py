@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from guildbotics.cli.diagnostics import diagnostics
+from guildbotics.cli.environment import environment
 from guildbotics.cli.hub import hub
 from guildbotics.cli.member import member
 from guildbotics.cli.secrets import secrets
@@ -146,6 +147,7 @@ def main() -> None:
 
 
 main.add_command(diagnostics)
+main.add_command(environment)
 main.add_command(hub)
 main.add_command(member)
 main.add_command(secrets)

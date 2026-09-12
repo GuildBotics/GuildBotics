@@ -11,7 +11,6 @@ import {
   ApiRequestError,
   cloneWorkspaceFromHub,
   deleteMemberConfig,
-  getCliAgentDetections,
   ensureAgentField,
   getAgentFieldState,
   getCommandOptions,
@@ -19,6 +18,7 @@ import {
   getConfigStatus,
   getIntelligenceConfig,
   getMemberConfig,
+  getAgentEnvironmentStatus,
   getProjectConfig,
   getProjectStatusOptions,
   getRoleOptions,
@@ -39,6 +39,7 @@ import {
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
 } from "../api/client";
+import { CLOSED_NETWORK_POLICY, type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
 import {
@@ -135,26 +136,6 @@ vi.mock("../api/client", async (importOriginal) => {
       devices: [],
     })),
     deleteMemberConfig: vi.fn(async () => configWriteResponse()),
-    getCliAgentDetections: vi.fn(async () => ({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          executable: "claude",
-          config_reference: "cli_agents/claude/default.yml",
-          detected: false,
-          path: "",
-        },
-      ],
-    })),
     getLlmProviders: vi.fn(async () => [
       {
         provider: "openai",
@@ -228,19 +209,13 @@ vi.mock("../api/client", async (importOriginal) => {
         {
           path: "cli_agents/codex/default.yml",
           name: "codex",
-          detected: true,
-          detected_path: "/usr/local/bin/codex",
           effort: {},
         },
       ],
       brain_mapping: [],
-      native_agent_policy: {
-        codex: { filesystem_access: "workspace" },
-        grok: { filesystem_access: "workspace" },
-        copilot: { filesystem_access: "workspace" },
-      },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
+    getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
     getProjectStatusOptions: vi.fn(async () => ({ available: false, statuses: [] })),
     getAgentFieldState: vi.fn(async () => ({
       available: false,
@@ -378,26 +353,28 @@ beforeEach(() => {
     members: [{ person_id: "alice", name: "Alice", is_active: true, roles: ["product"] }],
   });
   vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ description: "Demo project" }));
-  vi.mocked(getCliAgentDetections).mockResolvedValue({
-    agents: [
-      {
-        name: "codex",
-        label: "OpenAI Codex CLI",
-        executable: "codex",
-        config_reference: "cli_agents/codex/default.yml",
-        detected: true,
-        path: "/usr/local/bin/codex",
-      },
-      {
-        name: "claude",
-        label: "Claude Code",
-        executable: "claude",
-        config_reference: "cli_agents/claude/default.yml",
-        detected: false,
-        path: "",
-      },
-    ],
-  });
+  vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+    environmentStatus({
+      tools: [
+        {
+          name: "codex",
+          label: "OpenAI Codex CLI",
+          config_reference: "cli_agents/codex/default.yml",
+          provisioned: true,
+          logged_in: true,
+          problem: "",
+        },
+        {
+          name: "claude",
+          label: "Claude Code",
+          config_reference: "cli_agents/claude/default.yml",
+          provisioned: true,
+          logged_in: false,
+          problem: "",
+        },
+      ],
+    }),
+  );
 });
 
 afterEach(() => {
@@ -417,6 +394,29 @@ describe("SetupPage", () => {
       "aria-selected",
       "true",
     );
+  });
+
+  it("opens a member's AI CLI slot from a sandbox alert link", async () => {
+    renderSetupPage("/setup?section=members&person_id=alice&tab=intelligence&slot=default");
+
+    await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
+    expect(screen.getByRole("tab", { name: t("setup.members.tabs.intelligence") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    // The slot's accordion item is open, so its network block is in view.
+    const slot = await screen.findByRole("button", { name: /^default/ });
+    expect(slot).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("opens the advanced intelligence settings from a sandbox alert link", async () => {
+    renderSetupPage("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
+
+    const advanced = await screen.findByRole("button", {
+      name: t("setup.intelligence.advanced"),
+    });
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByTestId("grants:device")).toBeInTheDocument();
   });
 
   it("allows sidebar navigation after opening a members deep link", async () => {
@@ -755,7 +755,52 @@ describe("SetupPage", () => {
     expect(keyInput).toHaveValue("sk-test");
 
     expect(screen.getByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /Claude Code/ })).toBeDisabled();
+    // Not logged in on this device is a warning on the card, not a block:
+    // which tools can be chosen is the catalog's and the same on every device.
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.toolNotLoggedIn")),
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the tools the isolated agent environment provisions", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+          {
+            name: "grok",
+            label: "Grok Build",
+            config_reference: "cli_agents/grok/default.yml",
+            provisioned: false,
+            logged_in: false,
+            problem: "Grok Build is not provisioned in the agent environment yet.",
+          },
+        ],
+      }),
+    );
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockRejectedValue(
+      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
+    );
+    renderSetupPage("/setup");
+
+    await screen.findByRole("heading", { name: "First setup" });
+    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+
+    expect(await screen.findByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Grok Build" })).toBeDisabled();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.toolNotProvisioned")),
+    ).toBeInTheDocument();
   });
 
   it("shows AI CLI tool skill status and allows an explicit overwrite", async () => {
@@ -1009,18 +1054,20 @@ describe("SetupPage", () => {
   it("creates the initial setup via initConfig and restartBackend", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
@@ -1275,6 +1322,45 @@ function renderSetupPage(path: string) {
       </QueryClientProvider>
     </MantineProvider>,
   );
+}
+
+function environmentStatus(
+  overrides: Partial<AgentEnvironmentStatusResponse> = {},
+): AgentEnvironmentStatusResponse {
+  return {
+    platform: "darwin",
+    runtime: {
+      available: true,
+      reason: "",
+      version: "0.6.17",
+      home: "/Users/me/.guildbotics/data/msb",
+    },
+    snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+    dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
+    tools: [
+      {
+        name: "codex",
+        label: "OpenAI Codex CLI",
+        config_reference: "cli_agents/codex/default.yml",
+        provisioned: true,
+        logged_in: true,
+        problem: "",
+      },
+      {
+        name: "claude",
+        label: "Claude Code",
+        config_reference: "cli_agents/claude/default.yml",
+        provisioned: true,
+        logged_in: false,
+        problem: "Claude Code is not logged in on this device.",
+      },
+    ],
+    problem: "",
+    problem_setting: "",
+    access: { documents: [], paths: [], denied: [], problem: "" },
+    members: [],
+    ...overrides,
+  };
 }
 
 function memberConfig() {
@@ -2046,17 +2132,10 @@ describe("toIntelligenceUpdatePayload", () => {
       {
         path: "cli_agents/codex/default.yml",
         name: "codex" as const,
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
     ],
     brain_mapping: [],
-    native_agent_policy: {
-      codex: { filesystem_access: "workspace" as const },
-      grok: { filesystem_access: "workspace" as const },
-      copilot: { filesystem_access: "workspace" as const },
-    },
   };
 
   it("emits a full team-default update", () => {
@@ -2068,7 +2147,6 @@ describe("toIntelligenceUpdatePayload", () => {
       models: team.models,
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
-      native_agent_policy: team.native_agent_policy,
     });
   });
 
@@ -2083,7 +2161,6 @@ describe("toIntelligenceUpdatePayload", () => {
       cli_agent_mapping: team.cli_agent_mapping,
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
-      native_agent_policy: team.native_agent_policy,
     });
   });
 
@@ -2321,6 +2398,58 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: "Upload File" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Import from GitHub" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Import from Slack" })).toBeDisabled();
+  });
+
+  it("marks a member whose AI CLI slot cannot start on this device, with the reasons", async () => {
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [
+        { person_id: "alice", name: "Alice", person_type: "agent", is_active: true, roles: [] },
+        { person_id: "kenji", name: "Kenji", person_type: "agent", is_active: true, roles: [] },
+      ],
+    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        members: [
+          {
+            person_id: "alice",
+            slots: [
+              {
+                slot: "default",
+                tool: "codex",
+                network: CLOSED_NETWORK_POLICY,
+                problems: [],
+              },
+            ],
+          },
+          {
+            person_id: "kenji",
+            slots: [
+              {
+                slot: "default",
+                tool: "grok",
+                network: CLOSED_NETWORK_POLICY,
+                problems: [
+                  {
+                    setting: "grants",
+                    reason: "local path '/opt/nowhere' does not exist on this device",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    renderSetupPage("/setup?section=members");
+
+    const badge = await screen.findByText(t("setup.members.blockedHere"));
+    expect(screen.getAllByText(t("setup.members.blockedHere"))).toHaveLength(1);
+    await userEvent.hover(badge);
+    expect(
+      await screen.findByText("local path '/opt/nowhere' does not exist on this device"),
+    ).toBeInTheDocument();
   });
 
   it("sorts members by name and shows the AI CLI tool badge only for agents", async () => {
@@ -3480,19 +3609,12 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
     ],
     brain_mapping: [
       { name: "writer", brain_class: "WriterBrain", engine: "llm", target: "default" },
     ],
-    native_agent_policy: {
-      codex: { filesystem_access: "workspace" },
-      grok: { filesystem_access: "workspace" },
-      copilot: { filesystem_access: "workspace" },
-    },
     ...overrides,
   };
 }
@@ -3532,15 +3654,11 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
       {
         path: "cli_agents/codex/default.yml",
         name: "codex",
-        detected: true,
-        detected_path: "/usr/local/bin/codex",
         effort: {},
       },
       {
         path: "cli_agents/claude/default.yml",
         name: "claude",
-        detected: true,
-        detected_path: "/usr/local/bin/claude",
         effort: {},
       },
     ],
@@ -3582,18 +3700,20 @@ async function openMemberIntelligenceAdvanced(user: ReturnType<typeof userEvent.
 describe("IntelligenceEditor (team default)", () => {
   beforeEach(() => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
   });
 
   it("renames an LLM slot on blur and sends it on save, without losing focus while typing", async () => {
@@ -3709,15 +3829,11 @@ describe("IntelligenceEditor (team default)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
           {
             path: "cli_agents/codex/custom_cli.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
         ],
@@ -3972,6 +4088,30 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
+  it("saves neither half while the advanced settings hold an invalid entry", async () => {
+    // One button, two writes: an invalid advanced draft must stop the button
+    // as a whole. Saving the basic half and reporting success while the
+    // advanced half is dropped would contradict what the screen says.
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
+    );
+    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
+    await user.click(effortInput);
+    await user.paste("{not json");
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
+
+    await saveSection(user);
+
+    expect(await screen.findByText(t("setup.invalidSave.body"))).toBeInTheDocument();
+    expect(updateProjectConfig).not.toHaveBeenCalled();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+  });
+
   it("reseeds the model effort editor when the slot switches provider", async () => {
     // The editor seeds its state once per mount. Switching provider replaces
     // what the slot inherits, so a field that did not remount would keep
@@ -3990,81 +4130,14 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.queryByText(/reasoning_effort = high/)).not.toBeInTheDocument();
   });
 
-  it("renders the AI CLI tool detection badge from detections", async () => {
+  it("shows each slot's tool as this device can run it", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
     await screen.findByText(t("setup.intelligence.tabs.cli"));
-    expect(screen.getAllByText(t("setup.intelligence.detected")).length).toBeGreaterThan(0);
-  });
-
-  it("saves one native adapter policy without changing the others", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      }),
-    );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-    await saveSection(user);
-
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
-    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      codex: { filesystem_access: "workspace" },
-      grok: { filesystem_access: "host" },
-    });
-  });
-
-  it("shows the unrestricted-access warning for the adapter it applies to", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.codex"),
-        }),
-      }),
-    );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-
-    const warning = await screen.findByText(
-      t("setup.intelligence.hostAccessWarningBody", {
-        agent: t("setup.intelligence.nativeAgents.codex"),
-      }),
-    );
-    expect(warning).toBeInTheDocument();
     expect(
-      screen.queryByText(
-        t("setup.intelligence.hostAccessWarningBody", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      ),
-    ).not.toBeInTheDocument();
-  });
-
-  it("explains the real sandbox each native adapter uses", async () => {
-    const user = userEvent.setup();
-    await openTeamIntelligenceAdvanced(user);
-
-    expect(
-      await screen.findByText(t("setup.intelligence.sandboxMapping.grok")),
-    ).toBeInTheDocument();
-    expect(screen.getByText(t("setup.intelligence.sandboxMapping.codex"))).toBeInTheDocument();
+      screen.getAllByText(t("setup.intelligence.environment.toolLoggedIn")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("surfaces a save error returned by updateIntelligenceConfig", async () => {
@@ -4091,26 +4164,28 @@ describe("IntelligenceEditor (member override)", () => {
         provider_api_keys: { openai: true, gemini: true, anthropic: false },
       }),
     );
-    vi.mocked(getCliAgentDetections).mockResolvedValue({
-      agents: [
-        {
-          name: "codex",
-          label: "OpenAI Codex CLI",
-          executable: "codex",
-          config_reference: "cli_agents/codex/default.yml",
-          detected: true,
-          path: "/usr/local/bin/codex",
-        },
-        {
-          name: "claude",
-          label: "Claude Code",
-          executable: "claude",
-          config_reference: "cli_agents/claude/default.yml",
-          detected: true,
-          path: "/usr/local/bin/claude",
-        },
-      ],
-    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      environmentStatus({
+        tools: [
+          {
+            name: "codex",
+            label: "OpenAI Codex CLI",
+            config_reference: "cli_agents/codex/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+          {
+            name: "claude",
+            label: "Claude Code",
+            config_reference: "cli_agents/claude/default.yml",
+            provisioned: true,
+            logged_in: true,
+            problem: "",
+          },
+        ],
+      }),
+    );
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
   });
@@ -4209,8 +4284,6 @@ describe("IntelligenceEditor (member override)", () => {
           {
             path: "cli_agents/codex/default.yml",
             name: "codex",
-            detected: true,
-            detected_path: "/usr/local/bin/codex",
             effort: {},
           },
         ],
@@ -4225,6 +4298,32 @@ describe("IntelligenceEditor (member override)", () => {
     // The default CLI slot still renders, showing the newly picked tool (a
     // missing agent def would drop the slot entirely -> zero matches).
     expect((await screen.findAllByText("➔ claude")).length).toBeGreaterThan(0);
+  });
+
+  it("saves neither the member nor its advanced settings while an entry is invalid", async () => {
+    // The effort JSON editor needs a model with effort levels to edit.
+    const team = teamIntelligenceConfig();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      memberIntelligenceConfig({ model_mapping: team.model_mapping, models: team.models }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceAdvanced(user);
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
+    );
+    await user.click(
+      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
+    );
+    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
+    await user.click(effortInput);
+    await user.paste("{not json");
+    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    expect(await screen.findByText(t("setup.invalidSave.body"))).toBeInTheDocument();
+    expect(updateMemberConfig).not.toHaveBeenCalled();
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
   it("locks rename of team-owned slots but keeps member-added ones editable", async () => {
@@ -4249,28 +4348,22 @@ describe("IntelligenceEditor (member override)", () => {
     expect(byValue("custom")).not.toBeDisabled();
   });
 
-  it("persists a member-specific Grok filesystem boundary", async () => {
+  it("shows the member's own editor when inheriting is switched off", async () => {
     const user = userEvent.setup();
-    await openMemberIntelligenceAdvanced(user);
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({ person_id: "alice", inherited: true }),
+    );
+    await openMemberIntelligenceTab(user);
+    expect(await screen.findByText(t("setup.intelligence.inheritingTitle"))).toBeInTheDocument();
 
     await user.click(
-      await screen.findByRole("combobox", {
-        name: t("setup.intelligence.filesystemAccessFor", {
-          agent: t("setup.intelligence.nativeAgents.grok"),
-        }),
-      }),
+      screen.getByRole("switch", { name: t("setup.intelligence.inheritTeamDefaults") }),
     );
-    await user.click(
-      await screen.findByRole("option", {
-        name: t("setup.intelligence.filesystemOptions.host"),
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].native_agent_policy).toMatchObject({
-      grok: { filesystem_access: "host" },
-    });
+    expect(
+      await screen.findByRole("button", { name: t("setup.intelligence.advanced") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.intelligence.inheritingTitle"))).not.toBeInTheDocument();
   });
 
   it("sends inherit_team_defaults when the inherit switch is enabled", async () => {

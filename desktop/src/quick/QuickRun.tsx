@@ -255,7 +255,7 @@ export function QuickRun(props: QuickRunProps) {
             const resourceId = pendingImage;
             pendingImage = null;
             const file = await clipboardImageFile(resourceId);
-            input = (await uploadCommandInputFile(file)).path;
+            input = (await uploadCommandInputFile(file)).guest_path;
             setMessage(input);
           } catch (cause) {
             setRun({ status: "failed", message: String(cause) });
@@ -398,7 +398,7 @@ export function QuickRun(props: QuickRunProps) {
           if (stopped) {
             return;
           }
-          input = (await uploadCommandInputFile(file)).path;
+          input = (await uploadCommandInputFile(file)).guest_path;
           if (stopped) {
             return;
           }

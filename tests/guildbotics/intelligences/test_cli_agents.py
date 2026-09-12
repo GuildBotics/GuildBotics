@@ -223,3 +223,24 @@ def test_resolve_default_cli_executable_missing_definition(
 
     # No agent named "ghost" in config or template.
     assert resolve_default_cli_executable() == ""
+
+
+def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
+    """A turn with closed egress still reaches the provider; the tool is
+    nothing without its API, and a login that cannot be run cannot persist."""
+    from guildbotics.intelligences.cli_agents import CLI_AGENTS
+
+    for agent in CLI_AGENTS:
+        provision = agent.provision
+        assert provision.provisioned, agent.name
+        # One way in: npm, or a script that pins its own version.
+        assert bool(provision.package) != bool(provision.install), agent.name
+        assert provision.api_domains, agent.name
+        assert provision.login and provision.auth and provision.state_root, agent.name
+        assert provision.auth in provision.persisted, agent.name
+        expected = (
+            {provision.state_root_env: f"/h/{provision.state_root}"}
+            if provision.state_root_env
+            else {}
+        )
+        assert provision.environment("/h") == expected, agent.name

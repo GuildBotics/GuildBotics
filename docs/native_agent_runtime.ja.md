@@ -33,124 +33,145 @@ antigravity: antigravity
 ```
 
 各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
-このファイルが持つのは`parameters:`と`effort:`のオーバーレイで、
-プロバイダ非依存の`low` / `high`をAI CLIツールごとの設定へ翻訳するためのものです
-（書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）。
-設定として書くのはこの2つだけです。同梱の既定ファイルはこのほかに、
-設定エディタの型付き編集用の宣言である `effort_fields:` を持ちます。
+このファイルが持つのは`parameters:`と`effort:`のオーバーレイ（プロバイダ非依存の`low` / `high`を
+AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）と、
+後述の`network:`ブロックです。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
+`effort_fields:`を持ちます。
 
-ユーザーが変更できる実行時の**境界**は、
-`intelligences/native_agent_policy.yml`でAI CLIツールごとに指定するファイルアクセス範囲だけです。
+## エージェント隔離環境のアクセス許可
 
-```yaml
-codex:
-  filesystem_access: workspace
+AI CLIツールのターンはすべてエージェント隔離環境の中で実行します。この端末でビルドした
+snapshotからターンごとにGuildBoticsが起動するmicroVMで、ターンが終わると破棄します。
+ターンが到達できる範囲は以下のアクセス契約で、それを強制するのは隔離環境です。プロバイダの
+CLIは中で動き、それ以外を見ないので、OSやプロバイダによらず同じ形で強制されます。
+プロバイダごとの変換や「どのプロバイダが何を強制できるか」の表はありません。この端末で
+隔離環境が用意できない場合（runtimeが無い、snapshotが無い、ログインしていない）は、より広い
+権限へ置き換えずにエージェントを起動しません。
 
-grok:
-  filesystem_access: workspace
+隔離環境のruntimeは[microsandbox](https://microsandbox.dev/)（libkrun系のmicroVM）で、
+GuildBoticsが同梱し、最初に必要になったときに`~/.guildbotics/data/msb`へ配置してSDKに
+そのパスを指させます（`MSB_HOME` / `MSB_PATH`）。ダウンロードはせず、GuildBotics以外が
+どのruntimeを動かすかを決めることはありません。必要なハードウェア仮想化はmacOSでApple
+Silicon、Windows 11でWindowsハイパーバイザー プラットフォーム、LinuxでKVMです。Windowsでは
+runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出すため、固定パスに対する
+規則を昇格の確認1回で作成します。Windowsのhostパスは環境の中では`C:\work`→`/c/work`の
+ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
+bindします）。
 
-copilot:
-  filesystem_access: workspace
-```
+環境の中身（ベースイメージ、GuildBoticsが版を固定して導入するプロバイダCLI、
+`config/intelligences/agent_environment.yml`で宣言した追加パッケージ）はsnapshotとして端末ごとに
+ビルドし、宣言と一致しなければ再ビルドします。Desktopの **LLM・AI CLIツール** の
+「エージェント隔離環境」カードがruntime、snapshotの状態（ビルドボタンつき）、DNSリゾルバ、
+ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` / `login`が
+同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
+自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
+見送りにします。turnが起動できない理由（runtime無し、宣言不正、snapshot未ビルド、
+未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
-新しいワークスペースを作成すると、このファイルがパッケージのテンプレートからコピーされます。
-このファイルがない既存のワークスペースでは、設定を保存するまでパッケージの既定値を使用します。
-チーム共通の設定は、Desktopの **LLM・AI CLIツール → 詳細設定** で変更できます。
-メンバーごとの設定では、チーム設定を継承するか、個別の値を保存できます。個別設定は
-`team/members/<person_id>/intelligences/native_agent_policy.yml`に保存されます。
+- **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
+  `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
+  ワークスペースの`.guildbotics/config`や`state`は含みません
+- **作業ディレクトリの外**は2つあり、どちらもhostと同じパスに、hostのホームディレクトリと同じ
+  パスのホームの下でbindします。**documents**: 作業で読み書きするホームディレクトリ配下の
+  ディレクトリ（`read` / `read_write`、相対パスのみ）。無ければターン開始時に作成し、
+  `intelligences/cli_agent_filesystem_grants.yml`で共有します。このファイルとは別に、
+  `Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可されます: Desktopから渡した
+  ファイル（貼り付け画像、隔離環境から届かないファイルのコピー）はその`tmp/`に置かれてアプリの
+  終了時に消え、作業ディレクトリを指定しないDesktopからの実行はここで動き、エージェントが作った
+  成果物は指定が無ければこの下に出ます。Desktopが入力欄に入れるパスは隔離環境の綴り
+  （Windowsでは`C:\...`ではなく`/c/...`）で、エージェントはそれをそのまま開けます。**この端末の設定**: 追加パス
+  （絶対パス可、存在が必要）と、開いている場所の一部を閉じる`deny`。
+  `local/cli_agent_filesystem_grants.yml`に置き、同期しません。認証情報のディレクトリ
+  （`~/.ssh`、プロバイダ自身のディレクトリ）とワークスペース自身の`.guildbotics`は同梱のdenyで
+  常に閉じます。それ以外のhostのもの
+  （PATH、他のclone、キーチェーン）は中に存在しません。エージェントの道具は隔離環境自身のもので、
+  `config/intelligences/agent_environment.yml`に宣言します
+  （[`guildbotics environment`](cli_reference.md#guildbotics-environment)を参照）。
 
-画面を利用できない環境ではYAMLを直接編集できます。`filesystem_access`には、既定値の
-`workspace`または`host`を指定できます。`workspace`ではファイルアクセスをワークスペース内に
-制限し、`host`ではファイルアクセスの制限を設けません。どちらの場合もネットワークアクセスは
-有効です。Codexには操作の確認を求めない`never`を常に指定し、Codexから予期しない確認要求が
-届いた場合は拒否します。ネットワークアクセスと確認方法はユーザー設定として公開しません。
+  ```yaml
+  # config/intelligences/cli_agent_filesystem_grants.yml（共有）
+  documents:
+    - path: Documents/shared-documents
+      access: read
+    - path: Projects/generated-assets
+      access: read_write
+  ```
 
-Grok Buildでは、`workspace`が`--sandbox workspace`、`host`が`--sandbox off`に対応します。
-起動時のコマンドは`grok --no-auto-update --sandbox <profile> agent --always-approve stdio`で
-固定し、任意のCLIオプションを設定から注入することはできません。`--always-approve`は必ず
-sandboxと併用し、ACPの`session/request_permission`で予期しない確認要求が届いた場合は拒否して
-診断記録へ残します。拒否の際は、要求に含まれる`options`から`reject_once`（無ければ
-`reject_always`）のoption IDを選んで返します。option IDは要求ごとにGrokが決める識別子であり、
-種別名をIDとして送り返しません。拒否用のoptionが提示されない場合は、許可用のoptionへ
-読み替えず`cancelled`を返します。headless実行中にCLIが自動更新されないよう`--no-auto-update`を常に渡し、
-ユーザーの`config.toml`は書き換えません。
+  ```yaml
+  # local/cli_agent_filesystem_grants.yml（この端末だけ）
+  paths:
+    - path: .cache/uv
+      access: read_write
+  deny:
+    - Documents/shared-documents/private
+  ```
 
-GitHub Copilotでは、`workspace`がCopilot自身の既定動作（作業ディレクトリとシステムの一時
-ディレクトリにファイルアクセスを制限）に対応し、`host`ではその検証を無効にする
-`--allow-all-paths`を追加します。ただし読み取り専用のターンでは、メンバーが`host`を設定して
-いても作業ディレクトリ内に制限したまま実行します。読み取り専用のターンはログ・チケット・チャット
-など信頼できない記録を読み取る前提であり、許可されたパス内の読み取りには確認要求が発生せず、
-読み取った内容はそのターンの応答から外部へ出ます。書き込みを拒否するだけではこの経路を塞げない
-ため、アクセス範囲自体を狭めます。起動時のコマンドは
-`copilot --acp --no-auto-update --no-remote-export [--allow-all-paths]`で固定し、任意のCLI
-オプションを設定から注入することはできません。`--no-remote-export`は、メンバーのセッションが
-GitHubのWebやモバイルへ書き出されたり、そこから操作されたりすることを防ぎます。セッションには
-ワークスペースの内容が含まれ、指示はGuildBoticsからのみ受け取るべきだからです。
+- **ネットワーク**: 選択したAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`
+  ブロックで、シェルコマンドとその子プロセス、ツール組み込みのweb検索・URL取得のどちらで
+  到達するかによらず1つの規則です（隔離環境のgatewayは両者を区別できません）。`mode`は
+  `deny` / `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため
+  使いません）、`allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostと
+  LANも開きます。同梱の既定は閉じています。`network:`を省いたスロットはツールの`default.yml`
+  からブロック全体を継承し、書いたスロットは全体を書きます。プロバイダ自身のAPIドメインと
+  localhostのmember brokerはモードによらず常に到達でき、設定ではなくGuildBoticsが決めます。
 
-Copilotの承認方針は起動オプションではなくセッション設定項目のため、ターンごとに指定します。
-通常のターンは`allow_all: on`で実行し、確認要求は発生しません。読み取り専用のターンは
-`allow_all: off`で実行するため、ファイル書き込み・シェル実行・URL取得のたびにCopilotが確認を
-求め、GuildBoticsはそのすべてを拒否して診断記録へ残します。許可されたパス内の読み取りは確認なしで
-実行できるため、読み取り専用のターンは通常どおり調査を行えます。拒否の方法はGrok Buildと同じで、
-要求に含まれる`reject_once`（無ければ`reject_always`）のoption IDを返し、拒否用のoptionが
-提示されない場合は`cancelled`を返します。
+  ```yaml
+  network:
+    mode: allowlist
+    allowed_domains: [registry.npmjs.org]
+    allow_local_network: false
+  ```
 
-モデルと推論の深さ（reasoning effort）もセッション設定項目であり、セッションの作成または再開後に
-`session/set_config_option`で適用します。Copilotは未知の設定項目IDに対してエラーではなく空の
-応答を返すため、Copilotが返す設定項目一覧を読み取り、実際に適用された値を診断記録の設定イベントと
-して残します。要求した値をそのまま記録することはありません。適用されなかった項目は`rejected`として
-記録し、警告を出力します。これらの設定は実行中のセッションへいつでも適用できるため、効きの強さや
-モデルを変更してもセッションを切り替えません。
+これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。「ワークスペース共通の
+ディレクトリ」カードがdocumentsを、「この端末のディレクトリ」カードがここで足した追加パスと
+禁止を持ち、どちらも入力または選択したパスを保存前に判定します（存在有無、認証情報を含む
+場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、この端末で
+起動できないメンバーはメンバー一覧に理由付きで示され、設定を直すまで画面上部に状態異常が出ます。
 
-Antigravityのモデルと効きの強さは毎ターンのコマンドラインで渡り、再開した会話でも
-`--model`の変更が反映されるため、設定を変えてもセッションを切り替えません。`--model`と
-`--effort`は併用できません。`agy models`が提示するモデルIDは、いずれも効きの強さをID自体に
-含む（`gemini-3.6-flash-low`）か、`--effort`自体を受け付けない（`claude-sonnet-4-6`）ため、
-両方を渡すと`agy`がターンを拒否します。両方を設定したスロットではモデルを採用して効きの強さを
-落とし、その事実を設定イベントへ記録します。`agy models`に無いモデルは警告のうえ落とし、
-カタログを取得できない場合は検証を省略してそのまま実行します。`agy`がモデル名を報告するのは
-コマンドラインで明示した場合だけなので、`--model`を渡さないターンではアカウント既定の
-モデル名を推測せず、空のモデル名を記録します。
+隔離環境の中では各プロバイダ自身のsandboxも有効のままですが、環境より狭めることはしません。
+microVMの中にあるものはすべて許可済みなので、内側のsandboxが足すのは、エージェントのコマンドから
+プロバイダ自身の認証情報を隠すことと、プロバイダ設定の変更をターンをまたいで残さないことです。
+Codexは環境のmountをそのまま写したpermission profileで動きます: guest全体を読め、環境がbindした
+各ディレクトリはmountされたとおりに書き込み可または読み取り専用（`read_write`のgrantはCodexの
+コマンドからも読み書きできる）、作業ディレクトリ（`.git`を含む）と一時ディレクトリは書き込み可、
+ネットワークは有効、`~/.codex`だけを隠します。profileで`/`を書き込み可能にすると、Codex 0.153では
+`/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
+非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
+`bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
+rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
+`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
+`off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
+フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
+provisionするたびに実機で確認し、Codexは同梱のbubblewrapで動くことを確認済みです（imageに
+bubblewrapを入れると同梱のものより優先され、Codexのhelperを起動できないため、imageには入れません）。
 
-Antigravityは`native_agent_policy.yml`の対象外です。`agy --sandbox`が制限するのはターミナル
-実行だけで、`agy`自身のファイル書き込みツールは作業ディレクトリの外へ到達できます。
-`filesystem_access`として公開すると、実際には守られない範囲を約束することになるためです。
+ターンをまたいで残るのはプロバイダの永続状態（認証情報とセッション）だけで、この端末の
+store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
+プロバイダの設定やskillはsnapshot側のもので、ターンごとに元へ戻ります。読み取り専用ターンは
+member brokerが強制します（person leaseを持たず、書き込み系のmemberコマンドをすべて拒否
+します）。そのターンでプロバイダが自身のファイル操作ツールで何をしたかは承認イベントに
+記録されますが、境界ではありません。
 
-Antigravityは毎ターン`--dangerously-skip-permissions`を
-指定し、あわせて`--add-dir <cwd>`を渡します。後者は省略できません。これが無いと`agy`は
-`run_command`を含むすべてのツールを、メンバーのワークスペースではなく`agy`自身の作業用
-ディレクトリに対して解決します。
-
-**Antigravityでは、読み取り専用のターンをプロバイダ側で担保できません。** `agy` 1.1.10が
-提供する3つの手段はいずれも成立しませんでした。`--mode plan`は
-`--dangerously-skip-permissions`と併用しても書き込みが通り、`--sandbox`はシェル実行しか
-制限せず`agy`自身のファイルツールには及ばず、権限スキップを外すとheadlessモードがコマンドを
-すべて自動拒否して応答が空になるため、読み取り専用のターンが調査そのものを行えなくなります。
-そのため読み取り専用のターンも通常のターンと同じ引数で実行し、承認イベントに必ず
-`read_only_enforced: false`を記録して、担保していないことを診断記録から確認できるようにします。
-他の層の防御はそのまま効きます。読み取り専用のターンはperson leaseを取得しないため、
-書き込み系の`guildbotics member`コマンドは`validate_delegation`で失敗し、後述の認証情報の分離に
-より直接の`git push`や`gh`も認証できません。塞げていないのはワークスペース内のローカル
-ファイル書き換えと任意のシェル実行です。`agy`が本物の読み取り専用モードを備えた時点で見直します。
-
-Claude Codeは、操作ごとの確認を省略する`bypassPermissions`で常に実行します。Bash sandboxはチケット作業やチャットからの依頼に必要な
-幅広いコマンドと互換性がないため、`sandbox.enabled=false`も明示します。ただし、これらより
-優先されるClaude Codeの管理ポリシーがある場合は、その設定に従います。Claude Codeの
-確認方法とsandboxはワークスペース設定に保存せず、Desktopにも設定項目を表示しません。
-
-実際に適用した設定と操作ごとの承認判断は、AI CLIツールに依存しない共通形式の診断記録へ
-保存します。Codexで`host`を選択した場合と、Claude Codeを`bypassPermissions`で実行する
-場合は、ワークスペース外のファイルも変更できます。認証情報の分離を維持し、ワークスペース外の
-アクセスを許容できる環境で使用してください。不正な型、廃止された設定項目、未知の値が指定された
-場合は、別の権限へ暗黙に置き換えず、設定エラーとして停止します。
+有効になったpolicyと承認の判断は、プロバイダ非依存の診断イベントとして記録します。型の誤り、
+廃止したキー、未知の値は検証で失敗し、有効な境界が黙って変わることはありません。
 
 ## 認証
 
-GuildBoticsを起動する前に、使用するAI CLIツールをインストールしてください。その後、
-GuildBoticsのサービスを実行するOSユーザーと同じユーザーで、各ツールの標準的なログイン操作
-（`codex login`、`claude auth login`、`grok login`、`copilot login`、または`agy`の
-初回起動時のログイン）を行います。ログイン情報は各ツール自身の
-認証情報保存先にだけ保持され、GuildBoticsのセッション情報や診断記録には複製されません。
+AI CLIツールは隔離環境の中で動くため、hostにインストールする必要はなく、hostでのログインも
+turnには使われません。ログインは環境の中で行います。turnを実行する端末ごとに、ターミナルで
+`guildbotics environment login <tool>`（`codex` / `claude` / `grok` / `copilot` / `antigravity`）を実行すると、そのツール自身の
+ログインコマンドが環境の中で起動し、device code方式でブラウザ承認を案内します。結果は
+端末のstore（`~/.guildbotics/data/agent_environment/<tool>/`）に保存され、その端末の全メンバー・
+全ワークスペースで共有し、turnごとに認証情報とセッションだけを環境へbindします。
+GuildBoticsのセッション情報や診断記録には複製されません。Desktopはログイン状態と
+実行すべきコマンドを示し、Desktop自身がログインの対話を行うことはありません。
+
+loginは環境の中の端末（TTY）で動かします。認証情報をファイルに保存する前に確認するツールは端末でしか
+確認しないためで、Copilotは環境にキーチェーンが無いことを検出し、state root配下への平文保存を1回
+確認します。Grok Buildはdevice code方式のloginです。Antigravityにはloginコマンドが無く、保存済み
+loginの無いprint mode実行がGoogleのサインインURLを表示して認可コードを標準入力から受け取ります
+（60秒以内）。Grok Build自身のsandbox profileはLinuxでLandlockを要し、環境のkernelには無いため、
+環境の中では`--sandbox off`で動きます（境界は環境です）。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか

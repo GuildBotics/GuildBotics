@@ -56,6 +56,11 @@ ELSEWHERE = {
     ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
     ("POST", "/commands/input-files"): "a temporary file outside the workspace",
+    ("POST", "/commands/input-files/copy"): "a temporary file outside the workspace",
+    (
+        "POST",
+        "/commands/input-paths",
+    ): "answers what a turn would reach, writes nothing",
     ("POST", "/commands/run"): "starts a run; its own writes go through the port",
     ("POST", "/config/members/resolve"): "resolves an identity, writes nothing",
     ("POST", "/config/members/github-app/registrations"): "starts an OAuth flow",
@@ -67,6 +72,10 @@ ELSEWHERE = {
     ("POST", "/diagnostics/scenario"): "local/run diagnostics",
     ("POST", "/diagnostics/troubleshoot"): "local/run diagnostics",
     ("POST", "/hub"): "~/.guildbotics/hub, outside any workspace",
+    (
+        "POST",
+        "/intelligences/agent-environment/build",
+    ): "local/agent_environment snapshots, device-local",
     ("POST", "/hub/inspect"): "reads a hub",
     ("POST", "/hub/ssh-key"): "~/.ssh",
     ("POST", "/hub/trust"): "~/.ssh/known_hosts",

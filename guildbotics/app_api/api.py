@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -29,7 +29,14 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from guildbotics.app_api.command_input_files import CommandInputFileStore
+from guildbotics.app_api.agent_environment_status import (
+    evaluate_grant,
+)
+from guildbotics.app_api.command_input_files import (
+    CommandInputFileStore,
+    command_cwd,
+    describe_command_input_paths,
+)
 from guildbotics.app_api.config_revisions import (
     apply_config_write,
     config_repository,
@@ -43,10 +50,10 @@ from guildbotics.app_api.intelligences import (
 )
 from guildbotics.app_api.models import (
     ActivityHistoryResponse,
+    AgentEnvironmentStatusResponse,
     AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
-    CliAgentDetectionsResponse,
     CliAgentUsagesResponse,
     CommandAuthoringApplyRequest,
     CommandAuthoringApplyResponse,
@@ -57,7 +64,12 @@ from guildbotics.app_api.models import (
     CommandFileExecutionStatus,
     CommandFilesResponse,
     CommandFileUpdateRequest,
+    CommandInputFileCopyRequest,
     CommandInputFileResponse,
+    CommandInputGrantSuggestion,
+    CommandInputPathsRequest,
+    CommandInputPathsResponse,
+    CommandInputPathStatus,
     CommandOptionsResponse,
     CommandRunRequest,
     CommandRunResponse,
@@ -67,6 +79,8 @@ from guildbotics.app_api.models import (
     DeviceSshKey,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
+    GrantEvaluation,
+    GrantScope,
     HealthResponse,
     HotkeySettings,
     HubConnection,
@@ -146,6 +160,7 @@ from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
     SlackTokenVerification,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.env_loader import read_workspace_secrets
@@ -608,8 +623,24 @@ def create_app(
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
     ) -> CommandInputFileResponse:
+        return _store_command_input(lambda: input_file_store.save(file))
+
+    @app.post(
+        "/commands/input-files/copy",
+        response_model=CommandInputFileResponse,
+        responses=error_responses,
+    )
+    def command_input_file_copy(
+        request: CommandInputFileCopyRequest,
+        _: None = Depends(require_token),
+    ) -> CommandInputFileResponse:
+        return _store_command_input(lambda: input_file_store.copy(request.path))
+
+    def _store_command_input(
+        store: Callable[[], Path],
+    ) -> CommandInputFileResponse:
         try:
-            path = input_file_store.save(file)
+            path = store()
         except ValueError as exc:
             raise AppApiError(
                 "command_input_file_invalid",
@@ -622,7 +653,37 @@ def create_app(
                 "command_input_file_save_failed",
                 status_code=500,
             ) from exc
-        return CommandInputFileResponse(path=path)
+        return CommandInputFileResponse(path=path, guest_path=guest_path(path))
+
+    @app.post(
+        "/commands/input-paths",
+        response_model=CommandInputPathsResponse,
+        responses=error_responses,
+    )
+    def command_input_paths(
+        request: CommandInputPathsRequest,
+        _: None = Depends(require_token),
+    ) -> CommandInputPathsResponse:
+        return CommandInputPathsResponse(
+            paths=[
+                CommandInputPathStatus(
+                    path=entry.path,
+                    kind=entry.kind,
+                    reachable=entry.reachable,
+                    guest_path=entry.guest_path,
+                    grant=(
+                        CommandInputGrantSuggestion(
+                            scope=entry.grant.scope, path=entry.grant.path
+                        )
+                        if entry.grant
+                        else None
+                    ),
+                )
+                for entry in describe_command_input_paths(
+                    request.paths, command_cwd(request.cwd)
+                )
+            ]
+        )
 
     @app.post(
         "/commands/author",
@@ -976,16 +1037,6 @@ def create_app(
         )
 
     @app.get(
-        "/intelligences/cli-agents/detection",
-        response_model=CliAgentDetectionsResponse,
-        responses=error_responses,
-    )
-    def detect_cli_agents(
-        _: None = Depends(require_token),
-    ) -> CliAgentDetectionsResponse:
-        return app_runtime.detect_cli_agents()
-
-    @app.get(
         "/intelligences/cli-agents/usage",
         response_model=CliAgentUsagesResponse,
         responses=error_responses,
@@ -995,6 +1046,42 @@ def create_app(
         _: None = Depends(require_token),
     ) -> CliAgentUsagesResponse:
         return await app_runtime.get_cli_agent_usage(refresh=refresh)
+
+    @app.get(
+        "/intelligences/agent-environment",
+        response_model=AgentEnvironmentStatusResponse,
+        responses=error_responses,
+    )
+    def agent_environment_status_view(
+        _: None = Depends(require_token),
+    ) -> AgentEnvironmentStatusResponse:
+        """This device's agent environment, and every active member's slots on it."""
+        return app_runtime.get_agent_environment_status()
+
+    @app.post(
+        "/intelligences/agent-environment/build",
+        response_model=AgentEnvironmentStatusResponse,
+        responses=error_responses,
+    )
+    def agent_environment_build(
+        _: None = Depends(require_token),
+    ) -> AgentEnvironmentStatusResponse:
+        """Start building this device's snapshot; the status reports its progress."""
+        return app_runtime.build_agent_environment()
+
+    @app.get(
+        "/intelligences/grant-evaluation",
+        response_model=GrantEvaluation,
+        responses=error_responses,
+    )
+    def grant_evaluation_view(
+        scope: GrantScope,
+        path: str,
+        access: str = "read",
+        _: None = Depends(require_token),
+    ) -> GrantEvaluation:
+        """What a grant the user is about to add would mean on this device."""
+        return evaluate_grant(scope, path, access)
 
     @app.get(
         "/intelligences/model-providers",

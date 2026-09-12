@@ -6,14 +6,20 @@ import asyncio
 import json
 from contextlib import suppress
 from logging import getLogger
+from pathlib import PurePosixPath
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+)
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    guest_path,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    isolated_agent_environment,
-    remove_isolated_config,
-    terminate_process_tree,
+    start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
@@ -37,7 +43,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
 
 _MODERN_APPROVAL_METHODS = frozenset(
@@ -49,6 +54,15 @@ _MODERN_APPROVAL_METHODS = frozenset(
 _LEGACY_APPROVAL_METHODS = frozenset({"execCommandApproval", "applyPatchApproval"})
 _UNSUPPORTED_APPROVAL_METHODS = frozenset({"item/permissions/requestApproval"})
 _APPROVAL_POLICY = "never"
+#: The permission profile GuildBotics defines for every thread it starts. It is
+#: passed as configuration overrides at launch, so no user `config.toml`
+#: profile is read or written.
+_PERMISSION_PROFILE = "guildbotics"
+#: Where Codex looks for skills, relative to the home directory (`.agents`)
+#: and to its config folder (`skills`, `_skills`). Codex injects only the
+#: skill index into the prompt; the agent reads a skill's body itself, from
+#: inside the sandbox, so these must be readable or every skill outside the
+#: working directory is listed but unusable.
 #: The only effort-mapping keys ``turn/start`` accepts. Anything else is a
 #: configuration mistake and is reported rather than silently dropped.
 _TURN_SETTING_KEYS = frozenset({"model", "effort"})
@@ -102,7 +116,6 @@ class CodexAppServerAdapter:
         *,
         executable: str = "codex",
         timeout: float = 3600.0,
-        policy: AdapterFilesystemPolicy | None = None,
     ) -> None:
         self._executable = executable
         self._model_catalog: dict[str, dict[str, Any]] = {}
@@ -112,10 +125,9 @@ class CodexAppServerAdapter:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_server_request,
         )
-        self._gh_config_dir = ""
+        self._environment: AgentEnvironment | None = None
         self._active_thread_id = ""
         self._active_turn_id = ""
-        self._policy = policy or AdapterFilesystemPolicy()
         self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
@@ -135,6 +147,9 @@ class CodexAppServerAdapter:
         try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
+            # The environment is the turn's: nothing of it outlives the turn,
+            # and the next one boots its own and resumes the thread by id.
+            await self._close_provider()
             await self._member_broker.deactivate(context)
 
     async def _run_active_turn(
@@ -144,14 +159,19 @@ class CodexAppServerAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_started(context, emit)
+        environment = await self._ensure_started(context, emit)
         await self._check_account()
         await self._check_rate_limits()
         policy_event = AgentEvent(
             AgentEventKind.APPROVAL,
             "policy",
             approval=_APPROVAL_POLICY,
-            details={"filesystem_access": self._policy.filesystem_access},
+            details={
+                "requested_policy": context.contract.requested_policy(
+                    context.cwd, workspace_root=context.workspace_data_root
+                ),
+                "adapter_settings": _sandbox_overrides(environment.spec),
+            },
         )
         emitted = emit(policy_event)
         if asyncio.iscoroutine(emitted):
@@ -173,13 +193,8 @@ class CodexAppServerAdapter:
                             "text": self._member_broker.prompt(prompt),
                         }
                     ],
-                    "cwd": str(context.cwd),
+                    "cwd": guest_path(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
-                    "sandboxPolicy": _sandbox_policy(
-                        self._policy,
-                        str(context.workspace_data_root),
-                        context.read_only,
-                    ),
                     **turn_settings,
                 },
             )
@@ -305,7 +320,7 @@ class CodexAppServerAdapter:
                 )
         process = self._transport.process
         if process is not None and process.returncode is None:
-            await terminate_process_tree(process)
+            await process.kill()
 
     async def close(self) -> None:
         try:
@@ -314,44 +329,42 @@ class CodexAppServerAdapter:
             await self._member_broker.close()
 
     async def _close_provider(self) -> None:
-        """Stop only Codex App Server while preserving the active broker."""
+        """Stop Codex App Server and its environment, preserving the broker."""
         process = self._transport.process
         if process is not None and process.returncode is None:
-            if process.stdin is not None:
-                with suppress(BrokenPipeError, ConnectionError, OSError):
-                    process.stdin.close()
+            with suppress(BrokenPipeError, ConnectionError, OSError):
+                process.stdin.close()
             try:
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except TimeoutError:
-                await terminate_process_tree(process)
+                await process.kill()
         await self._transport.aclose()
-        remove_isolated_config(self._gh_config_dir)
+        environment, self._environment = self._environment, None
+        if environment is not None:
+            await environment.close()
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
-    ) -> None:
-        if self._transport.running:
-            return
+    ) -> AgentEnvironment:
         if self._transport.process is not None:
             await self._close_provider()
-        cwd = context.cwd
-        env, self._gh_config_dir = isolated_agent_environment()
-        env.update(self._member_broker.provider_environment())
+        environment = await start_turn_environment(
+            context,
+            "codex",
+            host_ports=(self._member_broker.endpoint.port,),
+            env=self._member_broker.provider_environment(),
+        )
+        self._environment = environment
         try:
-            process = await create_agent_subprocess(
+            process = await environment.run(
                 self._executable,
                 "app-server",
                 *_codex_mcp_arguments(self._member_broker),
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                *_config_arguments(_sandbox_overrides(environment.spec)),
                 limit=STREAM_READ_LIMIT,
             )
-        except OSError as exc:
-            remove_isolated_config(self._gh_config_dir)
+        except AgentEnvironmentError as exc:
+            await self._close_provider()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Codex App Server: {exc}",
@@ -379,6 +392,7 @@ class CodexAppServerAdapter:
         result = emit(event)
         if asyncio.iscoroutine(result):
             await result
+        return environment
 
     async def _resolve_thread(
         self, context: AgentExecutionContext, conversation: ConversationRecord
@@ -398,11 +412,7 @@ class CodexAppServerAdapter:
         else:
             response = await self._request(
                 "thread/start",
-                {
-                    "cwd": str(context.cwd),
-                    "approvalPolicy": _APPROVAL_POLICY,
-                    "sandbox": _thread_sandbox(self._policy, context.read_only),
-                },
+                {"cwd": guest_path(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
             )
         thread_id = _identifier(_dict(_dict(response).get("thread")))
         if not thread_id:
@@ -602,7 +612,7 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     prefix = f"mcp_servers.{endpoint.name}"
     return (
         "-c",
-        f"{prefix}.url={json.dumps(endpoint.url)}",
+        f"{prefix}.url={json.dumps(endpoint.guest_url)}",
         "-c",
         f'{prefix}.bearer_token_env_var="{MEMBER_BROKER_TOKEN_ENV}"',
         "-c",
@@ -614,30 +624,73 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     )
 
 
-def _thread_sandbox(policy: AdapterFilesystemPolicy, read_only: bool = False) -> str:
-    if read_only:
-        return "read-only"
-    return (
-        "danger-full-access"
-        if policy.filesystem_access == "host"
-        else "workspace-write"
-    )
+def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+    """Codex's own sandbox: the environment, as seen from inside it.
 
+    The environment is the boundary and everything it holds is already
+    allowed, so the profile mirrors it rather than narrowing it: the whole
+    guest is readable, and every directory the environment bound is
+    writable or read-only exactly as it was mounted -- what the user
+    granted read/write is read/write for Codex's commands too. The working
+    directory (its ``.git`` included, since the agent stages its own
+    changes) and the temporary directories are writable as Codex spells
+    them, and the network is on; which hosts is the environment's
+    gateway's to decide. Naming ``/`` writable instead would lose
+    ``/dev/null`` (measured on 0.153.4), and Codex's ``workspace-write``
+    default would close the network and ask for approvals, which no
+    headless turn can give.
 
-def _sandbox_policy(
-    policy: AdapterFilesystemPolicy, workspace_data_root: str, read_only: bool = False
-) -> dict[str, Any]:
-    # A read-only turn wins over the configured filesystem access: it exists to
-    # inspect recorded state, and what it reads is untrusted input.
-    if read_only:
-        return {"type": "readOnly", "networkAccess": False}
-    if policy.filesystem_access == "host":
-        return {"type": "dangerFullAccess"}
-    return {
-        "type": "workspaceWrite",
-        "writableRoots": [workspace_data_root],
-        "networkAccess": True,
+    What the inner sandbox adds is one thing: Codex's own state under
+    ``~/.codex`` -- its credentials above all -- is hidden from the agent's
+    commands. The environment binds the entries Codex itself needs there;
+    the profile never names them, so the deny stands.
+
+    Codex enforces the profile -- and reads the working directory's
+    instructions through it -- with the bubblewrap it bundles. A bubblewrap
+    installed in the image is preferred to the bundled one and cannot exec
+    Codex's helper (Debian's 0.8.0 on 0.153.4: every session fails to
+    start), so the image ships none.
+    """
+    state = f"{spec.home}/.codex"
+    mounts = {
+        mount.guest: "read" if mount.readonly else "write"
+        for mount in spec.mounts
+        if not PurePosixPath(mount.guest).is_relative_to(state)
     }
+    profile = f"permissions.{_PERMISSION_PROFILE}"
+    return {
+        "default_permissions": _PERMISSION_PROFILE,
+        f"{profile}.filesystem": {
+            "/": "read",
+            **mounts,
+            ":workspace_roots": {".": "write", ".git": "write"},
+            ":tmpdir": "write",
+            ":slash_tmp": "write",
+            state: "deny",
+        },
+        f"{profile}.network.enabled": True,
+    }
+
+
+def _config_arguments(overrides: dict[str, Any]) -> tuple[str, ...]:
+    """`-c key=value` pairs; values are TOML so tables and lists survive."""
+    arguments: list[str] = []
+    for key, value in overrides.items():
+        arguments.extend(("-c", f"{key}={_toml(value)}"))
+    return tuple(arguments)
+
+
+def _toml(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    if isinstance(value, dict):
+        entries = ", ".join(f"{json.dumps(k)} = {_toml(v)}" for k, v in value.items())
+        return "{" + entries + "}"
+    raise TypeError(f"Unsupported override value: {value!r}")
 
 
 def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | None:

@@ -11,12 +11,14 @@ from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any
 
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironment,
+    AgentEnvironmentError,
+    EnvironmentProcess,
+)
 from guildbotics.intelligences.agent_runtime.environment import (
     STREAM_READ_LIMIT,
-    create_agent_subprocess,
-    isolated_agent_environment,
-    remove_isolated_config,
-    terminate_process_tree,
+    start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
@@ -37,6 +39,10 @@ from guildbotics.intelligences.agent_runtime.models import (
 
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
+# Claude Code refuses bypassPermissions as root unless told it is inside a
+# sandbox (the check its container images satisfy the same way). The turn is
+# root inside the microVM, and the microVM is that sandbox.
+_ENVIRONMENT = {"IS_SANDBOX": "1"}
 # A read-only turn runs under the ordinary permission mode, where anything not
 # allowed below is denied outright in non-interactive mode. The allowlist is the
 # enforcement; the prompt is only a description of it.
@@ -66,8 +72,6 @@ _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 # Before this release, ``--strict-mcp-config`` could still wait for approval
 # of project-scoped servers it was explicitly told not to load. That makes a
 # headless turn unsafe only when the working tree actually has ``.mcp.json``.
-_PROJECT_MCP_SAFE_VERSION = (2, 1, 246)
-_VERSION_PATTERN = re.compile(r"\b(\d+)\.(\d+)\.(\d+)\b")
 _SESSION_LIMIT_PATTERN = re.compile(
     r"\AYou've hit your session limit"
     r"(?:\s*·\s*(?P<retry_after_text>resets\s+\d{1,2}:\d{2}\s*(?:am|pm)"
@@ -94,9 +98,8 @@ class ClaudeStreamJsonAdapter:
     ) -> None:
         self._executable = executable
         self._timeout = timeout
-        self._process: asyncio.subprocess.Process | None = None
-        self._capabilities_checked = False
-        self._installed_version_cache: tuple[int, int, int] | None = None
+        self._process: EnvironmentProcess | None = None
+        self._environment: AgentEnvironment | None = None
         self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
@@ -106,7 +109,6 @@ class ClaudeStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        await self._ensure_supported(context)
         try:
             await self._member_broker.activate(context)
         except MemberCapabilityBrokerError as exc:
@@ -126,8 +128,6 @@ class ClaudeStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        env, gh_config_dir = isolated_agent_environment()
-        env.update(self._member_broker.provider_environment())
         permission_mode = (
             _READ_ONLY_PERMISSION_MODE if context.read_only else _PERMISSION_MODE
         )
@@ -160,30 +160,22 @@ class ClaudeStreamJsonAdapter:
         args.extend(_effort_arguments(context))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
+        self._environment = await start_turn_environment(
+            context,
+            "claude",
+            host_ports=(self._member_broker.endpoint.port,),
+            env={**_ENVIRONMENT, **self._member_broker.provider_environment()},
+        )
         try:
-            self._process = await create_agent_subprocess(
-                *args,
-                cwd=str(context.cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-                limit=STREAM_READ_LIMIT,
-            )
-        except OSError as exc:
-            remove_isolated_config(gh_config_dir)
+            self._process = await self._environment.run(*args, limit=STREAM_READ_LIMIT)
+        except AgentEnvironmentError as exc:
+            await self._close_environment()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Claude Code: {exc}",
             ) from exc
         process = self._process
-        assert process.stdin is not None and process.stdout is not None
-        stderr_task = (
-            asyncio.create_task(process.stderr.read())
-            if process.stderr is not None
-            else None
-        )
+        stderr_task = asyncio.create_task(process.stderr.read())
         events: list[AgentEvent] = []
         session_id = conversation.provider_session_id
         reported_model = ""
@@ -303,19 +295,18 @@ class ClaudeStreamJsonAdapter:
                         process.wait(), timeout=_PROCESS_EXIT_GRACE_SECONDS
                     )
             observed_returncode = process.returncode
-            await terminate_process_tree(process)
-            if stderr_task is not None:
-                try:
-                    stderr = (
-                        await asyncio.wait_for(
-                            stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
-                        )
-                    ).decode(errors="replace")
-                except TimeoutError:
-                    stderr_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await stderr_task
-            remove_isolated_config(gh_config_dir)
+            await process.kill()
+            try:
+                stderr = (
+                    await asyncio.wait_for(
+                        stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
+                    )
+                ).decode(errors="replace")
+            except TimeoutError:
+                stderr_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stderr_task
+            await self._close_environment()
             self._process = None
         # A non-error terminal result is authoritative. Any later negative exit
         # status can be caused by our cleanup of a CLI that is still waiting for
@@ -370,123 +361,19 @@ class ClaudeStreamJsonAdapter:
     async def interrupt(self) -> None:
         await self._member_broker.deactivate()
         if self._process is not None and self._process.returncode is None:
-            await terminate_process_tree(self._process)
+            await self._process.kill()
 
     async def close(self) -> None:
         try:
             await self.interrupt()
+            await self._close_environment()
         finally:
             await self._member_broker.close()
 
-    async def _ensure_supported(self, context: AgentExecutionContext) -> None:
-        # The working tree changes between turns of one run (the agent itself
-        # may write `.mcp.json`), so only the installed CLI's capabilities are
-        # cached; the project MCP gate is re-evaluated on every turn.
-        await self._ensure_capabilities(context)
-        await self._ensure_project_mcp_safe(context)
-
-    async def _ensure_capabilities(self, context: AgentExecutionContext) -> None:
-        if self._capabilities_checked:
-            return
-        env, gh_config_dir = isolated_agent_environment()
-        process: asyncio.subprocess.Process | None = None
-        try:
-            process = await create_agent_subprocess(
-                self._executable,
-                "--help",
-                cwd=str(context.cwd),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        except (OSError, TimeoutError) as exc:
-            if process is not None and process.returncode is None:
-                await terminate_process_tree(process)
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                f"Could not inspect Claude Code stream-json capabilities: {exc}",
-            ) from exc
-        finally:
-            remove_isolated_config(gh_config_dir)
-        help_text = (stdout + stderr).decode(errors="replace")
-        required = (
-            "--input-format",
-            "--output-format",
-            "stream-json",
-            "--resume",
-            "--mcp-config",
-            "--strict-mcp-config",
-        )
-        missing = [flag for flag in required if flag not in help_text]
-        if process.returncode != 0 or missing:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                "The installed Claude Code version does not expose the required "
-                "stream-json and exact-resume capabilities.",
-                details={"missing_capabilities": missing},
-            )
-        self._capabilities_checked = True
-
-    async def _ensure_project_mcp_safe(self, context: AgentExecutionContext) -> None:
-        """Reject old Claude Code whenever the turn's tree has `.mcp.json`."""
-        if not (context.cwd / ".mcp.json").is_file():
-            return
-        version = await self._installed_version(context)
-        if version < _PROJECT_MCP_SAFE_VERSION:
-            formatted = ".".join(map(str, version))
-            minimum = ".".join(map(str, _PROJECT_MCP_SAFE_VERSION))
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                "The installed Claude Code version can wait for project MCP "
-                "approval despite --strict-mcp-config. Update Claude Code or "
-                "remove the project .mcp.json before a headless turn.",
-                details={
-                    "installed_version": formatted,
-                    "minimum_version": minimum,
-                },
-            )
-
-    async def _installed_version(
-        self, context: AgentExecutionContext
-    ) -> tuple[int, int, int]:
-        """Read the version only when a project MCP file makes it relevant."""
-        if self._installed_version_cache is not None:
-            return self._installed_version_cache
-        env, gh_config_dir = isolated_agent_environment()
-        process: asyncio.subprocess.Process | None = None
-        try:
-            process = await create_agent_subprocess(
-                self._executable,
-                "--version",
-                cwd=str(context.cwd),
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        except (OSError, TimeoutError) as exc:
-            if process is not None and process.returncode is None:
-                await terminate_process_tree(process)
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                f"Could not inspect the Claude Code version: {exc}",
-            ) from exc
-        finally:
-            remove_isolated_config(gh_config_dir)
-        version_text = (stdout + stderr).decode(errors="replace")
-        match = _VERSION_PATTERN.search(version_text)
-        if process.returncode != 0 or match is None:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.UNSUPPORTED_VERSION,
-                "Claude Code did not report a usable semantic version.",
-                details={"version_output": version_text.strip()[:200]},
-            )
-        major, minor, patch = (int(part) for part in match.groups())
-        self._installed_version_cache = (major, minor, patch)
-        return self._installed_version_cache
+    async def _close_environment(self) -> None:
+        environment, self._environment = self._environment, None
+        if environment is not None:
+            await environment.close()
 
 
 def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:
@@ -497,7 +384,7 @@ def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:
             "mcpServers": {
                 endpoint.name: {
                     "type": "http",
-                    "url": endpoint.url,
+                    "url": endpoint.guest_url,
                     "headers": {
                         "Authorization": f"Bearer ${{{MEMBER_BROKER_TOKEN_ENV}}}"
                     },

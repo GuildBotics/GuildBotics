@@ -14,6 +14,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    AccessContractError,
+    NetworkPolicy,
+    load_local_grants,
+    load_shared_grants,
+    parse_network_policy,
+    resolve_access,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
@@ -99,6 +108,8 @@ class ExecutableInfo:
     adapter: str = ""
     effort: dict[str, dict] = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
+    #: Where the tool's commands and built-in web features may connect.
+    network: NetworkPolicy = field(default_factory=NetworkPolicy)
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
@@ -150,6 +161,16 @@ class CliAgentExecutionResult:
 
 
 class CliAgentExecutionError(RuntimeError):
+    """A turn of an AI CLI tool that produced no usable response.
+
+    The message names the tool and carries the reason as the runtime stated
+    it. It claims no exit code: the brain never observes the tool's process,
+    only the adapter does, and an adapter that saw one exit puts the code in
+    its own words. Most failures reach here without any process at all (the
+    device refused the turn, the tool is not logged in, the session is gone),
+    so ``returncode`` is only the failed / finished distinction.
+    """
+
     def __init__(
         self,
         *,
@@ -162,10 +183,7 @@ class CliAgentExecutionError(RuntimeError):
         self.category = result.error_category
         self.details = dict(result.error_details)
         detail = result.stderr or result.stdout or "no output"
-        super().__init__(
-            message
-            or f"AI CLI tool '{cli_agent}' exited with code {result.returncode}: {detail}"
-        )
+        super().__init__(message or f"AI CLI tool '{cli_agent}' failed: {detail}")
 
 
 def normalize_cli_agent_retry_after(
@@ -477,6 +495,9 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
                 definition.get("effort"), where=f"AI CLI tool '{slot}'"
             ),
             parameters=_parameters_of(definition),
+            network=parse_network_policy(
+                definition.get("network"), where=f"AI CLI tool '{slot}'"
+            ),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
     return cli_agent_mapping
@@ -744,6 +765,19 @@ class CliAgentBrain(Brain):
                 )
             lease = owned_lease
         try:
+            try:
+                contract = AccessContract(
+                    network=self.executable_info.network,
+                    access=resolve_access(load_shared_grants(), load_local_grants()),
+                )
+            except AccessContractError as exc:
+                return CliAgentExecutionResult(
+                    stdout="",
+                    stderr=str(exc),
+                    returncode=1,
+                    error_category="configuration",
+                    error_details={"cli_agent": adapter_name},
+                )
             lease_metadata = lease.bind_run_id(run_id) if lease is not None else None
             context = AgentExecutionContext(
                 person_id=self.person_id,
@@ -775,6 +809,7 @@ class CliAgentBrain(Brain):
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
                 read_only=read_only,
+                contract=contract,
             )
             return await self._execute_native_turn(
                 input=input,
@@ -885,9 +920,14 @@ class CliAgentBrain(Brain):
             details["cli_agent"] = adapter_name
             if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
                 _normalize_native_retry_after(details)
+            # What the tool itself said last is the only lead a reader has
+            # when the process just ended, so it rides along with the reason.
+            stderr = str(exc)
+            if tail := details.get("stderr", "").strip():
+                stderr = f"{stderr}\n{tail}"
             return CliAgentExecutionResult(
                 stdout="",
-                stderr=str(exc),
+                stderr=stderr,
                 returncode=1,
                 error_category=exc.category.value,
                 error_details=details,

@@ -378,6 +378,18 @@ const resources = {
           rate_limited: "{{command}} was rate limited for {{person}}.",
           scheduler_failed: "The scheduler stopped because of an unexpected error.",
           worker_stopped: "One or more member workers stopped after repeated errors.",
+          agent_environment_unavailable: "This device cannot run AI CLI turns: {{reason}}",
+          agent_environment_tool_unavailable:
+            "An AI CLI tool cannot run on this device: {{reason}}",
+          agent_environment_slot_blocked:
+            "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
+        },
+        environmentFix: {
+          runtime:
+            'This device cannot host the isolated agent environment; see "What You Need" in the README.',
+          declaration:
+            'Fix the "Environment declaration" in the advanced settings, then build again.',
+          snapshot: 'Press "Build" on the "Isolated agent environment" card in the settings.',
         },
         actions: {
           diagnostics: "Run diagnostics",
@@ -815,7 +827,8 @@ const resources = {
           description: "Project description",
           descriptionHint: "Describe the purpose and contents of this project.",
           workspace: "Workspace",
-          workspaceDescription: "This folder is used as the project workspace.",
+          workspaceDescription:
+            "GuildBotics keeps this project's settings and state here (.guildbotics/).",
           choose: "Choose",
         },
         intelligence: {
@@ -852,10 +865,10 @@ const resources = {
           apiKeyRequiredTitle: "API key required",
           apiKeyRequiredBody:
             "Set the API key of the selected LLM provider with its key button. This section stays incomplete until the key is set.",
-          detected: "Detected",
-          notDetected: "Not detected",
-          notDetectedOnPath: "This agent was not detected on your PATH.",
-          cliHint: "AI CLI tools are not bundled. You can only select tools detected on PATH.",
+          toolNotProvisionedTooltip:
+            "This tool is not available in the isolated agent environment yet.",
+          cliHint:
+            "AI CLI tools run inside the isolated agent environment. Log in to the selected tool on every device that runs turns.",
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
             "Shows whether each AI CLI tool has the bundled GuildBotics skill installed.",
@@ -884,6 +897,106 @@ const resources = {
             outdated: "GuildBotics skill is managed, but it is not the bundled latest version.",
             agent_home_missing: "The skill directory for this AI CLI tool has not been detected.",
             error: "GuildBotics skill status could not be read.",
+          },
+          network: {
+            title: "Network",
+            description:
+              "Where this tool may connect, through the commands it runs or its own web tools alike. It starts closed.",
+            inherited: "Inherited from the tool default",
+            customize: "Customize for this slot",
+            useDefault: "Use the tool default",
+            resetToPackaged: "Reset to the packaged defaults",
+            mode: "Mode",
+            modes: {
+              deny: "Deny",
+              allowlist: "Allowed domains only",
+              unrestricted: "Unrestricted",
+            },
+            allowedDomains: "Allowed domains",
+            allowedDomainsPlaceholder: "registry.npmjs.org",
+            allowLocalNetwork: "Allow localhost and LAN",
+          },
+          environment: {
+            title: "Isolated agent environment",
+            description:
+              "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it here; logging in to a tool is done from a terminal.",
+            runtime: "Runtime",
+            runtimeAvailable: "Available ({{version}})",
+            runtimeUnavailable: "Unavailable",
+            snapshot: "Environment",
+            snapshotStates: {
+              missing: "Not built",
+              stale: "Older than the declaration",
+              building: "Building",
+              failed: "Build failed",
+              ready: "Ready",
+            },
+            build: "Build",
+            buildOutput: "Build output",
+            buildError: "The build could not be started.",
+            dns: "DNS resolvers",
+            dnsHost: "This device's resolvers",
+            toolNotProvisioned: "Not available in the environment yet",
+            toolLoggedIn: "Logged in on this device",
+            toolNotLoggedIn: "Not logged in on this device",
+            loginHint: "Run this in a terminal to log in:",
+            copy: "Copy",
+            copied: "Copied",
+            loadError: "The environment status could not be loaded.",
+            declaration: {
+              title: "Environment declaration",
+              description:
+                "What every device adds to its environment on top of the base image (Debian, Node.js, git, uv) and the AI CLI tools GuildBotics installs, and the DNS resolvers the environment uses. Shared by the workspace; changing the packages rebuilds the environment on every device.",
+              apt: "Debian packages (apt)",
+              npm: "npm packages",
+              uv: "Python tools (uv)",
+              aptPlaceholder: "ripgrep=14.1.0-1",
+              npmPlaceholder: "typescript@5.6.3",
+              uvPlaceholder: "ruff==0.6.9",
+              pinHint: "One entry per package. Pin the version the way that manager spells it.",
+              invalidPackage:
+                "A package is one argument to its manager: no spaces, and it cannot start with '-'.",
+              nameservers: "DNS resolvers",
+              nameserversHost:
+                "This device's resolvers, read when a turn starts (for networks that block outside DNS)",
+              nameserversList: "Fixed IPv4 addresses, shared as written",
+              nameserversPlaceholder: "10.0.0.53",
+              invalidNameserver: "Enter IPv4 addresses.",
+              emptyNameservers: "Name at least one resolver.",
+            },
+          },
+          documents: {
+            title: "Directories shared by the workspace",
+            description:
+              "Directories under the home directory, registered as one access setting for every device and member of the workspace. Paths are written relative to the home directory and resolved against each device's home; a missing one is created when a turn starts. The working directory of a turn and Documents/GuildBotics (the exchange directory) are always readable and writable: files handed over from this app are placed there (its tmp/ is emptied when the app closes), and so is what agents make for you.",
+            builtin: "built in",
+            empty: "No directories registered.",
+            pathPlaceholder: "Documents/shared-documents",
+          },
+          deviceAccess: {
+            title: "Directories on this device",
+            description:
+              "Access to any directory on this device beyond the working directory and the shared directories. Kept on this device and never synchronized.",
+            empty: "No additional directories.",
+            deny: "Denied",
+            builtin: "built in",
+            pathPlaceholder: ".cache/uv or /opt/homebrew/etc",
+          },
+          grants: {
+            path: "Path",
+            access: "Access",
+            accessLabels: { read: "Read", read_write: "Read / write" },
+            presentHere: "On this device",
+            absentHere: "Not on this device",
+            add: "Add",
+            choose: "Choose a directory",
+            accessFor: "Access to {{path}}",
+            remove: "Remove {{path}}",
+            sensitiveTitle: "This directory holds credentials or provider state",
+            sensitiveBody:
+              "Granting {{path}} lets agents read what is under {{reason}}. Add it only if the work really needs it.",
+            duplicate: "Already added.",
+            loadError: "Suggestions could not be loaded.",
           },
           advanced: "Advanced settings",
           createBeforeAdvanced: "Create the initial settings before editing detailed AI behavior.",
@@ -933,26 +1046,6 @@ const resources = {
           effortJsonDescription:
             'One block per effort level, e.g. {"high": {"reasoning_effort": "high"}}. Only low and high can be mapped: "default" means no intervention, so a mapping for it is rejected.',
           effortJsonError: "Enter a JSON object keyed by effort level.",
-          nativePolicy: "Native AI CLI tool execution permissions",
-          nativePolicyDescription: "Choose where each native AI CLI tool can access files.",
-          nativeAgents: {
-            codex: "Codex",
-            grok: "Grok Build",
-            copilot: "GitHub Copilot",
-          },
-          filesystemAccessFor: "{{agent}} file access",
-          sandboxMapping: {
-            codex: "Runs Codex with workspace-write or danger-full-access.",
-            grok: "Runs grok with --sandbox workspace or --sandbox off.",
-            copilot: "Runs copilot confined to the working directory, or with --allow-all-paths.",
-          },
-          filesystemOptions: {
-            workspace: "Workspace only",
-            host: "Unrestricted",
-          },
-          hostAccessWarningTitle: "Unrestricted file access",
-          hostAccessWarningBody:
-            "{{agent}} can read and write files outside the workspace. Select this only when it is genuinely required.",
         },
         members: {
           avatar: {
@@ -984,6 +1077,7 @@ const resources = {
             "GuildBotics cannot run without an active member. Add at least one member before finishing setup.",
           memberActive: "Active",
           memberInactive: "Inactive",
+          blockedHere: "Cannot start on this device",
           memberHuman: "Human",
           defaultPersonBadge: "Default",
           defaultPersonLabel: "Default executor",
@@ -1308,6 +1402,10 @@ const resources = {
           action: "Save",
           saved: "Saved",
           error: "Save failed",
+        },
+        invalidSave: {
+          title: "Nothing was saved",
+          body: "An entry in the advanced settings needs fixing. Correct it, then save again.",
         },
         staleSave: {
           title: "Nothing was saved",
@@ -1724,11 +1822,17 @@ const resources = {
         messageDescription:
           "Text passed to the command. Drop files to insert their paths, or paste an image to save it temporarily.",
         inputFileDropActive: "Drop to insert the file path",
-        inputFileSaving: "Saving the pasted image…",
-        inputFileSaveError: "Could not save the pasted image: {{message}}",
+        inputFileSaving: "Saving the file…",
+        inputFileSaveError: "Could not save the file: {{message}}",
+        inputPathUnreachable: "The isolated agent environment cannot reach:",
+        inputPathCopy: "Hand over a copy",
+        inputPathGrant: "Allow this folder",
+        inputPathDismiss: "Do not use this file",
+        inputPathHint:
+          "Agents reach only the working directory and the folders allowed under Settings → AI. A copy is placed in ~/Documents/GuildBotics/tmp and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
-        cwd: "Workspace",
-        cwdDescription: "Blank uses the current workspace: {{cwd}}",
+        cwd: "Working directory",
+        cwdDescription: "Blank uses the exchange folder: {{cwd}}",
         noRunsYet: "No command result yet.",
         output: "Output",
         events: "Events",
@@ -2248,6 +2352,16 @@ const resources = {
           rate_limited: "{{person}} の {{command}} が rate limit を受けました。",
           scheduler_failed: "想定外エラーによりスケジューラが停止しました。",
           worker_stopped: "連続エラーによりメンバーワーカーが停止しました。",
+          agent_environment_unavailable: "この端末では AI CLI の turn を実行できません: {{reason}}",
+          agent_environment_tool_unavailable: "AI CLIツールがこの端末で使えません: {{reason}}",
+          agent_environment_slot_blocked:
+            "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
+        },
+        environmentFix: {
+          runtime:
+            "この端末ではエージェント隔離環境を用意できません。README の「必要なもの」を確認してください。",
+          declaration: "詳細設定の「環境の宣言」を直してから、もう一度ビルドしてください。",
+          snapshot: "設定の「エージェント隔離環境」カードで「ビルド」を押してください。",
         },
         actions: {
           diagnostics: "診断を実行",
@@ -2378,7 +2492,8 @@ const resources = {
           description: "プロジェクトの説明",
           descriptionHint: "このプロジェクトの目的や内容を入力します。",
           workspace: "ワークスペース",
-          workspaceDescription: "このフォルダをプロジェクトの作業場所として使います。",
+          workspaceDescription:
+            "このフォルダに GuildBotics の設定と状態（.guildbotics/）を置きます。",
           choose: "選択",
         },
         intelligence: {
@@ -2415,10 +2530,9 @@ const resources = {
           apiKeyRequiredTitle: "APIキーが必要です",
           apiKeyRequiredBody:
             "選択中の LLM プロバイダのAPIキーを、キーのボタンから設定してください。設定するまでこのセクションは未完了のままです。",
-          detected: "検出済み",
-          notDetected: "未検出",
-          notDetectedOnPath: "このエージェントは PATH 上に検出されていません。",
-          cliHint: "AI CLIツールは同梱しません。PATHで検出できたものだけ選択できます。",
+          toolNotProvisionedTooltip: "このツールはまだエージェント隔離環境に導入できません。",
+          cliHint:
+            "AI CLIツールはエージェント隔離環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
             "各AI CLIツールに同梱版のGuildBoticsスキルが適用されているかを表示します。",
@@ -2448,6 +2562,107 @@ const resources = {
             outdated: "GuildBoticsスキル は管理対象ですが、同梱版の最新版ではありません。",
             agent_home_missing: "このAI CLIツールのスキル配置先はまだ検出されていません。",
             error: "GuildBoticsスキル の状態を取得できませんでした。",
+          },
+          network: {
+            title: "ネットワーク",
+            description:
+              "このツールが実行するコマンドと組み込み Web 機能の両方について、どこへ接続できるかを決めます。既定では閉じています。",
+            inherited: "ツール既定を継承",
+            customize: "このスロット用に変更する",
+            useDefault: "ツール既定に戻す",
+            resetToPackaged: "同梱の既定値に戻す",
+            mode: "モード",
+            modes: {
+              deny: "拒否",
+              allowlist: "許可ドメインのみ",
+              unrestricted: "制限なし",
+            },
+            allowedDomains: "許可ドメイン",
+            allowedDomainsPlaceholder: "registry.npmjs.org",
+            allowLocalNetwork: "localhost と LAN への接続を許可",
+          },
+          environment: {
+            title: "エージェント隔離環境",
+            description:
+              "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドはここから行い、ツールへのログインはターミナルで行います。",
+            runtime: "ランタイム",
+            runtimeAvailable: "利用可（{{version}}）",
+            runtimeUnavailable: "利用不可",
+            snapshot: "環境",
+            snapshotStates: {
+              missing: "未ビルド",
+              stale: "宣言より古い",
+              building: "ビルド中",
+              failed: "ビルド失敗",
+              ready: "準備完了",
+            },
+            build: "ビルド",
+            buildOutput: "ビルド出力",
+            buildError: "ビルドを開始できませんでした。",
+            dns: "DNS リゾルバ",
+            dnsHost: "この端末のリゾルバ",
+            toolNotProvisioned: "環境への導入は未対応",
+            toolLoggedIn: "この端末ではログイン済み",
+            toolNotLoggedIn: "この端末では未ログイン",
+            loginHint: "ターミナルで次を実行してログインします:",
+            copy: "コピー",
+            copied: "コピーしました",
+            loadError: "環境の状態を読み込めませんでした。",
+            declaration: {
+              title: "環境の宣言",
+              description:
+                "ベースイメージ（Debian、Node.js、git、uv）と GuildBotics が導入する AI CLIツールに加えて、各端末の環境に入れるパッケージと、環境が使う DNS リゾルバです。ワークスペースで共有され、パッケージを変えると全端末で環境が再ビルドされます。",
+              apt: "Debian パッケージ（apt）",
+              npm: "npm パッケージ",
+              uv: "Python ツール（uv）",
+              aptPlaceholder: "ripgrep=14.1.0-1",
+              npmPlaceholder: "typescript@5.6.3",
+              uvPlaceholder: "ruff==0.6.9",
+              pinHint:
+                "1 項目に 1 パッケージ。版はそのパッケージマネージャの書き方で固定してください。",
+              invalidPackage:
+                "パッケージはマネージャへの 1 引数です。空白を含めず、'-' で始めないでください。",
+              nameservers: "DNS リゾルバ",
+              nameserversHost:
+                "この端末のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",
+              nameserversList: "固定の IPv4 アドレス（書いたまま共有）",
+              nameserversPlaceholder: "10.0.0.53",
+              invalidNameserver: "IPv4 アドレスを入力してください。",
+              emptyNameservers: "リゾルバを 1 つ以上指定してください。",
+            },
+          },
+          documents: {
+            title: "ワークスペース共通のディレクトリ",
+            description:
+              "ホームディレクトリ配下のディレクトリを、ワークスペースの全端末・全メンバーに共通のアクセス設定として登録します。パスはホームディレクトリからの相対で書き、各端末のホームで解決します。無ければターン開始時に作成します。作業ディレクトリと Documents/GuildBotics（受け渡しフォルダ）は常に読み書きできます。このアプリから渡したファイルはそこに置かれ（tmp/ はアプリの終了時に空になります）、エージェントが作った成果物もそこに出ます。",
+            builtin: "同梱",
+            empty: "登録されたディレクトリはありません。",
+            pathPlaceholder: "Documents/shared-documents",
+          },
+          deviceAccess: {
+            title: "この端末のディレクトリ",
+            description:
+              "作業ディレクトリと共有ディレクトリ以外に、この端末の任意のディレクトリへのアクセスを設定します。この設定はこの端末にだけ保存され、同期されません。",
+            empty: "追加のディレクトリはありません。",
+            deny: "禁止",
+            builtin: "同梱",
+            pathPlaceholder: ".cache/uv や /opt/homebrew/etc",
+          },
+          grants: {
+            path: "パス",
+            access: "アクセス",
+            accessLabels: { read: "読み取り", read_write: "読み書き" },
+            presentHere: "この端末にあり",
+            absentHere: "この端末にはなし",
+            add: "追加",
+            choose: "ディレクトリを選択",
+            accessFor: "{{path}} のアクセス",
+            remove: "{{path}} を削除",
+            sensitiveTitle: "認証情報やプロバイダの状態を含むディレクトリです",
+            sensitiveBody:
+              "{{path}} を許可すると、{{reason}} 配下をエージェントが読めるようになります。作業に本当に必要な場合だけ追加してください。",
+            duplicate: "追加済みです。",
+            loadError: "候補を読み込めませんでした。",
           },
           advanced: "詳細設定",
           createBeforeAdvanced: "詳細なAI挙動を編集するには、先に初期設定を作成してください。",
@@ -2497,27 +2712,6 @@ const resources = {
           effortJsonDescription:
             'エフォートレベルごとに1ブロックを記述します（例: {"high": {"reasoning_effort": "high"}}）。指定できるのは low と high のみです。"default" は介入しないという意味なので、記述するとエラーになります。',
           effortJsonError: "エフォートレベルをキーとするJSONオブジェクトを入力してください。",
-          nativePolicy: "ネイティブAI CLIツールの実行権限",
-          nativePolicyDescription:
-            "各ネイティブAI CLIツールがアクセスできるファイルの範囲を設定します。",
-          nativeAgents: {
-            codex: "Codex",
-            grok: "Grok Build",
-            copilot: "GitHub Copilot",
-          },
-          filesystemAccessFor: "{{agent}}のファイルアクセス",
-          sandboxMapping: {
-            codex: "Codexをworkspace-writeまたはdanger-full-accessで実行します。",
-            grok: "grokを--sandbox workspaceまたは--sandbox offで実行します。",
-            copilot: "copilotを作業ディレクトリ内に制限して、または--allow-all-pathsで実行します。",
-          },
-          filesystemOptions: {
-            workspace: "ワークスペース内のみ",
-            host: "制限なし",
-          },
-          hostAccessWarningTitle: "ファイルアクセスを制限しない設定",
-          hostAccessWarningBody:
-            "{{agent}}がワークスペース外のファイルも読み書きできるようになります。本当に必要な場合だけ選択してください。",
         },
         members: {
           avatar: {
@@ -2549,6 +2743,7 @@ const resources = {
             "有効メンバーが0人の状態ではGuildBoticsは実行できません。セットアップ完了前に1人以上追加してください。",
           memberActive: "有効",
           memberInactive: "無効",
+          blockedHere: "この端末では起動不可",
           memberHuman: "人間",
           defaultPersonBadge: "既定",
           defaultPersonLabel: "既定の実行者",
@@ -2875,6 +3070,10 @@ const resources = {
           action: "保存",
           saved: "保存しました",
           error: "保存できませんでした",
+        },
+        invalidSave: {
+          title: "保存していません",
+          body: "詳細設定に修正が必要な入力があります。直してから、もう一度保存してください。",
         },
         staleSave: {
           title: "保存しませんでした",
@@ -3606,11 +3805,17 @@ const resources = {
         messageDescription:
           "この実行でコマンドへ渡す入力文です。ファイルのドロップでパスを挿入し、画像の貼り付けで一時保存できます。",
         inputFileDropActive: "ドロップしてファイルパスを挿入",
-        inputFileSaving: "貼り付け画像を保存しています…",
-        inputFileSaveError: "貼り付け画像を保存できませんでした: {{message}}",
+        inputFileSaving: "ファイルを保存しています…",
+        inputFileSaveError: "ファイルを保存できませんでした: {{message}}",
+        inputPathUnreachable: "エージェント隔離環境から届きません:",
+        inputPathCopy: "コピーを渡す",
+        inputPathGrant: "このフォルダを許可する",
+        inputPathDismiss: "このファイルは使わない",
+        inputPathHint:
+          "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは ~/Documents/GuildBotics/tmp に置かれアプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",
-        cwd: "ワークスペース",
-        cwdDescription: "空欄の場合は現在の workspace を使います: {{cwd}}",
+        cwd: "作業ディレクトリ",
+        cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",
         noRunsYet: "コマンド実行結果はまだありません。",
         output: "出力",
         events: "イベント",

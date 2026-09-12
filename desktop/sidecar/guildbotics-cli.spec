@@ -31,6 +31,10 @@ for pkg in (
     "google.genai",
     "openai",
     "anthropic",
+    # The agent environment runtime: the wheel carries msb and libkrunfw under
+    # `microsandbox/_bundled`, which GuildBotics copies to a fixed path on
+    # first use (`agent_environment/runtime.py`).
+    "microsandbox",
 ):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
     datas += pkg_datas

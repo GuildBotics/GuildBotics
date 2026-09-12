@@ -16,6 +16,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 pub const QUICK_WINDOW: &str = "quick";
 pub const MAIN_WINDOW: &str = "main";
+/// Asks the main window's frontend to go to a route (the payload).
+pub const NAVIGATE: &str = "app://navigate";
 
 /// Registered shortcut to command name. `None` is the generic quick-run window,
 /// which lets the user pick the command after it opens.
@@ -294,6 +296,17 @@ pub fn show_main_window(app: AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+/// Reveal the main window at a route: what a control in the quick-run window
+/// (its own webview, with no router of the main window's) uses to send the
+/// user to a settings screen.
+#[tauri::command]
+pub fn open_main_window(app: AppHandle, route: String) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.emit(NAVIGATE, route);
+    }
+    show_main_window(app);
 }
 
 fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {

@@ -10,18 +10,15 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 from yaml import safe_load
 
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.app_api.api import TAURI_ORIGINS, TOKEN_HEADER, create_app
-from guildbotics.app_api.command_input_files import (
-    COMMAND_INPUT_DIRECTORY_NAME,
-    CommandInputFileStore,
-)
+from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentDetectionsResponse,
     CliAgentUsage,
     CliAgentUsagesResponse,
     CliAgentUsageWindow,
@@ -377,26 +374,6 @@ class RuntimeStub:
                     message="No active members are configured.",
                 )
             ],
-        )
-
-    def detect_cli_agents(self) -> CliAgentDetectionsResponse:
-        return CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "claude",
-                    "executable": "claude",
-                    "config_reference": "claude",
-                    "detected": True,
-                    "path": "/usr/local/bin/claude",
-                },
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": False,
-                    "path": "",
-                },
-            ]
         )
 
     async def get_cli_agent_usage(
@@ -769,7 +746,7 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
     tmp_path: Path,
 ) -> None:
     runtime = RuntimeStub(tmp_path)
-    store = CommandInputFileStore(temporary_root=tmp_path)
+    store = CommandInputFileStore(root=tmp_path / "tmp")
     app = create_app(
         session_token="secret",
         runtime=runtime,
@@ -785,10 +762,95 @@ def test_command_input_file_upload_uses_app_session_temporary_directory(
 
         assert response.status_code == HTTP_OK
         saved = Path(response.json()["path"])
-        assert saved.is_relative_to(tmp_path / COMMAND_INPUT_DIRECTORY_NAME)
+        assert saved.is_relative_to(tmp_path / "tmp")
+        assert response.json()["guest_path"] == guest_path(saved)
         assert saved.read_bytes() == b"image-data"
 
     assert not saved.exists()
+
+
+def test_command_input_file_copy_places_a_copy_in_the_same_session_directory(
+    tmp_path: Path,
+) -> None:
+    store = CommandInputFileStore(root=tmp_path / "tmp")
+    app = create_app(
+        session_token="secret",
+        runtime=RuntimeStub(tmp_path),
+        command_input_file_store=store,
+    )
+    source = tmp_path / "report.md"
+    source.write_text("hello", encoding="utf-8")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-files/copy",
+            headers=AUTH_HEADERS,
+            json={"path": str(source)},
+        )
+        assert response.status_code == HTTP_OK
+        copied = Path(response.json()["path"])
+        assert copied.is_relative_to(tmp_path / "tmp")
+        assert response.json()["guest_path"] == guest_path(copied)
+        assert copied.name.endswith("-report.md")
+        assert copied.read_text(encoding="utf-8") == "hello"
+
+        refused = client.post(
+            "/commands/input-files/copy",
+            headers=AUTH_HEADERS,
+            json={"path": str(tmp_path)},
+        )
+
+    assert refused.status_code == HTTP_BAD_REQUEST
+    assert refused.json()["code"] == "command_input_file_invalid"
+    assert not copied.exists()
+    assert source.exists()
+
+
+def test_command_input_paths_report_what_a_turn_would_reach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    home = Path.home()
+    reachable = home / "Documents/GuildBotics/tmp/a.png"
+    reachable.parent.mkdir(parents=True)
+    reachable.write_bytes(b"x")
+    unreachable = tmp_path / "shot.png"
+    unreachable.write_bytes(b"x")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/commands/input-paths",
+            headers=AUTH_HEADERS,
+            json={"paths": [str(reachable), str(unreachable), str(tmp_path)]},
+        )
+
+    assert response.status_code == HTTP_OK
+    device = {"scope": "device", "path": str(tmp_path.resolve())}
+    assert response.json() == {
+        "paths": [
+            {
+                "path": str(reachable),
+                "kind": "file",
+                "reachable": True,
+                "guest_path": guest_path(reachable),
+                "grant": None,
+            },
+            {
+                "path": str(unreachable),
+                "kind": "file",
+                "reachable": False,
+                "guest_path": guest_path(unreachable),
+                "grant": device,
+            },
+            {
+                "path": str(tmp_path),
+                "kind": "directory",
+                "reachable": False,
+                "guest_path": guest_path(tmp_path),
+                "grant": device,
+            },
+        ]
+    }
 
 
 def test_command_input_file_upload_runs_sync_io_outside_event_loop(
@@ -1059,23 +1121,6 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
     assert isinstance(payload["context"].get("errors"), list)
 
 
-def test_cli_agent_detection_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
-
-    with TestClient(app) as client:
-        response = client.get(
-            "/intelligences/cli-agents/detection",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-        )
-
-    assert response.status_code == HTTP_OK
-    payload = response.json()
-    assert payload["agents"][0]["name"] == "claude"
-    assert payload["agents"][0]["detected"] is True
-    assert payload["agents"][1]["name"] == "codex"
-    assert payload["agents"][1]["detected"] is False
-
-
 def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
     app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
 
@@ -1105,46 +1150,10 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
 
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime,
-        "detect_cli_agents",
-        lambda: CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "copilot",
-                    "executable": "copilot",
-                    "config_reference": "copilot",
-                    "detected": True,
-                    "path": "/usr/local/bin/copilot",
-                },
-                {
-                    "name": "claude",
-                    "executable": "claude",
-                    "config_reference": "claude",
-                    "detected": True,
-                    "path": "/usr/local/bin/claude",
-                },
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": True,
-                    "path": "/usr/local/bin/codex",
-                },
-                {
-                    "name": "grok",
-                    "executable": "grok",
-                    "config_reference": "grok",
-                    "detected": True,
-                    "path": "/usr/local/bin/grok",
-                },
-            ]
-        ),
-    )
     probed: list[str] = []
 
-    async def fake_read_claude(executable: str, timeout: float = 30.0):
-        probed.append(executable)
+    async def fake_read_claude(timeout: float = 30.0):
+        probed.append("claude")
         return CliAgentUsageSnapshot(
             agent="claude",
             windows=[
@@ -1161,8 +1170,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    async def fake_read_codex(executable: str, timeout: float = 20.0):
-        probed.append(executable)
+    async def fake_read_codex(timeout: float = 20.0):
+        probed.append("codex")
         return CliAgentUsageSnapshot(
             agent="codex",
             windows=[UsageWindow(window="primary", used_percent=12.0)],
@@ -1170,8 +1179,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    async def fake_read_grok(executable: str, timeout: float = 20.0):
-        probed.append(executable)
+    async def fake_read_grok(timeout: float = 20.0):
+        probed.append("grok")
         return CliAgentUsageSnapshot(
             agent="grok",
             windows=[
@@ -1190,23 +1199,23 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     )
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
     monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
+    monkeypatch.setattr(
+        "guildbotics.app_api.runtime.is_logged_in",
+        lambda agent: agent.name in {"claude", "codex", "grok", "copilot"},
+    )
 
     first = await runtime.get_cli_agent_usage()
     second = await runtime.get_cli_agent_usage()
 
     # Copilot has no structured usage interface, so only the registry's tools
-    # are probed, and the second call is served from the TTL cache without a
-    # new probe.
-    assert probed == [
-        "/usr/local/bin/claude",
-        "/usr/local/bin/codex",
-        "/usr/local/bin/grok",
-    ]
-    assert first.usages[0].agent == "claude"
-    assert first.usages[0].windows[1].label == "Fable"
-    assert first.usages[0].windows[1].detail is True
-    assert first.usages[1].agent == "codex"
-    assert first.usages[1].windows[0].used_percent == 12.0
+    # that are logged in here are probed, in catalog order, and the second
+    # call is served from the TTL cache without a new probe.
+    assert probed == ["codex", "claude", "grok"]
+    assert first.usages[0].agent == "codex"
+    assert first.usages[0].windows[0].used_percent == 12.0
+    assert first.usages[1].agent == "claude"
+    assert first.usages[1].windows[1].label == "Fable"
+    assert first.usages[1].windows[1].detail is True
     assert first.usages[2].agent == "grok"
     assert first.usages[2].windows[0].used_percent is None
     assert first.usages[2].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
@@ -1220,21 +1229,6 @@ async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
     from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageError
 
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr(
-        runtime,
-        "detect_cli_agents",
-        lambda: CliAgentDetectionsResponse(
-            agents=[
-                {
-                    "name": "codex",
-                    "executable": "codex",
-                    "config_reference": "codex",
-                    "detected": True,
-                    "path": "/usr/local/bin/codex",
-                }
-            ]
-        ),
-    )
 
     async def failing_read(executable: str, timeout: float = 20.0):
         raise CliAgentUsageError("not logged in")
@@ -2344,7 +2338,6 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/system-alerts"),
     ("POST", "/system-alerts/dismiss"),
     ("POST", "/diagnostics/scenario"),
-    ("GET", "/intelligences/cli-agents/detection"),
     ("GET", "/config/intelligences"),
     ("PUT", "/config/intelligences"),
     ("POST", "/config/init"),

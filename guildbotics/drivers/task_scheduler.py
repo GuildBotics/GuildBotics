@@ -16,6 +16,8 @@ from guildbotics.drivers.execution import (
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
 from guildbotics.entities import Person, ScheduledCommand
+from guildbotics.intelligences.agent_environment.snapshot import SnapshotUpkeep
+from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
@@ -69,6 +71,8 @@ class TaskScheduler:
         self._member_routines_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._cancel_event = threading.Event()
+        #: The last reason AI CLI work was deferred here, so it is logged once.
+        self._environment_refusal = ""
         self._threads: list[threading.Thread] = []
         # Queued chat events are executed here, in each member's single worker
         # thread, so a member's chat / ticket / scheduled / routine work shares
@@ -83,7 +87,12 @@ class TaskScheduler:
     def start(self):
         """
         Start the task scheduler.
+
+        The agent environment's upkeep runs beside the member workers for as
+        long as they do: a changed declaration is rebuilt here, so the next
+        turn on this device boots from it without anyone asking.
         """
+        SnapshotUpkeep(self._stop_event, self.context.logger).start()
         threads: list[threading.Thread] = []
         for p, scheduled_tasks in self.scheduled_tasks_list.items():
             if not p.is_active:
@@ -324,7 +333,15 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
-            if routine_command == "workflows/ticket_driven_workflow":
+            if routine_command == "workflows/ticket_driven_workflow" and (
+                self._environment_unavailable()
+            ):
+                # The AI CLI turn the patrol would dispatch cannot start here
+                # yet (the environment is being built, or is not set up). It
+                # is deferred, not failed: the worker stays up and the ticket
+                # is picked again once the device is ready.
+                ok = True
+            elif routine_command == "workflows/ticket_driven_workflow":
                 # The ticket patrol opens its trace lazily (only when it
                 # dispatches work or fails), so the work id doubles as the
                 # trace id it will use.
@@ -558,7 +575,26 @@ class TaskScheduler:
         while not self._cancel_event.is_set():
             await asyncio.sleep(0.2)
 
+    def _environment_unavailable(self) -> bool:
+        """Whether AI CLI work must wait for this device's environment.
+
+        The reason is the one the status shows; it is logged once per change
+        rather than once per poll.
+        """
+        reason = device_status().refusal
+        if reason != self._environment_refusal:
+            self._environment_refusal = reason
+            if reason:
+                self.context.logger.warning(
+                    f"AI CLI work is deferred on this device: {reason}"
+                )
+            else:
+                self.context.logger.info("The agent environment is ready; resuming.")
+        return bool(reason)
+
     async def _process_pending_chat(self, person: Person) -> bool:
+        if self._environment_unavailable():
+            return True
         try:
             await self._chat_dispatcher.process_person(person, self._stop_event)
             return True

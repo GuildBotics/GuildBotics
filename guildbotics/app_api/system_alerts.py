@@ -6,9 +6,11 @@ import json
 import threading
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
+from guildbotics.app_api.agent_environment_status import EnvironmentProblemEntry
 from guildbotics.app_api.models import (
+    DeviceSetting,
     RuntimeStatus,
     SystemAlert,
     SystemAlertAction,
@@ -59,6 +61,19 @@ _RELEVANT_EVENT_TYPES = frozenset(
 )
 _STATE_VERSION = 3
 _ALERT_ID_PARTS = 3
+#: Alert key template and code by the ``setting`` of an environment problem:
+#: the device is one alert whichever part of it is the problem.
+_AGENT_ENVIRONMENT_ALERTS: dict[str, tuple[str, SystemAlertCode]] = {
+    **dict.fromkeys(
+        get_args(DeviceSetting),
+        ("agent-environment:device", "agent_environment_unavailable"),
+    ),
+    "tool": ("agent-environment:tool:{slot}", "agent_environment_tool_unavailable"),
+    "grants": (
+        "agent-environment:{person_id}:{slot}",
+        "agent_environment_slot_blocked",
+    ),
+}
 
 
 class SystemAlertService:
@@ -72,7 +87,18 @@ class SystemAlertService:
         self._alerts: dict[str, SystemAlert] = {}
         self._dismissed: set[str] = set()
 
-    def list_alerts(self, runtime: RuntimeStatus) -> SystemAlertsResponse:
+    def list_alerts(
+        self,
+        runtime: RuntimeStatus,
+        agent_environment_problems: list[EnvironmentProblemEntry] | None = None,
+    ) -> SystemAlertsResponse:
+        """Fold recorded diagnostics and current state into open alerts.
+
+        ``agent_environment_problems`` are ``(person_id, slot, setting, reason)`` for
+        everything that keeps AI CLI work from starting on this device: the
+        device's environment, one tool on it, or one member's slot. Each stays
+        open, and its dismissal is forgotten, until the setting changes.
+        """
         with self._lock:
             self._refresh_state()
             changed = False
@@ -84,14 +110,21 @@ class SystemAlertService:
                     self._apply_record(self._alerts, record)
                 changed = cursor != self._cursor
                 self._cursor = cursor
-            changed = self._reconcile_runtime_dismissals(runtime) or changed
+            changed = (
+                self._reconcile_runtime_dismissals(
+                    runtime, agent_environment_problems or []
+                )
+                or changed
+            )
             if changed:
                 self._save_state()
             alerts = {
                 key: alert.model_copy(deep=True) for key, alert in self._alerts.items()
             }
             dismissed = set(self._dismissed)
-        self._apply_runtime(alerts, runtime, dismissed)
+        self._apply_runtime(
+            alerts, runtime, dismissed, agent_environment_problems or []
+        )
         ordered = sorted(
             alerts.values(),
             key=lambda alert: (alert.severity != "critical", alert.opened_at, alert.id),
@@ -389,7 +422,24 @@ class SystemAlertService:
         alerts: dict[str, SystemAlert],
         runtime: RuntimeStatus,
         dismissed: set[str],
+        agent_environment_problems: list[EnvironmentProblemEntry],
     ) -> None:
+        for person_id, slot, setting, reason in agent_environment_problems:
+            # One alert per thing to fix: the device, a tool, a member's slot.
+            key, code = _AGENT_ENVIRONMENT_ALERTS[setting]
+            self._open_runtime(
+                alerts,
+                dismissed,
+                key=key.format(person_id=person_id, slot=slot),
+                code=code,
+                severity="warning",
+                timestamp="",
+                person_id=person_id,
+                command=slot,
+                reason=reason,
+                setting=setting,
+                actions=["setup"],
+            )
         scheduler = runtime.scheduler
         if scheduler.state == "failed":
             self._open_runtime(
@@ -410,10 +460,20 @@ class SystemAlertService:
                 actions=["diagnostics", "setup"],
             )
 
-    def _reconcile_runtime_dismissals(self, runtime: RuntimeStatus) -> bool:
+    def _reconcile_runtime_dismissals(
+        self,
+        runtime: RuntimeStatus,
+        agent_environment_problems: list[EnvironmentProblemEntry],
+    ) -> bool:
         before = set(self._dismissed)
         if runtime.scheduler.state != "failed":
             self._dismissed.discard("runtime:scheduler")
+        # A dismissed sandbox alert comes back when the setting still cannot
+        # be enforced, and clears itself when the setting changes; the
+        # user's way out is the setting, not the close button.
+        for key in list(self._dismissed):
+            if key.startswith("agent-environment:"):
+                self._dismissed.discard(key)
         auth_failed = set(runtime.events.events_auth_failed_persons)
         for key in list(self._dismissed):
             if (
@@ -432,6 +492,10 @@ class SystemAlertService:
         code: SystemAlertCode,
         timestamp: str,
         person_id: str = "",
+        command: str = "",
+        reason: str = "",
+        setting: str = "",
+        severity: SystemAlertSeverity = "critical",
         actions: list[SystemAlertAction] | None = None,
     ) -> None:
         if key in alerts or key in dismissed:
@@ -439,10 +503,13 @@ class SystemAlertService:
         alerts[key] = SystemAlert(
             id=key,
             code=code,
-            severity="critical",
+            severity=severity,
             opened_at=timestamp,
             updated_at=timestamp,
             person_id=person_id,
+            command=command,
+            reason=reason,
+            setting=setting,
             actions=actions or ["service", "diagnostics"],
         )
 

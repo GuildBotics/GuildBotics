@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
-  type CliAgentDetection,
   type CliAgentUsage,
+  type EnvironmentToolStatus,
   type IntelligenceConfig,
-  getCliAgentDetections,
+  getAgentEnvironmentStatus,
   getCliAgentUsage,
   getIntelligenceConfig,
 } from "./api/client";
@@ -29,16 +29,16 @@ export function cliAgentNameFromConfig(config: IntelligenceConfig | undefined): 
 }
 
 // Resolve the human-friendly AI CLI tool label. Labels come from the backend
-// AI CLI tool catalog (the detection endpoint).
+// AI CLI tool catalog, as the agent environment status lists it.
 export function cliAgentLabelFromConfig(
   config: IntelligenceConfig | undefined,
-  detections: CliAgentDetection[],
+  tools: Pick<EnvironmentToolStatus, "name" | "label">[],
 ): string | null {
   const value = cliAgentNameFromConfig(config);
   if (!value) {
     return null;
   }
-  return detections.find((agent) => agent.name === value)?.label ?? value;
+  return tools.find((tool) => tool.name === value)?.label ?? value;
 }
 
 function useMemberIntelligenceConfig(personId: string, enabled: boolean) {
@@ -54,11 +54,11 @@ function useMemberIntelligenceConfig(personId: string, enabled: boolean) {
 // `enabled: false` for human members, whose config carries no AI CLI tool.
 export function useMemberCliAgentLabel(personId: string, enabled: boolean): string | null {
   const config = useMemberIntelligenceConfig(personId, enabled);
-  const detections = useQuery({
-    queryKey: ["cli-agent-detections"],
-    queryFn: getCliAgentDetections,
+  const environment = useQuery({
+    queryKey: ["agent-environment-status"],
+    queryFn: getAgentEnvironmentStatus,
   });
-  return cliAgentLabelFromConfig(config.data, detections.data?.agents ?? []);
+  return cliAgentLabelFromConfig(config.data, environment.data?.tools ?? []);
 }
 
 const USAGE_REFRESH_MS = 5 * 60 * 1000;

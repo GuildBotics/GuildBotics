@@ -270,14 +270,19 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     context = _context(tmp_path)
     await broker.activate(context)
     descriptor = broker.mcp_server
+    endpoint = broker.endpoint
     turn_grant = broker.turn_grant
 
     try:
+        # The descriptor a provider reads inside the environment names the
+        # broker by the gateway's alias; this host-side test reaches it by
+        # the loopback address the same port answers on.
+        assert descriptor["url"] == endpoint.guest_url
         async with httpx2.AsyncClient(
             headers={"Authorization": "Bearer wrong-token"}
         ) as client:
             response = await client.post(
-                descriptor["url"],
+                endpoint.url,
                 headers={"Accept": "application/json, text/event-stream"},
                 json={
                     "jsonrpc": "2.0",
@@ -292,31 +297,55 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
             )
             assert response.status_code == 401
 
+        # A turn inside the agent environment names this host by the
+        # gateway's alias; the Host check, which runs behind the bearer
+        # check, lets it through and still refuses any other name.
         authorization = descriptor["headers"][0]["value"]
+        assert endpoint.port == int(endpoint.url.rsplit(":", 1)[1].split("/")[0])
+        assert (
+            endpoint.guest_url
+            == f"http://host.microsandbox.internal:{endpoint.port}/mcp"
+        )
         async with httpx2.AsyncClient(
             headers={"Authorization": authorization}
         ) as client:
-            async with streamable_http_client(
-                descriptor["url"], http_client=client
-            ) as streams:
-                async with ClientSession(*streams) as session:
-                    await session.initialize()
-                    result = await session.call_tool(
-                        "guildbotics_member",
-                        {
-                            "turn_grant": broker.turn_grant,
-                            "arguments": ["help"],
-                        },
-                    )
-                    # A refused request must stay a structured result: an MCP
-                    # tool error here fails the entire Antigravity run status.
-                    rejected = await session.call_tool(
-                        "guildbotics_member",
-                        {
-                            "turn_grant": "stale-grant",
-                            "arguments": ["help"],
-                        },
-                    )
+            for host, expected in (
+                (f"host.microsandbox.internal:{endpoint.port}", 200),
+                (f"evil.example:{endpoint.port}", 421),
+            ):
+                response = await client.post(
+                    endpoint.url,
+                    headers={
+                        "Accept": "application/json, text/event-stream",
+                        "Host": host,
+                    },
+                    json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                )
+                assert response.status_code == expected, host
+
+        authorization = descriptor["headers"][0]["value"]
+        async with (
+            httpx2.AsyncClient(headers={"Authorization": authorization}) as client,
+            streamable_http_client(endpoint.url, http_client=client) as streams,
+            ClientSession(*streams) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(
+                "guildbotics_member",
+                {
+                    "turn_grant": broker.turn_grant,
+                    "arguments": ["help"],
+                },
+            )
+            # A refused request must stay a structured result: an MCP
+            # tool error here fails the entire Antigravity run status.
+            rejected = await session.call_tool(
+                "guildbotics_member",
+                {
+                    "turn_grant": "stale-grant",
+                    "arguments": ["help"],
+                },
+            )
     finally:
         await broker.close()
 

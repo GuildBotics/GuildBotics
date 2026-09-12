@@ -4,6 +4,8 @@ import {
   ApiRequestError,
   applyCommandAuthoring,
   authorCommand,
+  checkCommandInputPaths,
+  copyCommandInputFile,
   troubleshoot,
   configureApi,
   createCommandFile,
@@ -21,6 +23,8 @@ import {
   updateCommandFile,
   getConfigStatus,
   getIntelligenceConfig,
+  evaluateGrant,
+  getAgentEnvironmentStatus,
   getMemoryEvents,
   getMemberConfig,
   getRuntimeDebug,
@@ -169,6 +173,29 @@ describe("request headers and body", () => {
       expect(call.init.body).toBeInstanceOf(FormData);
       expect((call.init.body as FormData).get("file")).toBe(file);
     }
+  });
+
+  it("POSTs the paths about to enter a command input, and a copy request", async () => {
+    const check = captureFetch(
+      jsonResponse({ paths: [{ path: "/a", kind: "file", reachable: false, guest_path: "/a" }] }),
+    );
+    await checkCommandInputPaths({ paths: ["/a"], cwd: "/work" });
+
+    expect(check.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-paths");
+    expect(check.calls[0].init.method).toBe("POST");
+    expect(check.calls[0].init.body).toBe(JSON.stringify({ paths: ["/a"], cwd: "/work" }));
+
+    const copy = captureFetch(
+      jsonResponse({
+        path: "/home/Documents/GuildBotics/tmp/x-a",
+        guest_path: "/home/Documents/GuildBotics/tmp/x-a",
+      }),
+    );
+    await copyCommandInputFile("/a");
+
+    expect(copy.calls[0].url).toBe("http://127.0.0.1:8765/commands/input-files/copy");
+    expect(copy.calls[0].init.method).toBe("POST");
+    expect(copy.calls[0].init.body).toBe(JSON.stringify({ path: "/a" }));
   });
 
   it("POSTs the GitHub App registration with the API base as callback", async () => {
@@ -379,6 +406,26 @@ describe("GET query parameter encoding", () => {
     await runScenarioDiagnostics();
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario");
+  });
+
+  it("fetches the sandbox status of this device", async () => {
+    const { calls } = captureFetch(jsonResponse({ platform: "darwin", members: [] }));
+    await getAgentEnvironmentStatus();
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/agent-environment");
+  });
+
+  it("encodes grant evaluations", async () => {
+    const { calls } = captureFetch(jsonResponse({ valid: true }));
+    await evaluateGrant({ scope: "deny", path: "/opt/homebrew/etc" });
+    await evaluateGrant({ scope: "local", path: "/opt/home brew", access: "read_write" });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=deny&path=%2Fopt%2Fhomebrew%2Fetc",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8765/intelligences/grant-evaluation?scope=local&path=%2Fopt%2Fhome+brew&access=read_write",
+    );
   });
 
   it("encodes person_id for getIntelligenceConfig", async () => {

@@ -220,6 +220,29 @@ the latest event separately from a bounded thread snapshot. A healthy session
 receives only the new event; a new or rotated session receives the earlier snapshot
 once.
 
+**Paths between the host and the isolated agent environment** follow three rules.
+(1) A host path means the same thing inside: every mount is at its host path and the
+guest's home is the host's, so GuildBotics never rewrites a path in user content. The
+one exception is Windows, where a drive becomes `/c/`; `guest_path()` in
+`intelligences/agent_environment/spec.py` is the single translation point, applied to
+the mount table and the working directory only. (2) A turn reaches only its working
+directory, the granted directories, and what GuildBotics itself binds; everything else
+is absent rather than forbidden. (3) Hand-overs go through the exchange directory
+`~/Documents/GuildBotics`, which every turn is granted read-write by GuildBotics itself
+(`EXCHANGE_GRANT` in `intelligences/agent_environment/contract.py`; the grants file adds
+to it and cannot remove it).
+What the Desktop hands a command -- a pasted image, a copy of a dropped file the
+environment could not reach -- is placed in its `tmp/` for one App API session and
+removed when the session ends (`app_api/command_input_files.py`); a Desktop run that
+names no working directory runs in the exchange directory; and what an agent makes for
+the user goes under it unless the request names a destination (a cross-cutting rule of
+the member reference). Before a dropped path enters the input field the Desktop asks
+`POST /commands/input-paths` whether a turn would reach it, and when it would not, the
+user chooses between handing over a copy (enough for reading) and allowing the file's
+directory (the path stays in the input, and the grants screen opens with that directory
+in its path field, from the quick-run window too via the host's `open_main_window`), or
+dismisses the file.
+
 ### Model effort
 
 Effort is the single provider-neutral vocabulary for how hard a model should
@@ -833,9 +856,12 @@ Two Person distinctions matter architecturally:
   `intelligences/agent_runtime/`, register it in `agent_runtime/factory.py`, and add
   its catalog entry to `CLI_AGENTS` in `intelligences/cli_agents.py` with a matching
   `templates/intelligences/cli_agents/<tool>/default.yml`. There is no YAML-only path:
-  a tool without an adapter cannot run. The user-configurable filesystem boundary, for
-  the adapters that can enforce one, is declared in
-  `templates/intelligences/native_agent_policy.yml`.
+  a tool without an adapter cannot run. Declare in its catalog entry how the tool is
+  provisioned into the isolated agent environment (`CliAgentProvision`: the pinned
+  npm package, its state root, which entries persist, its login command, its API
+  domains); the access contract (`intelligences/agent_environment/contract.py`) is
+  enforced by the environment (`intelligences/agent_environment/`), not translated per
+  adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
 - **New integration**: implement `TicketManager` / `ChatService` and wire it in the

@@ -826,6 +826,7 @@ pub fn run() {
             hotkeys::clipboard_watch_supported,
             hotkeys::poll_clipboard,
             hotkeys::show_main_window,
+            hotkeys::open_main_window,
             tray::set_tray_labels,
             tray::quit_app,
         ])

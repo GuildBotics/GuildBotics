@@ -173,7 +173,7 @@ def test_sidecar_rejects_invalid_token(sidecar: _Sidecar) -> None:
     assert response.json()["code"] == "invalid_session_token"
 
 
-def test_sidecar_config_status_reports_working_directory(
+def test_sidecar_config_status_reports_the_command_working_directory(
     sidecar: _Sidecar, tmp_path: Path
 ) -> None:
     response = httpx.get(
@@ -184,7 +184,12 @@ def test_sidecar_config_status_reports_working_directory(
 
     assert response.status_code == HTTP_OK
     payload = response.json()
-    assert Path(payload["cwd"]).resolve() == tmp_path.resolve()
+    # Where a command runs when the screen names no directory: the exchange
+    # directory under the sidecar's HOME, not where the sidecar was started.
+    assert (
+        Path(payload["cwd"]).resolve()
+        == (tmp_path / "home/Documents/GuildBotics").resolve()
+    )
 
 
 def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
@@ -211,7 +216,7 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
 
         assert response.status_code == HTTP_OK
         payload = response.json()
-        assert Path(payload["cwd"]) == workspace
+        assert Path(payload["cwd"]) == home / "Documents/GuildBotics"
         assert Path(payload["workspace"]) == workspace
         assert Path(payload["storage_dir"]) == workspace
     finally:

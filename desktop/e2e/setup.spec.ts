@@ -84,8 +84,11 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await expect(page.getByText("Initial settings created")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
-  // Navigate to the service view and confirm the transition.
-  await page.getByRole("link", { name: "Service" }).click();
+  // Navigate to the service view and confirm the transition. Nav links are
+  // matched in full: the system-alert band on a device without an agent
+  // environment carries "Open setup" links that a substring match would also
+  // resolve to.
+  await page.getByRole("link", { name: "Service", exact: true }).click();
   await expect(page).toHaveURL(/#\/service$/);
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
@@ -104,7 +107,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // the backend serves for the provider. jsdom can only prove the editor state
   // changed; that a number survives client -> FastAPI -> YAML as a number needs
   // this real stack. Branch coverage stays in the unit / component tests.
-  await page.getByRole("link", { name: "Setup" }).click();
+  await page.getByRole("link", { name: "Setup", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
   await page.getByRole("button", { name: "Advanced settings", exact: true }).click();

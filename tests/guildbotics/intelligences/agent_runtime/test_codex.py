@@ -8,12 +8,26 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    DeniedPath,
+    NetworkPolicy,
+    ResolvedAccess,
+    ResolvedGrant,
+    parse_network_policy,
+)
+from guildbotics.intelligences.agent_runtime import codex as codex_module
+from guildbotics.intelligences.agent_environment.spec import (
+    AgentEnvironmentSpec,
+    EnvironmentMount,
+    EnvironmentNetwork,
+)
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
+    _config_arguments,
+    _sandbox_overrides,
     _decode_notification,
-    _sandbox_policy,
-    _thread_sandbox,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
@@ -30,7 +44,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
-from guildbotics.intelligences.agent_runtime.policy import AdapterFilesystemPolicy
 from guildbotics.runtime.person_lease import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
@@ -40,7 +53,7 @@ from guildbotics.runtime.person_lease import (
 
 
 class _Writer:
-    def __init__(self, process: "_Process") -> None:
+    def __init__(self, process: _Process) -> None:
         self.process = process
 
     def write(self, data: bytes) -> None:
@@ -237,7 +250,7 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
     )
 
 
-def _turn_start(process: "_Process") -> dict[str, Any]:
+def _turn_start(process: _Process) -> dict[str, Any]:
     return next(
         message["params"]
         for message in process.messages
@@ -256,7 +269,8 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert all(args[index] == "-c" for index in range(2, len(args), 2))
         config = args[3::2]
         assert any(
-            value.endswith('.url="http://127.0.0.1:43123/mcp"') for value in config
+            value.endswith('.url="http://host.microsandbox.internal:43123/mcp"')
+            for value in config
         )
         assert any(
             value.endswith('.bearer_token_env_var="GUILDBOTICS_MEMBER_BROKER_TOKEN"')
@@ -265,7 +279,6 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert not any(".env_http_headers=" in value for value in config)
         assert any(value.endswith(".required=true") for value in config)
         assert any('enabled_tools=["guildbotics_member"]' in value for value in config)
-        assert kwargs["start_new_session"] is True
         assert kwargs["env"][MEMBER_BROKER_TOKEN_ENV]
         for key in (
             RUN_ENV,
@@ -280,7 +293,7 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
+    adapter = CodexAppServerAdapter()
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
         provider_session_id="thread-1",
@@ -336,7 +349,7 @@ async def test_codex_provider_never_inherits_the_parent_execution_grant(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
+    adapter = CodexAppServerAdapter()
     context = _context(tmp_path)
     events: list[AgentEvent] = []
     await adapter.run_turn(
@@ -351,52 +364,6 @@ async def test_codex_provider_never_inherits_the_parent_execution_grant(
     assert env[MEMBER_BROKER_TOKEN_ENV]
     for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
         assert key not in env
-
-
-@pytest.mark.asyncio
-async def test_codex_reuses_process_for_multiple_exact_turns(
-    monkeypatch, tmp_path
-) -> None:
-    process = _Process()
-    starts = 0
-
-    async def create_process(*_args, **_kwargs):
-        nonlocal starts
-        starts += 1
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    conversation = ConversationRecord(key=_context(tmp_path).conversation_key)
-
-    first = await adapter.run_turn(
-        "first", _context(tmp_path), conversation, lambda _event: None
-    )
-    conversation.provider_session_id = first.provider_session_id
-    second = await adapter.run_turn(
-        "second", _context(tmp_path), conversation, lambda _event: None
-    )
-    await adapter.close()
-
-    assert starts == 1
-    assert first.output == second.output == "hello world"
-    assert process.resume_thread == "thread-1"
-    thread_start = next(
-        message
-        for message in process.messages
-        if message.get("method") == "thread/start"
-    )
-    assert thread_start["params"]["approvalPolicy"] == "never"
-    assert thread_start["params"]["sandbox"] == "workspace-write"
-    turn_start = next(
-        message for message in process.messages if message.get("method") == "turn/start"
-    )
-    assert turn_start["params"]["approvalPolicy"] == "never"
-    assert turn_start["params"]["sandboxPolicy"] == {
-        "type": "workspaceWrite",
-        "writableRoots": [str(tmp_path)],
-        "networkAccess": True,
-    }
 
 
 @pytest.mark.asyncio
@@ -420,56 +387,6 @@ async def test_codex_declines_legacy_approval_requests(monkeypatch, tmp_path) ->
 
     assert {"id": 999, "result": {"decision": "denied"}} in process.messages
     assert any(event.approval == "decline" for event in events)
-
-
-@pytest.mark.parametrize(
-    ("filesystem_access", "expected"),
-    [
-        (
-            "workspace",
-            {
-                "type": "workspaceWrite",
-                "writableRoots": ["/workspace-data"],
-                "networkAccess": True,
-            },
-        ),
-        ("host", {"type": "dangerFullAccess"}),
-    ],
-)
-def test_codex_turn_sandbox_policy_matches_filesystem_access(
-    filesystem_access: str, expected: dict[str, Any]
-) -> None:
-    policy = AdapterFilesystemPolicy(filesystem_access=filesystem_access)
-
-    assert _sandbox_policy(policy, "/workspace-data") == expected
-
-
-@pytest.mark.parametrize("filesystem_access", ["workspace", "host"])
-def test_codex_read_only_turn_overrides_the_configured_filesystem_access(
-    filesystem_access: str,
-) -> None:
-    policy = AdapterFilesystemPolicy(filesystem_access=filesystem_access)
-
-    # A read-only turn reads untrusted material, so it must not inherit the
-    # member's configured write or network access.
-    assert _sandbox_policy(policy, "/workspace-data", True) == {
-        "type": "readOnly",
-        "networkAccess": False,
-    }
-    assert _thread_sandbox(policy, True) == "read-only"
-
-
-@pytest.mark.parametrize(
-    ("filesystem_access", "expected"),
-    [("workspace", "workspace-write"), ("host", "danger-full-access")],
-)
-def test_codex_thread_sandbox_matches_filesystem_access(
-    filesystem_access: str, expected: str
-) -> None:
-    assert (
-        _thread_sandbox(AdapterFilesystemPolicy(filesystem_access=filesystem_access))
-        == expected
-    )
 
 
 @pytest.mark.asyncio
@@ -834,10 +751,7 @@ async def test_codex_interrupt_still_terminates_after_rpc_is_cancelled(
         process.returncode = -15
 
     monkeypatch.setattr(adapter, "_request", cancelled_request)
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.codex.terminate_process_tree",
-        terminate,
-    )
+    process.kill = lambda: terminate(process)
 
     await adapter.interrupt()
 
@@ -934,7 +848,7 @@ async def _run_turn_returning(
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter(policy=AdapterFilesystemPolicy())
+    adapter = CodexAppServerAdapter()
     context = _context(tmp_path, **context_overrides)
     conversation = ConversationRecord(
         key=context.conversation_key,
@@ -946,7 +860,7 @@ async def _run_turn_returning(
     return process, terminal
 
 
-async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> "_Process":
+async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> _Process:
     process, _ = await _run_turn_returning(monkeypatch, tmp_path, **context_overrides)
     return process
 
@@ -1137,3 +1051,113 @@ async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_the
     params = _turn_start(process)
     assert "temperature" not in params
     assert "temperature" in caplog.text
+
+
+# --- access contract translation --------------------------------------------
+
+
+def _network(mode: str, *domains: str, local: bool = False) -> NetworkPolicy:
+    return parse_network_policy(
+        {"mode": mode, "allowed_domains": list(domains), "allow_local_network": local},
+        where="test",
+    )
+
+
+def _codex_binary(tmp_path: Path) -> Path:
+    binary = tmp_path / "opt" / "codex" / "bin" / "codex"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("", encoding="utf-8")
+    return binary
+
+
+def test_overrides_are_spelled_as_toml_values() -> None:
+    arguments = _config_arguments(
+        {
+            "default_permissions": "guildbotics",
+            "permissions.guildbotics.network.enabled": False,
+            "permissions.guildbotics.filesystem": {"/tmp/a b": "read"},
+            "tools.web_search.allowed_domains": ["docs.npmjs.com"],
+        }
+    )
+
+    assert arguments == (
+        "-c",
+        'default_permissions="guildbotics"',
+        "-c",
+        "permissions.guildbotics.network.enabled=false",
+        "-c",
+        'permissions.guildbotics.filesystem={"/tmp/a b" = "read"}',
+        "-c",
+        'tools.web_search.allowed_domains=["docs.npmjs.com"]',
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_is_told_the_working_directory_as_the_guest_spells_it(
+    monkeypatch, tmp_path
+) -> None:
+    """``thread/start`` and ``turn/start`` name the directory inside the
+    environment (``/c/...`` on Windows), never the host's own spelling."""
+    monkeypatch.setattr(
+        codex_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
+    )
+    process = _Process()
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    adapter = CodexAppServerAdapter()
+    context = _context(tmp_path)
+
+    await adapter.run_turn(
+        "go", context, ConversationRecord(key=context.conversation_key), lambda _e: None
+    )
+    await adapter.close()
+
+    started = next(
+        message["params"]
+        for message in process.messages
+        if message.get("method") == "thread/start"
+    )
+    assert started["cwd"] == f"/guest{tmp_path.as_posix()}"
+    assert _turn_start(process)["cwd"] == f"/guest{tmp_path.as_posix()}"
+
+
+def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() -> None:
+    """Every directory the environment bound is readable or writable for
+    Codex's commands exactly as it was mounted; the whole guest is readable;
+    only Codex's own state is hidden, and its bound entries are never named."""
+    home = "/home/u"
+    spec = AgentEnvironmentSpec(
+        cwd="/work/repo",
+        home=home,
+        mounts=(
+            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
+            EnvironmentMount(
+                "/home/u/Documents/GuildBotics", Path("/x"), readonly=False
+            ),
+            EnvironmentMount("/home/u/notes", Path("/y"), readonly=True),
+            EnvironmentMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/home/u/.codex/auth.json", Path("/z"), readonly=False),
+            EnvironmentMount("/home/u/.codex/sessions", Path("/w"), readonly=False),
+        ),
+        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        env={},
+    )
+
+    overrides = _sandbox_overrides(spec)
+
+    assert overrides["default_permissions"] == "guildbotics"
+    assert overrides["permissions.guildbotics.network.enabled"] is True
+    assert overrides["permissions.guildbotics.filesystem"] == {
+        "/": "read",
+        "/work/repo": "write",
+        "/home/u/Documents/GuildBotics": "write",
+        "/home/u/notes": "read",
+        "/work/repo/private": "read",
+        ":workspace_roots": {".": "write", ".git": "write"},
+        ":tmpdir": "write",
+        ":slash_tmp": "write",
+        "/home/u/.codex": "deny",
+    }

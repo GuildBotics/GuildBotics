@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
@@ -15,6 +16,14 @@ from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _environment_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The device can run AI CLI turns, so the patrol is dispatched, not deferred."""
+    monkeypatch.setattr(
+        task_scheduler, "device_status", lambda: types.SimpleNamespace(refusal="")
+    )
 
 
 class _FakeTicketManager:
