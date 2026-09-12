@@ -68,6 +68,8 @@ bindします）。
 見送りにします。turnが起動できない理由（runtime無し、宣言不正、snapshot未ビルド、
 未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
+macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください。開発中（`tauri dev`）は、起動に使ったターミナルや Visual Studio Code が対象です。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と Desktop に同じ拒否理由を表示します。
+
 - **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
   `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
   ワークスペースの`.guildbotics/config`や`state`は含みません

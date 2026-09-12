@@ -129,6 +129,8 @@ def status_command(output_format: str) -> None:
     if output_format == "json":
         click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
+    if payload["refusal"]:
+        click.echo(f"{payload['setting']}: {payload['refusal']}")
     health = payload["runtime"]
     click.echo(
         f"runtime: {'available ' + health['version'] if health['available'] else 'unavailable: ' + health['reason']}"
@@ -165,6 +167,8 @@ def _status_payload() -> dict[str, Any]:
     status = device_status()
     state = status.snapshot
     return {
+        "refusal": status.refusal,
+        "setting": status.setting,
         "runtime": {
             "available": status.runtime.available,
             "reason": status.runtime.reason,

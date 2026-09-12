@@ -5,7 +5,11 @@ from __future__ import annotations
 import ctypes
 import errno
 import os
+import plistlib
 import signal
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
 _WINDOWS = os.name == "nt"
@@ -13,6 +17,44 @@ _PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_ACCESS_DENIED = 5
 _STILL_ACTIVE = 259
+
+
+def launching_app_name() -> str:
+    """Return the nearest macOS parent app's bundle name, when observable."""
+    if sys.platform != "darwin":
+        return ""
+    pid = os.getpid()
+    seen: set[int] = set()
+    try:
+        while pid > 1 and pid not in seen:
+            seen.add(pid)
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "ppid=,comm="],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=1,
+            )
+            parent, executable = result.stdout.strip().split(maxsplit=1)
+            app, marker, _ = executable.partition(".app/Contents/MacOS/")
+            if marker:
+                bundle = Path(app + ".app")
+                with (bundle / "Contents" / "Info.plist").open("rb") as stream:
+                    info = plistlib.load(stream)
+                return str(
+                    info.get("CFBundleDisplayName")
+                    or info.get("CFBundleName")
+                    or bundle.stem
+                )
+            pid = int(parent)
+    except (
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+        plistlib.InvalidFileException,
+    ):
+        pass
+    return ""
 
 
 def _windows_kernel32() -> Any:

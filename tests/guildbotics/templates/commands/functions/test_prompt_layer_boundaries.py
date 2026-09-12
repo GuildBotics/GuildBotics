@@ -6,13 +6,17 @@ Prompt layer model (see AGENTS.md「member プロンプト層モデル」):
   ``{workflow_contract}``
 - trigger-specific contract → ``handle_github_ticket`` / ``handle_chat_event``
 - interactive envelope → ``skills/guildbotics/SKILL.md``
+- delegated one-off envelope → ``commands/ask.{en,ja}.md``
 
 These tests keep the boundaries mechanical: shared wording must not creep back
 into individual prompts, and the en/ja prompt variants must not drift apart.
 """
 
 import re
+from itertools import combinations
 from pathlib import Path
+
+import yaml
 
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
@@ -20,6 +24,7 @@ from guildbotics.utils.fileio import load_markdown_with_frontmatter
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 SKILL_PATH = Path("skills/guildbotics/SKILL.md")
 WORKFLOW_PROMPTS = ("handle_github_ticket", "handle_chat_event")
+ASK_PATH = Path("guildbotics/templates/commands/ask")
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 _MEMBER_COMMAND_RE = re.compile(r"guildbotics member ([a-z]+(?: [a-z]+)*)")
@@ -33,6 +38,72 @@ def _prompt_body(name: str, language: str) -> str:
 def _instruction_step_count(body: str) -> int:
     section = body.split("<instructions>")[1].split("</instructions>")[0]
     return len(re.findall(r"^\d+\.", section, flags=re.MULTILINE))
+
+
+def _ask(language: str) -> dict:
+    return load_markdown_with_frontmatter(ASK_PATH.with_suffix(f".{language}.md"))
+
+
+def test_delegated_prompt_matches_across_languages():
+    english, japanese = (_ask(language) for language in ("en", "ja"))
+    for key in ("name", "brain", "template_engine", "inputs"):
+        assert english[key] == japanese[key], key
+    bodies = [prompt["body"] for prompt in (english, japanese)]
+    assert (
+        set(re.findall(r"\{\{(.+?)\}\}", bodies[0]))
+        == set(re.findall(r"\{\{(.+?)\}\}", bodies[1]))
+        == {" context.person.person_id "}
+    )
+    assert set(_MEMBER_COMMAND_RE.findall(bodies[0])) == set(
+        _MEMBER_COMMAND_RE.findall(bodies[1])
+    )
+    assert _instruction_step_count(bodies[0]) == _instruction_step_count(bodies[1])
+    for body in bodies:
+        assert "guildbotics_execution_mode=delegated" in body
+        assert "--workspace-mode current" in body
+        assert "{workflow_contract}" not in body
+        assert "guildbotics_execution_mode=workflow" not in body
+        assert "AgentResponse" not in body
+        assert "stdout" in body
+
+
+def test_envelopes_do_not_duplicate_instruction_lines():
+    skill = load_markdown_with_frontmatter(SKILL_PATH)["body"]
+    for language in ("en", "ja"):
+        locale = Path(
+            f"guildbotics/templates/locales/commands/workflows/common.{language}.yml"
+        )
+        workflow = yaml.safe_load(locale.read_text(encoding="utf-8"))[language][
+            "workflow_contract"
+        ]
+        # Compare prose instructions, ignoring list markers and markup.
+        instructions = [
+            {
+                re.sub(r"^(?:- |\d+\. )", "", line.strip())
+                for line in body.splitlines()
+                if re.match(r"^(?:- |\d+\. )", line.strip())
+            }
+            for body in (skill, workflow, _ask(language)["body"])
+        ]
+        for left, right in combinations(instructions, 2):
+            assert not left & right, (language, left & right)
+
+
+def test_only_interactive_skill_offers_delegation():
+    skill = load_markdown_with_frontmatter(SKILL_PATH)["body"]
+    assert "run ask --person <person_id> --cwd <current_repo_path>" in skill
+    assert "guildbotics_execution_mode=delegated" in skill
+    assert "timeout" in skill and "background" in skill
+    bodies = [
+        capability_reference_text(),
+        *(_ask(language)["body"] for language in ("en", "ja")),
+        *(
+            _prompt_body(name, language)
+            for name in WORKFLOW_PROMPTS
+            for language in ("en", "ja")
+        ),
+    ]
+    assert all("run ask" not in body for body in bodies)
 
 
 def test_prompt_placeholders_match_across_languages():
@@ -86,6 +157,9 @@ def test_prompts_do_not_restate_member_reference_contracts():
         for language in ("en", "ja")
     }
     bodies[("skill", "en")] = load_markdown_with_frontmatter(SKILL_PATH)["body"]
+    bodies.update(
+        {("ask", language): _ask(language)["body"] for language in ("en", "ja")}
+    )
     for key, body in bodies.items():
         for sentinel in sentinels:
             assert sentinel not in body, (key, sentinel)

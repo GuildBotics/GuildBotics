@@ -392,6 +392,19 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
     return `/setup?${search.toString()}`;
   }
   if (
+    alert.code === "agent_environment_slot_blocked" ||
+    (alert.code === "agent_environment_unavailable" && alert.setting === "filesystem")
+  ) {
+    // A grant problem sits in the workspace's directory cards under the
+    // advanced intelligence settings.
+    const search = new URLSearchParams({
+      section: "intelligence",
+      advanced: "intelligence",
+      focus: "grants-device",
+    });
+    return `/setup?${search.toString()}`;
+  }
+  if (
     alert.code === "agent_environment_unavailable" ||
     alert.code === "agent_environment_tool_unavailable"
   ) {
@@ -404,16 +417,6 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
           ? "agent-environment-runtime"
           : "agent-environment-snapshot";
     return `/setup?${new URLSearchParams({ section: "intelligence", focus }).toString()}`;
-  }
-  if (alert.code === "agent_environment_slot_blocked") {
-    // A grant problem sits in the workspace's directory cards under the
-    // advanced intelligence settings.
-    const search = new URLSearchParams({
-      section: "intelligence",
-      advanced: "intelligence",
-      focus: "grants-device",
-    });
-    return `/setup?${search.toString()}`;
   }
   if (alert.code !== "credential_github" || !alert.person_id) {
     return "/setup";

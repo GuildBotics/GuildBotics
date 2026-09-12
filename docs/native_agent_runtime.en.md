@@ -83,6 +83,8 @@ dispatch are deferred rather than failed. Why a turn cannot start here (no
 runtime, an unreadable declaration, an unbuilt snapshot, no login) is shown
 in the same words in the alert band at the top of the screen.
 
+On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
+
 - **Working directory**: the turn's `cwd` (the member's clone for ticket work,
   `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
   read/write at the same path it has on the host. The workspace's

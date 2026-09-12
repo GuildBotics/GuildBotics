@@ -1,7 +1,9 @@
 ja:
+  command_workspace_changing: "Desktop のワークスペースを切り替えています。完了後にもう一度実行してください。"
   # errors.en.yml と 1 key = 1 文で対応する。片方だけの変更は
   # tests/guildbotics/app_api/test_api_error_messages.py が検出する。
   invalid_session_token: "セッショントークンが不正です。"
+  command_workspace_changed: "コマンドの開始前に Desktop のワークスペースが変わりました。コマンドをもう一度実行してください。"
   validation_error: "リクエストの検証に失敗しました。"
   config_busy: "同期がこのワークスペースへ書き込み中のため、保存されませんでした。少し待ってから、もう一度実行してください。"
   config_changed: "この画面はより新しい変更より前に読み込まれていたため、保存されませんでした。画面を読み込み直してから、もう一度変更してください。"

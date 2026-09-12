@@ -379,7 +379,11 @@ def create_app(
 
     @app.get("/health", response_model=HealthResponse, responses=error_responses)
     def health(_: None = Depends(require_token)) -> HealthResponse:
-        return HealthResponse(status="ok")
+        return HealthResponse(
+            status="ok",
+            service_instance_id=system_service_run_id,
+            workspace=app_runtime.get_config_status().workspace,
+        )
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:

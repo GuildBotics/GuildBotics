@@ -93,7 +93,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
-| [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
+| [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics secrets delete`](#guildbotics-secrets-delete) | Delete a stored secret. |
 | [`guildbotics secrets export`](#guildbotics-secrets-export) | Export stored secrets in dotenv format (exchange format only). |
@@ -132,7 +132,7 @@ guildbotics [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics hub`](#guildbotics-hub) | Host a synchronization hub for GuildBotics workspaces on this machine. |
 | [`guildbotics kill`](#guildbotics-kill) | Immediately force kill a CLI-managed background service. |
 | [`guildbotics member`](#guildbotics-member) | Operate as a configured GuildBotics member. |
-| [`guildbotics run`](#guildbotics-run) | Run the GuildBotics application. |
+| [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
 | [`guildbotics start`](#guildbotics-start) | Start GuildBotics runtimes (scheduler and event listener runner). |
 | [`guildbotics stop`](#guildbotics-stop) | Gracefully stop a CLI-managed background service. |
@@ -1458,7 +1458,7 @@ guildbotics member task status [OPTIONS]
 
 ## `guildbotics run`
 
-Run the GuildBotics application.
+Run a command through the matching Desktop when open, otherwise locally.
 
 ```text
 guildbotics run [OPTIONS] CUSTOM_COMMAND [COMMAND_ARGS]...

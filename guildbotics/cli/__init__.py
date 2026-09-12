@@ -13,6 +13,7 @@ from pathlib import Path
 
 import click
 
+from guildbotics.cli.desktop_commands import run_on_desktop
 from guildbotics.cli.diagnostics import diagnostics
 from guildbotics.cli.environment import environment
 from guildbotics.cli.hub import hub
@@ -396,10 +397,23 @@ def run(
     custom_command: str,
     command_args: tuple[str, ...],
 ) -> None:
-    """Run the GuildBotics application."""
-    _apply_selected_workspace()
+    """Run a command through the matching Desktop when open, otherwise locally."""
+    selected_workspace = _apply_selected_workspace()
     command_cwd = Path(cwd).expanduser().resolve(strict=False) if cwd else None
     message = "" if sys.stdin.isatty() else sys.stdin.read()
+    command_name, inline_person = _parse_command_spec(custom_command)
+    output = run_on_desktop(
+        selected_workspace,
+        command_name,
+        command_args,
+        person_option or inline_person,
+        message,
+        command_cwd or Path.cwd(),
+    )
+    if output is not None:
+        if output:
+            click.echo(output)
+        return
     asyncio.run(
         _run_custom_command(
             custom_command,

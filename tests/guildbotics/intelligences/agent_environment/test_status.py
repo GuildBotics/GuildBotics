@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+import errno
 
 import pytest
 
 from guildbotics.intelligences.agent_environment import status as module
+from guildbotics.intelligences.agent_runtime.environment import _ready
+from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
 )
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_environment.contract import (
+    DocumentGrant,
+    SharedGrants,
+    LocalGrants,
+    LocalPathGrant,
+)
 from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
@@ -22,7 +31,7 @@ from guildbotics.utils.i18n_tool import t
 
 
 @pytest.fixture
-def device(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
     """A device whose parts a test can swap one at a time."""
     parts: dict[str, object] = {
         "health": AgentEnvironmentHealth(True, "", "0.6.17"),
@@ -31,6 +40,9 @@ def device(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         "nameservers": ("192.168.3.1",),
         "logged_in": {"codex"},
     }
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / ".guildbotics/config"))
 
     def load() -> ToolchainDeclaration:
         declaration = parts["declaration"]
@@ -148,6 +160,10 @@ def test_the_refusal_is_the_first_thing_a_turn_would_stop_on(
     assert (status.refusal, status.setting) == (expected, setting)
     assert not status.ready
 
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        _ready("codex")
+    assert str(exc_info.value) == status.refusal
+
 
 def test_an_unreadable_declaration_leaves_no_snapshot_or_dns_to_report(device) -> None:
     device["declaration"] = ToolchainError("agent_environment.yml: bad")
@@ -167,3 +183,132 @@ def test_a_build_this_process_just_started_reads_as_building(device) -> None:
     # A snapshot that is already there is not un-built by a stray build.
     device["snapshot"] = SnapshotStatus("ready", "guildbotics-abc", Path("/snap"))
     assert device_status(building_here=True).snapshot.state == "ready"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
+@pytest.mark.parametrize("app", ["Visual Studio Code", ""])
+def test_unreadable_exchange_directory_refuses_with_macos_guidance(
+    device, monkeypatch, tmp_path, error_number, app
+):
+    target = tmp_path / "Documents/GuildBotics"
+    target.mkdir(parents=True)
+    original = module.os.scandir
+
+    def scandir(path):
+        if Path(path) == target:
+            raise PermissionError(error_number, "denied", str(path))
+        return original(path)
+
+    monkeypatch.setattr(module.os, "scandir", scandir)
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module, "launching_app_name", lambda: app)
+
+    status = device_status()
+    assert status.setting == "filesystem"
+    assert status.refusal == t(
+        "intelligences.agent_environment.filesystem.macos_documents",
+        app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
+        if app
+        else "",
+    )
+    assert not status.ready
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        _ready("codex")
+    assert str(exc_info.value) == status.refusal
+
+
+def test_grant_preflight_checks_parents_without_creating_directories(
+    device, monkeypatch, tmp_path
+):
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    original = module.os.scandir
+
+    def scandir(path):
+        if Path(path) == documents:
+            raise PermissionError(errno.EACCES, "denied", str(path))
+        return original(path)
+
+    monkeypatch.setattr(module.os, "scandir", scandir)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    status = device_status()
+    assert status.setting == "filesystem"
+    assert status.refusal == t(
+        "intelligences.agent_environment.filesystem.permission_denied", path=documents
+    )
+    assert not (documents / "GuildBotics").exists()
+
+
+@pytest.mark.parametrize("scope", ["document", "local", "denied"])
+def test_preflight_checks_all_open_grants(device, monkeypatch, tmp_path, scope):
+    target = tmp_path / "extra"
+    target.mkdir()
+    monkeypatch.setattr(
+        module,
+        "load_shared_grants",
+        lambda: SharedGrants(
+            documents=[DocumentGrant(path="extra", access="read")]
+            if scope == "document"
+            else []
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_local_grants",
+        lambda: LocalGrants(
+            paths=[LocalPathGrant(path=str(target), access="read")]
+            if scope != "document"
+            else [],
+            deny=[str(target)] if scope == "denied" else [],
+        ),
+    )
+    original = module.os.scandir
+
+    def scandir(path):
+        if Path(path) == target:
+            raise PermissionError(errno.EACCES, "denied", str(path))
+        return original(path)
+
+    monkeypatch.setattr(module.os, "scandir", scandir)
+    status = device_status()
+    assert status.ready == (scope == "denied")
+    if scope != "denied":
+        assert status.setting == "filesystem"
+        assert str(target) in status.refusal
+
+
+@pytest.mark.parametrize("existing_file", [False, True])
+def test_preflight_leaves_missing_local_grants_for_their_row(
+    device, monkeypatch, tmp_path, existing_file
+):
+    target = tmp_path / "local-grant"
+    if existing_file:
+        target.write_text("not a directory")
+    monkeypatch.setattr(
+        module,
+        "load_local_grants",
+        lambda: LocalGrants(paths=[LocalPathGrant(path=str(target), access="read")]),
+    )
+    status = device_status()
+    assert status.ready
+    assert not status.access.paths[0].present
+
+
+def test_preflight_reports_filesystem_changes_during_enumeration(
+    device, monkeypatch, tmp_path
+):
+    target = tmp_path / "Documents/GuildBotics"
+    target.mkdir(parents=True)
+    error = NotADirectoryError(errno.ENOTDIR, "changed into a file", str(target))
+
+    def scandir(path):
+        raise error
+
+    monkeypatch.setattr(module.os, "scandir", scandir)
+    status = device_status()
+    assert status.setting == "filesystem"
+    assert status.refusal == t(
+        "intelligences.agent_environment.filesystem.unavailable",
+        path=target,
+        error=error,
+    )

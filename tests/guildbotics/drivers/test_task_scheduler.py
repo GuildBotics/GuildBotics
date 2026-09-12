@@ -6,6 +6,7 @@ import pytest
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.observability import current_trace
+from guildbotics.utils.i18n_tool import t
 
 EXPECTED_ROUTINE_CALL_COUNT = 2
 
@@ -203,8 +204,10 @@ def test_routine_ticket_workflow_runs_without_caller_trace(monkeypatch) -> None:
     assert work_ids == [work_id]
 
 
+@pytest.mark.parametrize("setting", ["building", "filesystem"])
 def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
     monkeypatch,
+    setting,
 ) -> None:
     person = _Person(["workflows/ticket_driven_workflow"])
     warnings: list[str] = []
@@ -220,7 +223,11 @@ def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
         return True
 
     monkeypatch.setattr(scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow)
-    reason = "The agent environment is being built on this device; try again when it is ready."
+    reason = (
+        t("intelligences.agent_environment.filesystem.macos_documents", app="")
+        if setting == "filesystem"
+        else t("intelligences.agent_environment.snapshot.building")
+    )
     _set_environment_refusal(monkeypatch, reason)
 
     index, errors, next_at, should_stop = scheduler._process_routine_tasks(

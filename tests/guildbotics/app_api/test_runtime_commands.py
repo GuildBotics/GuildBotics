@@ -1446,6 +1446,47 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
 
 
 @pytest.mark.asyncio
+async def test_run_command_rejects_workspace_changed_after_discovery(
+    monkeypatch, tmp_path
+):
+    runtime = AppRuntime(EventBus())
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda *a, **k: pytest.fail("must not resolve a member"),
+    )
+    with pytest.raises(AppApiError) as exc_info:
+        await runtime.run_command(
+            CommandRunRequest(command="ask", expected_workspace=tmp_path / "other")
+        )
+    assert exc_info.value.code == "command_workspace_changed"
+    assert exc_info.value.status_code == HTTP_CONFLICT
+
+
+def test_workspace_switch_cannot_interrupt_an_accepted_command(tmp_path):
+    runtime = AppRuntime(EventBus())
+    runtime._reserve_command("inflight-id")
+    with pytest.raises(AppApiError) as exc_info:
+        runtime.set_workspace(tmp_path)
+    assert exc_info.value.code == "workspace_switch_blocked_by_active_work"
+    assert exc_info.value.status_code == HTTP_CONFLICT
+    runtime._release_command("inflight-id")
+
+
+def test_command_reservation_does_not_wait_for_workspace_switch():
+    from concurrent.futures import ThreadPoolExecutor
+
+    runtime = AppRuntime(EventBus())
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with runtime._lock:
+            future = executor.submit(runtime._reserve_command, "incoming")
+            with pytest.raises(AppApiError) as exc_info:
+                future.result(timeout=1)
+    assert exc_info.value.code == "command_workspace_changing"
+    assert exc_info.value.status_code == HTTP_CONFLICT
+
+
+@pytest.mark.asyncio
 async def test_run_command_rejects_person_lease_conflict_with_http_409(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

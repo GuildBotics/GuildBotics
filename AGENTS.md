@@ -238,7 +238,7 @@ help / docstring が正であり、member コマンドの一行説明は
 
 補足（実装ポイント）:
 
-- `run` は `--person` または `<command>@<person_id>` でメンバー指定可能
+- `run` は `--person` または `<command>@<person_id>` でメンバー指定可能。host CLI は同じ workspace の Desktop Local API が利用可能なら実行を委譲し、それ以外は手元で実行する。発見 record は `utils/local_api.py`、HTTP 委譲は `cli/desktop_commands.py`。POST 後は手元で再試行しない。workspace の一致は health と command 予約時に検証し、実行中の workspace 切替を拒否する
 - `workspace use` は active workspace を `~/.guildbotics/data/active-workspace.json` に保存する
 - `member` group は `--workspace <dir>` を受け取り、AI CLIツール / skill 経由の member capability の入口になる。サブグループは `guildbotics/cli/member.py` にあり、`memory`（record/recall/get/update/touch/archive/promote）、`chat`（identity/inspect/post/reply/reaction/noop/complete）、`git`（prepare/commit/push/publish）、`github`（issue/pr/reaction）、`context`、`help`
 - `start` と Desktop Service は共通の OS advisory lock
@@ -374,6 +374,7 @@ member 向けエージェント指示（SKILL / workflow プロンプト）は�
 - workflow 共通の封筒（実行モードマーカー、isolated workspace、complete 必須、AgentResponse 規定）は `guildbotics/templates/locales/commands/workflows/common.{en,ja}.yml` の `workflow_contract` に置き、各 workflow が `{workflow_contract}` としてテンプレートへ注入する
 - trigger 固有契約（完了コマンドの具体形、判断ポリシー）だけを `functions/handle_github_ticket` / `functions/handle_chat_event` に書く
 - 対話封筒（共有ワークスペース、`--workspace-mode current`、対話 DOD）だけを `skills/guildbotics/SKILL.md` に書く
+- 単発委任の封筒（現在の cwd、依頼範囲内だけの作業、stdout での結果返却）は `guildbotics/templates/commands/ask.{en,ja}.md` に置く。host から委任を起動する案内は対話スキルに置き、workflow や member 共通カタログには置かない
 - 同じ文が 2 ファイル以上に現れたら、より深い層へ移す。層境界と en/ja 整合は `tests/guildbotics/templates/commands/functions/test_prompt_layer_boundaries.py` が担保する
 
 ## 開発時の基本コマンド（CI 準拠）

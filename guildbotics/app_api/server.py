@@ -5,12 +5,14 @@ import contextlib
 import os
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
 
 from guildbotics.app_api.api import create_app
 from guildbotics.utils.fileio import apply_workspace_root, get_workspace_root
+from guildbotics.utils.local_api import LocalApiEndpoint
 from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.workspace_state import (
     apply_workspace_environment,
@@ -26,7 +28,7 @@ def _parent_is_alive(parent_pid: int) -> bool:
     return pid_exists(parent_pid)
 
 
-def _watch_parent(parent_pid: int) -> None:
+def _watch_parent(parent_pid: int, on_exit: Callable[[], None]) -> None:
     """Exit the sidecar once the parent (desktop app) process is gone.
 
     The packaged sidecar is a PyInstaller one-file binary, so the desktop host
@@ -38,11 +40,13 @@ def _watch_parent(parent_pid: int) -> None:
     """
     while True:
         if not _parent_is_alive(parent_pid):
+            with contextlib.suppress(OSError):
+                on_exit()
             os._exit(0)
         time.sleep(1.0)
 
 
-def _start_parent_watchdog() -> None:
+def _start_parent_watchdog(on_exit: Callable[[], None]) -> None:
     raw_pid = os.getenv("GUILDBOTICS_APP_API_PARENT_PID")
     if not raw_pid:
         return
@@ -53,7 +57,10 @@ def _start_parent_watchdog() -> None:
     if parent_pid <= 1:
         return
     thread = threading.Thread(
-        target=_watch_parent, args=(parent_pid,), name="parent-watchdog", daemon=True
+        target=_watch_parent,
+        args=(parent_pid, on_exit),
+        name="parent-watchdog",
+        daemon=True,
     )
     thread.start()
 
@@ -87,9 +94,10 @@ def _read_session_token() -> str:
 
     The token is never accepted on the command line and never printed: argv is
     world-readable through ``ps`` on a shared host, and a printed token spreads
-    into logs and screenshots. It is popped rather than read because this
-    process spawns AI CLI agents from a copy of ``os.environ``: a leftover
-    token would hand every agent write access to the Local API. Every launcher
+    into logs and screenshots. Host CLI callers discover it through a private
+    device-local file. AI CLI agents run in microVMs without the host environment
+    or machine-state directory mounted. Consume the launch-only variable so it
+    does not linger in unrelated host subprocesses. Every launcher
     in this repository mints its own token, so a missing one is a wiring bug
     rather than something to paper over with a generated value.
     """
@@ -119,21 +127,41 @@ def main() -> None:
 
     token = _read_session_token()
     allowed_origins = _read_allowed_origins()
-    _start_parent_watchdog()
     _restore_active_workspace()
 
-    uvicorn.run(
-        create_app(
-            session_token=token,
-            allowed_origins=allowed_origins,
-            restore_workspace_environment=True,
-        ),
+    app = create_app(
+        session_token=token,
+        allowed_origins=allowed_origins,
+        restore_workspace_environment=True,
+    )
+    endpoint = LocalApiEndpoint(
+        port=args.port,
+        token=token,
+        pid=os.getpid(),
+        service_instance_id=app.state.runtime.system_service_run_id,
+        workspace=app.state.runtime.get_config_status().workspace,
+    )
+
+    def workspace_changed(workspace: Path) -> None:
+        endpoint.workspace = workspace
+        endpoint.publish()
+
+    app.state.runtime.on_workspace_changed = workspace_changed
+    config = uvicorn.Config(
+        app,
         host=args.host,
         port=args.port,
         access_log=False,
-        # uvloop hands subprocesses a socketpair for stdio, and bun/node based
-        # agent CLIs (claude, agy, copilot) can exit before flushing a socket
-        # stdout, silently truncating what this process reads from them. The
-        # standard loop uses a pipe, which those runtimes flush synchronously.
+        # uvloop gives bun/node CLIs socketpair stdio, which can truncate their
+        # output on exit. The standard loop uses synchronously flushed pipes.
         loop="asyncio",
     )
+    # A failed bind must not replace a running Desktop's discovery record.
+    with config.bind_socket() as sock:
+        endpoint.port = sock.getsockname()[1]
+        endpoint.publish()
+        try:
+            _start_parent_watchdog(endpoint.discard)
+            uvicorn.Server(config).run(sockets=[sock])
+        finally:
+            endpoint.discard()

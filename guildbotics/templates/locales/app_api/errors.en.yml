@@ -1,8 +1,10 @@
 en:
+  command_workspace_changing: "The Desktop workspace is being switched. Try again after it finishes."
   # One key per sentence. A code that answers several situations nests one
   # key per situation; the pair of this file and errors.ja.yml is what keeps
   # the two languages saying the same thing.
   invalid_session_token: "Invalid session token."
+  command_workspace_changed: "The Desktop workspace changed before the command started. Run the command again."
   validation_error: "Request validation failed."
   config_busy: "Synchronization is still writing to this workspace, so nothing was saved. Try again in a moment."
   config_changed: "This screen was loaded before a more recent change, so nothing was saved. Reload it and make the change again."

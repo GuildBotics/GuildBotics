@@ -55,6 +55,7 @@ Treat the user's currently open repository as the shared pair-programming worksp
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
 - Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`.
+- To delegate a one-off task to another member, run `guildbotics run ask --person <person_id> --cwd <current_repo_path>` using the OS-specific executable above; write the request to a temporary file under the same rules as `--content-file`, feed it through stdin, and relay the returned output in the active member's voice. Allow several minutes with a longer tool timeout or background execution, wait for completion, and relay any environment/login refusal as returned. Open GuildBotics Desktop with the same workspace before requesting the task: when it is open, it starts the command and its isolated environment. If no matching Desktop is available, the command runs locally. This delegation runs from the host; do not invoke it inside an isolated agent environment.
 - Before a command that writes free-form content, create a UTF-8 file in the OS temporary directory, outside the repository and worktree, using a unique file name. Write the exact content with a file-editing capability instead of an inline shell literal, pass the path as one argument to `--content-file`, and delete the file even when the command fails. Never create or stage this file inside the repository.
 - On macOS/Linux, use:
 
@@ -83,7 +84,7 @@ Then write the final reply in the active member's voice.
 
 When the user asks the member to remember, correct, promote, or archive memory, do it through `guildbotics member memory ... --person <person_id>` instead of asking the user to edit files. Policy memory still requires the user's instruction or approval before using `--policy-approved`.
 
-## Workflow Marker Guardrail
+## Execution Mode Guardrail
 
-If a prompt contains `guildbotics_execution_mode=workflow`, that prompt is the primary contract for the run.
+If a prompt contains `guildbotics_execution_mode=workflow` or `guildbotics_execution_mode=delegated`, that prompt is the primary contract for the run.
 Do not apply this skill's Workspace Rules or Definition of Done to that run.

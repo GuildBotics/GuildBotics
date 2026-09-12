@@ -978,7 +978,7 @@ export type EnvironmentAccessStatus = {
 // Which part of the device keeps every turn from starting: the runtime it
 // lacks, the shared declaration (or the resolvers it names), the snapshot to
 // build, or a build to wait for.
-export type DeviceSetting = "runtime" | "declaration" | "snapshot" | "building";
+export type DeviceSetting = "runtime" | "declaration" | "snapshot" | "building" | "filesystem";
 
 // Which setting an environment problem is about: a part of the device, one
 // tool's row in the environment card, or the directory grants.

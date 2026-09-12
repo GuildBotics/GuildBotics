@@ -1,12 +1,19 @@
 import textwrap
+import json
+import os
 from pathlib import Path
 
 import click
 import pytest
+import httpx
+from click.testing import CliRunner
 
 import guildbotics.cli as cli_module
 from guildbotics.cli import _parse_command_spec
 from guildbotics.commands.errors import CommandError
+from guildbotics.cli import desktop_commands
+from guildbotics.utils import local_api
+from guildbotics.utils.local_api import LocalApiEndpoint
 from guildbotics.drivers.command_runner import (
     CommandRunner,
     PersonExecutionNotAllowedError,
@@ -43,6 +50,191 @@ def test_parse_command_spec_without_person():
     name, person = _parse_command_spec(" summarize ")
     assert name == "summarize"
     assert person is None
+
+
+@pytest.fixture
+def desktop_route(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_api, "endpoint_path", lambda: tmp_path / "app-api.json")
+    monkeypatch.setattr(cli_module, "_apply_selected_workspace", lambda: tmp_path)
+    endpoint = LocalApiEndpoint(
+        port=8765,
+        token="test-token",
+        pid=os.getpid(),
+        service_instance_id="instance",
+        workspace=tmp_path,
+    )
+    endpoint.publish()
+    calls = []
+
+    async def local(*args):
+        calls.append(("local", args))
+        click.echo("local output")
+
+    monkeypatch.setattr(cli_module, "_run_custom_command", local)
+    client_type = httpx.Client
+
+    def respond(handler):
+        def request(req):
+            calls.append((req.url.path, req))
+            assert req.headers["X-GuildBotics-Session-Token"] == "test-token"
+            return handler(req)
+
+        monkeypatch.setattr(
+            desktop_commands.httpx,
+            "Client",
+            lambda **kwargs: client_type(
+                **kwargs, transport=httpx.MockTransport(request)
+            ),
+        )
+
+    def healthy(req):
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "service_instance_id": "instance",
+                "workspace": str(tmp_path),
+            },
+        )
+
+    return endpoint, calls, respond, healthy
+
+
+@pytest.mark.parametrize(
+    "person_args", [["ask@alice"], ["ask@bob", "--person", "alice"]]
+)
+def test_cli_delegates_stdin_args_person_and_absolute_cwd(
+    desktop_route, tmp_path, person_args
+):
+    endpoint, calls, respond, healthy = desktop_route
+
+    def handler(req):
+        if req.url.path == "/health":
+            return healthy(req)
+        assert json.loads(req.content) == {
+            "command": "ask",
+            "args": ["topic=review", "value"],
+            "person": "alice",
+            "message": "日本語\nreview",
+            "cwd": str(tmp_path),
+            "expected_workspace": str(tmp_path),
+        }
+        assert all(value is None for value in req.extensions["timeout"].values())
+        return httpx.Response(200, json={"trace_id": "run", "output": "review output"})
+
+    respond(handler)
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["run", *person_args, "--cwd", str(tmp_path), "topic=review", "value"],
+        input="日本語\nreview",
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "review output\n"
+    assert [path for path, _ in calls] == ["/health", "/commands/run"]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "missing",
+        "dead",
+        "workspace",
+        "health_error",
+        "connection",
+        "instance",
+        "malformed",
+    ],
+)
+def test_cli_runs_locally_only_when_no_matching_desktop(
+    desktop_route, monkeypatch, state
+):
+    endpoint, calls, respond, healthy = desktop_route
+    if state == "missing":
+        local_api.endpoint_path().unlink()
+    if state == "dead":
+        monkeypatch.setattr(desktop_commands, "pid_exists", lambda pid: False)
+
+    def handler(req):
+        if state == "connection":
+            raise httpx.ConnectError("not listening")
+        if state == "health_error":
+            return httpx.Response(401)
+        if state == "malformed":
+            return httpx.Response(200, json=[])
+        payload = healthy(req).json()
+        payload["workspace" if state == "workspace" else "service_instance_id"] = (
+            "other"
+        )
+        return httpx.Response(200, json=payload)
+
+    respond(handler)
+    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "local output\n"
+    assert calls[-1][0] == "local"
+    assert not any(path == "/commands/run" for path, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "failure", ["command_already_running", "work_rejected", "connection"]
+)
+def test_cli_never_runs_locally_after_post(desktop_route, failure):
+    endpoint, calls, respond, healthy = desktop_route
+
+    def handler(req):
+        if req.url.path == "/health":
+            return healthy(req)
+        if failure == "connection":
+            raise httpx.ReadError("connection lost after sending")
+        return httpx.Response(
+            409,
+            json={
+                "code": failure,
+                "message": "実行中のため開始できません",
+                "context": {},
+            },
+        )
+
+    respond(handler)
+    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    assert result.exit_code != 0
+    assert (
+        "実行中のため開始できません" in result.stderr
+        if failure != "connection"
+        else "connection lost" in result.stderr
+    )
+    assert not any(path == "local" for path, _ in calls)
+
+
+def test_cli_reports_plain_http_error_without_retry(desktop_route):
+    endpoint, calls, respond, healthy = desktop_route
+    respond(
+        lambda req: (
+            healthy(req)
+            if req.url.path == "/health"
+            else httpx.Response(500, text="Internal Server Error")
+        )
+    )
+    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    assert result.exit_code == 1
+    assert "HTTP 500: Internal Server Error" in result.stderr
+    assert not any(path == "local" for path, _ in calls)
+
+
+def test_cli_preserves_default_cwd_and_empty_desktop_output(desktop_route):
+    endpoint, calls, respond, healthy = desktop_route
+
+    def handler(req):
+        if req.url.path == "/health":
+            return healthy(req)
+        assert json.loads(req.content)["cwd"] == str(Path.cwd())
+        return httpx.Response(200, json={"trace_id": "run", "output": ""})
+
+    respond(handler)
+    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    assert result.exit_code == 0, result.output
+    assert result.stdout == ""
+    assert not any(path == "local" for path, _ in calls)
 
 
 def _team(*members: Person, default_person_id: str = "") -> Team:

@@ -23,6 +23,9 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_network_policy,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment.status import (
+    filesystem_permission_problem,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
@@ -772,10 +775,14 @@ class CliAgentBrain(Brain):
                     network=self.executable_info.network,
                     access=resolve_access(load_shared_grants(), load_local_grants()),
                 )
-            except AccessContractError as exc:
+            except (AccessContractError, PermissionError) as exc:
                 return CliAgentExecutionResult(
                     stdout="",
-                    stderr=str(exc),
+                    stderr=(
+                        filesystem_permission_problem(Path(exc.filename or cwd))
+                        if isinstance(exc, PermissionError)
+                        else str(exc)
+                    ),
                     returncode=1,
                     error_category="configuration",
                     error_details={"cli_agent": adapter_name},
