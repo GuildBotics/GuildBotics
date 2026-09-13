@@ -21,6 +21,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import suppress
@@ -74,15 +75,15 @@ def _kill_command_tree(process: subprocess.Popen[str]) -> None:
     Killing only ``git`` would orphan an ssh still blocked in name
     resolution, and that orphan keeps the hang alive invisibly.
     """
-    if os.name == "posix":
-        with suppress(OSError):
-            os.killpg(process.pid, signal.SIGKILL)
-    else:
+    if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(process.pid)],
             capture_output=True,
             check=False,
         )
+    else:
+        with suppress(OSError):
+            os.killpg(process.pid, signal.SIGKILL)
     with suppress(OSError):
         process.kill()
     process.wait()

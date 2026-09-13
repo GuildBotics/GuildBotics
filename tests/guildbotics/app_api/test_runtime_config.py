@@ -540,6 +540,7 @@ def test_set_workspace_env_does_not_override_home_state_root(
     monkeypatch.setenv("USERPROFILE", original_userprofile)
     monkeypatch.setenv("HOMEDRIVE", original_homedrive)
     monkeypatch.setenv("HOMEPATH", original_homepath)
+    machine_state_dir = Path.home() / ".guildbotics/data"
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
         runtime, "stop_scheduler", lambda *, force=False: _idle_runtime_status()
@@ -566,10 +567,8 @@ def test_set_workspace_env_does_not_override_home_state_root(
     assert os.environ["USERPROFILE"] == original_userprofile
     assert os.environ["HOMEDRIVE"] == original_homedrive
     assert os.environ["HOMEPATH"] == original_homepath
-    assert status.machine_state_dir == isolated_home / "home/.guildbotics/data"
-    assert active_workspace_file() == (
-        isolated_home / "home/.guildbotics/data/active-workspace.json"
-    )
+    assert status.machine_state_dir == machine_state_dir
+    assert active_workspace_file() == machine_state_dir / "active-workspace.json"
 
 
 def test_get_context_keeps_selected_workspace_root(

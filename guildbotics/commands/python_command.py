@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import inspect
 import sys
@@ -75,8 +76,24 @@ class PythonCommand(CommandBase):
         return CommandOutcome(result=func_result, text_output=text_output)
 
 
+class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
+    """Source loader that never writes a bytecode cache beside the source.
+
+    Command files live in the synchronized ``config/commands/`` tree, where a
+    ``__pycache__/*.pyc`` is a binary file the shared-file validation refuses.
+    Running a command would therefore leave the user an unsendable change they
+    never wrote. Discarding the cache keeps the generated artifact from
+    existing at all; the cost is recompiling the command source on each run.
+    """
+
+    def set_data(self, path: str, data: Any, *, _mode: int = 0o666) -> None:
+        """Discard the bytecode instead of writing it next to the source."""
+
+
 def _load_python_module(path: Path) -> Any:
-    spec = importlib.util.spec_from_file_location(path.stem, path)
+    spec = importlib.util.spec_from_file_location(
+        path.stem, path, loader=_NoBytecodeLoader(path.stem, str(path))
+    )
     if spec is None or spec.loader is None:
         raise CommandError(f"Unable to load python command module from '{path}'.")
     module = importlib.util.module_from_spec(spec)

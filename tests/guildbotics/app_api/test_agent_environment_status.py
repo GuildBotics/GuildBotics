@@ -376,14 +376,19 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     assert [
         (g.path, g.grant, g.present, g.builtin) for g in status.access.documents
     ] == [
-        ("$HOME/Documents/GuildBotics", "Documents/GuildBotics", False, True),
-        ("$HOME/tools", "tools", True, False),
-        ("$HOME/Projects/out", "Projects/out", False, False),
+        (
+            str(Path("$HOME/Documents/GuildBotics")),
+            "Documents/GuildBotics",
+            False,
+            True,
+        ),
+        (str(Path("$HOME/tools")), "tools", True, False),
+        (str(Path("$HOME/Projects/out")), "Projects/out", False, False),
     ]
     assert not (home / "Projects/out").exists()
     assert [(d.path, d.builtin) for d in status.access.denied] == [
-        ("$HOME/.ssh", True),
-        ("$HOME/.local/share/x", False),
+        (str(Path("$HOME/.ssh")), True),
+        (str(Path("$HOME/.local/share/x")), False),
     ]
     # The environment enforces every network setting the same way, so no
     # slot is refused for what its tool could not do natively.
@@ -409,10 +414,11 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
 def test_an_unresolvable_local_path_is_reported_on_every_slot(
     monkeypatch, home: Path
 ) -> None:
+    missing = home.parent / "nowhere"
     monkeypatch.setattr(
         device_module,
         "load_local_grants",
-        lambda: LocalGrants(paths=[LocalPathGrant(path="/opt/nowhere", access="read")]),
+        lambda: LocalGrants(paths=[LocalPathGrant(path=str(missing), access="read")]),
     )
     monkeypatch.setattr(
         module,
@@ -426,15 +432,13 @@ def test_an_unresolvable_local_path_is_reported_on_every_slot(
 
     # The row is shown absent, and every applied slot names it as the reason.
     assert status.access.problem == ""
-    assert [(g.path, g.present) for g in status.access.paths] == [
-        ("/opt/nowhere", False)
-    ]
+    assert [(g.path, g.present) for g in status.access.paths] == [(str(missing), False)]
     assert [(p.setting, p.reason) for p in status.members[0].slots[0].problems] == [
         (
             "grants",
             t(
                 "intelligences.agent_environment.grants.local_path_missing",
-                path="/opt/nowhere",
+                path=str(missing),
             ),
         )
     ]

@@ -3737,9 +3737,9 @@ function MembersSection({
           </InfoCallout>
         ) : null}
         {displayedMembers.length > 0 ? (
-          <Stack gap={6}>
+          <Stack gap={6} role="list" aria-label={t("setup.members.title")}>
             {displayedMembers.map((member) => (
-              <Group key={member.person_id} justify="space-between" wrap="nowrap">
+              <Group key={member.person_id} role="listitem" justify="space-between" wrap="nowrap">
                 <Group gap="xs" align="center" wrap="nowrap" style={{ minWidth: 0 }}>
                   <Avatar
                     src={memberAvatarUrl(member.person_id, avatarTimestamp)}

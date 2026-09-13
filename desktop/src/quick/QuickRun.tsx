@@ -123,6 +123,13 @@ export function QuickRun(props: QuickRunProps) {
   // Watching is scoped to a visible window; the hidden webview keeps running.
   const [visible, setVisible] = useState(false);
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
   const messageRef = useRef<HTMLTextAreaElement>(null);
   const selected = options.find((option) => option.command === command);
 
@@ -439,7 +446,6 @@ export function QuickRun(props: QuickRunProps) {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
     } catch {
       selfCopied.current = null;
     }

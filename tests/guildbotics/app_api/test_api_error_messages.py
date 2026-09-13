@@ -34,7 +34,7 @@ _CALL_NAMES = {"AppApiError", "_error", "_reporting", "api_error_message"}
 def _collect_used_keys() -> set[str]:
     keys: set[str] = set()
     for path in APP_API.glob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -72,7 +72,9 @@ def _flatten(prefix: str, data: dict) -> dict[str, str]:
 
 
 def _entries(language: str) -> dict[str, str]:
-    data = yaml.safe_load((LOCALES / f"errors.{language}.yml").read_text())
+    data = yaml.safe_load(
+        (LOCALES / f"errors.{language}.yml").read_text(encoding="utf-8")
+    )
     return _flatten("", data[language])
 
 
