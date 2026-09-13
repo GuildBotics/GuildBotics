@@ -61,12 +61,31 @@ bindします）。
 環境の中身（ベースイメージ、GuildBoticsが版を固定して導入するプロバイダCLI、
 `config/intelligences/agent_environment.yml`で宣言した追加パッケージ）はsnapshotとして端末ごとに
 ビルドし、宣言と一致しなければ再ビルドします。Desktopの **LLM・AI CLIツール** の
-「エージェント隔離環境」カードがruntime、snapshotの状態（ビルドボタンつき）、DNSリゾルバ、
-ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` / `login`が
-同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
+「エージェント隔離環境」カードがruntime、ベースイメージ、snapshotの状態（ビルドボタンつき）、
+DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
+`login`が同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
 自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
-見送りにします。turnが起動できない理由（runtime無し、宣言不正、snapshot未ビルド、
-未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
+見送りにします。turnが起動できない理由（runtime無し、宣言不正、ベースイメージ未読み込み、
+snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
+
+ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。apt / npm /
+uv toolの3枠では入れられないツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
+ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
+アーカイブを各端末で`guildbotics environment image load`で読み込み、**LLM・AI CLIツール → 詳細設定**
+の「環境の宣言」でこの端末に読み込み済みのimageから選ぶか、`guildbotics environment image declare`で
+宣言します。imageはCPUアーキテクチャごとに別物（環境は端末のCPUをそのまま使う）なので、宣言には
+参照名と、アーキテクチャごとのimage configのdigest（save / loadを跨いで同じになる識別子。
+`docker images`のIMAGE IDと同じ）が入ります。`image declare --digest amd64=sha256:…`のように、
+buildした端末が全アーキテクチャのdigestをまとめて宣言でき、他の端末はアーカイブを読み込むだけで
+揃います（`image load`は、この端末のアーキテクチャ向けでないアーカイブを拒否します）。端末は参照名で
+読み込んだimageで動きます: 何も読み込んでいなければturnを拒否し、宣言と違うdigest（または自分の
+アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
+status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
+digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
+するか、buildの手順が使うもの（Debianの`apt`、Node.jsと`npm`、`curl`と`tar`）を備えていれば
+何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
+imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
+（`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください。開発中（`tauri dev`）は、起動に使ったターミナルや Visual Studio Code が対象です。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と Desktop に同じ拒否理由を表示します。
 

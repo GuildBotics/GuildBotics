@@ -24,6 +24,10 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics diagnostics traces`](#guildbotics-diagnostics-traces) | List recorded executions, newest first. |
 | [`guildbotics environment`](#guildbotics-environment) | Build and log in to the isolated agent environment on this device. |
 | [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
+| [`guildbotics environment image`](#guildbotics-environment-image) | The base images this device holds for the environment. |
+| [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
+| [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
+| [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
@@ -224,6 +228,7 @@ guildbotics environment [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics environment build`](#guildbotics-environment-build) | Build the environment the shared declaration asks for. |
+| [`guildbotics environment image`](#guildbotics-environment-image) | The base images this device holds for the environment. |
 | [`guildbotics environment login`](#guildbotics-environment-login) | Log in to an AI CLI tool inside the environment. |
 | [`guildbotics environment remove`](#guildbotics-environment-remove) | Remove the workspace's snapshots from this device (logins are kept). |
 | [`guildbotics environment status`](#guildbotics-environment-status) | Show the environment's runtime, snapshot, and logins on this device. |
@@ -243,6 +248,81 @@ guildbotics environment build [OPTIONS]
 | Option | Description |
 | --- | --- |
 | `--force` | Rebuild even when the snapshot already matches the declaration. |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment image`
+
+The base images this device holds for the environment.
+
+A workspace may name an image it built itself as the base of the
+environment; the image is not shared, so each device loads it from an
+archive (`docker save`) built for its CPU architecture, and the
+declaration names the image's digest per architecture.
+
+```text
+guildbotics environment image [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics environment image declare`](#guildbotics-environment-image-declare) | Name the base image in the workspace's shared declaration. |
+| [`guildbotics environment image list`](#guildbotics-environment-image-list) | List the images this device's declaration may name as its base. |
+| [`guildbotics environment image load`](#guildbotics-environment-image-load) | Load an image archive into this device's runtime. |
+
+## `guildbotics environment image declare`
+
+Name the base image in the workspace's shared declaration.
+
+The declaration is shared with every device of the workspace. Naming the
+same reference again merges the digests, so a device of another
+architecture adds its own; naming another reference replaces them.
+
+```text
+guildbotics environment image declare [OPTIONS] [REFERENCE]
+```
+
+| Option | Description |
+| --- | --- |
+| `--digest ARCH=DIGEST` | Name the image's digest for an architecture (e.g. amd64=sha256:...). Repeatable. Without it, the digest of the image loaded here under REFERENCE is declared for this device's architecture. |
+| `--default` | Declare no image: the environment builds from GuildBotics' own. |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment image list`
+
+List the images this device's declaration may name as its base.
+
+Those loaded here, by the name they were loaded under, and whether the
+declaration names each for this device's architecture; the same list the
+Desktop's declaration picks from.
+
+```text
+guildbotics environment image list [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics environment image load`
+
+Load an image archive into this device's runtime.
+
+The archive must be built for this device's CPU architecture. Its own
+tags are kept. What was loaded is printed by reference, with the digest
+the declaration names it by.
+
+```text
+guildbotics environment image load [OPTIONS] ARCHIVE
+```
+
+| Option | Description |
+| --- | --- |
+| `--tag TEXT` | A reference to add to the loaded image, beyond the archive's own tags. |
 | `--help` | Show this message and exit. |
 
 ## `guildbotics environment login`

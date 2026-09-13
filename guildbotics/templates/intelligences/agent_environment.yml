@@ -5,6 +5,27 @@
 # (Debian with Node.js, npm, git and uv) and installs the AI CLI tools at the
 # versions it was verified with; what is declared here is added on top.
 #
+# A workspace may instead start from an image it built itself, for toolchains
+# the package managers below cannot express (a Python interpreter, a Rust
+# toolchain, a browser). Build it FROM the default image, or from one that
+# gives the build the same: Debian's apt, Node.js with npm, curl and tar. Do
+# not ship bubblewrap (`bwrap`): Codex prefers it to the one it bundles and
+# cannot start a session with Debian's.
+# The image is not shared, and it is per CPU architecture (the environment
+# runs the device's own CPU): build it for each architecture the workspace's
+# devices run, name it here by reference and by the digest of each build
+# (`guildbotics environment image declare`), and load the archive (`docker
+# save`) on each device with `guildbotics environment image load`. A device
+# runs on the image it loaded under the reference: none loaded refuses turns,
+# another digest than declared (or none declared for its architecture) runs
+# with a warning that says how to fall in line.
+#
+#   image:
+#     reference: local/agent:1
+#     digests:
+#       arm64: sha256:<64 hex digits>
+#       amd64: sha256:<64 hex digits>
+#
 # Every entry is one argument to its package manager, so pin versions the way
 # that manager spells them. An unpinned entry changes with every rebuild
 # without the environment noticing.

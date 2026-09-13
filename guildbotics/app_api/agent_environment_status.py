@@ -23,6 +23,9 @@ from guildbotics.app_api.models import (
     EnvironmentDenyStatus,
     EnvironmentDnsStatus,
     EnvironmentGrantStatus,
+    EnvironmentImage,
+    EnvironmentImagesResponse,
+    EnvironmentImageStatus,
     EnvironmentMemberStatus,
     EnvironmentProblem,
     EnvironmentRuntimeStatus,
@@ -32,6 +35,7 @@ from guildbotics.app_api.models import (
     GrantEvaluation,
     GrantScope,
 )
+from guildbotics.intelligences.agent_environment import runtime
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     DocumentGrant,
@@ -45,9 +49,21 @@ from guildbotics.intelligences.agent_environment.contract import (
     resolve_access,
     sensitive_grant_reason,
 )
+from guildbotics.intelligences.agent_environment.image import (
+    IMAGE,
+    candidate_images,
+    device_architecture,
+    image_load_command,
+    image_status,
+)
+from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.status import (
     device_status,
     login_command,
+)
+from guildbotics.intelligences.agent_environment.toolchain import (
+    ToolchainError,
+    load_toolchain,
 )
 from guildbotics.intelligences.agent_runtime.usage import CLI_AGENT_USAGE_READERS
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
@@ -112,6 +128,18 @@ def agent_environment_status(
             detail=snapshot.detail if snapshot else device.declaration_problem,
             output=list(build_output or []),
         ),
+        image=EnvironmentImageStatus(
+            default=IMAGE,
+            architecture=device.image.architecture or device_architecture(),
+            reference=device.image.reference,
+            digest=device.image.digest,
+            digests=dict(device.image.digests),
+            present=device.image.present,
+            held=device.image.held,
+            problem=device.image.refusal,
+            warning=device.image.warning,
+            load_command=image_load_command(platform=platform),
+        ),
         dns=EnvironmentDnsStatus(
             declared=device.dns.declared,
             nameservers=list(device.dns.nameservers),
@@ -134,8 +162,42 @@ def agent_environment_status(
         ],
         problem=device.refusal,
         problem_setting=device.setting,
+        warning=device.warning,
         access=_access_status(access, problem, home),
         members=members,
+    )
+
+
+def agent_environment_images() -> EnvironmentImagesResponse:
+    """The images this device's declaration may name, for the picker.
+
+    The same list ``guildbotics environment image list`` prints. A device
+    without a runtime, or whose store cannot be read, has none to offer and
+    says why; the declaration can still be edited.
+    """
+    architecture = device_architecture()
+    health = runtime.doctor()
+    if not health.available:
+        return EnvironmentImagesResponse(
+            architecture=architecture, problem=health.reason
+        )
+    try:
+        images = candidate_images()
+        declared = image_status(load_toolchain(), lookup=False)
+    except (AgentEnvironmentError, ToolchainError) as exc:
+        return EnvironmentImagesResponse(architecture=architecture, problem=str(exc))
+    return EnvironmentImagesResponse(
+        architecture=architecture,
+        images=[
+            EnvironmentImage(
+                reference=i.reference,
+                digest=i.digest,
+                size_bytes=i.size_bytes,
+                declared=i.reference == declared.reference
+                and i.digest == declared.digest,
+            )
+            for i in images
+        ],
     )
 
 
@@ -202,6 +264,8 @@ def agent_environment_problems(
     entries: list[EnvironmentProblemEntry] = []
     if status.problem_setting:
         entries.append(("", "", status.problem_setting, status.problem))
+    if status.warning:
+        entries.append(("", "", "image_differs", status.warning))
     used = {slot.tool for member in status.members for slot in member.slots}
     entries += [
         ("", tool.name, "tool", tool.problem)

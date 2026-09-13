@@ -73,15 +73,46 @@ installs at pinned versions, and the extra packages declared in
 `config/intelligences/agent_environment.yml` -- is built per device as a
 snapshot and rebuilt when it no longer matches the declaration. The
 **Isolated agent environment** card under **LLM / AI CLI tools** in the
-Desktop shows the runtime, the snapshot's state (with a build button), the
-DNS resolvers, and each tool's login; `guildbotics environment status` /
-`build` / `login` are the same state and actions from a terminal. While the
-service runs, a changed declaration (including one that arrived from another
-device through synchronization) is rebuilt by itself, and while it builds,
-or whenever the environment is unusable, the ticket patrol and chat
-dispatch are deferred rather than failed. Why a turn cannot start here (no
-runtime, an unreadable declaration, an unbuilt snapshot, no login) is shown
-in the same words in the alert band at the top of the screen.
+Desktop shows the runtime, the base image, the snapshot's state (with a
+build button), the DNS resolvers, and each tool's login; `guildbotics
+environment status` / `build` / `login` are the same state and actions from
+a terminal. While the service runs, a changed declaration (including one
+that arrived from another device through synchronization) is rebuilt by
+itself, and while it builds, or whenever the environment is unusable, the
+ticket patrol and chat dispatch are deferred rather than failed. Why a turn
+cannot start here (no runtime, an unreadable declaration, a base image not
+loaded, an unbuilt snapshot, no login) is shown in the same words in the
+alert band at the top of the screen.
+
+The base image is GuildBotics' own by default (Debian + Node.js + npm + git
++ uv). A workspace that needs a toolchain the three package slots (apt /
+npm / uv tool) cannot express -- a Python interpreter, Rust, a browser --
+declares an image it built itself. The image's content is not shared: load
+its `docker save` archive on each device with `guildbotics environment image
+load`, then pick it from the images loaded on this device under **LLM / AI
+CLI tools → advanced settings → Environment declaration**, or declare it
+with `guildbotics environment image declare`. Images are per CPU
+architecture (the environment runs the device's own CPU), so the
+declaration carries the reference and, per architecture, the image config
+digest (the identity that stays the same across save and load; the same as
+the IMAGE ID `docker images` shows). The device that built the images can
+declare every architecture at once (`image declare --digest
+amd64=sha256:...`), so the other devices only load their archive (`image
+load` refuses an archive not built for this device's architecture). A device
+runs on the image it loaded under the reference: nothing loaded refuses
+turns, while another digest than declared (or nothing declared for its
+architecture) runs with a standing warning on the status card, in the alert
+band, and in `environment status` that says how to fall in line. The
+snapshot is named by the digest the device loaded, so loading the image
+again makes it stale, and it is rebuilt.
+Build the image `FROM` the default one, or from any image that gives the
+build steps what they use (Debian's `apt`, Node.js with `npm`, `curl` and
+`tar`), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
+bundles and cannot start a session with Debian's (packages such as
+`libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
+`never`). The image for developing GuildBotics itself
+(`docker/agent-environment/Dockerfile`; `scripts/build-agent-environment-image.sh`
+builds every architecture, loads, and declares) is the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
 

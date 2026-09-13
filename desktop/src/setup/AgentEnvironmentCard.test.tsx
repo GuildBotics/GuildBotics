@@ -37,6 +37,18 @@ function status(
       home: "/Users/me/.guildbotics/data/msb",
     },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+    image: {
+      default: "node:22.23.2-bookworm",
+      architecture: "arm64",
+      reference: "",
+      digest: "",
+      digests: {},
+      present: true,
+      held: "",
+      problem: "",
+      warning: "",
+      load_command: "/Users/me/.guildbotics/bin/guildbotics environment image load <archive.tar>",
+    },
     dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
     tools: [
       {
@@ -78,6 +90,7 @@ function status(
     ],
     problem: "",
     problem_setting: "",
+    warning: "",
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
     ...overrides,
@@ -220,6 +233,8 @@ describe("AgentEnvironmentCard", () => {
       screen.getByText(t("setup.intelligence.environment.snapshotStates.ready")),
     ).toBeInTheDocument();
     expect(screen.getByText("guildbotics-abc")).toBeInTheDocument();
+    expect(screen.getByText(t("setup.intelligence.environment.imageDefault"))).toBeInTheDocument();
+    expect(screen.getByText("node:22.23.2-bookworm")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.dnsHost"))).toBeInTheDocument();
     expect(screen.getByText(/192\.168\.3\.1/)).toBeInTheDocument();
     // The catalog's three answers, on the device's layer: logged in here, not
@@ -289,6 +304,99 @@ describe("AgentEnvironmentCard", () => {
       await i18n.changeLanguage("en");
     },
   );
+
+  it("shows the declared image with the command that loads it here, and no build until then", async () => {
+    const digest = "sha256:" + "c".repeat(64);
+    const problem = "The base image local/agent:1 is not loaded on this device.";
+    const data = status({
+      snapshot: { state: "missing", name: "guildbotics-def", detail: "", output: [] },
+      problem,
+      problem_setting: "image",
+    });
+    data.image = {
+      ...data.image,
+      reference: "local/agent:1",
+      digest,
+      digests: { arm64: digest, amd64: "sha256:" + "d".repeat(64) },
+      present: false,
+      problem,
+    };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+    renderCard("agent-environment-image");
+
+    expect(
+      await screen.findByText(t("setup.intelligence.environment.imageMissing")),
+    ).toBeInTheDocument();
+    const row = within(document.getElementById("agent-environment-image")!);
+    expect(row.getByText("local/agent:1 arm64")).toBeInTheDocument();
+    expect(
+      row.getByText(
+        t("setup.intelligence.environment.imageDeclaredFor", { architectures: "amd64, arm64" }),
+      ),
+    ).toBeInTheDocument();
+    expect(row.getByText(problem)).toBeInTheDocument();
+    expect(row.getByText(data.image.load_command)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: t("setup.intelligence.environment.build") }),
+    ).not.toBeInTheDocument();
+
+    const loaded = { ...data, problem: "", problem_setting: "" as const };
+    loaded.image = { ...data.image, present: true, held: digest, problem: "" };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(loaded);
+    await userEvent.click(
+      screen.getByRole("button", { name: t("setup.intelligence.environment.refresh") }),
+    );
+    expect(
+      await screen.findByText(t("setup.intelligence.environment.imagePresent")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: t("setup.intelligence.environment.build") }),
+    ).toBeInTheDocument();
+  });
+
+  it("says when turns run on a loaded image the declaration did not name", async () => {
+    const held = "sha256:" + "e".repeat(64);
+    const data = status({ warning: "runs on e..." });
+    data.image = {
+      ...data.image,
+      reference: "local/agent:1",
+      digest: "",
+      digests: { amd64: "sha256:" + "d".repeat(64) },
+      present: false,
+      held,
+      warning: "runs on e...",
+    };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+    renderCard();
+
+    expect(
+      await screen.findByText(t("setup.intelligence.environment.imageUndeclared")),
+    ).toBeInTheDocument();
+    const row = within(document.getElementById("agent-environment-image")!);
+    expect(row.getByText(`local/agent:1 arm64 ${held.slice(0, 19)}`)).toBeInTheDocument();
+    expect(row.getByText("runs on e...")).toBeInTheDocument();
+    // The snapshot can be built from what is held.
+    expect(
+      screen.queryByRole("button", { name: t("setup.intelligence.environment.build") }),
+    ).not.toBeInTheDocument();
+
+    const differs = { ...data, snapshot: { ...data.snapshot, state: "stale" as const } };
+    differs.image = {
+      ...data.image,
+      digest: "sha256:" + "c".repeat(64),
+      digests: { arm64: "sha256:" + "c".repeat(64) },
+    };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(differs);
+    await userEvent.click(
+      screen.getByRole("button", { name: t("setup.intelligence.environment.refresh") }),
+    );
+    expect(
+      await screen.findByText(t("setup.intelligence.environment.imageDiffers")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: t("setup.intelligence.environment.build") }),
+    ).toBeInTheDocument();
+  });
 
   it("offers a build for a missing snapshot and shows the build's output while it runs", async () => {
     vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(

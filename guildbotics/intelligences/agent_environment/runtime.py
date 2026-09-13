@@ -15,18 +15,21 @@ and be told, through :func:`doctor`, why no agent can run there.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from importlib.resources import as_file, files
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
@@ -78,6 +81,24 @@ class AgentEnvironmentHealth:
     runtime_version: str = ""
     #: Where the runtime and its state (images, sandboxes) live on this device.
     home: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ImageInfo:
+    """An image this device holds, as the runtime names and identifies it.
+
+    ``digest`` is the digest of the image's configuration: the identity that
+    survives ``docker save`` and ``msb image load``, unlike the
+    ``manifest_digest``, which an archive re-encodes and which is how the
+    runtime itself names what a sandbox was created from. ``architecture``
+    is the CPU architecture the image was built for, as OCI names it.
+    """
+
+    reference: str
+    digest: str
+    architecture: str = ""
+    size_bytes: int | None = None
+    manifest_digest: str = ""
 
 
 def runtime_home() -> Path:
@@ -412,27 +433,40 @@ class BuildStep:
 
 
 async def build_snapshot(
-    name: str,
+    name: Callable[[str], str],
     *,
     dest_dir: Path,
     image: str,
+    pull: bool,
     home: str,
     steps: Sequence[BuildStep],
     nameservers: Iterable[str],
     on_line: Callable[[str], None],
 ) -> Path:
-    """Run ``steps`` on ``image`` and keep the result as the snapshot ``name``.
+    """Run ``steps`` on ``image`` and keep the result as a snapshot.
 
     The build sandbox has all egress open: it fetches packages from wherever
     they live, and nothing of the user's is mounted into it. Every line the
     steps print goes to ``on_line``. The sandbox is removed whether the
     build succeeds or not; only the snapshot under ``dest_dir`` remains.
 
+    Args:
+        name: Names the snapshot from the config digest of the image the
+            sandbox was actually created from ("" when the runtime holds
+            no such image, as for one it just pulled and cannot describe).
+            A reference is read once, here, by the runtime; naming from the
+            same reading keeps the name true to the content when the
+            reference is re-tagged by a concurrent ``image load``.
+        pull: Fetch ``image`` from its registry when this device lacks it.
+            False for an image the user loaded here: a local reference
+            names nothing anywhere else, and asking a registry about it
+            would fail slowly instead of not at all.
+
     Raises:
         AgentEnvironmentError: When the sandbox cannot start, a step exits
             non-zero, or the snapshot cannot be written.
     """
-    from microsandbox import Sandbox, Snapshot
+    from microsandbox import PullPolicy, Sandbox, Snapshot
 
     network = EnvironmentNetwork(
         unrestricted=True,
@@ -446,6 +480,7 @@ async def build_snapshot(
             sandbox = await Sandbox.create(
                 _BUILD_NAME,
                 image=image,
+                pull_policy=PullPolicy.IF_MISSING if pull else PullPolicy.NEVER,
                 replace=True,
                 workdir="/",
                 network=_network_of(network),
@@ -455,6 +490,7 @@ async def build_snapshot(
             t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
         ) from exc
     try:
+        snapshot_name = name(await _built_from(Sandbox))
         await _ipv4_only(sandbox)
         for step in steps:
             on_line(f"[{step.label}]")
@@ -476,7 +512,10 @@ async def build_snapshot(
                 )
         await sandbox.stop(timeout=_STOP_TIMEOUT)
         snapshot = await Snapshot.create(
-            name, from_sandbox=_BUILD_NAME, dest_dir=str(dest_dir), force=True
+            snapshot_name,
+            from_sandbox=_BUILD_NAME,
+            dest_dir=str(dest_dir),
+            force=True,
         )
         return Path(snapshot.path)
     except AgentEnvironmentError:
@@ -488,6 +527,20 @@ async def build_snapshot(
     finally:
         with suppress(Exception):
             await (await Sandbox.get(_BUILD_NAME)).destroy(force=True)
+
+
+async def _built_from(sandbox_api: Any) -> str:
+    """The config digest of the image the build sandbox was created from.
+
+    The runtime records the manifest it resolved the reference to; the
+    config digest is read from the image that manifest belongs to.
+    """
+    config = json.loads((await sandbox_api.get(_BUILD_NAME)).config_json)
+    manifest = str(config.get("manifest_digest") or "")
+    for image in await _images():
+        if manifest and image.manifest_digest == manifest:
+            return image.digest
+    return ""
 
 
 @contextmanager
@@ -511,6 +564,144 @@ def _anonymous_registry() -> Iterator[None]:
                 del os.environ["DOCKER_CONFIG"]
             else:
                 os.environ["DOCKER_CONFIG"] = previous
+
+
+async def _images() -> tuple[ImageInfo, ...]:
+    from microsandbox import Image
+
+    images = []
+    # The stub spells the return type as the method that shadows it.
+    for handle in cast("list[Any]", await Image.list()):
+        detail = await handle.inspect()
+        if detail.config is None:
+            continue
+        images.append(
+            ImageInfo(
+                handle.reference,
+                detail.config.digest,
+                handle.architecture or "",
+                handle.size_bytes,
+                handle.manifest_digest or "",
+            )
+        )
+    return tuple(images)
+
+
+def list_images() -> tuple[ImageInfo, ...]:
+    """Every image this device's runtime holds, by reference.
+
+    Synchronous because the device's status is read synchronously wherever
+    it is asked for (the CLI, an API thread, a turn about to start), and
+    what is read is local metadata.
+
+    Raises:
+        AgentEnvironmentError: When the runtime cannot enumerate its store.
+    """
+    try:
+        return _run_sync(_images())
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.images_failed", error=exc)
+        ) from exc
+
+
+def archive_architecture(archive: Path) -> str:
+    """The CPU architecture an image archive was built for, or "" if unsaid.
+
+    Read from the archive itself -- the image configuration of a ``docker
+    save`` archive (``manifest.json``) or of an OCI layout (``index.json``,
+    whose first manifest is the one taken) -- because the runtime records a
+    loaded archive as this device's architecture whatever it holds.
+
+    Raises:
+        AgentEnvironmentError: When the archive cannot be read.
+    """
+    try:
+        with tarfile.open(archive) as tar:
+
+            def read(name: str) -> Any:
+                member = tar.extractfile(name)
+                if member is None:
+                    raise KeyError(name)
+                with member:
+                    return json.load(member)
+
+            def blob(digest: str) -> str:
+                algorithm, _, hexdigest = digest.partition(":")
+                return f"blobs/{algorithm}/{hexdigest}"
+
+            try:
+                manifest = read("manifest.json")
+            except KeyError:
+                manifest = None
+            if manifest:
+                return str(read(manifest[0]["Config"]).get("architecture", ""))
+            descriptor = read("index.json")
+            for _ in range(2):  # an index may point at a per-platform index
+                manifests = descriptor.get("manifests") or []
+                if not manifests:
+                    return ""
+                platform = manifests[0].get("platform") or {}
+                if platform.get("architecture"):
+                    return str(platform["architecture"])
+                descriptor = read(blob(manifests[0]["digest"]))
+                if "config" in descriptor:
+                    config = read(blob(descriptor["config"]["digest"]))
+                    return str(config.get("architecture", ""))
+            return ""
+    except (OSError, tarfile.TarError, KeyError, ValueError, TypeError) as exc:
+        raise AgentEnvironmentError(
+            t(
+                "intelligences.agent_environment.runtime.load_failed",
+                path=archive,
+                error=exc,
+            )
+        ) from exc
+
+
+async def load_image(archive: Path, *, tag: str | None = None) -> tuple[ImageInfo, ...]:
+    """Load a ``docker save`` / OCI archive into this device's runtime.
+
+    The archive's own tags are kept and ``tag`` is added to the first image;
+    what was loaded is returned by reference.
+
+    Raises:
+        AgentEnvironmentError: When the archive cannot be read, or holds
+            no image.
+    """
+    from microsandbox import Image
+
+    try:
+        handles = cast("list[Any]", await Image.load(str(archive), tag=tag))
+    except Exception as exc:
+        raise AgentEnvironmentError(
+            t(
+                "intelligences.agent_environment.runtime.load_failed",
+                path=archive,
+                error=exc,
+            )
+        ) from exc
+    if not handles:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.nothing_loaded", path=archive)
+        )
+    references = {handle.reference for handle in handles}
+    return tuple(image for image in list_images() if image.reference in references)
+
+
+def _run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
+    """Run ``coroutine`` to completion from synchronous code.
+
+    From a thread that already runs an event loop (a turn starting inside
+    the service), the coroutine runs on a loop of its own in another
+    thread; ``asyncio.run`` refuses to nest.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coroutine).result()
 
 
 async def remove_snapshot(path: Path) -> None:

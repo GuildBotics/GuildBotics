@@ -254,7 +254,7 @@ def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
     )
     monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
 
-    with held_lock(sync_lock_path(workspace), timeout=0.0):
+    with held_lock(sync_lock_path(workspace)):
         response = client.post(
             "/workspace/sync/preview",
             headers=AUTH_HEADERS,

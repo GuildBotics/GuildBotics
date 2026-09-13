@@ -24,6 +24,7 @@ import {
   getAgentEnvironmentStatus,
   recheckCliAgentUsage,
   type AgentEnvironmentStatusResponse,
+  type EnvironmentImageStatus,
   type EnvironmentToolStatus,
   type SnapshotState,
 } from "../api/client";
@@ -45,8 +46,9 @@ const STATE_COLORS: Record<SnapshotState, string> = {
 
 /**
  * What this device holds of the isolated agent environment: whether it can
- * run one at all, the snapshot the declaration asks for, the resolvers, and
- * each tool's login. Everything here is the device's, so the card does not
+ * run one at all, the base image the declaration names, the snapshot the
+ * declaration asks for, the resolvers, and each tool's login. Everything
+ * here is the device's, so the card does not
  * share the intelligence settings' save button: the one action is a build,
  * and it runs on this device alone.
  */
@@ -148,6 +150,21 @@ export function AgentEnvironmentCard({
                   </Group>
                 </Table.Td>
               </Table.Tr>
+              <Table.Tr
+                id={`${AGENT_ENVIRONMENT_CARD_ID}-image`}
+                style={{
+                  outline:
+                    focusElement === `${AGENT_ENVIRONMENT_CARD_ID}-image`
+                      ? "1px solid var(--mantine-color-teal-6)"
+                      : undefined,
+                  scrollMarginTop: 24,
+                }}
+              >
+                <Table.Th style={narrow}>{t("setup.intelligence.environment.image")}</Table.Th>
+                <Table.Td>
+                  <BaseImage image={data.image} />
+                </Table.Td>
+              </Table.Tr>
               <Table.Tr id={`${AGENT_ENVIRONMENT_CARD_ID}-snapshot`}>
                 <Table.Th style={narrow}>{t("setup.intelligence.environment.snapshot")}</Table.Th>
                 <Table.Td>
@@ -162,7 +179,9 @@ export function AgentEnvironmentCard({
                           {data.snapshot.name}
                         </Text>
                       ) : null}
-                      {data.runtime.available && BUILDABLE.includes(data.snapshot.state) ? (
+                      {data.runtime.available &&
+                      !data.image.problem &&
+                      BUILDABLE.includes(data.snapshot.state) ? (
                         <Button
                           size="xs"
                           variant="light"
@@ -242,6 +261,90 @@ export function AgentEnvironmentCard({
         ) : null}
       </Stack>
     </Card>
+  );
+}
+
+/** A terminal command to run on this device, with a button that copies it. */
+function CommandLine({ command }: { command: string }) {
+  const { t } = useTranslation();
+  return (
+    <Group gap="xs">
+      <Code>{command}</Code>
+      <CopyButton value={command}>
+        {({ copied, copy }) => (
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            leftSection={copied ? <Check size={12} /> : <Copy size={12} />}
+            onClick={copy}
+          >
+            {copied
+              ? t("setup.intelligence.environment.copied")
+              : t("setup.intelligence.environment.copy")}
+          </Button>
+        )}
+      </CopyButton>
+    </Group>
+  );
+}
+
+/** The declared base image on this device, with the command that loads it. */
+function BaseImage({ image }: { image: EnvironmentImageStatus }) {
+  const { t } = useTranslation();
+  if (!image.reference) {
+    return (
+      <Group gap="xs">
+        <Badge color="gray" variant="light" size="sm">
+          {t("setup.intelligence.environment.imageDefault")}
+        </Badge>
+        <Text size="xs" c="dimmed" ff="monospace">
+          {image.default}
+        </Text>
+      </Group>
+    );
+  }
+  // Nothing loaded is a problem; loaded but not what is declared is a
+  // warning, the turns run on it; loaded and declared is fine.
+  const state = !image.held
+    ? "imageMissing"
+    : image.present
+      ? "imagePresent"
+      : image.digest
+        ? "imageDiffers"
+        : "imageUndeclared";
+  return (
+    <Stack gap="xs" py={4}>
+      <Group gap="xs">
+        <Badge
+          color={
+            state === "imagePresent" ? "success" : state === "imageMissing" ? "danger" : "warning"
+          }
+          variant="light"
+          size="sm"
+        >
+          {t(`setup.intelligence.environment.${state}`)}
+        </Badge>
+        <Text size="xs" c="dimmed" ff="monospace">
+          {image.reference} {image.architecture}
+          {image.held ? ` ${image.held.slice(0, "sha256:".length + 12)}` : ""}
+        </Text>
+      </Group>
+      <Text size="xs" c="dimmed">
+        {t("setup.intelligence.environment.imageDeclaredFor", {
+          architectures: Object.keys(image.digests).sort().join(", "),
+        })}
+      </Text>
+      {image.problem ? <Text size="sm">{image.problem}</Text> : null}
+      {image.warning ? <Text size="sm">{image.warning}</Text> : null}
+      {image.present ? null : (
+        <>
+          <Text size="xs" c="dimmed">
+            {t("setup.intelligence.environment.imageLoadHint")}
+          </Text>
+          <CommandLine command={image.load_command} />
+        </>
+      )}
+    </Stack>
   );
 }
 
@@ -349,23 +452,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
           {t("setup.intelligence.environment.loginRecheckHint")}
         </Text>
       )}
-      <Group gap="xs">
-        <Code>{command}</Code>
-        <CopyButton value={command}>
-          {({ copied, copy }) => (
-            <Button
-              size="compact-xs"
-              variant="subtle"
-              leftSection={copied ? <Check size={12} /> : <Copy size={12} />}
-              onClick={copy}
-            >
-              {copied
-                ? t("setup.intelligence.environment.copied")
-                : t("setup.intelligence.environment.copy")}
-            </Button>
-          )}
-        </CopyButton>
-      </Group>
+      <CommandLine command={command} />
     </Stack>
   );
 }

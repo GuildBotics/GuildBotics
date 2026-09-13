@@ -68,6 +68,7 @@ _AGENT_ENVIRONMENT_ALERTS: dict[str, tuple[str, SystemAlertCode]] = {
         get_args(DeviceSetting),
         ("agent-environment:device", "agent_environment_unavailable"),
     ),
+    "image_differs": ("agent-environment:image", "agent_environment_image_differs"),
     "tool": ("agent-environment:tool:{slot}", "agent_environment_tool_unavailable"),
     "grants": (
         "agent-environment:{person_id}:{slot}",

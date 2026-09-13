@@ -1,8 +1,9 @@
 import { Card, Select, Stack, TagsInput, Text } from "@mantine/core";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AgentEnvironmentDeclaration } from "../api/client";
+import { getAgentEnvironmentImages, type AgentEnvironmentDeclaration } from "../api/client";
 
 /** Anchor for a system alert to scroll to. */
 export const AGENT_ENVIRONMENT_DECLARATION_ID = "agent-environment-declaration";
@@ -16,19 +17,30 @@ function isPackageSpec(spec: string): boolean {
   return spec.length > 0 && !/\s/.test(spec) && !spec.startsWith("-");
 }
 
+/** How much of a digest a person is shown: enough to tell two apart. */
+function shortDigest(digest: string): string {
+  return digest.slice(0, "sha256:".length + 12);
+}
+
 /**
- * The shared declaration of the agent environment: the packages every device
- * adds on top of the base image, and the resolvers the environment forwards
- * DNS to. It is saved with the rest of the intelligence settings, so the card
- * only edits; what it rejects never reaches the draft, and an empty resolver
- * list is reported so the save button can wait for it.
+ * The shared declaration of the agent environment: the base image every
+ * device builds from, the packages it adds on top, and the resolvers the
+ * environment forwards DNS to. It is saved with the rest of the intelligence
+ * settings, so the card only edits; what it rejects never reaches the draft,
+ * and an empty resolver list is reported so the save button can wait for it.
+ * The image is picked from those loaded on this device, so the declaration
+ * carries the digest of what will actually be built from; a declared image
+ * this device lacks stays selectable as declared.
  */
 export function AgentEnvironmentDeclarationCard({
   value,
+  defaultImage,
   onChange,
   onValidityChange,
 }: {
   value: AgentEnvironmentDeclaration;
+  /** The image GuildBotics builds from when the declaration names none. */
+  defaultImage: string;
   onChange: (value: AgentEnvironmentDeclaration) => void;
   onValidityChange?: (valid: boolean) => void;
 }) {
@@ -40,7 +52,59 @@ export function AgentEnvironmentDeclarationCard({
   useEffect(() => {
     onValidityChange?.(!emptyList);
   }, [emptyList, onValidityChange]);
-
+  const images = useQuery({
+    queryKey: ["agent-environment-images"],
+    queryFn: getAgentEnvironmentImages,
+  });
+  const architecture = images.data?.architecture ?? "";
+  const held = images.data?.images ?? [];
+  const declared = value.image ?? null;
+  const declaredHere = declared?.digests[architecture];
+  // An option is one image: reference and digest, so a reference loaded
+  // again under a new digest is a new choice beside the declared one.
+  const key = (reference: string, digest: string) => `${reference}@${digest}`;
+  const selected = declared && declaredHere ? key(declared.reference, declaredHere) : "";
+  const imageOptions = [
+    {
+      value: "",
+      label: t("setup.intelligence.environment.declaration.imageDefault", {
+        reference: defaultImage,
+      }),
+    },
+    ...held.map((image) => ({
+      value: key(image.reference, image.digest),
+      label: `${image.reference} (${shortDigest(image.digest)})`,
+    })),
+    ...(declared &&
+    declaredHere &&
+    !held.some((image) => key(image.reference, image.digest) === selected)
+      ? [
+          {
+            value: selected,
+            label: `${declared.reference} (${shortDigest(declaredHere)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+            disabled: true,
+          },
+        ]
+      : []),
+  ];
+  // The digest this device picks is its architecture's; what other
+  // architectures declared for the same reference stays, since their images
+  // are built from the same source on their own devices.
+  const setImage = (option: string | null) => {
+    const image = held.find((candidate) => key(candidate.reference, candidate.digest) === option);
+    onChange({
+      ...value,
+      image: image
+        ? {
+            reference: image.reference,
+            digests: {
+              ...(declared?.reference === image.reference ? declared.digests : {}),
+              [architecture]: image.digest,
+            },
+          }
+        : null,
+    });
+  };
   const setPackages = (manager: PackageManager, specs: string[]) => {
     const invalid = specs.find((spec) => !isPackageSpec(spec));
     setRejected((current) => ({
@@ -80,6 +144,38 @@ export function AgentEnvironmentDeclarationCard({
             {t("setup.intelligence.environment.declaration.description")}
           </Text>
         </div>
+        <Select
+          size="xs"
+          label={t("setup.intelligence.environment.declaration.image")}
+          description={t("setup.intelligence.environment.declaration.imageHint")}
+          data={imageOptions}
+          value={selected}
+          onChange={setImage}
+          error={
+            images.data?.problem
+              ? t("setup.intelligence.environment.declaration.imageUnavailable", {
+                  problem: images.data.problem,
+                })
+              : declared && architecture && !declaredHere
+                ? t("setup.intelligence.environment.declaration.imageNotDeclaredHere", {
+                    reference: declared.reference,
+                    architecture,
+                    declared: Object.keys(declared.digests).sort().join(", "),
+                  })
+                : undefined
+          }
+          allowDeselect={false}
+        />
+        {declared ? (
+          <Text size="xs" c="dimmed">
+            {t("setup.intelligence.environment.declaration.imageDeclared", {
+              digests: Object.entries(declared.digests)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([arch, digest]) => `${arch}=${shortDigest(digest)}`)
+                .join(" "),
+            })}
+          </Text>
+        ) : null}
         {PACKAGE_MANAGERS.map((manager) => (
           <TagsInput
             key={manager}

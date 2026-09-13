@@ -208,7 +208,8 @@ export type SystemAlert = {
     | "worker_stopped"
     | "agent_environment_unavailable"
     | "agent_environment_tool_unavailable"
-    | "agent_environment_slot_blocked";
+    | "agent_environment_slot_blocked"
+    | "agent_environment_image_differs";
   severity: "critical" | "warning";
   opened_at: string;
   updated_at: string;
@@ -977,11 +978,12 @@ export type EnvironmentAccessStatus = {
 // Which part of the device keeps every turn from starting: the runtime it
 // lacks, the shared declaration (or the resolvers it names), the snapshot to
 // build, or a build to wait for.
-export type DeviceSetting = "runtime" | "declaration" | "snapshot" | "building" | "filesystem";
+export type DeviceSetting =
+  "runtime" | "declaration" | "image" | "snapshot" | "building" | "filesystem";
 
 // Which setting an environment problem is about: a part of the device, one
 // tool's row in the environment card, or the directory grants.
-export type EnvironmentSetting = DeviceSetting | "tool" | "grants";
+export type EnvironmentSetting = DeviceSetting | "image_differs" | "tool" | "grants";
 
 export type EnvironmentProblem = {
   setting: EnvironmentSetting;
@@ -1012,6 +1014,43 @@ export type EnvironmentDnsStatus = {
   problem: string;
 };
 
+// The declared base image against this device. `reference` is empty when the
+// declaration names none and GuildBotics' own (`default`) is used.
+// `architecture` is this device's CPU as images name it; `digest` is what the
+// declaration names for it (empty when nothing is) and `digests` everything it
+// names; `held` is the digest this device holds under the reference.
+export type EnvironmentImageStatus = {
+  default: string;
+  architecture: string;
+  reference: string;
+  digest: string;
+  digests: Record<string, string>;
+  present: boolean;
+  held: string;
+  // Why no turn can start over the image, or "".
+  problem: string;
+  // Turns run on an image the declaration did not name, or "".
+  warning: string;
+  load_command: string;
+};
+
+// An image this device holds, as the declaration may name it; `declared` says
+// the declaration names this very digest for this device's architecture.
+export type EnvironmentImage = {
+  reference: string;
+  digest: string;
+  size_bytes: number | null;
+  declared: boolean;
+};
+
+// The images this device holds for its own `architecture`.
+export type EnvironmentImagesResponse = {
+  architecture: string;
+  images: EnvironmentImage[];
+  // Why none could be read, or "".
+  problem: string;
+};
+
 // One AI CLI tool of the catalog as this device can run it.
 export type EnvironmentToolStatus = {
   name: string;
@@ -1032,7 +1071,10 @@ export type EnvironmentToolStatus = {
 };
 
 // The shared declaration of the agent environment: what every device builds.
+// `image` names the base image by reference and, per CPU architecture, its
+// content digest; absent, the build starts from GuildBotics' own image.
 export type AgentEnvironmentDeclaration = {
+  image?: { reference: string; digests: Record<string, string> } | null;
   packages: { apt: string[]; npm: string[]; uv: string[] };
   dns: { nameservers: "host" | string[] };
 };
@@ -1053,12 +1095,15 @@ export type AgentEnvironmentStatusResponse = {
   platform: string;
   runtime: EnvironmentRuntimeStatus;
   snapshot: EnvironmentSnapshotStatus;
+  image: EnvironmentImageStatus;
   dns: EnvironmentDnsStatus;
   tools: EnvironmentToolStatus[];
   // Why no turn at all can start on this device, or "" when one can.
   problem: string;
   // What `problem` is about, or "" when there is none.
   problem_setting: DeviceSetting | "";
+  // What turns that do start here run on that the declaration did not name, or "".
+  warning: string;
   access: EnvironmentAccessStatus;
   members: EnvironmentMemberStatus[];
 };
@@ -1694,6 +1739,11 @@ export async function getAgentEnvironmentStatus(): Promise<AgentEnvironmentStatu
 /** Start building this device's snapshot; the status reports its progress. */
 export async function buildAgentEnvironment(): Promise<AgentEnvironmentStatusResponse> {
   return request("/intelligences/agent-environment/build", { method: "POST" });
+}
+
+/** The images this device holds, for the declaration to name one as its base. */
+export async function getAgentEnvironmentImages(): Promise<EnvironmentImagesResponse> {
+  return request("/intelligences/agent-environment/images");
 }
 
 export async function evaluateGrant(query: {

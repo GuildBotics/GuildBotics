@@ -252,6 +252,18 @@ beforeEach(() => {
       home: "/Users/me/.guildbotics/data/msb",
     },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+    image: {
+      default: "node:22.23.2-bookworm",
+      architecture: "arm64",
+      reference: "",
+      digest: "",
+      digests: {},
+      present: true,
+      held: "",
+      problem: "",
+      warning: "",
+      load_command: "/Users/me/.guildbotics/bin/guildbotics environment image load <archive.tar>",
+    },
     dns: { declared: "host", nameservers: [], problem: "" },
     tools: [
       {
@@ -269,6 +281,7 @@ beforeEach(() => {
     ],
     problem: "",
     problem_setting: "",
+    warning: "",
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
   });

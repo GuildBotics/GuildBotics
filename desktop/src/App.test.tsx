@@ -296,7 +296,9 @@ describe("App", () => {
     };
     // The device: the row of the environment card that is the problem, or
     // the declaration card in the advanced settings.
-    const device = (setting: "runtime" | "declaration" | "snapshot" | "building" | "filesystem") =>
+    const device = (
+      setting: "runtime" | "declaration" | "image" | "snapshot" | "building" | "filesystem",
+    ) =>
       systemAlertSetupTarget({
         ...base,
         id: "agent-environment:device",
@@ -306,6 +308,7 @@ describe("App", () => {
         setting,
       });
     expect(device("runtime")).toBe("/setup?section=intelligence&focus=agent-environment-runtime");
+    expect(device("image")).toBe("/setup?section=intelligence&focus=agent-environment-image");
     expect(device("snapshot")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
     expect(device("building")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
     expect(device("filesystem")).toBe(
@@ -314,6 +317,17 @@ describe("App", () => {
     expect(device("declaration")).toBe(
       "/setup?section=intelligence&advanced=intelligence&focus=agent-environment-declaration",
     );
+    // Turns run on an image the declaration did not name: the image row.
+    expect(
+      systemAlertSetupTarget({
+        ...base,
+        id: "agent-environment:image",
+        code: "agent_environment_image_differs",
+        person_id: "",
+        command: "",
+        setting: "image_differs",
+      }),
+    ).toBe("/setup?section=intelligence&focus=agent-environment-image");
     // One tool: its own row in the card.
     expect(
       systemAlertSetupTarget({
@@ -339,7 +353,9 @@ describe("App", () => {
   });
 
   it("tells the person what to do about a device alert, by the part that is wrong", () => {
-    const device = (setting: "runtime" | "declaration" | "snapshot" | "building" | "filesystem") =>
+    const device = (
+      setting: "runtime" | "declaration" | "image" | "snapshot" | "building" | "filesystem",
+    ) =>
       systemAlertMessage(t(), {
         id: "agent-environment:device",
         code: "agent_environment_unavailable",
@@ -358,6 +374,7 @@ describe("App", () => {
     expect(device("snapshot")).toBe(`${said} ${t()("systemAlerts.environmentFix.snapshot")}`);
     expect(device("runtime")).toBe(`${said} ${t()("systemAlerts.environmentFix.runtime")}`);
     expect(device("declaration")).toBe(`${said} ${t()("systemAlerts.environmentFix.declaration")}`);
+    expect(device("image")).toBe(`${said} ${t()("systemAlerts.environmentFix.image")}`);
     // A build in progress asks for nothing but patience.
     expect(device("building")).toBe(said);
   });

@@ -31,6 +31,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from guildbotics.app_api import hub_secrets
 from guildbotics.app_api.agent_environment_status import (
+    agent_environment_images,
     evaluate_grant,
 )
 from guildbotics.app_api.command_input_files import (
@@ -78,6 +79,7 @@ from guildbotics.app_api.models import (
     DefaultPersonUpdateRequest,
     DeviceRenameRequest,
     DeviceSshKey,
+    EnvironmentImagesResponse,
     GitHubAppRegistrationStartRequest,
     GitHubAppRegistrationStatus,
     GrantEvaluation,
@@ -1083,6 +1085,17 @@ def create_app(
     ) -> AgentEnvironmentStatusResponse:
         """Start building this device's snapshot; the status reports its progress."""
         return app_runtime.build_agent_environment()
+
+    @app.get(
+        "/intelligences/agent-environment/images",
+        response_model=EnvironmentImagesResponse,
+        responses=error_responses,
+    )
+    def agent_environment_images_view(
+        _: None = Depends(require_token),
+    ) -> EnvironmentImagesResponse:
+        """The images this device holds, for the declaration to name one."""
+        return agent_environment_images()
 
     @app.get(
         "/intelligences/grant-evaluation",

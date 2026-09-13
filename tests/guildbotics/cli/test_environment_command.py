@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import json
+
+import yaml
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,9 +22,15 @@ from guildbotics.intelligences.agent_environment import (
     runtime,
     snapshot,
 )
+from guildbotics.intelligences.agent_environment import image as image_module
+from guildbotics.intelligences.agent_environment.image import (
+    ImageStatus,
+    image_load_command,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
+    ImageInfo,
 )
 from guildbotics.intelligences.agent_environment.snapshot import (
     SnapshotStatus,
@@ -46,6 +54,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         runtime, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
     )
+    monkeypatch.setattr(image_module.platform, "machine", lambda: "arm64")
     return root
 
 
@@ -60,8 +69,9 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "runtime: available 0.6.17" in result.output
+    assert f"image: {image_module.IMAGE} (GuildBotics default)" in result.output
     assert (
-        f"snapshot: missing {snapshot_name(load_toolchain())} "
+        f"snapshot: missing {snapshot_name(load_toolchain(), ImageStatus())} "
         "(run `guildbotics environment build`)"
     ) in result.output
     assert "dns: 1.1.1.1, 8.8.8.8 -> 1.1.1.1, 8.8.8.8" in result.output
@@ -87,6 +97,17 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "home": "",
     }
     assert payload["snapshot"]["state"] == "missing"
+    assert payload["warning"] == ""
+    assert payload["image"] == {
+        "reference": "",
+        "architecture": "arm64",
+        "digest": "",
+        "digests": {},
+        "present": True,
+        "held": "",
+        "problem": "",
+        "warning": "",
+    }
     assert payload["dns"] == {
         "declared": "1.1.1.1, 8.8.8.8",
         "nameservers": ["1.1.1.1", "8.8.8.8"],
@@ -155,7 +176,7 @@ def test_build_runs_the_recipe_and_prints_its_lines(
 def test_build_does_nothing_when_up_to_date_unless_forced(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    name = snapshot_name(load_toolchain())
+    name = snapshot_name(load_toolchain(), ImageStatus())
     (snapshot.snapshots_dir(workspace) / name).mkdir(parents=True)
     built: list[str] = []
 
@@ -204,7 +225,7 @@ def test_login_accepts_only_provisioned_tools(workspace: Path) -> None:
 def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    name = snapshot_name(load_toolchain())
+    name = snapshot_name(load_toolchain(), ImageStatus())
     path = snapshot.snapshots_dir(workspace) / name
     path.mkdir(parents=True)
     calls: list[dict[str, Any]] = []
@@ -232,7 +253,9 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
 def test_login_that_stores_nothing_is_an_error(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = snapshot.snapshots_dir(workspace) / snapshot_name(load_toolchain())
+    path = snapshot.snapshots_dir(workspace) / snapshot_name(
+        load_toolchain(), ImageStatus()
+    )
     path.mkdir(parents=True)
 
     async def fake_login(*_: Any, **__: Any) -> int:
@@ -261,8 +284,312 @@ def test_environment_group_lists_its_commands() -> None:
     result = CliRunner().invoke(environment_group, ["--help"])
 
     assert result.exit_code == 0
-    for command in ("build", "login", "remove", "status"):
+    for command in ("build", "image", "login", "remove", "status"):
         assert f"\n  {command}" in result.output
+
+
+_DIGEST = "sha256:" + "c" * 64
+
+
+def _declare_image(workspace: Path, digest: str = _DIGEST) -> None:
+    target = workspace / ".guildbotics" / "config" / "intelligences"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "agent_environment.yml").write_text(
+        f"image:\n  reference: local/agent:1\n  digests:\n    arm64: {digest}\n"
+        "dns:\n  nameservers: [1.1.1.1]\n"
+    )
+
+
+def test_status_reports_the_declared_image_as_this_device_holds_it(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_image(workspace)
+    monkeypatch.setattr(runtime, "list_images", lambda: ())
+
+    missing = _invoke(workspace, "status")
+    problem = t(
+        "intelligences.agent_environment.image.missing",
+        reference="local/agent:1",
+        architecture="arm64",
+        command=image_load_command(),
+    )
+    assert f"image: local/agent:1 [arm64={_DIGEST[:19]}] arm64: not loaded" in (
+        missing.output
+    )
+    assert f"image: {problem}" in missing.output
+
+    monkeypatch.setattr(
+        runtime,
+        "list_images",
+        lambda: (ImageInfo("local/agent:1", _DIGEST, "arm64"),),
+    )
+    loaded = _invoke(workspace, "status", "--format", "json")
+    payload = json.loads(loaded.output)
+    assert payload["image"] == {
+        "reference": "local/agent:1",
+        "architecture": "arm64",
+        "digest": _DIGEST,
+        "digests": {"arm64": _DIGEST},
+        "present": True,
+        "held": _DIGEST,
+        "problem": "",
+        "warning": "",
+    }
+    # The snapshot is still to be built; the image itself refuses nothing.
+    assert payload["refusal"] == t("intelligences.agent_environment.snapshot.missing")
+    assert payload["warning"] == ""
+
+    other = "sha256:" + "d" * 64
+    monkeypatch.setattr(
+        runtime, "list_images", lambda: (ImageInfo("local/agent:1", other, "arm64"),)
+    )
+    differs = _invoke(workspace, "status")
+    warning = t(
+        "intelligences.agent_environment.image.mismatch",
+        reference="local/agent:1",
+        architecture="arm64",
+        held=other[:19],
+        digest=_DIGEST[:19],
+        command=image_load_command(),
+    )
+    assert f"warning: {warning}" in differs.output
+    assert (
+        f"image: local/agent:1 [arm64={_DIGEST[:19]}] arm64: loaded at {other[:19]}, "
+        "not the declared one"
+    ) in differs.output
+    assert "image: The base image" not in differs.output
+
+    monkeypatch.setattr(image_module.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        runtime, "list_images", lambda: (ImageInfo("local/agent:1", other, "amd64"),)
+    )
+    undeclared = _invoke(workspace, "status")
+    assert (
+        f"image: local/agent:1 [arm64={_DIGEST[:19]}] amd64: loaded at {other[:19]}, "
+        "not declared for amd64"
+    ) in undeclared.output
+
+
+def test_build_refuses_while_the_declared_image_is_not_here(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _declare_image(workspace)
+    monkeypatch.setattr(runtime, "list_images", lambda: ())
+    calls: list[str] = []
+    monkeypatch.setattr(
+        runtime, "build_snapshot", lambda name, **kw: calls.append(name)
+    )
+
+    result = _invoke(workspace, "build")
+
+    assert result.exit_code == 1
+    assert "local/agent:1" in result.output and "image load" in result.output
+    assert calls == []
+
+
+def test_image_list_prints_what_the_declaration_may_name(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recipe's own image, the pull's digest alias, and another
+    architecture's image are in the store but not on the list; the row the
+    declaration names is marked."""
+    _declare_image(workspace)
+    other = "sha256:" + "d" * 64
+    monkeypatch.setattr(
+        runtime,
+        "list_images",
+        lambda: (
+            ImageInfo("node:22.23.2-bookworm", "sha256:" + "a" * 64, "arm64", 381),
+            ImageInfo(
+                "docker.io/library/node@sha256:" + "a" * 64,
+                "sha256:" + "a" * 64,
+                "arm64",
+            ),
+            ImageInfo("local/agent:1", _DIGEST, "arm64", 900),
+            ImageInfo("local/agent:1", other, "amd64", 900),
+            ImageInfo("local/other:2", other, "arm64", 1),
+        ),
+    )
+
+    text = _invoke(workspace, "image", "list")
+    assert text.output.splitlines() == [
+        "architecture: arm64",
+        f"local/agent:1 {_DIGEST} declared",
+        f"local/other:2 {other}",
+    ]
+
+    as_json = _invoke(workspace, "image", "list", "--format", "json")
+    assert json.loads(as_json.output) == {
+        "architecture": "arm64",
+        "images": [
+            {
+                "reference": "local/agent:1",
+                "digest": _DIGEST,
+                "size_bytes": 900,
+                "declared": True,
+            },
+            {
+                "reference": "local/other:2",
+                "digest": other,
+                "size_bytes": 1,
+                "declared": False,
+            },
+        ],
+    }
+
+    monkeypatch.setattr(
+        runtime,
+        "list_images",
+        lambda: (ImageInfo("local/agent:1", other, "arm64", 900),),
+    )
+    assert (
+        f"local/agent:1 {other} declared at {_DIGEST[:19]}"
+        in _invoke(workspace, "image", "list").output
+    )
+    monkeypatch.setattr(runtime, "list_images", lambda: ())
+    (
+        workspace
+        / ".guildbotics"
+        / "config"
+        / "intelligences"
+        / "agent_environment.yml"
+    ).unlink()
+    empty = _invoke(workspace, "image", "list")
+    assert empty.output.splitlines() == [
+        "architecture: arm64",
+        "This device holds no image.",
+    ]
+
+
+def _declared_image(workspace: Path) -> dict[str, Any]:
+    text = (
+        workspace
+        / ".guildbotics"
+        / "config"
+        / "intelligences"
+        / "agent_environment.yml"
+    ).read_text()
+    return yaml.safe_load(text)
+
+
+def test_image_declare_names_the_loaded_image_for_this_architecture(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runtime, "list_images", lambda: (ImageInfo("local/agent:1", _DIGEST, "arm64"),)
+    )
+
+    result = _invoke(workspace, "image", "declare", "local/agent:1")
+
+    assert result.exit_code == 0, result.output
+    assert result.output == f"local/agent:1 arm64 {_DIGEST}\n"
+    declared = _declared_image(workspace)
+    assert declared["image"] == {
+        "reference": "local/agent:1",
+        "digests": {"arm64": _DIGEST},
+    }
+    assert declared["dns"] == {"nameservers": ["1.1.1.1", "8.8.8.8"]}
+    assert "packages" in declared
+
+    absent = _invoke(workspace, "image", "declare", "local/agent:2")
+    assert absent.exit_code == 1
+    assert "local/agent:2" in absent.output and "image load" in absent.output
+
+
+def test_image_declare_merges_digests_of_the_same_reference_and_replaces_another(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit digests need no runtime: a build machine declares every
+    architecture it built for. Another reference starts over."""
+    monkeypatch.setattr(
+        runtime, "doctor", lambda: pytest.fail("no runtime needed for explicit digests")
+    )
+    _declare_image(workspace)
+    other = "sha256:" + "d" * 64
+
+    merged = _invoke(
+        workspace, "image", "declare", "local/agent:1", "--digest", f"amd64={other}"
+    )
+    assert merged.exit_code == 0, merged.output
+    assert merged.output.splitlines() == [
+        f"local/agent:1 amd64 {other}",
+        f"local/agent:1 arm64 {_DIGEST}",
+    ]
+    assert _declared_image(workspace)["image"]["digests"] == {
+        "arm64": _DIGEST,
+        "amd64": other,
+    }
+
+    replaced = _invoke(
+        workspace, "image", "declare", "local/agent:2", "--digest", f"amd64={other}"
+    )
+    assert replaced.exit_code == 0, replaced.output
+    assert _declared_image(workspace)["image"] == {
+        "reference": "local/agent:2",
+        "digests": {"amd64": other},
+    }
+
+    bad = _invoke(workspace, "image", "declare", "local/agent:2", "--digest", "amd64")
+    assert bad.exit_code == 2 and "ARCH=DIGEST" in bad.output
+    invalid = _invoke(
+        workspace, "image", "declare", "local/agent:2", "--digest", "amd64=sha256:x"
+    )
+    assert invalid.exit_code == 1 and "sha256:x" in invalid.output
+
+    default = _invoke(workspace, "image", "declare", "--default")
+    assert default.exit_code == 0, default.output
+    assert "image" not in _declared_image(workspace)
+    assert _invoke(workspace, "image", "declare").exit_code == 2
+    assert _invoke(workspace, "image", "declare", "x:1", "--default").exit_code == 2
+
+
+def test_image_load_reads_the_archive_and_prints_what_it_added(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive = tmp_path / "agent.tar"
+    archive.write_bytes(b"tar")
+    loads: list[dict[str, Any]] = []
+
+    async def load(path: Path, *, tag: str | None = None) -> tuple[ImageInfo, ...]:
+        loads.append({"path": path, "tag": tag})
+        return (ImageInfo("local/agent:1", _DIGEST, "arm64", 900),)
+
+    monkeypatch.setattr(runtime, "load_image", load)
+    monkeypatch.setattr(runtime, "archive_architecture", lambda path: "arm64")
+
+    result = _invoke(workspace, "image", "load", str(archive), "--tag", "local/agent:1")
+
+    assert result.exit_code == 0, result.output
+    assert loads == [{"path": archive, "tag": "local/agent:1"}]
+    assert result.output == f"loaded local/agent:1 {_DIGEST}\n"
+
+    monkeypatch.setattr(runtime, "archive_architecture", lambda path: "amd64")
+    foreign = _invoke(workspace, "image", "load", str(archive))
+    assert foreign.exit_code == 1 and "amd64" in foreign.output
+
+    absent = _invoke(workspace, "image", "load", str(tmp_path / "none.tar"))
+    assert absent.exit_code == 2
+
+
+def test_image_commands_report_a_runtime_refusal(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    archive = tmp_path / "agent.tar"
+    archive.write_bytes(b"tar")
+
+    async def load(path: Path, *, tag: str | None = None) -> tuple[ImageInfo, ...]:
+        raise AgentEnvironmentError("not a tar")
+
+    monkeypatch.setattr(runtime, "load_image", load)
+    monkeypatch.setattr(runtime, "archive_architecture", lambda path: "")
+
+    def fail() -> tuple[ImageInfo, ...]:
+        raise AgentEnvironmentError("store locked")
+
+    monkeypatch.setattr(runtime, "list_images", fail)
+
+    assert "not a tar" in _invoke(workspace, "image", "load", str(archive)).output
+    assert "store locked" in _invoke(workspace, "image", "list").output
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])
