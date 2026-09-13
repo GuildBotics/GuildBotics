@@ -974,19 +974,29 @@ describe("QuickRun", () => {
       value: { writeText },
       configurable: true,
     });
-    renderWindow();
+    const view = renderWindow();
 
     await fire({ command: null, text: "original" });
     await user.click(await screen.findByRole("button", { name: t("quickRun.run") }));
     await screen.findByText("done");
 
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
     await user.click(screen.getByRole("button", { name: t("quickRun.copy") }));
     expect(writeText).toHaveBeenCalledWith("done");
+    const resetTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1500);
+    expect(resetTimerIndex).toBeGreaterThanOrEqual(0);
+    const resetTimer = setTimeoutSpy.mock.results[resetTimerIndex].value;
 
     // The watcher sees the change but must recognise it as our own.
     setClipboard(2, "done");
     await waitFor(() => expect(pollClipboardMock).toHaveBeenCalledWith(2));
     expect(screen.getByRole("textbox", { name: t("quickRun.message") })).toHaveValue("original");
+
+    view.unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimer);
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
   });
 
   it("closes from the window's own close button", async () => {
