@@ -88,21 +88,29 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 class _FakeBuild:
-    """Stands in for the runtime: records the build and writes the snapshot."""
+    """Stands in for the runtime: records the build and writes the snapshot.
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, fail: str = "") -> None:
+    ``built_from`` is the config digest the runtime reports having created
+    the sandbox from; "" stands for the recipe's own image.
+    """
+
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, *, fail: str = "", built_from: str = ""
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.removed: list[Path] = []
         self.fail = fail
+        self.built_from = built_from
         monkeypatch.setattr(runtime, "build_snapshot", self.build)
         monkeypatch.setattr(runtime, "remove_snapshot", self.remove)
 
-    async def build(self, name: str, **kwargs: Any) -> Path:
-        self.calls.append({"name": name, **kwargs})
+    async def build(self, name: Any, **kwargs: Any) -> Path:
+        snapshot_name = name(self.built_from)
+        self.calls.append({"name": snapshot_name, **kwargs})
         kwargs["on_line"]("Get:1 http://deb.debian.org bookworm InRelease")
         if self.fail:
             raise AgentEnvironmentError(self.fail)
-        path = kwargs["dest_dir"] / name
+        path = kwargs["dest_dir"] / snapshot_name
         path.mkdir()
         return path
 
@@ -310,14 +318,38 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
 def test_a_build_starts_from_the_declared_image_this_device_holds(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = _FakeBuild(monkeypatch)
+    fake = _FakeBuild(monkeypatch, built_from=_DIGEST)
     _device_holds(monkeypatch)
 
-    asyncio.run(
+    status = asyncio.run(
         build_snapshot(_with_image(), on_line=lambda _: None, workspace_root=workspace)
     )
 
     assert (fake.calls[0]["image"], fake.calls[0]["pull"]) == ("local/agent:1", False)
+    held = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
+    assert status.name == snapshot_name(_with_image(), held)
+
+
+def test_a_snapshot_is_named_by_the_image_the_runtime_built_from(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent ``image load`` re-tagged the reference between the
+    status read and the build: the content is the newer image's, so the
+    name is too, and the declared digest's snapshot is still missing."""
+    newer = "sha256:" + "e" * 64
+    fake = _FakeBuild(monkeypatch, built_from=newer)
+    _device_holds(monkeypatch)
+
+    status = asyncio.run(
+        build_snapshot(_with_image(), on_line=lambda _: None, workspace_root=workspace)
+    )
+
+    as_read = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
+    as_built = ImageStatus("local/agent:1", "arm64", _DIGEST, False, newer)
+    assert status.name == snapshot_name(_with_image(), as_built)
+    assert status.name != snapshot_name(_with_image(), as_read)
+    assert status.path.is_dir()
+    assert snapshot_status(_with_image(), as_read, workspace).state == "stale"
 
 
 def test_a_build_refuses_a_declared_image_this_device_lacks(
@@ -348,8 +380,8 @@ def test_a_build_refuses_a_declared_image_this_device_lacks(
 def test_a_build_from_an_image_that_differs_from_the_declaration_says_so(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = _FakeBuild(monkeypatch)
     other = "sha256:" + "d" * 64
+    fake = _FakeBuild(monkeypatch, built_from=other)
     _device_holds(monkeypatch, {"local/agent:1": other})
     lines: list[str] = []
 

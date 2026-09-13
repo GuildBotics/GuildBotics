@@ -24,7 +24,7 @@ import json
 import shlex
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from logging import Logger
 from pathlib import Path
 from typing import Literal
@@ -256,10 +256,19 @@ async def build_snapshot(
         raise AgentEnvironmentError(image.refusal)
     if image.warning:
         on_line(f"[image] {image.warning}")
-    name = snapshot_name(declaration, image)
+    expected = snapshot_name(declaration, image)
     directory = snapshots_dir(workspace_root)
     directory.mkdir(parents=True, exist_ok=True)
-    failed = directory / (name + _FAILED_SUFFIX)
+    failed = directory / (expected + _FAILED_SUFFIX)
+
+    def name(digest: str) -> str:
+        # The runtime read the reference itself; the name follows what it
+        # found, so a reference re-tagged by a concurrent load cannot leave
+        # one image's content under another's name.
+        return snapshot_name(
+            declaration, replace(image, held=digest) if digest else image
+        )
+
     try:
         with held_lock(directory / _LOCK_FILE, timeout=0):
             failed.unlink(missing_ok=True)
@@ -289,11 +298,11 @@ async def build_snapshot(
                 failed.write_text(f"{reason}\n")
                 raise AgentEnvironmentError(reason) from exc
             for other in _snapshots_in(directory):
-                if other.name != name:
+                if other.name != path.name:
                     await runtime.remove_snapshot(other)
             for marker in directory.glob(f"{SNAPSHOT_PREFIX}*{_FAILED_SUFFIX}"):
                 marker.unlink()
-            return SnapshotStatus("ready", name, path)
+            return SnapshotStatus("ready", path.name, path)
     except LockTimeoutError as exc:
         raise AgentEnvironmentError(
             t("intelligences.agent_environment.snapshot.build_running")

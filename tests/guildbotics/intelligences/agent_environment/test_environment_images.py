@@ -35,7 +35,11 @@ def _handle(
         return SimpleNamespace(config=config)
 
     return SimpleNamespace(
-        reference=reference, size_bytes=size, architecture=architecture, inspect=inspect
+        reference=reference,
+        size_bytes=size,
+        architecture=architecture,
+        manifest_digest="",
+        inspect=inspect,
     )
 
 

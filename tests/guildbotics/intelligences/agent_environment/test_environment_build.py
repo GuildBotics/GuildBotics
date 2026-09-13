@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
+import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -53,6 +54,9 @@ class _Sandbox:
     destroyed = False
     create_error: Exception | None = None
     docker_config: str | None = None
+    #: The manifest the runtime resolved the reference to at creation.
+    manifest_digest = "sha256:" + "m" * 64
+    config_json = ""
 
     @classmethod
     async def create(cls, name: str, **kwargs: Any) -> _Sandbox:
@@ -64,7 +68,14 @@ class _Sandbox:
 
     @staticmethod
     async def get(name: str) -> _Sandbox:
-        return _Sandbox()
+        sandbox = _Sandbox()
+        sandbox.config_json = json.dumps(
+            {
+                "image": {"Oci": {"reference": "x"}},
+                "manifest_digest": _Sandbox.manifest_digest,
+            }
+        )
+        return sandbox
 
     async def exec_stream(self, cmd: str, args: list[str], **kwargs: Any) -> _Handle:
         _Sandbox.execs.append({"cmd": cmd, "args": args, **kwargs})
@@ -97,14 +108,55 @@ class _Snapshot:
         cls.removed.append({"path": path, "force": force})
 
 
+def _handle(reference: str, digest: str, manifest: str) -> Any:
+    async def inspect() -> Any:
+        return SimpleNamespace(config=SimpleNamespace(digest=digest))
+
+    return SimpleNamespace(
+        reference=reference,
+        size_bytes=1,
+        architecture="arm64",
+        manifest_digest=manifest,
+        inspect=inspect,
+    )
+
+
+class _Image:
+    """The store: the built-from manifest belongs to ``local/agent:1``."""
+
+    handles: list[Any] = []
+
+    @staticmethod
+    async def list() -> list[Any]:
+        return list(_Image.handles)
+
+
 @pytest.fixture
 def sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     _Sandbox.created, _Sandbox.execs = {}, []
     _Sandbox.stopped = _Sandbox.destroyed = False
     _Sandbox.create_error = None
+    _Sandbox.manifest_digest = "sha256:" + "m" * 64
     _Snapshot.created, _Snapshot.removed = {}, []
+    _Image.handles = [
+        _handle("node:22.23.2-bookworm", "sha256:" + "a" * 64, "sha256:" + "n" * 64),
+        _handle("local/agent:1", "sha256:" + "c" * 64, "sha256:" + "m" * 64),
+    ]
     monkeypatch.setattr(microsandbox, "Sandbox", _Sandbox)
     monkeypatch.setattr(microsandbox, "Snapshot", _Snapshot)
+    monkeypatch.setattr(microsandbox, "Image", _Image)
+
+
+def _named(name: str):
+    """A naming callback that records what the runtime built from."""
+    seen: list[str] = []
+
+    def name_for(digest: str) -> str:
+        seen.append(digest)
+        return name
+
+    name_for.seen = seen  # type: ignore[attr-defined]
+    return name_for
 
 
 _STEPS = (BuildStep("home", 'mkdir -p "$HOME"'), BuildStep("npm", "npm install -g x"))
@@ -115,9 +167,10 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     sdk: None, tmp_path: Path
 ) -> None:
     lines: list[str] = []
+    name = _named("guildbotics-abc")
 
     path = await build_snapshot(
-        "guildbotics-abc",
+        name,
         dest_dir=tmp_path,
         image="node:22.23.2-bookworm",
         pull=True,
@@ -160,6 +213,29 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     }
     assert path == tmp_path / "guildbotics-abc"
     assert _Sandbox.destroyed
+    # The name came from the image the runtime resolved the reference to.
+    assert name.seen == ["sha256:" + "c" * 64]  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_a_build_from_an_image_the_store_cannot_name_reports_no_digest(
+    sdk: None, tmp_path: Path
+) -> None:
+    _Sandbox.manifest_digest = "sha256:" + "z" * 64
+    name = _named("n")
+
+    await build_snapshot(
+        name,
+        dest_dir=tmp_path,
+        image="i",
+        pull=True,
+        home="/h",
+        steps=(),
+        nameservers=(),
+        on_line=lambda _: None,
+    )
+
+    assert name.seen == [""]  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -171,7 +247,7 @@ async def test_the_pull_ignores_the_docker_clients_configuration(
     monkeypatch.setenv("DOCKER_CONFIG", str(tmp_path / "docker"))
 
     await build_snapshot(
-        "n",
+        _named("n"),
         dest_dir=tmp_path,
         image="i",
         pull=True,
@@ -194,7 +270,7 @@ async def test_an_image_loaded_here_is_never_asked_of_a_registry(
     """A local reference names nothing anywhere else; a pull would only
     fail slowly where refusing it fails at once."""
     await build_snapshot(
-        "n",
+        _named("n"),
         dest_dir=tmp_path,
         image="local/agent:1",
         pull=False,
@@ -218,7 +294,7 @@ async def test_a_failing_step_names_itself_and_the_build_sandbox_is_dropped(
     )
     with pytest.raises(AgentEnvironmentError, match=re.escape(failed)):
         await build_snapshot(
-            "guildbotics-abc",
+            _named("guildbotics-abc"),
             dest_dir=tmp_path,
             image="i",
             pull=True,
@@ -242,7 +318,7 @@ async def test_a_sandbox_that_cannot_start_is_reported(
 
     with pytest.raises(AgentEnvironmentError, match="build environment: no hypervisor"):
         await build_snapshot(
-            "n",
+            _named("n"),
             dest_dir=tmp_path,
             image="i",
             pull=True,

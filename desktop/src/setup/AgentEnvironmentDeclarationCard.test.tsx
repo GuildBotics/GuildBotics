@@ -182,6 +182,38 @@ describe("AgentEnvironmentDeclarationCard", () => {
     });
   });
 
+  it("keeps the declared reference as the current choice when only an alias holds its digest", async () => {
+    // `image load --tag` can name one image twice; the declaration names a
+    // reference, so an alias at the same digest does not stand in for it.
+    vi.mocked(getAgentEnvironmentImages).mockResolvedValue({
+      architecture: "arm64",
+      images: [{ reference: "local/alias:1", digest: DIGEST, size_bytes: 900, declared: false }],
+      problem: "",
+    });
+    render(
+      <Harness
+        initial={{ ...packaged, image: { reference: "local/agent:1", digests: { arm64: DIGEST } } }}
+      />,
+    );
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    await waitFor(() =>
+      expect(select).toHaveValue(
+        `local/agent:1 (${DIGEST.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+      ),
+    );
+    await userEvent.click(select);
+    expect(await screen.findByRole("option", { name: /local\/agent:1/ })).toHaveAttribute(
+      "data-combobox-disabled",
+      "true",
+    );
+    expect(screen.getByRole("option", { name: /local\/alias:1/ })).not.toHaveAttribute(
+      "data-combobox-disabled",
+      "true",
+    );
+  });
+
   it("offers an image loaded again under a new digest beside the declared one", async () => {
     const onChange = vi.fn();
     render(

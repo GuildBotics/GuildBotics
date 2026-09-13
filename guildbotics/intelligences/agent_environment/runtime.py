@@ -88,15 +88,17 @@ class ImageInfo:
     """An image this device holds, as the runtime names and identifies it.
 
     ``digest`` is the digest of the image's configuration: the identity that
-    survives ``docker save`` and ``msb image load``, unlike the manifest
-    digest, which an archive re-encodes. ``architecture`` is the CPU
-    architecture the image was built for, as OCI names it.
+    survives ``docker save`` and ``msb image load``, unlike the
+    ``manifest_digest``, which an archive re-encodes and which is how the
+    runtime itself names what a sandbox was created from. ``architecture``
+    is the CPU architecture the image was built for, as OCI names it.
     """
 
     reference: str
     digest: str
     architecture: str = ""
     size_bytes: int | None = None
+    manifest_digest: str = ""
 
 
 def runtime_home() -> Path:
@@ -431,7 +433,7 @@ class BuildStep:
 
 
 async def build_snapshot(
-    name: str,
+    name: Callable[[str], str],
     *,
     dest_dir: Path,
     image: str,
@@ -441,7 +443,7 @@ async def build_snapshot(
     nameservers: Iterable[str],
     on_line: Callable[[str], None],
 ) -> Path:
-    """Run ``steps`` on ``image`` and keep the result as the snapshot ``name``.
+    """Run ``steps`` on ``image`` and keep the result as a snapshot.
 
     The build sandbox has all egress open: it fetches packages from wherever
     they live, and nothing of the user's is mounted into it. Every line the
@@ -449,6 +451,12 @@ async def build_snapshot(
     build succeeds or not; only the snapshot under ``dest_dir`` remains.
 
     Args:
+        name: Names the snapshot from the config digest of the image the
+            sandbox was actually created from ("" when the runtime holds
+            no such image, as for one it just pulled and cannot describe).
+            A reference is read once, here, by the runtime; naming from the
+            same reading keeps the name true to the content when the
+            reference is re-tagged by a concurrent ``image load``.
         pull: Fetch ``image`` from its registry when this device lacks it.
             False for an image the user loaded here: a local reference
             names nothing anywhere else, and asking a registry about it
@@ -482,6 +490,7 @@ async def build_snapshot(
             t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
         ) from exc
     try:
+        snapshot_name = name(await _built_from(Sandbox))
         await _ipv4_only(sandbox)
         for step in steps:
             on_line(f"[{step.label}]")
@@ -503,7 +512,10 @@ async def build_snapshot(
                 )
         await sandbox.stop(timeout=_STOP_TIMEOUT)
         snapshot = await Snapshot.create(
-            name, from_sandbox=_BUILD_NAME, dest_dir=str(dest_dir), force=True
+            snapshot_name,
+            from_sandbox=_BUILD_NAME,
+            dest_dir=str(dest_dir),
+            force=True,
         )
         return Path(snapshot.path)
     except AgentEnvironmentError:
@@ -515,6 +527,20 @@ async def build_snapshot(
     finally:
         with suppress(Exception):
             await (await Sandbox.get(_BUILD_NAME)).destroy(force=True)
+
+
+async def _built_from(sandbox_api: Any) -> str:
+    """The config digest of the image the build sandbox was created from.
+
+    The runtime records the manifest it resolved the reference to; the
+    config digest is read from the image that manifest belongs to.
+    """
+    config = json.loads((await sandbox_api.get(_BUILD_NAME)).config_json)
+    manifest = str(config.get("manifest_digest") or "")
+    for image in await _images():
+        if manifest and image.manifest_digest == manifest:
+            return image.digest
+    return ""
 
 
 @contextmanager
@@ -540,6 +566,27 @@ def _anonymous_registry() -> Iterator[None]:
                 os.environ["DOCKER_CONFIG"] = previous
 
 
+async def _images() -> tuple[ImageInfo, ...]:
+    from microsandbox import Image
+
+    images = []
+    # The stub spells the return type as the method that shadows it.
+    for handle in cast("list[Any]", await Image.list()):
+        detail = await handle.inspect()
+        if detail.config is None:
+            continue
+        images.append(
+            ImageInfo(
+                handle.reference,
+                detail.config.digest,
+                handle.architecture or "",
+                handle.size_bytes,
+                handle.manifest_digest or "",
+            )
+        )
+    return tuple(images)
+
+
 def list_images() -> tuple[ImageInfo, ...]:
     """Every image this device's runtime holds, by reference.
 
@@ -550,27 +597,8 @@ def list_images() -> tuple[ImageInfo, ...]:
     Raises:
         AgentEnvironmentError: When the runtime cannot enumerate its store.
     """
-    from microsandbox import Image
-
-    async def read() -> tuple[ImageInfo, ...]:
-        images = []
-        # The stub spells the return type as the method that shadows it.
-        for handle in cast("list[Any]", await Image.list()):
-            detail = await handle.inspect()
-            if detail.config is None:
-                continue
-            images.append(
-                ImageInfo(
-                    handle.reference,
-                    detail.config.digest,
-                    handle.architecture or "",
-                    handle.size_bytes,
-                )
-            )
-        return tuple(images)
-
     try:
-        return _run_sync(read())
+        return _run_sync(_images())
     except Exception as exc:
         raise AgentEnvironmentError(
             t("intelligences.agent_environment.runtime.images_failed", error=exc)

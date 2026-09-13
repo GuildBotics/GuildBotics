@@ -75,7 +75,9 @@ export function AgentEnvironmentDeclarationCard({
       value: key(image.reference, image.digest),
       label: `${image.reference} (${shortDigest(image.digest)})`,
     })),
-    ...(declared && declaredHere && !held.some((image) => image.digest === declaredHere)
+    ...(declared &&
+    declaredHere &&
+    !held.some((image) => key(image.reference, image.digest) === selected)
       ? [
           {
             value: selected,
