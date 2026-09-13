@@ -14,8 +14,9 @@
 #   - lychee, for the Markdown link check
 #
 # It keeps what GuildBotics' build recipe expects of a base image: Debian's apt,
-# Node.js with npm, curl and tar. GuildBotics installs the AI CLI tools and the
-# declared packages on top when it builds the environment snapshot.
+# Node.js with npm, curl and tar, and no bubblewrap (see the last step).
+# GuildBotics installs the AI CLI tools and the declared packages on top when
+# it builds the environment snapshot.
 #
 # `scripts/build-agent-environment-image.sh` builds it for every architecture
 # the workspace's devices run, loads it on the building device, and declares
@@ -96,3 +97,11 @@ RUN npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
     && npm cache clean --force \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Codex enforces its permission profile with the bubblewrap it bundles, but
+# prefers one installed in the image, and Debian's 0.8.0 cannot exec Codex's
+# helper: every Codex session then fails to start. The Tauri libraries above
+# pull the package in as a dependency, so the binary is removed here; nothing
+# a turn runs needs it (WebKit's own sandbox is not exercised by `cargo check`).
+RUN rm -f /usr/bin/bwrap \
+    && ! command -v bwrap

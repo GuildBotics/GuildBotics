@@ -107,7 +107,9 @@ snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
 build steps what they use (Debian's `apt`, Node.js with `npm`, `curl` and
-`tar`). A loaded image is used without asking a registry (pull policy
+`tar`), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
+bundles and cannot start a session with Debian's (packages such as
+`libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
 `never`). The image for developing GuildBotics itself
 (`docker/agent-environment/Dockerfile`; `scripts/build-agent-environment-image.sh`
 builds every architecture, loads, and declares) is the worked example.

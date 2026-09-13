@@ -8,7 +8,9 @@
 # A workspace may instead start from an image it built itself, for toolchains
 # the package managers below cannot express (a Python interpreter, a Rust
 # toolchain, a browser). Build it FROM the default image, or from one that
-# gives the build the same: Debian's apt, Node.js with npm, curl and tar.
+# gives the build the same: Debian's apt, Node.js with npm, curl and tar. Do
+# not ship bubblewrap (`bwrap`): Codex prefers it to the one it bundles and
+# cannot start a session with Debian's.
 # The image is not shared, and it is per CPU architecture (the environment
 # runs the device's own CPU): build it for each architecture the workspace's
 # devices run, name it here by reference and by the digest of each build
