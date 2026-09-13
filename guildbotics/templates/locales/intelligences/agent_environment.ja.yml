@@ -11,6 +11,9 @@ ja:
     build_step_failed: "ビルド手順 '%{step}' が終了コード %{code} で失敗しました。"
     build_failed: "スナップショットをビルドできませんでした: %{error}"
     remove_failed: "%{path} のスナップショットを削除できませんでした: %{error}"
+    images_failed: "この端末の image を読めませんでした: %{error}"
+    load_failed: "image アーカイブ %{path} を読み込めませんでした: %{error}"
+    nothing_loaded: "アーカイブ %{path} に image がありません。"
   filesystem:
     unavailable: "この GuildBotics はディレクトリ「%{path}」にアクセスできません: %{error}"
     macos_documents: "この GuildBotics を起動しているアプリ%{app}に、システム設定 → プライバシーとセキュリティ → ファイルとフォルダ で書類フォルダへのアクセスを許可してください。"
@@ -18,10 +21,19 @@ ja:
     permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:
     not_a_package: "'%{spec}' はパッケージ指定ではありません"
+    not_an_image: "'%{reference}' は image の参照名ではありません"
+    not_a_digest: "'%{digest}' は image の digest（sha256:<16進 64 桁>）ではありません"
+    no_digests: "image にはアーキテクチャごとの digest を 1 つ以上書いてください"
+    not_an_architecture: "'%{architecture}' はアーキテクチャ名（amd64、arm64）ではありません"
     no_nameservers: "nameserver を 1 つ以上書くか、'%{host}' を指定してください"
     not_ipv4: "'%{nameserver}' は IPv4 アドレスではありません"
     not_a_mapping: "%{where}: 宣言はマッピングでなければなりません"
     no_device_resolver: "%{where}: dns.nameservers が '%{host}' ですが、この端末には IPv4 のリゾルバがありません。nameservers を明示してください"
+  image:
+    missing: "ベースイメージ %{reference} はこの端末（%{architecture}）に読み込まれていません。`%{command}` で読み込んでください。"
+    mismatch: "この端末の turn はベースイメージ %{reference} の %{held} で動きます。宣言が %{architecture} 向けに指すのは %{digest} です。宣言の image を `%{command}` で読み込むと揃います。"
+    undeclared: "この端末の turn はベースイメージ %{reference} の %{held} で動きます。宣言は %{declared} 向けにはありますが、この端末のアーキテクチャ（%{architecture}）向けにはありません。%{architecture} 向けに宣言すると揃います。"
+    wrong_architecture: "アーカイブ %{path} の image は %{architecture} 向けで、この端末（%{device}）では動きません。"
   snapshot:
     missing: "この端末にはエージェント隔離環境がありません。"
     stale: "この端末のエージェント隔離環境は宣言より古い状態です。"

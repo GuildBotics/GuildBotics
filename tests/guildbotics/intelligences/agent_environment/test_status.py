@@ -11,6 +11,10 @@ from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.intelligences.agent_environment import status as module
 from guildbotics.intelligences.agent_runtime.environment import _ready
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+from guildbotics.intelligences.agent_environment.image import (
+    ImageStatus,
+    image_load_command,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
 )
@@ -38,6 +42,7 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
         "health": AgentEnvironmentHealth(True, "", "0.6.17"),
         "declaration": ToolchainDeclaration(dns=DnsSettings(nameservers="host")),
         "snapshot": SnapshotStatus("ready", "guildbotics-abc", Path("/snap")),
+        "image": ImageStatus(),
         "nameservers": ("192.168.3.1",),
         "credentials_saved": {"codex"},
     }
@@ -61,7 +66,10 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
 
     monkeypatch.setattr(module.runtime, "doctor", lambda: parts["health"])
     monkeypatch.setattr(module, "load_toolchain", load)
-    monkeypatch.setattr(module.snapshot, "snapshot_status", lambda d: parts["snapshot"])
+    monkeypatch.setattr(
+        module.snapshot, "snapshot_status", lambda d, image: parts["snapshot"]
+    )
+    monkeypatch.setattr(module, "image_status", lambda d, lookup=True: parts["image"])
     monkeypatch.setattr(module, "upstream_nameservers", resolvers)
     monkeypatch.setattr(
         module,
@@ -75,6 +83,7 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
     status = device_status()
 
     assert status.ready and (status.refusal, status.setting) == ("", "")
+    assert status.warning == ""
     assert (status.dns.declared, status.dns.nameservers) == ("host", ("192.168.3.1",))
     assert status.tool("codex").refusal == ""
     assert status.tool("claude").refusal == t(
@@ -127,6 +136,14 @@ def test_a_tool_the_snapshot_does_not_carry_is_refused_as_such(
             "declaration",
         ),
         (
+            "image",
+            ImageStatus(
+                "local/agent:1", "arm64", "sha256:" + "c" * 64, False, error="locked"
+            ),
+            "locked",
+            "image",
+        ),
+        (
             "snapshot",
             SnapshotStatus("missing", "guildbotics-abc", Path("/snap")),
             t("intelligences.agent_environment.snapshot.missing"),
@@ -166,6 +183,59 @@ def test_the_refusal_is_the_first_thing_a_turn_would_stop_on(
     with pytest.raises(AgentRuntimeError) as exc_info:
         _ready("codex")
     assert str(exc_info.value) == status.refusal
+
+
+def test_an_image_that_differs_from_the_declaration_is_a_warning_not_a_refusal(
+    device,
+) -> None:
+    device["image"] = ImageStatus(
+        "local/agent:1", "arm64", "sha256:" + "c" * 64, False, "sha256:" + "d" * 64
+    )
+
+    status = device_status()
+
+    assert status.ready and (status.refusal, status.setting) == ("", "")
+    assert status.warning == status.image.warning != ""
+    _ready("codex")
+
+
+def test_the_image_is_read_before_the_snapshot_that_would_be_built_from_it(
+    device,
+) -> None:
+    """A missing snapshot is not what to fix while its image is not here."""
+    device["snapshot"] = SnapshotStatus("missing", "guildbotics-abc", Path("/snap"))
+    device["image"] = ImageStatus("local/agent:1", "arm64", "sha256:" + "c" * 64, False)
+
+    status = device_status()
+
+    assert (status.refusal, status.setting) == (
+        t(
+            "intelligences.agent_environment.image.missing",
+            reference="local/agent:1",
+            architecture="arm64",
+            command=image_load_command(),
+        ),
+        "image",
+    )
+
+
+def test_without_a_runtime_the_declared_image_is_shown_but_not_looked_for(
+    device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    device["health"] = AgentEnvironmentHealth(False, "no hypervisor")
+    declared = ImageStatus("local/agent:1", "arm64", "sha256:" + "c" * 64, False)
+    lookups: list[bool] = []
+
+    def status_of(declaration, *, lookup: bool = True) -> ImageStatus:
+        lookups.append(lookup)
+        return declared
+
+    monkeypatch.setattr(module, "image_status", status_of)
+
+    status = device_status()
+
+    assert (status.image, lookups) == (declared, [False])
+    assert (status.refusal, status.setting) == ("no hypervisor", "runtime")
 
 
 def test_an_unreadable_declaration_leaves_no_snapshot_or_dns_to_report(device) -> None:

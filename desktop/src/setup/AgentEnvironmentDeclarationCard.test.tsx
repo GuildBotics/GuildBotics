@@ -1,15 +1,23 @@
 import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentEnvironmentDeclaration } from "../api/client";
+import { getAgentEnvironmentImages, type AgentEnvironmentDeclaration } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
 
+vi.mock("../api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/client")>()),
+  getAgentEnvironmentImages: vi.fn(),
+}));
+
 const t = i18n.getFixedT("en");
+const DIGEST = "sha256:" + "c".repeat(64);
+const OTHER = "sha256:" + "d".repeat(64);
 
 const packaged: AgentEnvironmentDeclaration = {
   packages: { apt: [], npm: [], uv: [] },
@@ -27,21 +35,199 @@ function Harness({
   onValidityChange?: (valid: boolean) => void;
 }) {
   const [value, setValue] = useState(initial);
+  const [client] = useState(
+    () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  );
   return (
     <MantineProvider env="test">
-      <AgentEnvironmentDeclarationCard
-        value={value}
-        onChange={(next) => {
-          setValue(next);
-          onChange?.(next);
-        }}
-        onValidityChange={onValidityChange}
-      />
+      <QueryClientProvider client={client}>
+        <AgentEnvironmentDeclarationCard
+          value={value}
+          defaultImage="node:22.23.2-bookworm"
+          onChange={(next) => {
+            setValue(next);
+            onChange?.(next);
+          }}
+          onValidityChange={onValidityChange}
+        />
+      </QueryClientProvider>
     </MantineProvider>
   );
 }
 
 describe("AgentEnvironmentDeclarationCard", () => {
+  beforeEach(() => {
+    vi.mocked(getAgentEnvironmentImages).mockResolvedValue({
+      architecture: "arm64",
+      images: [
+        {
+          reference: "local/other:2",
+          digest: "sha256:" + "a".repeat(64),
+          size_bytes: 1,
+          declared: false,
+        },
+        { reference: "local/agent:1", digest: DIGEST, size_bytes: 900, declared: false },
+      ],
+      problem: "",
+    });
+  });
+
+  it("names the base image by the digest of the image loaded on this device", async () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    expect(select).toHaveValue(
+      t("setup.intelligence.environment.declaration.imageDefault", {
+        reference: "node:22.23.2-bookworm",
+      }),
+    );
+
+    await userEvent.click(select);
+    await userEvent.click(await screen.findByRole("option", { name: /local\/agent:1/ }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      image: { reference: "local/agent:1", digests: { arm64: DIGEST } },
+    });
+    expect(
+      screen.getByText(
+        t("setup.intelligence.environment.declaration.imageDeclared", {
+          digests: `arm64=${DIGEST.slice(0, 19)}`,
+        }),
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(select);
+    await userEvent.click(await screen.findByRole("option", { name: /GuildBotics default/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...packaged, image: null });
+  });
+
+  it("adds this device's architecture to an image another architecture declared", async () => {
+    const onChange = vi.fn();
+    render(
+      <Harness
+        initial={{ ...packaged, image: { reference: "local/agent:1", digests: { amd64: OTHER } } }}
+        onChange={onChange}
+      />,
+    );
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    // Declared elsewhere, not here: the select shows nothing picked and says why.
+    expect(
+      await screen.findByText(
+        t("setup.intelligence.environment.declaration.imageNotDeclaredHere", {
+          reference: "local/agent:1",
+          architecture: "arm64",
+          declared: "amd64",
+        }),
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(select);
+    await userEvent.click(await screen.findByRole("option", { name: /local\/agent:1/ }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      image: { reference: "local/agent:1", digests: { amd64: OTHER, arm64: DIGEST } },
+    });
+  });
+
+  it("drops other architectures' digests when a different image is picked", async () => {
+    const onChange = vi.fn();
+    render(
+      <Harness
+        initial={{ ...packaged, image: { reference: "local/agent:2", digests: { amd64: OTHER } } }}
+        onChange={onChange}
+      />,
+    );
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    await userEvent.click(select);
+    await userEvent.click(await screen.findByRole("option", { name: /local\/agent:1/ }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      image: { reference: "local/agent:1", digests: { arm64: DIGEST } },
+    });
+  });
+
+  it("shows a declared image this device lacks as the current, unpickable choice", async () => {
+    const onChange = vi.fn();
+    render(
+      <Harness
+        initial={{ ...packaged, image: { reference: "local/agent:2", digests: { arm64: OTHER } } }}
+        onChange={onChange}
+      />,
+    );
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    await waitFor(() =>
+      expect(select).toHaveValue(
+        `local/agent:2 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+      ),
+    );
+
+    await userEvent.click(select);
+    const declared = await screen.findByRole("option", { name: /local\/agent:2/ });
+    expect(declared).toHaveAttribute("data-combobox-disabled", "true");
+    await userEvent.click(await screen.findByRole("option", { name: /local\/agent:1/ }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      image: { reference: "local/agent:1", digests: { arm64: DIGEST } },
+    });
+  });
+
+  it("offers an image loaded again under a new digest beside the declared one", async () => {
+    const onChange = vi.fn();
+    render(
+      <Harness
+        initial={{ ...packaged, image: { reference: "local/agent:1", digests: { arm64: OTHER } } }}
+        onChange={onChange}
+      />,
+    );
+    const select = screen.getByRole("combobox", {
+      name: t("setup.intelligence.environment.declaration.image"),
+    });
+    await waitFor(() =>
+      expect(select).toHaveValue(
+        `local/agent:1 (${OTHER.slice(0, 19)}) — ${t("setup.intelligence.environment.declaration.imageNotHere")}`,
+      ),
+    );
+    // The declared digest is not loaded here, the new one is: two choices.
+    await userEvent.click(select);
+    expect(
+      await screen.findByRole("option", { name: new RegExp(OTHER.slice(0, 19)) }),
+    ).toHaveAttribute("data-combobox-disabled", "true");
+    await userEvent.click(screen.getByRole("option", { name: new RegExp(DIGEST.slice(0, 19)) }));
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      image: { reference: "local/agent:1", digests: { arm64: DIGEST } },
+    });
+  });
+
+  it("says why this device's images cannot be offered", async () => {
+    vi.mocked(getAgentEnvironmentImages).mockResolvedValue({
+      architecture: "arm64",
+      images: [],
+      problem: "no hypervisor",
+    });
+    render(<Harness />);
+
+    expect(
+      await screen.findByText(
+        t("setup.intelligence.environment.declaration.imageUnavailable", {
+          problem: "no hypervisor",
+        }),
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("adds a pinned package to its manager's list", async () => {
     const onChange = vi.fn();
     render(<Harness onChange={onChange} />);

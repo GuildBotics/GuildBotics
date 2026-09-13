@@ -2609,6 +2609,7 @@ function IntelligenceEditor({
             {!personId && draft.agent_environment ? (
               <AgentEnvironmentDeclarationCard
                 value={draft.agent_environment}
+                defaultImage={environmentStatus.data?.image.default ?? ""}
                 onChange={(agent_environment) =>
                   updateDraft((current) => ({ ...current, agent_environment }))
                 }

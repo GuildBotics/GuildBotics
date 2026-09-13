@@ -18,6 +18,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     SharedGrants,
 )
+from guildbotics.intelligences.agent_environment.image import (
+    IMAGE,
+    device_architecture,
+)
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
 from guildbotics.intelligences.agent_environment.status import DeviceSetting
 from guildbotics.intelligences.agent_environment.toolchain import ToolchainDeclaration
@@ -1000,6 +1004,8 @@ SystemAlertCode = Literal[
     "agent_environment_tool_unavailable",
     #: One member's slot cannot start here over a grant this device lacks.
     "agent_environment_slot_blocked",
+    #: Turns run here on a base image the declaration did not name.
+    "agent_environment_image_differs",
 ]
 SystemAlertSeverity = Literal["critical", "warning"]
 SystemAlertAction = Literal["diagnostics", "setup", "trace", "service"]
@@ -1180,8 +1186,10 @@ class EnvironmentAccessStatus(BaseModel):
 
 #: Which setting an environment problem is about, so the Desktop can open it
 #: and say what to do there: a part of the device (:data:`DeviceSetting`),
-#: one tool's row in it (provisioning, login), or the directory grants.
-EnvironmentSetting = Literal[DeviceSetting, "tool", "grants"]
+#: the base image turns run on though the declaration named another
+#: (``image_differs``), one tool's row in it (provisioning, login), or the
+#: directory grants.
+EnvironmentSetting = Literal[DeviceSetting, "image_differs", "tool", "grants"]
 
 
 class EnvironmentProblem(BaseModel):
@@ -1215,6 +1223,53 @@ class EnvironmentSnapshotStatus(BaseModel):
 class EnvironmentDnsStatus(BaseModel):
     declared: str = ""
     nameservers: list[str] = Field(default_factory=list)
+    problem: str = ""
+
+
+class EnvironmentImageStatus(BaseModel):
+    """The declared base image against this device.
+
+    ``reference`` is empty when the declaration names none and GuildBotics'
+    own image (``default``) is used. ``architecture`` is this device's CPU
+    architecture as images name it; ``digest`` is what the declaration names
+    for it (empty when nothing is) and ``digests`` everything it names.
+    ``held`` is the digest this device holds under the reference, empty when
+    it holds none; ``load_command`` loads an archive here. ``problem`` is why
+    no turn can start over the image; ``warning`` says turns run on an image
+    the declaration did not name.
+    """
+
+    default: str
+    architecture: str
+    reference: str = ""
+    digest: str = ""
+    digests: dict[str, str] = Field(default_factory=dict)
+    present: bool = True
+    held: str = ""
+    problem: str = ""
+    warning: str = ""
+    load_command: str = ""
+
+
+class EnvironmentImage(BaseModel):
+    """An image this device holds, as the declaration may name it.
+
+    ``declared`` says the declaration names this very digest for this
+    device's architecture.
+    """
+
+    reference: str
+    digest: str
+    size_bytes: int | None = None
+    declared: bool = False
+
+
+class EnvironmentImagesResponse(BaseModel):
+    """The images this device holds for its own ``architecture``; ``problem``
+    says why none could be read."""
+
+    architecture: str
+    images: list[EnvironmentImage] = Field(default_factory=list)
     problem: str = ""
 
 
@@ -1253,12 +1308,20 @@ class AgentEnvironmentStatusResponse(BaseModel):
     platform: str
     runtime: EnvironmentRuntimeStatus
     snapshot: EnvironmentSnapshotStatus
+    image: EnvironmentImageStatus = Field(
+        default_factory=lambda: EnvironmentImageStatus(
+            default=IMAGE, architecture=device_architecture()
+        )
+    )
     dns: EnvironmentDnsStatus = Field(default_factory=EnvironmentDnsStatus)
     tools: list[EnvironmentToolStatus] = Field(default_factory=list)
     #: Why no turn at all can start on this device, or "" when one can.
     problem: str = ""
     #: What ``problem`` is about, or "" when there is none.
     problem_setting: DeviceSetting | Literal[""] = ""
+    #: What turns that do start here run on that the declaration did not
+    #: name, or "".
+    warning: str = ""
     access: EnvironmentAccessStatus = Field(default_factory=EnvironmentAccessStatus)
     members: list[EnvironmentMemberStatus] = Field(default_factory=list)
 

@@ -179,7 +179,8 @@ class IntelligenceConfigService:
         if request.agent_environment is not None:
             declaration_file = request.config_dir / TOOLCHAIN_PATH
             save_yaml_file(
-                declaration_file, request.agent_environment.model_dump(mode="json")
+                declaration_file,
+                request.agent_environment.model_dump(mode="json", exclude_none=True),
             )
             files.append(CreatedFile(path=declaration_file, action="update"))
 

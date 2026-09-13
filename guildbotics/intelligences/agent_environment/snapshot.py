@@ -2,7 +2,9 @@
 
 A device holds one snapshot per workspace, under the workspace's device-local
 directory. Its name is a digest of everything that went into it -- the base
-image, the provider CLIs at the versions GuildBotics pins, the declared
+image (the recipe's pinned tag, or the digest of the image this device holds
+under the declared reference, which is what the build starts from), the
+provider CLIs at the versions GuildBotics pins, the declared
 packages, and the version of this recipe -- so a snapshot built from an
 older declaration, or by an older GuildBotics, is recognised by its name
 alone and rebuilt. What the name cannot tell is the content of an entry the
@@ -28,6 +30,11 @@ from pathlib import Path
 from typing import Literal
 
 from guildbotics.intelligences.agent_environment import runtime
+from guildbotics.intelligences.agent_environment.image import (
+    IMAGE,
+    ImageStatus,
+    image_status,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     BuildStep,
@@ -50,10 +57,6 @@ from guildbotics.utils.advisory_lock import (
 from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 
-#: The base image: Debian with Node.js, npm, and git, the tools the provider
-#: CLIs are installed and run with. Pinned to an exact tag so two devices
-#: building the same declaration get the same environment.
-IMAGE = "node:22.23.2-bookworm"
 #: uv, for the Python tools a declaration asks for; installed from its
 #: release archive because the image has no Python of its own.
 UV_VERSION = "0.12.10"
@@ -114,11 +117,15 @@ def provisioned_installs() -> dict[str, str]:
     }
 
 
-def snapshot_name(declaration: ToolchainDeclaration) -> str:
-    """The name of the snapshot ``declaration`` asks for on any device."""
+def snapshot_name(declaration: ToolchainDeclaration, image: ImageStatus) -> str:
+    """The name of the snapshot ``declaration`` asks for on this device.
+
+    ``image`` is the declared base image as this device holds it: the
+    snapshot is built from what is held, so that is what names it.
+    """
     recipe = {
         "recipe": RECIPE_VERSION,
-        "image": IMAGE,
+        "image": image.held if image.declared else IMAGE,
         "uv": UV_VERSION,
         "providers": provisioned_packages(),
         "installs": provisioned_installs(),
@@ -182,10 +189,12 @@ def _args(specs: list[str]) -> str:
 
 
 def snapshot_status(
-    declaration: ToolchainDeclaration, workspace_root: Path | None = None
+    declaration: ToolchainDeclaration,
+    image: ImageStatus,
+    workspace_root: Path | None = None,
 ) -> SnapshotStatus:
     """Compare what the declaration asks for with what this device holds."""
-    name = snapshot_name(declaration)
+    name = snapshot_name(declaration, image)
     directory = snapshots_dir(workspace_root)
     path = directory / name
     if _building(directory):
@@ -233,15 +242,21 @@ async def build_snapshot(
     """Build the snapshot the declaration asks for and drop the ones it does not.
 
     Raises:
-        AgentEnvironmentError: When another build of this workspace holds
-            the lock, or the build itself fails. A failed build leaves its
+        AgentEnvironmentError: When this device holds no image under the
+            declared reference, another build of this workspace holds the
+            lock, or the build itself fails. A failed build leaves its
             reason beside the snapshots, where :func:`snapshot_status`
             reports it until the declaration changes.
         ToolchainError: When the declaration's resolvers cannot be read
             on this device.
     """
     nameservers = upstream_nameservers(declaration.dns)
-    name = snapshot_name(declaration)
+    image = image_status(declaration)
+    if image.refusal:
+        raise AgentEnvironmentError(image.refusal)
+    if image.warning:
+        on_line(f"[image] {image.warning}")
+    name = snapshot_name(declaration, image)
     directory = snapshots_dir(workspace_root)
     directory.mkdir(parents=True, exist_ok=True)
     failed = directory / (name + _FAILED_SUFFIX)
@@ -253,7 +268,8 @@ async def build_snapshot(
                     runtime.build_snapshot(
                         name,
                         dest_dir=directory,
-                        image=IMAGE,
+                        image=image.reference or IMAGE,
+                        pull=not image.declared,
                         home=guest_home(home),
                         steps=build_steps(declaration),
                         nameservers=nameservers,
@@ -338,7 +354,11 @@ class SnapshotUpkeep(threading.Thread):
         except (ToolchainError, OSError) as exc:
             self._report(f"The agent environment declaration cannot be read: {exc}")
             return
-        status = snapshot_status(declaration)
+        image = image_status(declaration)
+        if image.refusal:
+            self._report(f"The agent environment cannot be built here: {image.refusal}")
+            return
+        status = snapshot_status(declaration, image)
         if status.state not in ("missing", "stale"):
             return
         self._log.info("Building the agent environment %s...", status.name)

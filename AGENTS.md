@@ -413,6 +413,8 @@ lychee --no-progress --scheme file --include-fragments \
 uv sync --extra dev
 ```
 
+メンバー（AI CLI）の turn は隔離環境の中で動くため、そこで上記の確認コマンドを流すには、GuildBotics 既定のベースイメージ（Debian + Node.js）では足りない（Python 3.12・Rust・Chromium・lychee が無い）。このリポジトリ自身の開発用ベースイメージは `docker/agent-environment/Dockerfile` で管理し、CI と同じツールチェーン一式を入れる。Docker のあるマシンで `scripts/build-agent-environment-image.sh` を実行すると、arm64 と amd64 の両方を build → `docker save`（`dist/agent-environment/`）→ そのマシン向けの分を `guildbotics environment image load` → 全アーキテクチャの digest を `guildbotics environment image declare` で宣言（`intelligences/agent_environment.yml` の `image:`）まで行う。他のマシンは印字された tar を持ち込んで `image load` するだけでよい。image は CPU アーキテクチャごとに別物で、各マシンは読み込んだ image で動き、宣言と違う間は「宣言と違う image で動作中」の警告が出続ける。turn 内で `uv sync` / `npm ci` / `cargo` が外へ届くには、ツール定義の `network:` を allowlist（`pypi.org`、`files.pythonhosted.org`、`registry.npmjs.org`、`github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`、`static.crates.io`、`index.crates.io`）にする。CI のバージョンを上げたら Dockerfile の `ARG` も合わせる
+
 desktop frontend (`desktop/`) の品質確認:
 
 ```bash

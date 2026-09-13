@@ -12,10 +12,16 @@ from typing import Any
 import pytest
 
 from guildbotics.intelligences.agent_environment import runtime, snapshot
+from guildbotics.intelligences.agent_environment import image as image_module
+from guildbotics.intelligences.agent_environment.image import (
+    ImageStatus,
+    image_load_command,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     AgentEnvironmentHealth,
     BuildStep,
+    ImageInfo,
 )
 from guildbotics.intelligences.agent_environment.snapshot import (
     SNAPSHOT_PREFIX,
@@ -38,6 +44,38 @@ from guildbotics.utils.i18n_tool import t
 def _declaration(**packages: list[str]) -> ToolchainDeclaration:
     return parse_toolchain(
         {"packages": packages, "dns": {"nameservers": ["10.0.0.53"]}}, where="t"
+    )
+
+
+_DIGEST = "sha256:" + "c" * 64
+
+
+def _with_image(reference: str = "local/agent:1", digest: str = _DIGEST):
+    return parse_toolchain(
+        {
+            "image": {"reference": reference, "digests": {"arm64": digest}},
+            "dns": {"nameservers": ["10.0.0.53"]},
+        },
+        where="t",
+    )
+
+
+@pytest.fixture(autouse=True)
+def arm64(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(image_module.platform, "machine", lambda: "arm64")
+
+
+def _device_holds(
+    monkeypatch: pytest.MonkeyPatch, images: dict[str, str] | None = None
+) -> None:
+    """What the runtime's store answers on this device: reference -> digest."""
+    held = {"local/agent:1": _DIGEST} if images is None else images
+    monkeypatch.setattr(
+        runtime,
+        "list_images",
+        lambda: tuple(
+            ImageInfo(reference, digest, "arm64") for reference, digest in held.items()
+        ),
     )
 
 
@@ -77,11 +115,27 @@ class _FakeBuild:
 
 
 def test_the_name_is_a_digest_of_the_declared_packages_and_the_recipe() -> None:
-    plain = snapshot_name(_declaration())
+    plain = snapshot_name(_declaration(), ImageStatus())
 
     assert plain.startswith(SNAPSHOT_PREFIX)
-    assert snapshot_name(_declaration()) == plain
-    assert snapshot_name(_declaration(apt=["ripgrep=14.1.0-1"])) != plain
+    assert snapshot_name(_declaration(), ImageStatus()) == plain
+    assert snapshot_name(_declaration(apt=["ripgrep=14.1.0-1"]), ImageStatus()) != plain
+
+
+def test_a_declared_image_names_the_snapshot_by_the_digest_this_device_holds() -> None:
+    """A reference is re-tagged when the image is rebuilt; the digest is
+    what the device actually holds, so it is what the name follows."""
+    plain = snapshot_name(_declaration(), ImageStatus())
+    held = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
+    declared = snapshot_name(_with_image(), held)
+
+    assert declared != plain
+    assert snapshot_name(_with_image(reference="other/name:9"), held) == declared
+    # The snapshot is built from what the device holds, so that names it:
+    # an image loaded under the reference at another digest is another
+    # snapshot, whatever the declaration says.
+    other = ImageStatus("local/agent:1", "arm64", _DIGEST, False, "sha256:" + "d" * 64)
+    assert snapshot_name(_with_image(), other) != declared
 
 
 def test_dns_is_not_part_of_the_name() -> None:
@@ -89,22 +143,24 @@ def test_dns_is_not_part_of_the_name() -> None:
     changing them must not rebuild anything."""
     other = parse_toolchain({"dns": {"nameservers": ["1.1.1.1"]}}, where="t")
 
-    assert snapshot_name(other) == snapshot_name(_declaration())
+    assert snapshot_name(other, ImageStatus()) == snapshot_name(
+        _declaration(), ImageStatus()
+    )
 
 
 def test_the_name_changes_with_the_pinned_provider_versions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    before = snapshot_name(_declaration())
+    before = snapshot_name(_declaration(), ImageStatus())
     monkeypatch.setattr(
         snapshot, "provisioned_packages", lambda: {"codex": "@openai/codex@9.9.9"}
     )
-    changed = snapshot_name(_declaration())
+    changed = snapshot_name(_declaration(), ImageStatus())
     assert changed != before
 
     # A script-installed tool is pinned by its script, so that counts too.
     monkeypatch.setattr(snapshot, "provisioned_installs", lambda: {"grok": "pin 9.9.9"})
-    assert snapshot_name(_declaration()) != changed
+    assert snapshot_name(_declaration(), ImageStatus()) != changed
 
 
 # --- recipe ----------------------------------------------------------------------
@@ -162,7 +218,7 @@ def test_package_arguments_are_shell_quoted() -> None:
 
 
 def test_a_device_without_a_snapshot_is_missing(workspace: Path) -> None:
-    status = snapshot_status(_declaration(), workspace)
+    status = snapshot_status(_declaration(), ImageStatus(), workspace)
 
     assert status.state == "missing"
     assert status.path == snapshots_dir(workspace) / status.name
@@ -173,23 +229,27 @@ def test_a_snapshot_of_another_declaration_is_stale(workspace: Path) -> None:
         parents=True
     )
 
-    assert snapshot_status(_declaration(), workspace).state == "stale"
+    assert snapshot_status(_declaration(), ImageStatus(), workspace).state == "stale"
 
 
 def test_the_named_snapshot_is_ready(workspace: Path) -> None:
     declaration = _declaration()
-    (snapshots_dir(workspace) / snapshot_name(declaration)).mkdir(parents=True)
+    (snapshots_dir(workspace) / snapshot_name(declaration, ImageStatus())).mkdir(
+        parents=True
+    )
 
-    assert snapshot_status(declaration, workspace).state == "ready"
+    assert snapshot_status(declaration, ImageStatus(), workspace).state == "ready"
 
 
 def test_a_failed_build_is_reported_with_its_reason(workspace: Path) -> None:
     declaration = _declaration()
     directory = snapshots_dir(workspace)
     directory.mkdir(parents=True)
-    (directory / f"{snapshot_name(declaration)}.failed").write_text("npm exploded\n")
+    (directory / f"{snapshot_name(declaration, ImageStatus())}.failed").write_text(
+        "npm exploded\n"
+    )
 
-    status = snapshot_status(declaration, workspace)
+    status = snapshot_status(declaration, ImageStatus(), workspace)
 
     assert (status.state, status.detail) == ("failed", "npm exploded")
 
@@ -199,8 +259,11 @@ def test_a_held_build_lock_means_building(workspace: Path) -> None:
     directory.mkdir(parents=True)
 
     with held_lock(directory / "build.lock"):
-        assert snapshot_status(_declaration(), workspace).state == "building"
-    assert snapshot_status(_declaration(), workspace).state == "missing"
+        assert (
+            snapshot_status(_declaration(), ImageStatus(), workspace).state
+            == "building"
+        )
+    assert snapshot_status(_declaration(), ImageStatus(), workspace).state == "missing"
 
 
 # --- build -----------------------------------------------------------------------
@@ -225,9 +288,9 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     )
 
     call = fake.calls[0]
-    assert call["name"] == status.name == snapshot_name(declaration)
+    assert call["name"] == status.name == snapshot_name(declaration, ImageStatus())
     assert call["dest_dir"] == directory
-    assert call["image"] == snapshot.IMAGE
+    assert (call["image"], call["pull"]) == (image_module.IMAGE, True)
     assert call["home"] == home.resolve().as_posix()
     assert call["nameservers"] == ("10.0.0.53",)
     assert [s.label for s in call["steps"]] == [
@@ -241,7 +304,70 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert fake.removed == [old]
     assert sorted(p.name for p in directory.iterdir()) == ["build.lock", status.name]
     assert lines == ["Get:1 http://deb.debian.org bookworm InRelease"]
-    assert snapshot_status(declaration, workspace).state == "ready"
+    assert snapshot_status(declaration, ImageStatus(), workspace).state == "ready"
+
+
+def test_a_build_starts_from_the_declared_image_this_device_holds(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeBuild(monkeypatch)
+    _device_holds(monkeypatch)
+
+    asyncio.run(
+        build_snapshot(_with_image(), on_line=lambda _: None, workspace_root=workspace)
+    )
+
+    assert (fake.calls[0]["image"], fake.calls[0]["pull"]) == ("local/agent:1", False)
+
+
+def test_a_build_refuses_a_declared_image_this_device_lacks(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is built and nothing is remembered as failed: the device is
+    told to load the image, and the next build goes ahead once it has."""
+    fake = _FakeBuild(monkeypatch)
+    _device_holds(monkeypatch, {})
+
+    with pytest.raises(AgentEnvironmentError) as exc_info:
+        asyncio.run(
+            build_snapshot(
+                _with_image(), on_line=lambda _: None, workspace_root=workspace
+            )
+        )
+
+    assert str(exc_info.value) == t(
+        "intelligences.agent_environment.image.missing",
+        reference="local/agent:1",
+        architecture="arm64",
+        command=image_load_command(),
+    )
+    assert fake.calls == []
+    assert list(snapshots_dir(workspace).glob("*.failed")) == []
+
+
+def test_a_build_from_an_image_that_differs_from_the_declaration_says_so(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeBuild(monkeypatch)
+    other = "sha256:" + "d" * 64
+    _device_holds(monkeypatch, {"local/agent:1": other})
+    lines: list[str] = []
+
+    status = asyncio.run(
+        build_snapshot(_with_image(), on_line=lines.append, workspace_root=workspace)
+    )
+
+    assert (fake.calls[0]["image"], fake.calls[0]["pull"]) == ("local/agent:1", False)
+    held = ImageStatus("local/agent:1", "arm64", _DIGEST, False, other)
+    assert status.name == snapshot_name(_with_image(), held)
+    assert lines[0] == "[image] " + t(
+        "intelligences.agent_environment.image.mismatch",
+        reference="local/agent:1",
+        architecture="arm64",
+        held=other[:19],
+        digest=_DIGEST[:19],
+        command=image_load_command(),
+    )
 
 
 def test_a_build_reads_the_devices_resolvers_when_the_declaration_says_host(
@@ -273,7 +399,7 @@ def test_a_failed_build_leaves_its_reason_and_the_older_snapshot(
             )
         )
 
-    status = snapshot_status(declaration, workspace)
+    status = snapshot_status(declaration, ImageStatus(), workspace)
     assert (status.state, status.detail) == (
         "failed",
         "Build step 'npm' failed with exit code 1.",
@@ -300,7 +426,7 @@ def test_a_stalled_build_is_failed_with_the_lock_released(
             )
         )
 
-    status = snapshot_status(declaration, workspace)
+    status = snapshot_status(declaration, ImageStatus(), workspace)
     assert status.state == "failed"
     assert "did not finish" in status.detail
 
@@ -395,6 +521,22 @@ def test_the_service_says_once_why_it_cannot_build(
 
     assert fake.calls == []
     assert caplog.text.count("no hypervisor") == 1
+
+
+def test_the_service_says_once_that_the_declared_image_is_not_here(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake = _FakeBuild(monkeypatch)
+    monkeypatch.setattr(runtime, "doctor", lambda: AgentEnvironmentHealth(True))
+    _device_holds(monkeypatch, {})
+    monkeypatch.setattr(snapshot, "load_toolchain", _with_image)
+    upkeep = _upkeep(monkeypatch, caplog)
+
+    upkeep.once()
+    upkeep.once()
+
+    assert fake.calls == []
+    assert caplog.text.count(image_load_command()) == 1
 
 
 def test_a_broken_declaration_stops_the_service_from_building(

@@ -1,7 +1,8 @@
 """What this device holds of the agent environment, and why a turn may not start.
 
-One reading of the device -- the runtime, the shared declaration, the snapshot
-built from it, the provider logins -- answers the CLI's ``environment status``,
+One reading of the device -- the runtime, the shared declaration, the base
+image it names, the snapshot built from it, the provider logins -- answers
+the CLI's ``environment status``,
 the Desktop's status card and alert band, and the refusal a turn is given when
 it cannot start here. They must not disagree, so they are one function and one
 set of words.
@@ -25,6 +26,10 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_shared_grants,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment.image import (
+    ImageStatus,
+    image_status,
+)
 from guildbotics.intelligences.agent_environment.provider_state import (
     authentication_failed,
     has_credentials,
@@ -45,8 +50,11 @@ from guildbotics.utils.processes import launching_app_name
 
 #: Which part of the device a refusal is about, so whoever shows it can point
 #: at what to do: the runtime this device lacks, the shared declaration (or
-#: the resolvers it names), the snapshot to build, or a build to wait for.
-DeviceSetting = Literal["runtime", "declaration", "snapshot", "building", "filesystem"]
+#: the resolvers it names), the base image to load, the snapshot to build,
+#: or a build to wait for.
+DeviceSetting = Literal[
+    "runtime", "declaration", "image", "snapshot", "building", "filesystem"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +119,7 @@ class DeviceStatus:
     snapshot: SnapshotStatus | None
     dns: DnsStatus
     tools: tuple[ToolStatus, ...]
+    image: ImageStatus = field(default_factory=ImageStatus)
     access: ResolvedAccess = field(default_factory=ResolvedAccess)
     filesystem_problem: str = ""
 
@@ -126,7 +135,15 @@ class DeviceStatus:
             return self.declaration_problem
         if self.dns.problem:
             return self.dns.problem
-        return _not_ready(self.snapshot) or self.filesystem_problem
+        return (
+            self.image.refusal or _not_ready(self.snapshot) or self.filesystem_problem
+        )
+
+    @property
+    def warning(self) -> str:
+        """What a turn that does start here runs on that the declaration
+        did not ask for, or ""."""
+        return self.image.warning
 
     @property
     def setting(self) -> DeviceSetting | Literal[""]:
@@ -135,6 +152,8 @@ class DeviceStatus:
             return "runtime"
         if self.snapshot is None or self.dns.problem:
             return "declaration"
+        if self.image.refusal:
+            return "image"
         if self.snapshot.state == "building":
             return "building"
         if self.snapshot.state != "ready":
@@ -172,8 +191,12 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
         declaration_problem = str(exc)
     state: SnapshotStatus | None = None
     dns = DnsStatus(declared="")
+    image = ImageStatus()
     if declaration is not None:
-        state = snapshot.snapshot_status(declaration)
+        # Without a runtime there is no store to look in; the runtime is what
+        # the refusal is about, and the image is shown as declared.
+        image = image_status(declaration, lookup=health.available)
+        state = snapshot.snapshot_status(declaration, image)
         if building_here and state.state in ("missing", "stale"):
             state = SnapshotStatus("building", state.name, state.path)
         declared = declaration.dns.nameservers
@@ -191,6 +214,7 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
         snapshot=state,
         dns=dns,
         tools=tuple(_tool_status(agent) for agent in CLI_AGENTS),
+        image=image,
         access=access,
         filesystem_problem=filesystem_problem,
     )

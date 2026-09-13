@@ -390,12 +390,15 @@ const resources = {
           agent_environment_tool_unavailable: "Check this AI CLI tool: {{reason}}",
           agent_environment_slot_blocked:
             "The AI CLI slot {{command}} of {{person}} cannot start on this device: {{reason}}",
+          agent_environment_image_differs: "{{reason}}",
         },
         environmentFix: {
           runtime:
             'This device cannot host the isolated agent environment; see "What You Need" in the README.',
           declaration:
             'Fix the "Environment declaration" in the advanced settings, then build again.',
+          image:
+            'Load the declared base image on this device with the command on the "Isolated agent environment" card in the settings.',
           snapshot: 'Press "Build" on the "Isolated agent environment" card in the settings.',
         },
         actions: {
@@ -943,6 +946,15 @@ const resources = {
             build: "Build",
             buildOutput: "Build output",
             buildError: "The build could not be started.",
+            image: "Base image",
+            imageDefault: "GuildBotics default",
+            imagePresent: "Loaded on this device",
+            imageMissing: "Not loaded on this device",
+            imageUndeclared: "Loaded; not declared for this device's architecture",
+            imageDiffers: "Loaded; not the declared digest",
+            imageDeclaredFor: "Declared for: {{architectures}}",
+            imageLoadHint:
+              "Load the image archive (docker save) on this device by running this command in a terminal:",
             dns: "DNS resolvers",
             dnsHost: "This device's resolvers",
             toolNotProvisioned: "Not available in the environment yet",
@@ -966,7 +978,16 @@ const resources = {
             declaration: {
               title: "Environment declaration",
               description:
-                "What every device adds to its environment on top of the base image (Debian, Node.js, git, uv) and the AI CLI tools GuildBotics installs, and the DNS resolvers the environment uses. Shared by the workspace; changing the packages rebuilds the environment on every device.",
+                "The base image every device builds its environment from, what each adds on top of it and the AI CLI tools GuildBotics installs, and the DNS resolvers the environment uses. Shared by the workspace; changing the image or the packages rebuilds the environment on every device.",
+              image: "Base image",
+              imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
+              imageHint:
+                "An image loaded on this device (docker save → guildbotics environment image load), built FROM the default image or one with Debian's apt, Node.js with npm, curl and tar. Images are per CPU architecture: the declaration names one digest per architecture, and a device of another architecture builds the same Dockerfile itself and picks its image here too.",
+              imageUnavailable: "The images on this device cannot be read: {{problem}}",
+              imageNotHere: "declared, not loaded on this device",
+              imageNotDeclaredHere:
+                "{{reference}} is declared for {{declared}} but not for this device ({{architecture}}). Pick the image loaded here to declare it for {{architecture}}.",
+              imageDeclared: "Declared: {{digests}}",
               apt: "Debian packages (apt)",
               npm: "npm packages",
               uv: "Python tools (uv)",
@@ -2385,11 +2406,14 @@ const resources = {
           agent_environment_tool_unavailable: "AI CLIツールの状態を確認してください: {{reason}}",
           agent_environment_slot_blocked:
             "{{person}} の AI CLI スロット {{command}} はこの端末では起動できません: {{reason}}",
+          agent_environment_image_differs: "{{reason}}",
         },
         environmentFix: {
           runtime:
             "この端末ではエージェント隔離環境を用意できません。README の「必要なもの」を確認してください。",
           declaration: "詳細設定の「環境の宣言」を直してから、もう一度ビルドしてください。",
+          image:
+            "設定の「エージェント隔離環境」カードに表示されるコマンドで、宣言されたベースイメージをこの端末に読み込んでください。",
           snapshot: "設定の「エージェント隔離環境」カードで「ビルド」を押してください。",
         },
         actions: {
@@ -2628,6 +2652,15 @@ const resources = {
             build: "ビルド",
             buildOutput: "ビルド出力",
             buildError: "ビルドを開始できませんでした。",
+            image: "ベースイメージ",
+            imageDefault: "GuildBotics 既定",
+            imagePresent: "この端末に読み込み済み",
+            imageMissing: "この端末に未読み込み",
+            imageUndeclared: "読み込み済み。この端末のアーキテクチャ向けには未宣言",
+            imageDiffers: "読み込み済み。宣言の digest とは別",
+            imageDeclaredFor: "宣言済み: {{architectures}}",
+            imageLoadHint:
+              "image のアーカイブ（docker save）をこの端末に読み込むには、ターミナルで次を実行してください。",
             dns: "DNS リゾルバ",
             dnsHost: "この端末のリゾルバ",
             toolNotProvisioned: "環境への導入は未対応",
@@ -2652,7 +2685,16 @@ const resources = {
             declaration: {
               title: "環境の宣言",
               description:
-                "ベースイメージ（Debian、Node.js、git、uv）と GuildBotics が導入する AI CLIツールに加えて、各端末の環境に入れるパッケージと、環境が使う DNS リゾルバです。ワークスペースで共有され、パッケージを変えると全端末で環境が再ビルドされます。",
+                "各端末が環境をビルドする元になるベースイメージ、その上に足すパッケージと GuildBotics が導入する AI CLIツール、環境が使う DNS リゾルバです。ワークスペースで共有され、イメージやパッケージを変えると全端末で環境が再ビルドされます。",
+              image: "ベースイメージ",
+              imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
+              imageHint:
+                "この端末に読み込み済みの image（docker save → guildbotics environment image load）から選びます。既定 image を FROM にするか、Debian の apt・Node.js と npm・curl と tar を備えた image にしてください。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入ります。別アーキテクチャの端末では同じ Dockerfile を自分で build し、ここで選んでください。",
+              imageUnavailable: "この端末の image を読めません: {{problem}}",
+              imageNotHere: "宣言中。この端末に未読み込み",
+              imageNotDeclaredHere:
+                "{{reference}} は {{declared}} 向けに宣言されていますが、この端末（{{architecture}}）向けには未宣言です。この端末に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
+              imageDeclared: "宣言: {{digests}}",
               apt: "Debian パッケージ（apt）",
               npm: "npm パッケージ",
               uv: "Python ツール（uv）",

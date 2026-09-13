@@ -462,9 +462,10 @@ All non-secret configuration is stored as plain text files inside the workspace,
 5. Build the isolated agent environment on the server and log in to the AI CLI tool there (the server needs KVM; see [What You Need](#what-you-need)):
 
    ```bash
-   guildbotics environment status         # runtime, environment, and logins on this machine
-   guildbotics environment build          # build the environment the workspace declares
-   guildbotics environment login codex    # log in inside the environment (device code flow)
+   guildbotics environment status                    # runtime, base image, environment, and logins on this machine
+   guildbotics environment image load agent.tar      # only when the declaration names a base image: load the docker save archive built for this machine
+   guildbotics environment build                     # build the environment the workspace declares
+   guildbotics environment login codex               # log in inside the environment (device code flow)
    ```
 
    While the service runs, a changed declaration is rebuilt automatically; the login is kept per machine under `~/.guildbotics/data/agent_environment/`
@@ -896,7 +897,7 @@ discarding; the activity history record stays either way.
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
 - `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: files handed over from the desktop app and what agents make for you go there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
 - `intelligences/cli_agents/<tool>/*.yml`: the effort mapping and the `network:` block (where commands and built-in web tools may connect) for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `intelligences/agent_environment.yml`: what every machine adds to its isolated agent environment on top of the base image (`packages` for apt / npm / uv, pinned) and the DNS resolvers the environment uses (`dns.nameservers`: a list of IPv4 addresses, public resolvers by default, or `host` for this device's own resolvers on networks that block outside DNS). Shared by the workspace; changing the packages rebuilds the environment on every machine
+- `intelligences/agent_environment.yml`: the base image every machine builds its isolated agent environment from (`image`: GuildBotics' own Debian + Node.js unless set; for a toolchain apt / npm / uv tool cannot express, build an image yourself, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`. Images are per CPU architecture, so the declaration carries one digest per architecture; each machine runs on the image it loaded and keeps warning while its digest is not the declared one. `docker/agent-environment/Dockerfile` with `scripts/build-agent-environment-image.sh`, which builds every architecture and declares them, is the example for developing GuildBotics itself), what is added on top (`packages` for apt / npm / uv, pinned), and the DNS resolvers the environment uses (`dns.nameservers`: a list of IPv4 addresses, public resolvers by default, or `host` for this device's own resolvers on networks that block outside DNS). Shared by the workspace; changing the image or the packages rebuilds the environment on every machine
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).

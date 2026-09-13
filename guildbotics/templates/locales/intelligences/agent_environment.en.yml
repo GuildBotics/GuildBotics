@@ -18,6 +18,9 @@ en:
     build_step_failed: "Build step '%{step}' failed with exit code %{code}."
     build_failed: "Could not build the snapshot: %{error}"
     remove_failed: "Could not remove the snapshot at %{path}: %{error}"
+    images_failed: "Could not read the images on this device: %{error}"
+    load_failed: "Could not load the image archive %{path}: %{error}"
+    nothing_loaded: "The archive %{path} holds no image."
   filesystem:
     unavailable: "This GuildBotics cannot access directory '%{path}': %{error}"
     macos_documents: "Allow the app that launched this GuildBotics%{app} to access the Documents folder in System Settings > Privacy & Security > Files & Folders."
@@ -25,10 +28,19 @@ en:
     permission_denied: "This GuildBotics cannot list '%{path}'. Allow its launching app or user to access this directory."
   declaration:
     not_a_package: "'%{spec}' is not a package specification"
+    not_an_image: "'%{reference}' is not an image reference"
+    not_a_digest: "'%{digest}' is not an image digest (sha256:<64 hex digits>)"
+    no_digests: "an image names at least one digest, by architecture"
+    not_an_architecture: "'%{architecture}' is not an architecture name (amd64, arm64)"
     no_nameservers: "name at least one nameserver, or '%{host}'"
     not_ipv4: "'%{nameserver}' is not an IPv4 address"
     not_a_mapping: "%{where}: the declaration must be a mapping"
     no_device_resolver: "%{where}: dns.nameservers is '%{host}' but this device has no IPv4 resolver; name the nameservers explicitly"
+  image:
+    missing: "The base image %{reference} is not loaded on this device (%{architecture}); load it with `%{command}`."
+    mismatch: "Turns on this device run on the base image %{reference} at %{held}, not the %{digest} the declaration names for %{architecture}; load the declared image with `%{command}` to bring this device in line."
+    undeclared: "Turns on this device run on the base image %{reference} at %{held}; the declaration names it for %{declared} but not for this device's architecture (%{architecture}). Declare the image for %{architecture} to bring the devices in line."
+    wrong_architecture: "The archive %{path} holds an image built for %{architecture}, which this device (%{device}) cannot run."
   snapshot:
     missing: "The agent environment is missing on this device."
     stale: "The agent environment on this device is older than the declaration."

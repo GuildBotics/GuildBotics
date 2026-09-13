@@ -7,6 +7,7 @@ import pytest
 from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.app_api import agent_environment_status as module
 from guildbotics.app_api.agent_environment_status import (
+    agent_environment_images,
     agent_environment_problems,
     agent_environment_status,
     evaluate_grant,
@@ -20,9 +21,16 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_network_policy,
     resolve_access,
 )
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironmentHealth,
+from guildbotics.intelligences.agent_environment.image import (
+    ImageStatus,
+    image_load_command,
 )
+from guildbotics.intelligences.agent_environment.runtime import (
+    AgentEnvironmentError,
+    AgentEnvironmentHealth,
+    ImageInfo,
+)
+from guildbotics.intelligences.agent_environment.image import IMAGE
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.status import (
     DeviceStatus,
@@ -59,6 +67,7 @@ def _device(
     snapshot_state: str = "ready",
     credentials_saved: frozenset[str] = frozenset({"codex", "claude"}),
     filesystem_problem: str = "",
+    image: ImageStatus | None = None,
 ) -> None:
     """Stand in for the device: its runtime, snapshot, DNS, and logins."""
     health = AgentEnvironmentHealth(
@@ -89,6 +98,7 @@ def _device(
             snapshot=state,
             dns=DnsStatus("host", ("192.168.3.1",)),
             tools=tools,
+            image=image or ImageStatus(),
             filesystem_problem=filesystem_problem,
             access=resolve_access(
                 device_module.load_shared_grants(),
@@ -138,6 +148,18 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         "boom",
     )
     assert status.snapshot.output == ["[apt]", "E: boom"]
+    assert status.image.model_dump() == {
+        "default": IMAGE,
+        "architecture": module.device_architecture(),
+        "reference": "",
+        "digest": "",
+        "digests": {},
+        "present": True,
+        "held": "",
+        "problem": "",
+        "warning": "",
+        "load_command": image_load_command(platform="darwin"),
+    }
     assert (status.dns.declared, status.dns.nameservers) == ("host", ["192.168.3.1"])
     assert (status.problem, status.problem_setting) == (
         t("intelligences.agent_environment.snapshot.failed", detail="boom"),
@@ -167,6 +189,111 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         tool="Claude Code",
         command=login_command("claude"),
     )
+
+
+def test_a_declared_image_this_device_lacks_is_the_devices_problem(
+    monkeypatch, home: Path
+) -> None:
+    """The card's image row, the alert band, and the CLI say the same thing,
+    with the command that loads the image on this device."""
+    _codex_slot(monkeypatch)
+    digest = "sha256:" + "c" * 64
+    _device(
+        monkeypatch,
+        snapshot_state="missing",
+        image=ImageStatus(
+            "local/agent:1", "arm64", digest, present=False, digests={"arm64": digest}
+        ),
+    )
+
+    status = agent_environment_status(["aiko"], platform="win32")
+
+    expected = t(
+        "intelligences.agent_environment.image.missing",
+        reference="local/agent:1",
+        architecture="arm64",
+        command=image_load_command(),
+    )
+    assert (
+        status.image.reference,
+        status.image.architecture,
+        status.image.digest,
+        status.image.digests,
+        status.image.present,
+    ) == ("local/agent:1", "arm64", digest, {"arm64": digest}, False)
+    assert status.image.problem == expected
+    assert (
+        status.image.load_command == "guildbotics environment image load <archive.tar>"
+    )
+    assert (status.problem, status.problem_setting) == (expected, "image")
+    assert agent_environment_problems(["aiko"]) == [("", "", "image", expected)]
+
+
+def test_the_picker_is_offered_the_images_the_cli_lists(monkeypatch) -> None:
+    """One policy (``candidate_images``) says what a declaration may name,
+    and the row the declaration names is marked."""
+    digest = "sha256:" + "c" * 64
+    monkeypatch.setattr(module, "device_architecture", lambda: "arm64")
+    monkeypatch.setattr(
+        module.runtime, "doctor", lambda: AgentEnvironmentHealth(True, "", "0.6.17")
+    )
+    monkeypatch.setattr(
+        module,
+        "candidate_images",
+        lambda: (
+            ImageInfo("local/agent:1", digest, "arm64", 900),
+            ImageInfo("local/other:2", "sha256:" + "d" * 64, "arm64", 1),
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "image_status",
+        lambda declaration, lookup=True: ImageStatus(
+            "local/agent:1", "arm64", digest, False, digests={"arm64": digest}
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_toolchain",
+        lambda: ToolchainDeclaration(dns=DnsSettings(nameservers="host")),
+    )
+
+    offered = agent_environment_images()
+
+    assert (offered.architecture, offered.problem) == ("arm64", "")
+    assert [i.model_dump() for i in offered.images] == [
+        {
+            "reference": "local/agent:1",
+            "digest": digest,
+            "size_bytes": 900,
+            "declared": True,
+        },
+        {
+            "reference": "local/other:2",
+            "digest": "sha256:" + "d" * 64,
+            "size_bytes": 1,
+            "declared": False,
+        },
+    ]
+
+    def fail() -> tuple[ImageInfo, ...]:
+        raise AgentEnvironmentError("store locked")
+
+    monkeypatch.setattr(module, "candidate_images", fail)
+    assert agent_environment_images().model_dump() == {
+        "architecture": "arm64",
+        "images": [],
+        "problem": "store locked",
+    }
+
+    monkeypatch.setattr(
+        module.runtime, "doctor", lambda: AgentEnvironmentHealth(False, "no hypervisor")
+    )
+    assert agent_environment_images().model_dump() == {
+        "architecture": "arm64",
+        "images": [],
+        "problem": "no hypervisor",
+    }
 
 
 def test_problems_name_the_device_once_and_only_the_tools_in_use(
@@ -372,6 +499,8 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.models import (
         AgentEnvironmentStatusResponse,
+        EnvironmentImage,
+        EnvironmentImagesResponse,
         EnvironmentRuntimeStatus,
         EnvironmentSnapshotStatus,
         GrantEvaluation,
@@ -397,8 +526,20 @@ def test_the_sandbox_endpoints_answer_from_this_device(
     )
     headers = {"X-GuildBotics-Session-Token": "secret"}
 
+    monkeypatch.setattr(
+        api_module,
+        "agent_environment_images",
+        lambda: EnvironmentImagesResponse(
+            architecture="arm64",
+            images=[
+                EnvironmentImage(reference="local/agent:1", digest="sha256:" + "c" * 64)
+            ],
+        ),
+    )
+
     with TestClient(create_app(session_token="secret", runtime=runtime)) as client:
         status = client.get("/intelligences/agent-environment", headers=headers)
+        images = client.get("/intelligences/agent-environment/images", headers=headers)
         evaluation = client.get(
             "/intelligences/grant-evaluation",
             params={"scope": "deny", "path": "/opt/x"},
@@ -412,6 +553,7 @@ def test_the_sandbox_endpoints_answer_from_this_device(
         unauthorized = client.get("/intelligences/agent-environment")
 
     assert status.json()["platform"] == "darwin"
+    assert images.json()["images"][0]["reference"] == "local/agent:1"
     assert evaluation.json()["scope"] == "deny"
     assert bad_scope.status_code == 422
     assert unauthorized.status_code == 401

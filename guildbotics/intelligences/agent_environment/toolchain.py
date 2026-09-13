@@ -2,17 +2,19 @@
 
 ``config/intelligences/agent_environment.yml`` is shared between the devices
 of a workspace, so every device builds the same environment from it: the
-packages an agent finds inside, beyond the base image and the provider CLIs
-GuildBotics itself puts there, and the upstream resolvers the environment's
-DNS gateway forwards to. It is the whole of what a user declares. The base
-image and the way packages are installed belong to the build recipe
-(:mod:`.snapshot`), not to the declaration: they are how GuildBotics builds,
+base image the build starts from (GuildBotics' own unless the workspace
+names one it built itself), the packages an agent finds inside beyond that
+image and the provider CLIs GuildBotics itself puts there, and the upstream
+resolvers the environment's DNS gateway forwards to. It is the whole of what
+a user declares. The way packages are installed belongs to the build recipe
+(:mod:`.snapshot`), not to the declaration: it is how GuildBotics builds,
 not what the user wants inside.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +45,79 @@ def _package_specs(specs: list[str]) -> list[str]:
                 )
             )
     return specs
+
+
+#: An image identity as the runtime reports it: the digest of the image's
+#: configuration, which survives ``docker save`` / ``msb image load`` (a
+#: manifest digest does not, since an archive re-encodes the manifest).
+_IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+#: A CPU architecture as OCI names it (``amd64``, ``arm64``).
+_ARCHITECTURE = re.compile(r"^[a-z0-9]+$")
+
+
+class BaseImage(BaseModel):
+    """The image the build starts from, when the workspace names one.
+
+    ``reference`` is how the image is called on a device (``local/agent:1``)
+    and ``digests`` says which image that is, per CPU architecture: the
+    environment runs the device's own architecture, so an arm64 device and
+    an amd64 device build the same Dockerfile into two images, and the
+    declaration carries the identity of each. A reference is re-tagged
+    whenever the image is rebuilt, so a device that holds the reference at
+    another digest, or has no digest declared for its architecture, is told
+    to load or build the declared image. The image itself is not shared;
+    each device loads it (``guildbotics environment image load``) from an
+    archive built for its architecture.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    reference: str
+    digests: dict[str, str]
+
+    @field_validator("reference")
+    @classmethod
+    def _one_reference(cls, reference: str) -> str:
+        if (
+            not reference
+            or any(ch.isspace() for ch in reference)
+            or reference.startswith("-")
+        ):
+            raise ValueError(
+                t(
+                    "intelligences.agent_environment.declaration.not_an_image",
+                    reference=reference,
+                )
+            )
+        return reference
+
+    @field_validator("digests")
+    @classmethod
+    def _config_digests(cls, digests: dict[str, str]) -> dict[str, str]:
+        if not digests:
+            raise ValueError(
+                t("intelligences.agent_environment.declaration.no_digests")
+            )
+        for architecture, digest in digests.items():
+            if not _ARCHITECTURE.match(architecture):
+                raise ValueError(
+                    t(
+                        "intelligences.agent_environment.declaration.not_an_architecture",
+                        architecture=architecture,
+                    )
+                )
+            if not _IMAGE_DIGEST.match(digest):
+                raise ValueError(
+                    t(
+                        "intelligences.agent_environment.declaration.not_a_digest",
+                        digest=digest,
+                    )
+                )
+        return digests
+
+    def digest_for(self, architecture: str) -> str:
+        """The declared identity for ``architecture``, or "" when none is."""
+        return self.digests.get(architecture, "")
 
 
 class Packages(BaseModel):
@@ -175,6 +250,8 @@ class ToolchainDeclaration(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
+    #: Absent, the build starts from the image the recipe pins.
+    image: BaseImage | None = None
     packages: Packages = Field(default_factory=Packages)
     dns: DnsSettings
 

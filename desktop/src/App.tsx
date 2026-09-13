@@ -367,7 +367,7 @@ function SystemAlertBand() {
 // The device alert names what is wrong (the backend's words) and then what
 // to do about it, which depends on which part of the device it is: a build
 // in progress needs nothing but patience, so it gets no second sentence.
-const DEVICE_FIXES = ["runtime", "declaration", "snapshot"] as const;
+const DEVICE_FIXES = ["runtime", "declaration", "image", "snapshot"] as const;
 
 export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
   const message = t(`systemAlerts.codes.${alert.code}`, {
@@ -406,15 +406,19 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
   }
   if (
     alert.code === "agent_environment_unavailable" ||
+    alert.code === "agent_environment_image_differs" ||
     alert.code === "agent_environment_tool_unavailable"
   ) {
     // The device's environment card, at the row that is the problem: the
-    // runtime or the snapshot for the device, the tool's own row for a tool.
+    // runtime, the base image, or the snapshot for the device, the tool's
+    // own row for a tool.
     const focus =
       alert.code === "agent_environment_tool_unavailable" && alert.command
         ? `agent-environment-tool-${alert.command}`
-        : alert.setting === "runtime"
-          ? "agent-environment-runtime"
+        : alert.code === "agent_environment_image_differs" ||
+            alert.setting === "runtime" ||
+            alert.setting === "image"
+          ? `agent-environment-${alert.code === "agent_environment_image_differs" ? "image" : alert.setting}`
           : "agent-environment-snapshot";
     return `/setup?${new URLSearchParams({ section: "intelligence", focus }).toString()}`;
   }

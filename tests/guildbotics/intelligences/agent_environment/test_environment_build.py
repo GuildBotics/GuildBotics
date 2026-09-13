@@ -120,6 +120,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
         "guildbotics-abc",
         dest_dir=tmp_path,
         image="node:22.23.2-bookworm",
+        pull=True,
         home="/Users/u",
         steps=_STEPS,
         nameservers=("10.0.0.53",),
@@ -129,6 +130,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     created = _Sandbox.created
     assert created["name"] == "guildbotics-build"
     assert created["image"] == "node:22.23.2-bookworm"
+    assert created["pull_policy"] == microsandbox.PullPolicy.IF_MISSING
     assert created["replace"] is True
     assert "volumes" not in created
     policy = created["network"].policy
@@ -172,6 +174,7 @@ async def test_the_pull_ignores_the_docker_clients_configuration(
         "n",
         dest_dir=tmp_path,
         image="i",
+        pull=True,
         home="/h",
         steps=(),
         nameservers=(),
@@ -182,6 +185,26 @@ async def test_the_pull_ignores_the_docker_clients_configuration(
     assert _Sandbox.docker_config != str(tmp_path / "docker")
     assert not Path(_Sandbox.docker_config).exists()
     assert os.environ["DOCKER_CONFIG"] == str(tmp_path / "docker")
+
+
+@pytest.mark.asyncio
+async def test_an_image_loaded_here_is_never_asked_of_a_registry(
+    sdk: None, tmp_path: Path
+) -> None:
+    """A local reference names nothing anywhere else; a pull would only
+    fail slowly where refusing it fails at once."""
+    await build_snapshot(
+        "n",
+        dest_dir=tmp_path,
+        image="local/agent:1",
+        pull=False,
+        home="/h",
+        steps=(),
+        nameservers=(),
+        on_line=lambda _: None,
+    )
+
+    assert _Sandbox.created["pull_policy"] == microsandbox.PullPolicy.NEVER
 
 
 @pytest.mark.asyncio
@@ -198,6 +221,7 @@ async def test_a_failing_step_names_itself_and_the_build_sandbox_is_dropped(
             "guildbotics-abc",
             dest_dir=tmp_path,
             image="i",
+            pull=True,
             home="/h",
             steps=(BuildStep("apt", "apt-get install fail"), _STEPS[1]),
             nameservers=(),
@@ -221,6 +245,7 @@ async def test_a_sandbox_that_cannot_start_is_reported(
             "n",
             dest_dir=tmp_path,
             image="i",
+            pull=True,
             home="/h",
             steps=_STEPS,
             nameservers=(),

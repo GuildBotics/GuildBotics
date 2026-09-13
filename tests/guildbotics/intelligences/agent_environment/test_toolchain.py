@@ -27,6 +27,13 @@ _DNS = {"nameservers": ["10.0.0.53"]}
 def test_a_full_declaration_parses() -> None:
     declaration = parse_toolchain(
         {
+            "image": {
+                "reference": "local/agent:1",
+                "digests": {
+                    "arm64": "sha256:" + "c" * 64,
+                    "amd64": "sha256:" + "d" * 64,
+                },
+            },
             "packages": {
                 "apt": ["ripgrep=14.1.0-1"],
                 "npm": ["typescript@5.6.3"],
@@ -37,6 +44,11 @@ def test_a_full_declaration_parses() -> None:
         where="test",
     )
 
+    assert declaration.image is not None
+    assert declaration.image.reference == "local/agent:1"
+    assert declaration.image.digest_for("arm64") == "sha256:" + "c" * 64
+    assert declaration.image.digest_for("amd64") == "sha256:" + "d" * 64
+    assert declaration.image.digest_for("riscv64") == ""
     assert declaration.packages.apt == ["ripgrep=14.1.0-1"]
     assert declaration.packages.npm == ["typescript@5.6.3"]
     assert declaration.packages.uv == ["ruff==0.6.9"]
@@ -45,6 +57,7 @@ def test_a_full_declaration_parses() -> None:
 
 def test_packages_default_to_nothing_but_dns_is_required() -> None:
     assert parse_toolchain({"dns": _DNS}, where="t").packages.apt == []
+    assert parse_toolchain({"dns": _DNS}, where="t").image is None
     with pytest.raises(ToolchainError, match="dns"):
         parse_toolchain({"packages": {}}, where="t")
 
@@ -54,6 +67,29 @@ def test_packages_default_to_nothing_but_dns_is_required() -> None:
     [
         ["not", "a", "mapping"],
         {"dns": _DNS, "image": "node:22"},
+        {"dns": _DNS, "image": {"reference": "node:22"}},
+        {"dns": _DNS, "image": {"reference": "a:1", "digest": "sha256:" + "0" * 64}},
+        {"dns": _DNS, "image": {"reference": "a:1", "digests": {}}},
+        {
+            "dns": _DNS,
+            "image": {"reference": "a:1", "digests": {"arm64": "sha256:abc"}},
+        },
+        {
+            "dns": _DNS,
+            "image": {"reference": "a:1", "digests": {"ARM 64": "sha256:" + "0" * 64}},
+        },
+        {
+            "dns": _DNS,
+            "image": {"reference": "a b", "digests": {"arm64": "sha256:" + "0" * 64}},
+        },
+        {
+            "dns": _DNS,
+            "image": {"reference": "-x", "digests": {"arm64": "sha256:" + "0" * 64}},
+        },
+        {
+            "dns": _DNS,
+            "image": {"reference": "", "digests": {"arm64": "sha256:" + "0" * 64}},
+        },
         {"dns": _DNS, "packages": {"pip": ["x"]}},
         {"dns": _DNS, "packages": {"apt": "ripgrep"}},
         {"dns": {"nameservers": []}},
@@ -65,8 +101,9 @@ def test_packages_default_to_nothing_but_dns_is_required() -> None:
     ],
 )
 def test_anything_the_declaration_does_not_define_is_rejected(raw: object) -> None:
-    """The base image is the recipe's, not the user's; a manager GuildBotics
-    does not install with, an IPv6 or a hostname upstream have no meaning."""
+    """An image is a reference and, per architecture, the digest that says
+    which one; a manager GuildBotics does not install with, an IPv6 or a
+    hostname upstream have no meaning."""
     with pytest.raises(ToolchainError, match="^test: "):
         parse_toolchain(raw, where="test")
 
