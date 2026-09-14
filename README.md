@@ -797,6 +797,10 @@ the same record. Synchronization does not stop, and no one is asked to resolve a
 Content that was not adopted when a machine with an existing `.guildbotics/` joined the hub
 is listed there the same way.
 
+Files and directories whose names start with `.` are not shared from `config/` or `state/`.
+Bookkeeping files created by Finder or an editor at any depth therefore do not appear as
+changes that cannot be sent.
+
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set

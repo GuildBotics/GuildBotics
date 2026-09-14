@@ -10,6 +10,7 @@ import pytest
 from git import Git, GitCommandError, Repo
 
 from guildbotics.sync.local_repository import (
+    GITIGNORE_CONTENT,
     REJECTED_REF_PREFIX,
     HubTimeoutError,
     LocalSyncRepository,
@@ -26,28 +27,35 @@ def _workspace(root: Path) -> LocalSyncRepository:
     return repository
 
 
-def test_initialize_ignores_device_local_data_and_env_files(tmp_path: Path) -> None:
+def test_initialize_ignores_device_local_data_and_hidden_paths(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     (tmp_path / ".guildbotics" / "local" / "run" / "pid").write_text("1")
     (tmp_path / ".guildbotics" / ".env").write_text("TOKEN=x")
+    config = tmp_path / ".guildbotics" / "config"
+    config.mkdir()
+    (config / ".DS_Store").write_bytes(b"\xff\xfe")
+    hidden_directory = tmp_path / ".guildbotics" / "state" / ".editor"
+    hidden_directory.mkdir()
+    (hidden_directory / "session").write_text("local state")
     (tmp_path / ".guildbotics" / "state" / "kept.json").write_text("{}")
 
     assert [change.path for change in repository.working_tree_changes()] == [
         "state/kept.json"
     ]
-    assert (
-        tmp_path / ".guildbotics" / ".gitignore"
-    ).read_text() == "local/\n.env\n*.tmp\n"
+    assert (tmp_path / ".guildbotics" / ".gitignore").read_text() == GITIGNORE_CONTENT
 
 
 def test_initialize_is_repeatable(tmp_path: Path) -> None:
     repository = _workspace(tmp_path)
     head_before = repository.head()
+    ignore = tmp_path / ".guildbotics" / ".gitignore"
+    ignore.write_text("old rules\n")
 
     repository.initialize()
 
     assert repository.initialized
     assert repository.head() == head_before
+    assert ignore.read_text() == GITIGNORE_CONTENT
 
 
 def test_boundary_refuses_a_repository_inside_a_member_working_clone(

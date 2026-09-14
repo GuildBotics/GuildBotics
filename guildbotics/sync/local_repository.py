@@ -47,14 +47,15 @@ SYNC_REMOTE = "origin"
 REJECTED_REF_PREFIX = "refs/guildbotics/rejected"
 #: Where a hub's content is read before the workspace is connected to it.
 PREVIEW_REF = "refs/guildbotics/hub-preview"
-#: ``local/`` is device-only; ``.env`` is refused a second time here because a
-#: file of secrets must not reach the hub even if one is written by hand. The
-#: third entry is an atomic write in progress: it is created beside its
+#: ``local/`` is device-only. Hidden paths are not GuildBotics shared data;
+#: ignoring the whole category keeps OS and editor bookkeeping out at every
+#: depth and also refuses ``.env`` a second time. The final entry is an atomic
+#: write in progress: it is created beside its
 #: destination, so for a shared file it lands inside this tree, and a cycle
 #: that enumerates it either commits a half-written name or fails its own
 #: ``git add`` when the rename beats it -- reported as a hub it could not
 #: reach. It is never a file the user meant to share.
-GITIGNORE_CONTENT = f"local/\n.env\n*{ATOMIC_WRITE_SUFFIX}\n"
+GITIGNORE_CONTENT = f"local/\n.*\n*{ATOMIC_WRITE_SUFFIX}\n"
 #: Command lines stay bounded when a rescan finds thousands of changed files.
 _PATH_BATCH = 200
 #: ``git status --porcelain`` prefixes every entry with ``XY `` before the path.
