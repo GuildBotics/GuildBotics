@@ -92,6 +92,7 @@ def _device(
             declaration=declaration,
             declaration_problem="",
             snapshot=state,
+            network=declaration.network,
             dns=DnsStatus("host", ("192.168.3.1",)),
             tools=tools,
             image=image or ImageStatus(),
@@ -151,6 +152,7 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         "boom",
     )
     assert status.snapshot.output == ["[apt]", "E: boom"]
+    assert status.network is not None
     assert status.network.allowed_domains == ["github.com"]
     assert status.image.model_dump() == {
         "default": IMAGE,
@@ -392,6 +394,7 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
     ]
     aiko, kenji = status.members[0].slots[0], status.members[1].slots[0]
     assert (aiko.tool, kenji.tool) == ("codex", "grok")
+    assert status.network is not None
     assert status.network.mode == "deny"
     assert aiko.problems == [] and kenji.problems == []
     # What does keep kenji's slot from starting is its tool, which is not

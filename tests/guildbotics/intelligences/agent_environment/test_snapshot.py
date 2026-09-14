@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import re
 import asyncio
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.agent_environment import runtime, snapshot
 from guildbotics.intelligences.agent_environment import image as image_module
+from guildbotics.intelligences.agent_environment import runtime, snapshot
 from guildbotics.intelligences.agent_environment.image import (
     ImageStatus,
     image_load_command,
@@ -121,77 +121,47 @@ class _FakeBuild:
 
 
 def test_the_name_is_a_digest_of_the_image_and_provider_recipe() -> None:
-    plain = snapshot_name(_declaration(), ImageStatus())
+    plain = snapshot_name(ImageStatus())
 
     assert plain.startswith(SNAPSHOT_PREFIX)
-    assert snapshot_name(_declaration(), ImageStatus()) == plain
+    assert snapshot_name(ImageStatus()) == plain
 
 
 def test_a_declared_image_names_the_snapshot_by_the_digest_this_device_holds() -> None:
     """A reference is re-tagged when the image is rebuilt; the digest is
     what the device actually holds, so it is what the name follows."""
-    plain = snapshot_name(_declaration(), ImageStatus())
+    plain = snapshot_name(ImageStatus())
     held = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
-    declared = snapshot_name(_with_image(), held)
+    declared = snapshot_name(held)
 
     assert declared != plain
-    assert snapshot_name(_with_image(reference="other/name:9"), held) == declared
     # The snapshot is built from what the device holds, so that names it:
     # an image loaded under the reference at another digest is another
     # snapshot, whatever the declaration says.
     other = ImageStatus("local/agent:1", "arm64", _DIGEST, False, "sha256:" + "d" * 64)
-    assert snapshot_name(_with_image(), other) != declared
-
-
-def test_dns_is_not_part_of_the_name() -> None:
-    """The resolvers are a gateway setting of every turn, not snapshot content;
-    changing them must not rebuild anything."""
-    other = parse_toolchain({"dns": {"nameservers": ["1.1.1.1"]}}, where="t")
-
-    assert snapshot_name(other, ImageStatus()) == snapshot_name(
-        _declaration(), ImageStatus()
-    )
-
-
-def test_network_is_not_part_of_the_name() -> None:
-    """A network policy shapes each turn rather than snapshot content."""
-    unrestricted = parse_toolchain(
-        {
-            "network": {
-                "mode": "unrestricted",
-                "allowed_domains": [],
-                "allow_local_network": False,
-            },
-            "dns": {"nameservers": ["10.0.0.53"]},
-        },
-        where="t",
-    )
-
-    assert snapshot_name(unrestricted, ImageStatus()) == snapshot_name(
-        _declaration(), ImageStatus()
-    )
+    assert snapshot_name(other) != declared
 
 
 def test_the_name_changes_with_the_pinned_provider_versions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    before = snapshot_name(_declaration(), ImageStatus())
+    before = snapshot_name(ImageStatus())
     monkeypatch.setattr(
         snapshot, "provisioned_packages", lambda: {"codex": "@openai/codex@9.9.9"}
     )
-    changed = snapshot_name(_declaration(), ImageStatus())
+    changed = snapshot_name(ImageStatus())
     assert changed != before
 
     # A script-installed tool is pinned by its script, so that counts too.
     monkeypatch.setattr(snapshot, "provisioned_installs", lambda: {"grok": "pin 9.9.9"})
-    assert snapshot_name(_declaration(), ImageStatus()) != changed
+    assert snapshot_name(ImageStatus()) != changed
 
 
 # --- recipe ----------------------------------------------------------------------
 
 
 def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
-    steps = build_steps(_declaration())
+    steps = build_steps()
 
     installs = list(snapshot.provisioned_installs())
     assert [step.label for step in steps] == [
@@ -210,7 +180,7 @@ def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
 
 
 def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
-    assert [s.label for s in build_steps(_declaration())] == [
+    assert [s.label for s in build_steps()] == [
         "home",
         "uv",
         "npm",
@@ -222,7 +192,7 @@ def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
 
 
 def test_a_device_without_a_snapshot_is_missing(workspace: Path) -> None:
-    status = snapshot_status(_declaration(), ImageStatus(), workspace)
+    status = snapshot_status(ImageStatus(), workspace)
 
     assert status.state == "missing"
     assert status.path == snapshots_dir(workspace) / status.name
@@ -233,27 +203,21 @@ def test_a_snapshot_of_another_declaration_is_stale(workspace: Path) -> None:
         parents=True
     )
 
-    assert snapshot_status(_declaration(), ImageStatus(), workspace).state == "stale"
+    assert snapshot_status(ImageStatus(), workspace).state == "stale"
 
 
 def test_the_named_snapshot_is_ready(workspace: Path) -> None:
-    declaration = _declaration()
-    (snapshots_dir(workspace) / snapshot_name(declaration, ImageStatus())).mkdir(
-        parents=True
-    )
+    (snapshots_dir(workspace) / snapshot_name(ImageStatus())).mkdir(parents=True)
 
-    assert snapshot_status(declaration, ImageStatus(), workspace).state == "ready"
+    assert snapshot_status(ImageStatus(), workspace).state == "ready"
 
 
 def test_a_failed_build_is_reported_with_its_reason(workspace: Path) -> None:
-    declaration = _declaration()
     directory = snapshots_dir(workspace)
     directory.mkdir(parents=True)
-    (directory / f"{snapshot_name(declaration, ImageStatus())}.failed").write_text(
-        "npm exploded\n"
-    )
+    (directory / f"{snapshot_name(ImageStatus())}.failed").write_text("npm exploded\n")
 
-    status = snapshot_status(declaration, ImageStatus(), workspace)
+    status = snapshot_status(ImageStatus(), workspace)
 
     assert (status.state, status.detail) == ("failed", "npm exploded")
 
@@ -263,11 +227,8 @@ def test_a_held_build_lock_means_building(workspace: Path) -> None:
     directory.mkdir(parents=True)
 
     with held_lock(directory / "build.lock"):
-        assert (
-            snapshot_status(_declaration(), ImageStatus(), workspace).state
-            == "building"
-        )
-    assert snapshot_status(_declaration(), ImageStatus(), workspace).state == "missing"
+        assert snapshot_status(ImageStatus(), workspace).state == "building"
+    assert snapshot_status(ImageStatus(), workspace).state == "missing"
 
 
 # --- build -----------------------------------------------------------------------
@@ -292,7 +253,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     )
 
     call = fake.calls[0]
-    assert call["name"] == status.name == snapshot_name(declaration, ImageStatus())
+    assert call["name"] == status.name == snapshot_name(ImageStatus())
     assert call["dest_dir"] == directory
     assert (call["image"], call["pull"]) == (image_module.IMAGE, True)
     assert call["home"] == home.resolve().as_posix()
@@ -308,7 +269,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert fake.removed == [old]
     assert sorted(p.name for p in directory.iterdir()) == ["build.lock", status.name]
     assert lines == ["Get:1 http://deb.debian.org bookworm InRelease"]
-    assert snapshot_status(declaration, ImageStatus(), workspace).state == "ready"
+    assert snapshot_status(ImageStatus(), workspace).state == "ready"
 
 
 def test_a_build_starts_from_the_declared_image_this_device_holds(
@@ -323,7 +284,7 @@ def test_a_build_starts_from_the_declared_image_this_device_holds(
 
     assert (fake.calls[0]["image"], fake.calls[0]["pull"]) == ("local/agent:1", False)
     held = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
-    assert status.name == snapshot_name(_with_image(), held)
+    assert status.name == snapshot_name(held)
 
 
 def test_a_snapshot_is_named_by_the_image_the_runtime_built_from(
@@ -333,7 +294,7 @@ def test_a_snapshot_is_named_by_the_image_the_runtime_built_from(
     status read and the build: the content is the newer image's, so the
     name is too, and the declared digest's snapshot is still missing."""
     newer = "sha256:" + "e" * 64
-    fake = _FakeBuild(monkeypatch, built_from=newer)
+    _FakeBuild(monkeypatch, built_from=newer)
     _device_holds(monkeypatch)
 
     status = asyncio.run(
@@ -342,10 +303,10 @@ def test_a_snapshot_is_named_by_the_image_the_runtime_built_from(
 
     as_read = ImageStatus("local/agent:1", "arm64", _DIGEST, True, _DIGEST)
     as_built = ImageStatus("local/agent:1", "arm64", _DIGEST, False, newer)
-    assert status.name == snapshot_name(_with_image(), as_built)
-    assert status.name != snapshot_name(_with_image(), as_read)
+    assert status.name == snapshot_name(as_built)
+    assert status.name != snapshot_name(as_read)
     assert status.path.is_dir()
-    assert snapshot_status(_with_image(), as_read, workspace).state == "stale"
+    assert snapshot_status(as_read, workspace).state == "stale"
 
 
 def test_a_build_refuses_a_declared_image_this_device_lacks(
@@ -387,7 +348,7 @@ def test_a_build_from_an_image_that_differs_from_the_declaration_says_so(
 
     assert (fake.calls[0]["image"], fake.calls[0]["pull"]) == ("local/agent:1", False)
     held = ImageStatus("local/agent:1", "arm64", _DIGEST, False, other)
-    assert status.name == snapshot_name(_with_image(), held)
+    assert status.name == snapshot_name(held)
     assert lines[0] == "[image] " + t(
         "intelligences.agent_environment.image.mismatch",
         reference="local/agent:1",
@@ -427,7 +388,7 @@ def test_a_failed_build_leaves_its_reason_and_the_older_snapshot(
             )
         )
 
-    status = snapshot_status(declaration, ImageStatus(), workspace)
+    status = snapshot_status(ImageStatus(), workspace)
     assert (status.state, status.detail) == (
         "failed",
         "Build step 'npm' failed with exit code 1.",
@@ -454,7 +415,7 @@ def test_a_stalled_build_is_failed_with_the_lock_released(
             )
         )
 
-    status = snapshot_status(declaration, ImageStatus(), workspace)
+    status = snapshot_status(ImageStatus(), workspace)
     assert status.state == "failed"
     assert "did not finish" in status.detail
 
@@ -584,4 +545,4 @@ def test_a_broken_declaration_stops_the_service_from_building(
 
 
 def test_the_build_step_type_is_what_the_recipe_hands_the_runtime() -> None:
-    assert isinstance(build_steps(_declaration())[0], BuildStep)
+    assert isinstance(build_steps()[0], BuildStep)

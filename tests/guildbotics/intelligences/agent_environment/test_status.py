@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import errno
+from pathlib import Path
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.status import login_command
 from guildbotics.intelligences.agent_environment import status as module
-from guildbotics.intelligences.agent_runtime.environment import _ready
-from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+from guildbotics.intelligences.agent_environment.contract import (
+    DocumentGrant,
+    LocalGrants,
+    LocalPathGrant,
+    SharedGrants,
+)
 from guildbotics.intelligences.agent_environment.image import (
     ImageStatus,
     image_load_command,
@@ -19,19 +22,18 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
 )
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
-from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.intelligences.agent_environment.contract import (
-    DocumentGrant,
-    SharedGrants,
-    LocalGrants,
-    LocalPathGrant,
+from guildbotics.intelligences.agent_environment.status import (
+    device_status,
+    login_command,
 )
-from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
     ToolchainError,
 )
+from guildbotics.intelligences.agent_runtime.environment import _ready
+from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
+from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.utils.i18n_tool import t
 
 
@@ -67,7 +69,7 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
     monkeypatch.setattr(module.runtime, "doctor", lambda: parts["health"])
     monkeypatch.setattr(module, "load_toolchain", load)
     monkeypatch.setattr(
-        module.snapshot, "snapshot_status", lambda d, image: parts["snapshot"]
+        module.snapshot, "snapshot_status", lambda image: parts["snapshot"]
     )
     monkeypatch.setattr(module, "image_status", lambda d, lookup=True: parts["image"])
     monkeypatch.setattr(module, "upstream_nameservers", resolvers)
@@ -84,6 +86,7 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
 
     assert status.ready and (status.refusal, status.setting) == ("", "")
     assert status.warning == ""
+    assert status.network == status.declaration.network
     assert (status.dns.declared, status.dns.nameservers) == ("host", ("192.168.3.1",))
     assert status.tool("codex").refusal == ""
     assert status.tool("claude").refusal == t(
@@ -245,6 +248,7 @@ def test_an_unreadable_declaration_leaves_no_snapshot_or_dns_to_report(device) -
 
     assert status.snapshot is None
     assert status.declaration_problem == "agent_environment.yml: bad"
+    assert status.network is None
     assert status.dns == module.DnsStatus(declared="")
 
 
@@ -393,6 +397,7 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
     monkeypatch, tmp_path, platform, language
 ):
     import shlex
+
     from guildbotics.intelligences.agent_environment.status import ToolStatus
     from guildbotics.utils.i18n_tool import set_language
 

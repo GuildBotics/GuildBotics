@@ -221,16 +221,23 @@ export function AgentEnvironmentCard({
                 <Table.Td>
                   <Stack gap={2}>
                     <Text size="sm">
-                      {t(`setup.intelligence.network.modes.${data.network.mode}`)}
+                      {data.network
+                        ? t(`setup.intelligence.network.modes.${data.network.mode}`)
+                        : t("setup.intelligence.environment.networkUnavailable")}
                     </Text>
-                    {data.network.allowed_domains.length > 0 ? (
+                    {data.network?.allowed_domains.length ? (
                       <Text size="xs" c="dimmed" ff="monospace">
                         {data.network.allowed_domains.join(", ")}
                       </Text>
                     ) : null}
-                    {data.network.allow_local_network ? (
+                    {data.network?.allow_local_network ? (
                       <Text size="xs" c="dimmed">
                         {t("setup.intelligence.environment.networkLocal")}
+                      </Text>
+                    ) : null}
+                    {data.network?.mode === "unrestricted" ? (
+                      <Text size="xs" c="danger">
+                        {t("setup.intelligence.environment.networkUnrestricted")}
                       </Text>
                     ) : null}
                   </Stack>

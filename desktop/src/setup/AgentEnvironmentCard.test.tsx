@@ -264,6 +264,38 @@ describe("AgentEnvironmentCard", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps an unrestricted network visible on the status card", async () => {
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      status({
+        network: {
+          mode: "unrestricted",
+          allowed_domains: [],
+          allow_local_network: false,
+        },
+      }),
+    );
+    renderCard();
+
+    expect(
+      await screen.findByText(t("setup.intelligence.network.modes.unrestricted")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.networkUnrestricted")),
+    ).toBeInTheDocument();
+  });
+
+  it("does not report deny when the declaration could not be read", async () => {
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      status({ network: null, problem: "Invalid declaration", problem_setting: "declaration" }),
+    );
+    renderCard();
+
+    expect(
+      await screen.findByText(t("setup.intelligence.environment.networkUnavailable")),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(t("setup.intelligence.network.modes.deny"))).not.toBeInTheDocument();
+  });
+
   it.each(["en", "ja"])(
     "keeps login and copy available for every credential state in %s",
     async (language) => {

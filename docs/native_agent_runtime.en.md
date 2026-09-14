@@ -84,11 +84,10 @@ loaded, an unbuilt snapshot, no login) is shown in the same words in the
 alert band at the top of the screen.
 
 The base image is GuildBotics' own by default (Debian + Node.js + npm + git
-+ uv). A workspace that needs a toolchain the three package slots (apt /
-npm / uv tool) cannot express -- a Python interpreter, Rust, a browser --
-declares an image it built itself. The image's content is not shared: load
-its `docker save` archive on each device with `guildbotics environment image
-load`, then pick it from the images loaded on this device under **LLM / AI
++ uv). A workspace that needs another toolchain -- a Python interpreter,
+Rust, a browser -- declares an image it built itself. The image's content is
+not shared: load its `docker save` archive on each device with `guildbotics
+environment image load`, then pick it from the images loaded on this device under **LLM / AI
 CLI tools → advanced settings → Environment declaration**, or declare it
 with `guildbotics environment image declare`. Images are per CPU
 architecture (the environment runs the device's own CPU), so the
@@ -166,8 +165,8 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   `unrestricted` (`off` would read as a YAML boolean). `allowed_domains` is
   used only with `allowlist`; `allow_local_network` also opens localhost and
   the LAN. Omitting `network:` means `deny`. The shipped declaration uses an
-  allowlist of the known GitHub and package-registry hosts needed to develop
-  GuildBotics. `unrestricted` is only an explicit escape hatch: a turn can
+  allowlist of common GitHub and package-registry hosts as a starting point
+  for coding work. `unrestricted` is only an explicit escape hatch: a turn can
   then send workspace content it can read to any Internet host or fetch any
   external payload. Provider API domains and the localhost member broker are
   always reachable regardless of mode. The gateway still blocks every other

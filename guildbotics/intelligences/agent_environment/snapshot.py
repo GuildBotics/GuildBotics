@@ -55,8 +55,8 @@ from guildbotics.utils.advisory_lock import (
 from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 
-#: uv, used by provider installation scripts; installed from its release
-#: archive because the default image has no Python of its own.
+#: uv, available to agents as the default image's Python toolchain; installed
+#: from its release archive because that image has no Python of its own.
 UV_VERSION = "0.12.10"
 #: Bumped when the build steps change in a way the data above does not show.
 RECIPE_VERSION = 1
@@ -115,8 +115,8 @@ def provisioned_installs() -> dict[str, str]:
     }
 
 
-def snapshot_name(_: ToolchainDeclaration, image: ImageStatus) -> str:
-    """The name of the snapshot ``declaration`` asks for on this device.
+def snapshot_name(image: ImageStatus) -> str:
+    """The name of the snapshot this device needs for ``image``.
 
     ``image`` is the declared base image as this device holds it: the
     snapshot is built from what is held, so that is what names it.
@@ -132,7 +132,7 @@ def snapshot_name(_: ToolchainDeclaration, image: ImageStatus) -> str:
     return SNAPSHOT_PREFIX + hashlib.sha256(encoded).hexdigest()[:16]
 
 
-def build_steps(_: ToolchainDeclaration) -> tuple[BuildStep, ...]:
+def build_steps() -> tuple[BuildStep, ...]:
     """The scripts that install GuildBotics' provider CLIs into the base image."""
     steps = [BuildStep("home", 'install -d -m 0700 "$HOME"')]
     archive = "uv-${arch}-unknown-linux-gnu"
@@ -165,12 +165,11 @@ def _args(specs: list[str]) -> str:
 
 
 def snapshot_status(
-    declaration: ToolchainDeclaration,
     image: ImageStatus,
     workspace_root: Path | None = None,
 ) -> SnapshotStatus:
-    """Compare what the declaration asks for with what this device holds."""
-    name = snapshot_name(declaration, image)
+    """Compare the snapshot recipe with what this device holds."""
+    name = snapshot_name(image)
     directory = snapshots_dir(workspace_root)
     path = directory / name
     if _building(directory):
@@ -232,7 +231,7 @@ async def build_snapshot(
         raise AgentEnvironmentError(image.refusal)
     if image.warning:
         on_line(f"[image] {image.warning}")
-    expected = snapshot_name(declaration, image)
+    expected = snapshot_name(image)
     directory = snapshots_dir(workspace_root)
     directory.mkdir(parents=True, exist_ok=True)
     failed = directory / (expected + _FAILED_SUFFIX)
@@ -241,9 +240,7 @@ async def build_snapshot(
         # The runtime read the reference itself; the name follows what it
         # found, so a reference re-tagged by a concurrent load cannot leave
         # one image's content under another's name.
-        return snapshot_name(
-            declaration, replace(image, held=digest) if digest else image
-        )
+        return snapshot_name(replace(image, held=digest) if digest else image)
 
     try:
         with held_lock(directory / _LOCK_FILE, timeout=0):
@@ -256,7 +253,7 @@ async def build_snapshot(
                         image=image.reference or IMAGE,
                         pull=not image.declared,
                         home=guest_home(home),
-                        steps=build_steps(declaration),
+                        steps=build_steps(),
                         nameservers=nameservers,
                         on_line=on_line,
                     ),
@@ -343,7 +340,7 @@ class SnapshotUpkeep(threading.Thread):
         if image.refusal:
             self._report(f"The agent environment cannot be built here: {image.refusal}")
             return
-        status = snapshot_status(declaration, image)
+        status = snapshot_status(image)
         if status.state not in ("missing", "stale"):
             return
         self._log.info("Building the agent environment %s...", status.name)

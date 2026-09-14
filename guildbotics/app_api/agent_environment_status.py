@@ -40,7 +40,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     DocumentGrant,
     LocalGrants,
-    NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
     SharedGrants,
@@ -140,7 +139,7 @@ def agent_environment_status(
             warning=device.image.warning,
             load_command=image_load_command(platform=platform),
         ),
-        network=device.declaration.network if device.declaration else NetworkPolicy(),
+        network=device.network,
         dns=EnvironmentDnsStatus(
             declared=device.dns.declared,
             nameservers=list(device.dns.nameservers),

@@ -1085,7 +1085,7 @@ export type AgentEnvironmentStatusResponse = {
   runtime: EnvironmentRuntimeStatus;
   snapshot: EnvironmentSnapshotStatus;
   image: EnvironmentImageStatus;
-  network: NetworkPolicy;
+  network: NetworkPolicy | null;
   dns: EnvironmentDnsStatus;
   tools: EnvironmentToolStatus[];
   // Why no turn at all can start on this device, or "" when one can.

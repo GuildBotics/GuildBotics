@@ -7,8 +7,8 @@
 #
 # A workspace may instead start from an image it built itself, for another
 # toolchain (a Python interpreter, Rust, a browser). Build it FROM the default
-# image, or from one that
-# gives the build the same: Debian's apt, Node.js with npm, curl and tar. Do
+# image, or from one that gives the build the same: Node.js with npm, curl and
+# tar. Do
 # not ship bubblewrap (`bwrap`): Codex prefers it to the one it bundles and
 # cannot start a session with Debian's.
 # The image is not shared, and it is per CPU architecture (the environment
@@ -27,9 +27,10 @@
 #       amd64: sha256:<64 hex digits>
 #
 # One rule covers every member, slot, command, and provider web feature. The
-# allowlist below is the known set used to develop GuildBotics itself. Omit
-# this block to deny all non-provider traffic. `unrestricted` is an explicit
-# escape hatch: a turn could then send readable workspace content anywhere
+# allowlist below is a starting point for common coding work with package
+# registries and GitHub. Omit this block to deny all non-provider traffic.
+# `unrestricted` is an explicit escape hatch: a turn could then send readable
+# workspace content anywhere
 # or fetch a payload from any Internet host.
 network:
   mode: allowlist

@@ -13,8 +13,8 @@
 #   - Playwright's Chromium with its system libraries for `npm run e2e`
 #   - lychee, for the Markdown link check
 #
-# It keeps what GuildBotics' build recipe expects of a base image: Debian's apt,
-# Node.js with npm, curl and tar, and no bubblewrap (see the last step).
+# It keeps what GuildBotics' build recipe expects of a base image: Node.js with
+# npm, curl and tar, and no bubblewrap (see the last step).
 # GuildBotics installs the AI CLI tools on top when it builds the environment
 # snapshot.
 #

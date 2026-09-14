@@ -1305,7 +1305,7 @@ class AgentEnvironmentStatusResponse(BaseModel):
             default=IMAGE, architecture=device_architecture()
         )
     )
-    network: NetworkPolicy = Field(default_factory=NetworkPolicy)
+    network: NetworkPolicy | None = None
     dns: EnvironmentDnsStatus = Field(default_factory=EnvironmentDnsStatus)
     tools: list[EnvironmentToolStatus] = Field(default_factory=list)
     #: Why no turn at all can start on this device, or "" when one can.

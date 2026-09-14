@@ -36,7 +36,6 @@ from guildbotics.intelligences.agent_environment.snapshot import (
     SnapshotStatus,
     snapshot_name,
 )
-from guildbotics.intelligences.agent_environment.toolchain import load_toolchain
 from guildbotics.utils.i18n_tool import t
 
 
@@ -71,7 +70,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
     assert "runtime: available 0.6.17" in result.output
     assert f"image: {image_module.IMAGE} (GuildBotics default)" in result.output
     assert (
-        f"snapshot: missing {snapshot_name(load_toolchain(), ImageStatus())} "
+        f"snapshot: missing {snapshot_name(ImageStatus())} "
         "(run `guildbotics environment build`)"
     ) in result.output
     assert "dns: 1.1.1.1, 8.8.8.8 -> 1.1.1.1, 8.8.8.8" in result.output
@@ -132,6 +131,19 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
     assert tools["antigravity"]["provisioned"] is True
 
 
+def test_an_unreadable_declaration_does_not_look_like_deny(workspace: Path) -> None:
+    declaration = workspace / ".guildbotics/config/intelligences/agent_environment.yml"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text("network: []\ndns:\n  nameservers: [1.1.1.1]\n")
+
+    text = _invoke(workspace, "status")
+    payload = _invoke(workspace, "status", "--format", "json")
+
+    assert text.exit_code == payload.exit_code == 0
+    assert "network: unavailable" in text.output
+    assert json.loads(payload.output)["network"] is None
+
+
 def test_status_displays_the_device_filesystem_refusal(workspace, monkeypatch):
     _invoke(workspace, "status")
     reason = t("intelligences.agent_environment.filesystem.macos_documents", app="")
@@ -179,7 +191,7 @@ def test_build_runs_the_recipe_and_prints_its_lines(
 def test_build_does_nothing_when_up_to_date_unless_forced(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    name = snapshot_name(load_toolchain(), ImageStatus())
+    name = snapshot_name(ImageStatus())
     (snapshot.snapshots_dir(workspace) / name).mkdir(parents=True)
     built: list[str] = []
 
@@ -228,7 +240,7 @@ def test_login_accepts_only_provisioned_tools(workspace: Path) -> None:
 def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    name = snapshot_name(load_toolchain(), ImageStatus())
+    name = snapshot_name(ImageStatus())
     path = snapshot.snapshots_dir(workspace) / name
     path.mkdir(parents=True)
     calls: list[dict[str, Any]] = []
@@ -256,9 +268,7 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
 def test_login_that_stores_nothing_is_an_error(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = snapshot.snapshots_dir(workspace) / snapshot_name(
-        load_toolchain(), ImageStatus()
-    )
+    path = snapshot.snapshots_dir(workspace) / snapshot_name(ImageStatus())
     path.mkdir(parents=True)
 
     async def fake_login(*_: Any, **__: Any) -> int:

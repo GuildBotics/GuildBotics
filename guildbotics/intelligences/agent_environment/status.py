@@ -20,6 +20,7 @@ from typing import Literal
 from guildbotics.intelligences.agent_environment import runtime, snapshot
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
+    NetworkPolicy,
     ResolvedAccess,
     exchange_dir,
     load_local_grants,
@@ -117,6 +118,7 @@ class DeviceStatus:
     declaration: ToolchainDeclaration | None
     declaration_problem: str
     snapshot: SnapshotStatus | None
+    network: NetworkPolicy | None
     dns: DnsStatus
     tools: tuple[ToolStatus, ...]
     image: ImageStatus = field(default_factory=ImageStatus)
@@ -190,13 +192,15 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
         declaration = None
         declaration_problem = str(exc)
     state: SnapshotStatus | None = None
+    network: NetworkPolicy | None = None
     dns = DnsStatus(declared="")
     image = ImageStatus()
     if declaration is not None:
+        network = declaration.network
         # Without a runtime there is no store to look in; the runtime is what
         # the refusal is about, and the image is shown as declared.
         image = image_status(declaration, lookup=health.available)
-        state = snapshot.snapshot_status(declaration, image)
+        state = snapshot.snapshot_status(image)
         if building_here and state.state in ("missing", "stale"):
             state = SnapshotStatus("building", state.name, state.path)
         declared = declaration.dns.nameservers
@@ -212,6 +216,7 @@ def device_status(*, building_here: bool = False) -> DeviceStatus:
         declaration=declaration,
         declaration_problem=declaration_problem,
         snapshot=state,
+        network=network,
         dns=dns,
         tools=tuple(_tool_status(agent) for agent in CLI_AGENTS),
         image=image,

@@ -81,7 +81,7 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt`、Node.jsと`npm`、`curl`と`tar`）を備えていれば
+するか、buildの手順が使うもの（Node.jsと`npm`、`curl`と`tar`）を備えていれば
 何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
@@ -131,8 +131,9 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   ツール組み込みのweb検索・URL取得のどちらにも同じ規則が効きます。`mode`は`deny` /
   `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため使いません）。
   `allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostとLANも開きます。
-  `network:`省略時は`deny`です。同梱の宣言はGuildBotics開発で既知のGitHub・package registryを
-  allowlistにします。`unrestricted`は明示的なescape hatchで、turnが読めるworkspaceの内容を
+  `network:`省略時は`deny`です。同梱の宣言は一般的なcoding作業の出発点として、主要なGitHub・
+  package registryをallowlistにします。`unrestricted`は明示的なescape hatchで、turnが読める
+  workspaceの内容を
   任意のInternet hostへ送信したり、任意の外部payloadを取得したりできます。プロバイダ自身の
   APIドメインとlocalhostのmember brokerはモードによらず常に到達できます。その他の接続先は
   gatewayが拒否しますが、現在のmicrosandboxは拒否先をhostへ渡す公開SDK eventを持たないため、

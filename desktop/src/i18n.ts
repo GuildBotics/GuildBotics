@@ -913,7 +913,7 @@ const resources = {
           network: {
             title: "Network",
             description:
-              "Where every member and slot in this workspace may connect, through commands and provider web tools alike. Omit the block to deny non-provider traffic.",
+              "Where every member and slot in this workspace may connect, through commands and provider web tools alike. Deny blocks everything except the provider's own API and the member broker.",
             mode: "Mode",
             modes: {
               deny: "Deny",
@@ -957,6 +957,8 @@ const resources = {
               "Load the image archive (docker save) on this device by running this command in a terminal:",
             network: "Network",
             networkLocal: "localhost and LAN allowed",
+            networkUnavailable: "Unavailable",
+            networkUnrestricted: "Can connect directly to any Internet host",
             dns: "DNS resolvers",
             dnsHost: "This device's resolvers",
             toolNotProvisioned: "Not available in the environment yet",
@@ -2612,7 +2614,7 @@ const resources = {
           network: {
             title: "ネットワーク",
             description:
-              "このワークスペースの全メンバー・全スロットについて、コマンドと組み込み Web 機能が接続できる先を決めます。省略時は provider 以外の通信を拒否します。",
+              "このワークスペースの全メンバー・全スロットについて、コマンドと組み込み Web 機能が接続できる先を決めます。拒否を選ぶと、provider 自身の API と member broker 以外への通信をすべて遮断します。",
             mode: "モード",
             modes: {
               deny: "拒否",
@@ -2656,6 +2658,8 @@ const resources = {
               "image のアーカイブ（docker save）をこの端末に読み込むには、ターミナルで次を実行してください。",
             network: "ネットワーク",
             networkLocal: "localhost と LAN を許可",
+            networkUnavailable: "利用不可",
+            networkUnrestricted: "任意の Internet host へ直接通信可能",
             dns: "DNS リゾルバ",
             dnsHost: "この端末のリゾルバ",
             toolNotProvisioned: "環境への導入は未対応",
