@@ -23,6 +23,7 @@ from guildbotics.capabilities.member_activity_events import (
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.capabilities.member_github import (
+    DEFAULT_LOG_TAIL_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
@@ -1468,7 +1469,7 @@ def _workspace_mode(value: str) -> WorkspaceMode:
 
 @member.group()
 def github() -> None:
-    """GitHub issue, pull request, and reaction capabilities."""
+    """GitHub issue, pull request, Actions, and reaction capabilities."""
 
 
 @github.group()
@@ -1722,6 +1723,51 @@ async def _pr_inspect(
         await service.aclose()
 
 
+@pr.command(name="checks")
+@_read_only_member_command
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--failed-logs",
+    is_flag=True,
+    help="Include bounded log tails for failed GitHub Actions jobs.",
+)
+@click.option(
+    "--log-tail-bytes",
+    type=click.IntRange(min=1),
+    default=DEFAULT_LOG_TAIL_BYTES,
+    show_default=True,
+    help="Maximum bytes returned from the end of each failed job log.",
+)
+@_markdown_format_option
+def pr_checks(
+    person: str,
+    pr_url: str,
+    failed_logs: bool,
+    log_tail_bytes: int,
+    output_format: str,
+) -> None:
+    _run(
+        _pr_checks(person, pr_url, failed_logs, log_tail_bytes),
+        output_format=output_format,
+    )
+
+
+async def _pr_checks(
+    person: str, pr_url: str, failed_logs: bool, log_tail_bytes: int
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        return await service.pr_checks(
+            pr_url,
+            failed_logs=failed_logs,
+            log_tail_bytes=log_tail_bytes,
+        )
+    finally:
+        await service.aclose()
+
+
 @pr.command(name="create")
 @_person_option
 @click.option("--repo", required=True, help="Target repository as <owner>/<repo>.")
@@ -1962,6 +2008,60 @@ async def _pr_reply(
         result = await service.pr_reply(pr_url, reply_target_id, body)
         TaskRunStore().append_evidence(current_task_run_id(), "pr_reply", result)
         return result
+    finally:
+        await service.aclose()
+
+
+@github.group()
+def run() -> None:
+    """GitHub Actions run operations."""
+
+
+@run.group()
+def artifact() -> None:
+    """GitHub Actions artifact operations."""
+
+
+@artifact.command(name="download")
+@_read_only_member_command
+@_person_option
+@click.option(
+    "--url",
+    "target_url",
+    required=True,
+    help="Pull request URL or GitHub Actions run URL.",
+)
+@click.option("--name", required=True, help="Exact artifact name.")
+@click.option(
+    "--dest",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=Path("."),
+    help=(
+        "Directory to extract into. Defaults to the current directory. Remove "
+        "downloaded files after inspection when this is inside a repository."
+    ),
+)
+@_json_format_option
+def artifact_download(
+    person: str,
+    target_url: str,
+    name: str,
+    dest: Path,
+    output_format: str,
+) -> None:
+    _run(
+        _artifact_download(person, target_url, name, dest),
+        output_format=output_format,
+    )
+
+
+async def _artifact_download(
+    person: str, target_url: str, name: str, dest: Path
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        return await service.artifact_download(target_url, name, dest)
     finally:
         await service.aclose()
 

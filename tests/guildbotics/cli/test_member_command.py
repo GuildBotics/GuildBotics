@@ -280,6 +280,17 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         assert member_module._member_command_needs_lease() is False
 
 
+def test_ci_inspection_commands_are_read_only() -> None:
+    github = member_module.member.commands["github"]
+    pr = github.commands["pr"]
+    run = github.commands["run"]
+    artifact = run.commands["artifact"]
+
+    for command in (pr.commands["checks"], artifact.commands["download"]):
+        with click.Context(command):
+            assert member_module._member_command_needs_lease() is False
+
+
 def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
     from guildbotics.intelligences.agent_runtime.models import (
         ConversationKey,

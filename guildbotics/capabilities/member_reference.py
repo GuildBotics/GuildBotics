@@ -114,6 +114,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Read a PR, optionally including review threads and diff comment coordinates.",
             ),
             (
+                "guildbotics member github pr checks --person <person> --url <pr_url> "
+                "[--failed-logs] [--log-tail-bytes <n>]",
+                "Read a PR head's check rollup and optional failed Actions log tails.",
+            ),
+            (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
                 "[--issue-url <url>] [--draft true|false]",
@@ -138,6 +143,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member github pr reply --person <person> --url <pr_url> "
                 "--reply-target-id <id> --content-file <file>",
                 "Reply to an inline review thread.",
+            ),
+            (
+                "guildbotics member github run artifact download --person <person> "
+                "--url <pr_url|run_url> --name <artifact> [--dest <dir>]",
+                "Download and extract a size-limited GitHub Actions artifact; remove "
+                "repository files after inspection.",
             ),
             (
                 "guildbotics member github reaction add --person <person> --repo <owner/repo> "

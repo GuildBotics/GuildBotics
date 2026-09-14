@@ -49,14 +49,11 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 from guildbotics.utils.processes import terminate_posix_process_group
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 _WINDOWS = os.name == "nt"
-
-# asyncio's default 64 KiB StreamReader limit aborts readline() on single-line
-# JSON payloads such as replayed tool results or aggregated command output.
-STREAM_READ_LIMIT = 10 * 1024 * 1024
 
 #: What every provider process starts with, beside the tool's own state
 #: variables: git must never wait for a terminal that is not there.

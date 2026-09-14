@@ -70,13 +70,14 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch (--issue-url), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
 | [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential. |
-| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, and reaction capabilities. |
+| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
 | [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
 | [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
+| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's check rollup and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
@@ -85,6 +86,9 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; empty content removes the body. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
 | [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
+| [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
+| [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
+| [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member memory archive`](#guildbotics-member-memory-archive) | Move a stale memory under archived/ and remove it from recall and digest. |
@@ -646,7 +650,7 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member chat`](#guildbotics-member-chat) | Chat identity, posting, replies, reactions, and run completion. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
-| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, and reaction capabilities. |
+| [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
@@ -1027,7 +1031,7 @@ guildbotics member git push [OPTIONS]
 
 ## `guildbotics member github`
 
-GitHub issue, pull request, and reaction capabilities.
+GitHub issue, pull request, Actions, and reaction capabilities.
 
 ```text
 guildbotics member github [OPTIONS] COMMAND [ARGS]...
@@ -1042,6 +1046,7 @@ guildbotics member github [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
+| [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 
 ## `guildbotics member github issue`
 
@@ -1152,12 +1157,30 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
+| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's check rollup and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; empty content removes the body. |
+
+## `guildbotics member github pr checks`
+
+Read a PR head's check rollup and optional failed Actions log tails.
+
+```text
+guildbotics member github pr checks [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL. [required] |
+| `--failed-logs` | Include bounded log tails for failed GitHub Actions jobs. |
+| `--log-tail-bytes INTEGER RANGE` | Maximum bytes returned from the end of each failed job log. [default: 327680; x\>=1] |
+| `--format [json\|markdown]` | Output format. [default: markdown] |
+| `--help` | Show this message and exit. |
 
 ## `guildbotics member github pr comment`
 
@@ -1304,6 +1327,55 @@ guildbotics member github reaction add [OPTIONS]
 | `--target [issue-comment\|pr-review-comment]` | Kind of comment to react to. [required] |
 | `--comment-id INTEGER` | Numeric id of the comment. [required] |
 | `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member github run`
+
+GitHub Actions run operations.
+
+```text
+guildbotics member github run [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
+
+## `guildbotics member github run artifact`
+
+GitHub Actions artifact operations.
+
+```text
+guildbotics member github run artifact [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
+
+## `guildbotics member github run artifact download`
+
+Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection.
+
+```text
+guildbotics member github run artifact download [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--url TEXT` | Pull request URL or GitHub Actions run URL. [required] |
+| `--name TEXT` | Exact artifact name. [required] |
+| `--dest DIRECTORY` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

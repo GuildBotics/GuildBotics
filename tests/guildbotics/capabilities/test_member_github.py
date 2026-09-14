@@ -1,10 +1,16 @@
+from io import BytesIO
+from zipfile import ZipFile
+
 import pytest
 
 from guildbotics.capabilities.member_github import (
+    DEFAULT_LOG_TAIL_BYTES,
+    MAX_ARTIFACT_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 HTTP_BAD_REQUEST = 400
 ISSUE_NUMBER = 42
@@ -13,10 +19,17 @@ ROOT_REVIEW_COMMENT_ID = 101
 LATEST_REVIEW_COMMENT_ID = 102
 
 
+def test_ci_download_limits_derive_from_the_broker_stream_boundary():
+    assert MAX_ARTIFACT_BYTES == STREAM_READ_LIMIT
+    assert DEFAULT_LOG_TAIL_BYTES == STREAM_READ_LIMIT // 32
+
+
 class FakeResponse:
-    def __init__(self, payload, status_code=200):
+    def __init__(self, payload, status_code=200, *, content=b"", headers=None):
         self._payload = payload
         self.status_code = status_code
+        self.content = content
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -31,6 +44,7 @@ class FakeClient:
         self.posts = []
         self.gets = []
         self.get_payloads = {}
+        self.get_status_codes = {}
         self.post_payloads = {}
         self.patches = []
         self.patch_payloads = {}
@@ -39,11 +53,17 @@ class FakeClient:
         self.delete_status_codes = {}
         self.graphql_payloads = []
         self.history = []
+        self.contents = {}
 
     async def get(self, endpoint, params=None, headers=None):
         self.gets.append((endpoint, params, headers))
         self.history.append(("get", endpoint))
-        return FakeResponse(self.get_payloads.get(endpoint, []))
+        if endpoint in self.contents:
+            return FakeResponse([], content=self.contents[endpoint])
+        return FakeResponse(
+            self.get_payloads.get(endpoint, []),
+            status_code=self.get_status_codes.get(endpoint, 200),
+        )
 
     async def post(self, endpoint, json=None, headers=None):
         self.posts.append((endpoint, json, headers))
@@ -380,6 +400,230 @@ async def test_pr_inspect_rejects_unexpected_pull_request_payload():
         await service.pr_inspect(
             "https://github.com/owner/repo/pull/7", include_comments=False
         )
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                },
+            },
+            "/repos/owner/repo/commits/abc123/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "details_url": "https://github.com/owner/repo/actions/runs/9",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+            "/repos/owner/repo/actions/runs": {
+                "workflow_runs": [{"id": 9}]
+            },
+            "/repos/owner/repo/actions/runs/9/jobs": {
+                "jobs": [
+                    {
+                        "id": 90,
+                        "name": "Playwright (base)",
+                        "conclusion": "failure",
+                        "html_url": (
+                            "https://github.com/owner/repo/actions/runs/9/job/90"
+                        ),
+                    },
+                    {"id": 91, "name": "lint", "conclusion": "success"},
+                ]
+            },
+        }
+    )
+    fake.contents["/repos/owner/repo/actions/jobs/90/logs"] = b"prefix\nlast line\n"
+    service._client = fake
+
+    result = await service.pr_checks(
+        "https://github.com/owner/repo/pull/7",
+        failed_logs=True,
+        log_tail_bytes=10,
+    )
+
+    assert result["rollup"] == "failure"
+    assert result["checks"] == [
+        {
+            "name": "test",
+            "status": "completed",
+            "conclusion": "failure",
+            "details_url": "https://github.com/owner/repo/actions/runs/9",
+            "source": "check_run",
+        }
+    ]
+    assert result["failed_logs"] == [
+        {
+            "run_id": 9,
+            "job_id": 90,
+            "name": "Playwright (base)",
+            "conclusion": "failure",
+            "html_url": "https://github.com/owner/repo/actions/runs/9/job/90",
+            "log": "last line\n",
+            "log_bytes": 10,
+            "tail_limit_bytes": 10,
+            "truncated": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_reports_no_checks():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                }
+            },
+            "/repos/owner/repo/commits/abc123/check-runs": {"check_runs": []},
+            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+    assert result["rollup"] == "no_checks"
+    assert result["checks"] == []
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_reports_permission_failure():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "head": {
+            "sha": "abc123",
+            "ref": "feature",
+            "repo": {"full_name": "owner/repo"},
+        }
+    }
+    endpoint = "/repos/owner/repo/commits/abc123/check-runs"
+    fake.get_status_codes[endpoint] = 403
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="status 403"):
+        await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+
+def _artifact_zip(files: dict[str, bytes]) -> bytes:
+    output = BytesIO()
+    with ZipFile(output, "w") as bundle:
+        for path, content in files.items():
+            bundle.writestr(path, content)
+    return output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                }
+            },
+            "/repos/owner/repo/actions/artifacts": {
+                "artifacts": [
+                    {
+                        "id": 12,
+                        "name": "playwright-report",
+                        "expired": False,
+                        "size_in_bytes": 100,
+                        "workflow_run": {"id": 9, "head_sha": "abc123"},
+                    }
+                ]
+            },
+        }
+    )
+    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
+        {"error-context.md": b"failure details"}
+    )
+    service._client = fake
+
+    result = await service.artifact_download(
+        "https://github.com/owner/repo/pull/7", "playwright-report", tmp_path
+    )
+
+    assert result["run_id"] == 9
+    assert result["files"] == [str((tmp_path / "error-context.md").resolve())]
+    assert (tmp_path / "error-context.md").read_bytes() == b"failure details"
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_rejects_oversized_artifact(tmp_path):
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads[
+        "/repos/owner/repo/actions/runs/9/artifacts"
+    ] = {
+        "artifacts": [
+            {
+                "id": 12,
+                "name": "large",
+                "expired": False,
+                "size_in_bytes": MAX_ARTIFACT_BYTES + 1,
+            }
+        ]
+    }
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="above the"):
+        await service.artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "large", tmp_path
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_artifact_download_rejects_path_traversal(tmp_path):
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads[
+        "/repos/owner/repo/actions/runs/9/artifacts"
+    ] = {
+        "artifacts": [
+            {
+                "id": 12,
+                "name": "unsafe",
+                "expired": False,
+                "size_in_bytes": 100,
+            }
+        ]
+    }
+    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = _artifact_zip(
+        {"../outside.txt": b"must not escape"}
+    )
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="unsafe path"):
+        await service.artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "unsafe", tmp_path
+        )
+
+    assert not (tmp_path.parent / "outside.txt").exists()
 
 
 @pytest.mark.asyncio

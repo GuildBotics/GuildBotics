@@ -29,6 +29,10 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member github pr create" in text
     assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
+    assert "guildbotics member github pr checks" in text
+    assert "--failed-logs" in text
+    assert "guildbotics member github run artifact download" in text
+    assert "remove repository files after inspection" in text
     assert "--content-file" in text
     assert "guildbotics member chat reply" in text
     assert "guildbotics member task complete" in text
