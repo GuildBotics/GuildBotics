@@ -1129,13 +1129,6 @@ class CliAgentDefinition(BaseModel):
     #: protocol has nowhere to put these settings says so, so the editor can
     #: explain instead of collecting configuration that would be dropped.
     effort_supported: bool = True
-    #: This definition's own `network` block, or None when the file states
-    #: none. A request that omits it leaves the file's block as it is, so an
-    #: editor that does not surface the block cannot drop it.
-    network: NetworkPolicy | None = None
-    #: What the slot runs under when it states no block of its own: its tool's
-    #: default definition, or the closed policy when that states none either.
-    inherited_network: NetworkPolicy = Field(default_factory=NetworkPolicy)
 
 
 GrantScope = Literal["document", "local", "deny"]
@@ -1292,7 +1285,6 @@ class EnvironmentToolStatus(BaseModel):
 class EnvironmentSlotStatus(BaseModel):
     slot: str
     tool: str
-    network: NetworkPolicy
     #: Everything that keeps this slot from starting on this device.
     problems: list[EnvironmentProblem] = Field(default_factory=list)
 
@@ -1313,6 +1305,7 @@ class AgentEnvironmentStatusResponse(BaseModel):
             default=IMAGE, architecture=device_architecture()
         )
     )
+    network: NetworkPolicy = Field(default_factory=NetworkPolicy)
     dns: EnvironmentDnsStatus = Field(default_factory=EnvironmentDnsStatus)
     tools: list[EnvironmentToolStatus] = Field(default_factory=list)
     #: Why no turn at all can start on this device, or "" when one can.
@@ -1352,7 +1345,7 @@ class IntelligenceConfigResponse(BaseModel):
     filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
     #: This device's own extra paths and denies, never synchronized.
     local_grants: LocalGrants = Field(default_factory=LocalGrants)
-    #: The workspace's agent environment declaration (packages and DNS). The
+    #: The workspace's agent environment declaration (image, network, and DNS). The
     #: team's, whichever scope is read; only the team scope writes it.
     agent_environment: ToolchainDeclaration | None = None
     platform: str = ""

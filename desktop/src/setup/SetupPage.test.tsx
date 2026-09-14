@@ -39,7 +39,7 @@ import {
   type ScenarioDiagnosticsResponse,
   type DiagnosticCheck,
 } from "../api/client";
-import { CLOSED_NETWORK_POLICY, type AgentEnvironmentStatusResponse } from "../api/client";
+import { type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
 import {
@@ -412,7 +412,7 @@ describe("SetupPage", () => {
       "aria-selected",
       "true",
     );
-    // The slot's accordion item is open, so its network block is in view.
+    // The requested slot's accordion item is open.
     const slot = await screen.findByRole("button", { name: /^default/ });
     expect(slot).toHaveAttribute("aria-expanded", "true");
   });
@@ -1368,6 +1368,7 @@ function environmentStatus(
       warning: "",
       load_command: "/Users/me/.guildbotics/bin/guildbotics environment image load <archive.tar>",
     },
+    network: { mode: "deny", allowed_domains: [], allow_local_network: false },
     dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
     tools: [
       {
@@ -2459,7 +2460,6 @@ describe("MembersSection", () => {
               {
                 slot: "default",
                 tool: "codex",
-                network: CLOSED_NETWORK_POLICY,
                 problems: [],
               },
             ],
@@ -2470,7 +2470,6 @@ describe("MembersSection", () => {
               {
                 slot: "default",
                 tool: "grok",
-                network: CLOSED_NETWORK_POLICY,
                 problems: [
                   {
                     setting: "grants",

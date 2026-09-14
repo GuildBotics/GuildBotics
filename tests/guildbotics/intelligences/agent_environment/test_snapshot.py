@@ -41,10 +41,8 @@ from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.i18n_tool import t
 
 
-def _declaration(**packages: list[str]) -> ToolchainDeclaration:
-    return parse_toolchain(
-        {"packages": packages, "dns": {"nameservers": ["10.0.0.53"]}}, where="t"
-    )
+def _declaration() -> ToolchainDeclaration:
+    return parse_toolchain({"dns": {"nameservers": ["10.0.0.53"]}}, where="t")
 
 
 _DIGEST = "sha256:" + "c" * 64
@@ -122,12 +120,11 @@ class _FakeBuild:
 # --- naming ----------------------------------------------------------------------
 
 
-def test_the_name_is_a_digest_of_the_declared_packages_and_the_recipe() -> None:
+def test_the_name_is_a_digest_of_the_image_and_provider_recipe() -> None:
     plain = snapshot_name(_declaration(), ImageStatus())
 
     assert plain.startswith(SNAPSHOT_PREFIX)
     assert snapshot_name(_declaration(), ImageStatus()) == plain
-    assert snapshot_name(_declaration(apt=["ripgrep=14.1.0-1"]), ImageStatus()) != plain
 
 
 def test_a_declared_image_names_the_snapshot_by_the_digest_this_device_holds() -> None:
@@ -156,6 +153,25 @@ def test_dns_is_not_part_of_the_name() -> None:
     )
 
 
+def test_network_is_not_part_of_the_name() -> None:
+    """A network policy shapes each turn rather than snapshot content."""
+    unrestricted = parse_toolchain(
+        {
+            "network": {
+                "mode": "unrestricted",
+                "allowed_domains": [],
+                "allow_local_network": False,
+            },
+            "dns": {"nameservers": ["10.0.0.53"]},
+        },
+        where="t",
+    )
+
+    assert snapshot_name(unrestricted, ImageStatus()) == snapshot_name(
+        _declaration(), ImageStatus()
+    )
+
+
 def test_the_name_changes_with_the_pinned_provider_versions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,37 +190,23 @@ def test_the_name_changes_with_the_pinned_provider_versions(
 # --- recipe ----------------------------------------------------------------------
 
 
-def test_the_recipe_installs_the_providers_and_the_declared_packages() -> None:
-    steps = build_steps(
-        _declaration(
-            apt=["ripgrep=14.1.0-1"], npm=["typescript@5.6.3"], uv=["ruff==0.6.9"]
-        )
-    )
+def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
+    steps = build_steps(_declaration())
 
     installs = list(snapshot.provisioned_installs())
     assert [step.label for step in steps] == [
         "home",
-        "apt",
         "uv",
         "npm",
         *installs,
-        "uv-tools",
     ]
     scripts = {step.label: step.script for step in steps}
     # A tool that is not on npm is put in by its own pinned script.
     for name in installs:
         assert scripts[name] == snapshot.provisioned_installs()[name]
     assert 'install -d -m 0700 "$HOME"' in scripts["home"]
-    assert (
-        "apt-get install -y --no-install-recommends ripgrep=14.1.0-1" in scripts["apt"]
-    )
-    assert "rm -rf /var/lib/apt/lists/*" in scripts["apt"]
     assert f"astral-sh/uv/releases/download/{snapshot.UV_VERSION}/" in scripts["uv"]
     assert "npm install -g @openai/codex@" in scripts["npm"]
-    assert "typescript@5.6.3" in scripts["npm"]
-    assert scripts["uv-tools"] == (
-        "UV_TOOL_BIN_DIR=/usr/local/bin uv tool install ruff==0.6.9"
-    )
 
 
 def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
@@ -214,12 +216,6 @@ def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
         "npm",
         *snapshot.provisioned_installs(),
     ]
-
-
-def test_package_arguments_are_shell_quoted() -> None:
-    steps = build_steps(_declaration(npm=["@scope/pkg@1.0.0", "it's"]))
-
-    assert "'it'\"'\"'s'" in {s.label: s.script for s in steps}["npm"]
 
 
 # --- status ----------------------------------------------------------------------
@@ -285,7 +281,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     old = directory / f"{SNAPSHOT_PREFIX}0123456789abcdef"
     old.mkdir(parents=True)
     (directory / f"{SNAPSHOT_PREFIX}0123456789abcdef.failed").write_text("old\n")
-    declaration = _declaration(npm=["typescript@5.6.3"])
+    declaration = _declaration()
     lines: list[str] = []
     home = tmp_path / "home"
 

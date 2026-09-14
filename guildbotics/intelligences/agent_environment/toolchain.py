@@ -1,14 +1,11 @@
-"""The toolchain declaration: what every agent environment of a workspace holds.
+"""The environment declaration shared by every AI CLI turn of a workspace.
 
 ``config/intelligences/agent_environment.yml`` is shared between the devices
 of a workspace, so every device builds the same environment from it: the
-base image the build starts from (GuildBotics' own unless the workspace
-names one it built itself), the packages an agent finds inside beyond that
-image and the provider CLIs GuildBotics itself puts there, and the upstream
-resolvers the environment's DNS gateway forwards to. It is the whole of what
-a user declares. The way packages are installed belongs to the build recipe
-(:mod:`.snapshot`), not to the declaration: it is how GuildBotics builds,
-not what the user wants inside.
+base image the build starts from (GuildBotics' own unless the workspace names
+one it built itself), where the environment may connect, and the upstream
+resolvers its DNS gateway forwards to. Provider CLI installation belongs to
+the build recipe (:mod:`.snapshot`), not to the declaration.
 """
 
 from __future__ import annotations
@@ -22,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 from guildbotics.utils.i18n_tool import t
 
@@ -32,19 +30,6 @@ TOOLCHAIN_PATH = "intelligences/agent_environment.yml"
 
 class ToolchainError(ValueError):
     """Raised when the declaration is malformed."""
-
-
-def _package_specs(specs: list[str]) -> list[str]:
-    """A package spec is one argument to the package manager: never an option."""
-    for spec in specs:
-        if not spec or any(ch.isspace() for ch in spec) or spec.startswith("-"):
-            raise ValueError(
-                t(
-                    "intelligences.agent_environment.declaration.not_a_package",
-                    spec=spec,
-                )
-            )
-    return specs
 
 
 #: An image identity as the runtime reports it: the digest of the image's
@@ -118,24 +103,6 @@ class BaseImage(BaseModel):
     def digest_for(self, architecture: str) -> str:
         """The declared identity for ``architecture``, or "" when none is."""
         return self.digests.get(architecture, "")
-
-
-class Packages(BaseModel):
-    """Packages installed on top of the base image, by package manager.
-
-    Each entry is passed to its manager as one argument, so a version is
-    pinned the way that manager spells it (``ripgrep=14.1.0-1``,
-    ``typescript@5.6.3``, ``ruff==0.6.9``). An unpinned entry drifts with
-    every rebuild and the environment's name cannot tell.
-    """
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    apt: list[str] = Field(default_factory=list)
-    npm: list[str] = Field(default_factory=list)
-    uv: list[str] = Field(default_factory=list)
-
-    _specs = field_validator("apt", "npm", "uv")(_package_specs)
 
 
 #: The declaration's word for "the resolvers this device uses".
@@ -252,7 +219,7 @@ class ToolchainDeclaration(BaseModel):
 
     #: Absent, the build starts from the image the recipe pins.
     image: BaseImage | None = None
-    packages: Packages = Field(default_factory=Packages)
+    network: NetworkPolicy = Field(default_factory=NetworkPolicy)
     dns: DnsSettings
 
 

@@ -2,6 +2,11 @@ import logging
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
+from guildbotics.intelligences.agent_environment.toolchain import (
+    DnsSettings,
+    ToolchainDeclaration,
+)
 from guildbotics.intelligences.brains import cli_agent
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
@@ -36,6 +41,11 @@ def _native_brain(monkeypatch, result: cli_agent.CliAgentExecutionResult, **kwar
 
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    monkeypatch.setattr(
+        cli_agent,
+        "load_toolchain",
+        lambda: ToolchainDeclaration(dns=DnsSettings(nameservers=["1.1.1.1"])),
     )
     monkeypatch.setitem(
         cli_agent.person_cli_agent_mapping,
@@ -853,66 +863,63 @@ def test_diagnostics_reflect_the_level_not_the_baseline(monkeypatch, tmp_path) -
     assert mapped_payload["applied_keys"] == ["effort"]
 
 
-def test_a_slot_inherits_the_tools_network_block(monkeypatch, tmp_path) -> None:
+def test_a_tool_definition_network_block_is_ignored(monkeypatch, tmp_path) -> None:
     _write_definition(
         tmp_path,
         "cli_agents/codex/default.yml",
         "network:\n  mode: allowlist\n  allowed_domains: [registry.npmjs.org]\n"
         "  allow_local_network: false\n",
     )
-    _write_definition(tmp_path, "cli_agents/codex/writer.yml", "effort: {}\n")
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     cli_agent.person_cli_agent_mapping.clear()
     monkeypatch.setattr(
         cli_agent,
         "load_person_slot_mapping",
-        lambda *_args: {"writer": "cli_agents/codex/writer.yml"},
+        lambda *_args: {"writer": "cli_agents/codex/default.yml"},
     )
 
     resolved = cli_agent.get_cli_agent_mapping("aiko")
 
-    assert resolved["writer"].network.mode == "allowlist"
-    assert resolved["writer"].network.allowed_domains == ["registry.npmjs.org"]
+    assert resolved["writer"] == cli_agent.ExecutableInfo(adapter="codex")
     cli_agent.person_cli_agent_mapping.clear()
 
 
-def test_a_definition_without_a_network_block_is_closed(monkeypatch, tmp_path) -> None:
-    _write_definition(tmp_path, "cli_agents/codex/default.yml", "effort: {}\n")
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
-    monkeypatch.setattr(
-        cli_agent,
-        "load_person_slot_mapping",
-        lambda *_args: {"default": "cli_agents/codex/default.yml"},
-    )
-
-    resolved = cli_agent.get_cli_agent_mapping("aiko")
-
-    assert resolved["default"].network == cli_agent.NetworkPolicy()
-    cli_agent.person_cli_agent_mapping.clear()
-
-
-def test_a_partial_network_block_names_the_slot_it_came_from(
+@pytest.mark.asyncio
+async def test_every_slot_uses_the_workspace_network_declaration(
     monkeypatch, tmp_path
 ) -> None:
-    """A slot states the whole block or none of it; a half block is a mistake."""
-    _write_definition(
-        tmp_path,
-        "cli_agents/codex/default.yml",
-        "network:\n  command:\n    mode: unrestricted\n    allowed_domains: []\n"
-        "    allow_local_network: false\n",
+    captured: dict = {}
+
+    async def fake_execute_native_turn(self, *, context, **_kwargs):
+        captured["contract"] = context.contract
+        return cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0)
+
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
     )
-    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    cli_agent.person_cli_agent_mapping.clear()
+    monkeypatch.setattr(
+        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    network = NetworkPolicy(
+        mode="allowlist",
+        allowed_domains=["registry.npmjs.org"],
+        allow_local_network=False,
+    )
     monkeypatch.setattr(
         cli_agent,
-        "load_person_slot_mapping",
-        lambda *_args: {"default": "cli_agents/codex/default.yml"},
+        "load_toolchain",
+        lambda: ToolchainDeclaration(
+            network=network, dns=DnsSettings(nameservers=["1.1.1.1"])
+        ),
     )
 
-    with pytest.raises(ValueError, match="AI CLI tool 'default'"):
-        cli_agent.get_cli_agent_mapping("aiko")
-    cli_agent.person_cli_agent_mapping.clear()
+    brain = cli_agent.CliAgentBrain(
+        "p1", "x", logger=_test_logger(), cli_agent="default"
+    )
+    await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    assert captured["contract"].network == network
 
 
 @pytest.mark.asyncio

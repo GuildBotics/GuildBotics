@@ -217,6 +217,26 @@ export function AgentEnvironmentCard({
                 </Table.Td>
               </Table.Tr>
               <Table.Tr>
+                <Table.Th style={narrow}>{t("setup.intelligence.environment.network")}</Table.Th>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="sm">
+                      {t(`setup.intelligence.network.modes.${data.network.mode}`)}
+                    </Text>
+                    {data.network.allowed_domains.length > 0 ? (
+                      <Text size="xs" c="dimmed" ff="monospace">
+                        {data.network.allowed_domains.join(", ")}
+                      </Text>
+                    ) : null}
+                    {data.network.allow_local_network ? (
+                      <Text size="xs" c="dimmed">
+                        {t("setup.intelligence.environment.networkLocal")}
+                      </Text>
+                    ) : null}
+                  </Stack>
+                </Table.Td>
+              </Table.Tr>
+              <Table.Tr>
                 <Table.Th style={narrow}>{t("setup.intelligence.environment.dns")}</Table.Th>
                 <Table.Td>
                   <Text size="sm">

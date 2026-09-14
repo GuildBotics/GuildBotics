@@ -4,18 +4,12 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getAgentEnvironmentImages, type AgentEnvironmentDeclaration } from "../api/client";
+import { NetworkPolicyField } from "./NetworkPolicyField";
 
 /** Anchor for a system alert to scroll to. */
 export const AGENT_ENVIRONMENT_DECLARATION_ID = "agent-environment-declaration";
 
-type PackageManager = keyof AgentEnvironmentDeclaration["packages"];
-const PACKAGE_MANAGERS: PackageManager[] = ["apt", "npm", "uv"];
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
-
-/** A package spec is one argument to its manager: never an option, never two. */
-function isPackageSpec(spec: string): boolean {
-  return spec.length > 0 && !/\s/.test(spec) && !spec.startsWith("-");
-}
 
 /** How much of a digest a person is shown: enough to tell two apart. */
 function shortDigest(digest: string): string {
@@ -24,7 +18,7 @@ function shortDigest(digest: string): string {
 
 /**
  * The shared declaration of the agent environment: the base image every
- * device builds from, the packages it adds on top, and the resolvers the
+ * device builds from, where every turn may connect, and the resolvers the
  * environment forwards DNS to. It is saved with the rest of the intelligence
  * settings, so the card only edits; what it rejects never reaches the draft,
  * and an empty resolver list is reported so the save button can wait for it.
@@ -45,13 +39,14 @@ export function AgentEnvironmentDeclarationCard({
   onValidityChange?: (valid: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [rejected, setRejected] = useState<Partial<Record<PackageManager | "dns", string>>>({});
+  const [rejectedDns, setRejectedDns] = useState<string>();
+  const [networkValid, setNetworkValid] = useState(true);
   const nameservers = Array.isArray(value.dns.nameservers) ? value.dns.nameservers : [];
   const useHost = !Array.isArray(value.dns.nameservers);
   const emptyList = !useHost && nameservers.length === 0;
   useEffect(() => {
-    onValidityChange?.(!emptyList);
-  }, [emptyList, onValidityChange]);
+    onValidityChange?.(!emptyList && networkValid && !rejectedDns);
+  }, [emptyList, networkValid, onValidityChange, rejectedDns]);
   const images = useQuery({
     queryKey: ["agent-environment-images"],
     queryFn: getAgentEnvironmentImages,
@@ -105,25 +100,11 @@ export function AgentEnvironmentDeclarationCard({
         : null,
     });
   };
-  const setPackages = (manager: PackageManager, specs: string[]) => {
-    const invalid = specs.find((spec) => !isPackageSpec(spec));
-    setRejected((current) => ({
-      ...current,
-      [manager]: invalid
-        ? t("setup.intelligence.environment.declaration.invalidPackage")
-        : undefined,
-    }));
-    onChange({
-      ...value,
-      packages: { ...value.packages, [manager]: specs.filter(isPackageSpec) },
-    });
-  };
   const setNameservers = (entries: string[]) => {
     const invalid = entries.find((entry) => !IPV4.test(entry));
-    setRejected((current) => ({
-      ...current,
-      dns: invalid ? t("setup.intelligence.environment.declaration.invalidNameserver") : undefined,
-    }));
+    setRejectedDns(
+      invalid ? t("setup.intelligence.environment.declaration.invalidNameserver") : undefined,
+    );
     onChange({ ...value, dns: { nameservers: entries.filter((entry) => IPV4.test(entry)) } });
   };
 
@@ -176,19 +157,11 @@ export function AgentEnvironmentDeclarationCard({
             })}
           </Text>
         ) : null}
-        {PACKAGE_MANAGERS.map((manager) => (
-          <TagsInput
-            key={manager}
-            size="xs"
-            label={t(`setup.intelligence.environment.declaration.${manager}`)}
-            description={t("setup.intelligence.environment.declaration.pinHint")}
-            placeholder={t(`setup.intelligence.environment.declaration.${manager}Placeholder`)}
-            value={value.packages[manager]}
-            onChange={(specs) => setPackages(manager, specs)}
-            error={rejected[manager]}
-            splitChars={[",", " "]}
-          />
-        ))}
+        <NetworkPolicyField
+          value={value.network}
+          onChange={(network) => onChange({ ...value, network })}
+          onValidityChange={setNetworkValid}
+        />
         <Select
           size="xs"
           label={t("setup.intelligence.environment.declaration.nameservers")}
@@ -216,7 +189,7 @@ export function AgentEnvironmentDeclarationCard({
             value={nameservers}
             onChange={setNameservers}
             error={
-              rejected.dns ??
+              rejectedDns ??
               (emptyList
                 ? t("setup.intelligence.environment.declaration.emptyNameservers")
                 : undefined)

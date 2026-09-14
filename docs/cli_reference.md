@@ -237,7 +237,7 @@ guildbotics environment [OPTIONS] COMMAND [ARGS]...
 
 Build the environment the shared declaration asks for.
 
-The build installs packages and nothing else, so it needs no input. A
+The build installs provider CLIs and nothing else, so it needs no input. A
 build that fails is remembered until the declaration changes or this
 command runs again.
 

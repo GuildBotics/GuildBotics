@@ -482,6 +482,7 @@ describe("Setup integration (real client + mock server)", () => {
           home: "/Users/me/.guildbotics/data/msb",
         },
         snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
+        network: { mode: "deny", allowed_domains: [], allow_local_network: false },
         dns: { declared: "host", nameservers: [], problem: "" },
         tools: [
           {

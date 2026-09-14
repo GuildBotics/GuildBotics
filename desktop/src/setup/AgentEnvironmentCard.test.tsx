@@ -49,6 +49,11 @@ function status(
       warning: "",
       load_command: "/Users/me/.guildbotics/bin/guildbotics environment image load <archive.tar>",
     },
+    network: {
+      mode: "allowlist",
+      allowed_domains: ["github.com", "pypi.org"],
+      allow_local_network: false,
+    },
     dns: { declared: "host", nameservers: ["192.168.3.1"], problem: "" },
     tools: [
       {
@@ -235,6 +240,8 @@ describe("AgentEnvironmentCard", () => {
     expect(screen.getByText("guildbotics-abc")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.imageDefault"))).toBeInTheDocument();
     expect(screen.getByText("node:22.23.2-bookworm")).toBeInTheDocument();
+    expect(screen.getByText(t("setup.intelligence.network.modes.allowlist"))).toBeInTheDocument();
+    expect(screen.getByText("github.com, pypi.org")).toBeInTheDocument();
     expect(screen.getByText(t("setup.intelligence.environment.dnsHost"))).toBeInTheDocument();
     expect(screen.getByText(/192\.168\.3\.1/)).toBeInTheDocument();
     // The catalog's three answers, on the device's layer: logged in here, not

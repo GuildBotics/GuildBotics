@@ -75,6 +75,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
         "(run `guildbotics environment build`)"
     ) in result.output
     assert "dns: 1.1.1.1, 8.8.8.8 -> 1.1.1.1, 8.8.8.8" in result.output
+    assert "network: allowlist (pypi.org" in result.output
     for name, label in (("codex", "Codex"), ("grok", "Grok Build")):
         assert (
             t(
@@ -113,6 +114,8 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "nameservers": ["1.1.1.1", "8.8.8.8"],
         "problem": "",
     }
+    assert payload["network"]["mode"] == "allowlist"
+    assert "api.github.com" in payload["network"]["allowed_domains"]
     tools = {tool["name"]: tool for tool in payload["tools"]}
     assert tools["codex"] == {
         "name": "codex",
@@ -489,7 +492,8 @@ def test_image_declare_names_the_loaded_image_for_this_architecture(
         "digests": {"arm64": _DIGEST},
     }
     assert declared["dns"] == {"nameservers": ["1.1.1.1", "8.8.8.8"]}
-    assert "packages" in declared
+    assert declared["network"]["mode"] == "allowlist"
+    assert "packages" not in declared
 
     absent = _invoke(workspace, "image", "declare", "local/agent:2")
     assert absent.exit_code == 1

@@ -23,10 +23,8 @@ from guildbotics.intelligences.agent_environment.contract import (
     LOCAL_GRANTS_FILENAME,
     AccessContractError,
     LocalGrants,
-    NetworkPolicy,
     SharedGrants,
     parse_local_grants,
-    parse_network_policy,
     parse_shared_grants,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
@@ -256,11 +254,7 @@ class IntelligenceConfigService:
             "cli_agents",
             [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
             {self._cli_agent_rel_path(agent): agent for agent in request.cli_agents},
-            lambda base, agent: self._cli_def_yaml(
-                agent,
-                agent.network
-                or self._network_of(base, where=f"AI CLI tool '{agent.path}'"),
-            ),
+            lambda _base, agent: self._cli_def_yaml(agent),
             files,
         )
 
@@ -423,42 +417,23 @@ class IntelligenceConfigService:
             where=f"AI CLI tool '{agent.path}'",
         )
         agent_file = target_dir / rel_path
-        existing = self._read_optional_yaml(agent_file)
-        network = agent.network
-        if network is None:
-            network = self._network_of(existing, where=f"AI CLI tool '{agent.path}'")
         # The file is written even for an empty mapping, as an explicit
         # `effort: {}`. Deleting it instead would fall through to the packaged
         # template, whose mapping would silently take effect again -- so
         # clearing the field in the editor would not clear anything.
         agent_file.parent.mkdir(parents=True, exist_ok=True)
-        save_yaml_file(agent_file, self._cli_def_yaml(agent, network))
+        save_yaml_file(agent_file, self._cli_def_yaml(agent))
         files.append(CreatedFile(path=agent_file, action="update"))
 
     @staticmethod
-    def _cli_def_yaml(
-        agent: CliAgentDefinition, network: NetworkPolicy | None
-    ) -> dict[str, Any]:
+    def _cli_def_yaml(agent: CliAgentDefinition) -> dict[str, Any]:
         """An AI CLI tool's definition file.
 
         The tool is driven entirely by its adapter, so its file configures only
-        which settings each effort level imposes and where the tool may
-        connect. The whole file is rewritten from those.
+        which settings each effort level imposes. The whole file is rewritten
+        from those.
         """
-        data: dict[str, Any] = {"parameters": agent.parameters, "effort": agent.effort}
-        if network is not None:
-            data["network"] = network.model_dump(mode="json")
-        return data
-
-    @staticmethod
-    def _network_of(data: dict[str, Any], *, where: str) -> NetworkPolicy | None:
-        """A definition's own `network` block, validated, or None if absent."""
-        if "network" not in data:
-            return None
-        try:
-            return parse_network_policy(data.get("network"), where=where)
-        except AccessContractError as exc:
-            raise SetupServiceError("invalid_network_settings", str(exc)) from exc
+        return {"parameters": agent.parameters, "effort": agent.effort}
 
     def _model_def_yaml(
         self, base: dict[str, Any], model: ModelDefinition, described: set[str]
@@ -719,27 +694,9 @@ class IntelligenceConfigService:
                     inherited_effort=inherited_effort,
                     effort_fields=effort_fields,
                     effort_supported=effort_supported,
-                    network=self._network_of(data, where=f"AI CLI tool '{agent_path}'"),
-                    inherited_network=self._inherited_network(
-                        config_dir, person_id, tool
-                    ),
                 )
             )
         return agents
-
-    def _inherited_network(
-        self, config_dir: Path, person_id: str | None, tool: str
-    ) -> NetworkPolicy:
-        """What a slot on ``tool`` runs under when it states no block itself."""
-        default_path = cli_agent_default_path(tool)
-        for data in (
-            self._cli_tool_default(config_dir, person_id, tool),
-            self._template_yaml(default_path),
-        ):
-            network = self._network_of(data, where=f"AI CLI tool '{default_path}'")
-            if network is not None:
-                return network
-        return NetworkPolicy()
 
     def _read_declaration(self, config_dir: Path) -> ToolchainDeclaration:
         """The workspace's agent environment declaration; absent file, the template."""

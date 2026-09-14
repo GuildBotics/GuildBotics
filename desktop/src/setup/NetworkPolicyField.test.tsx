@@ -4,64 +4,47 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CLOSED_NETWORK_POLICY, type NetworkPolicy } from "../api/client";
+import { type NetworkPolicy } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { NetworkPolicyField } from "./NetworkPolicyField";
 
 const t = i18n.getFixedT("en");
+const CLOSED_NETWORK_POLICY: NetworkPolicy = {
+  mode: "deny",
+  allowed_domains: [],
+  allow_local_network: false,
+};
 
 function Harness({
-  initial = null,
-  isToolDefault = false,
+  initial = CLOSED_NETWORK_POLICY,
   onChange,
+  onValidityChange,
 }: {
-  initial?: NetworkPolicy | null;
-  isToolDefault?: boolean;
-  onChange?: (value: NetworkPolicy | null) => void;
+  initial?: NetworkPolicy;
+  onChange?: (value: NetworkPolicy) => void;
+  onValidityChange?: (valid: boolean) => void;
 }) {
-  const [value, setValue] = useState<NetworkPolicy | null>(initial);
+  const [value, setValue] = useState<NetworkPolicy>(initial);
   return (
     <MantineProvider env="test">
       <NetworkPolicyField
         value={value}
-        inherited={CLOSED_NETWORK_POLICY}
-        tool="codex"
-        isToolDefault={isToolDefault}
         onChange={(next) => {
           setValue(next);
           onChange?.(next);
         }}
+        onValidityChange={onValidityChange}
       />
     </MantineProvider>
   );
 }
 
 describe("NetworkPolicyField", () => {
-  it("shows the inherited block read-only until the slot customizes it", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<Harness onChange={onChange} />);
-
-    expect(screen.getByText(t("setup.intelligence.network.inherited"))).toBeInTheDocument();
-    const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
-    expect(mode).toBeDisabled();
-
-    await user.click(
-      screen.getByRole("button", { name: t("setup.intelligence.network.customize") }),
-    );
-
-    // The slot now states the whole block, starting from what it inherited.
-    expect(onChange).toHaveBeenLastCalledWith(CLOSED_NETWORK_POLICY);
-    expect(
-      screen.getByRole("button", { name: t("setup.intelligence.network.useDefault") }),
-    ).toBeInTheDocument();
-  });
-
   it("asks for domains only under allowlist and drops them elsewhere", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<Harness initial={structuredClone(CLOSED_NETWORK_POLICY)} onChange={onChange} />);
+    render(<Harness onChange={onChange} />);
 
     const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
     await user.click(mode);
@@ -83,35 +66,45 @@ describe("NetworkPolicyField", () => {
     await user.click(
       await screen.findByRole("option", { name: t("setup.intelligence.network.modes.deny") }),
     );
+    expect(onChange).toHaveBeenLastCalledWith(CLOSED_NETWORK_POLICY);
+  });
+
+  it("blocks an empty or malformed allowlist before save", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onValidityChange = vi.fn();
+    render(
+      <Harness
+        initial={{ ...CLOSED_NETWORK_POLICY, mode: "allowlist" }}
+        onChange={onChange}
+        onValidityChange={onValidityChange}
+      />,
+    );
+
+    expect(screen.getByText(t("setup.intelligence.network.emptyAllowlist"))).toBeInTheDocument();
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+    await user.type(
+      screen.getByRole("combobox", { name: t("setup.intelligence.network.allowedDomains") }),
+      "https://example.com/path{enter}",
+    );
+    expect(screen.getByText(t("setup.intelligence.network.invalidDomain"))).toBeInTheDocument();
     expect(onChange).toHaveBeenLastCalledWith({
-      mode: "deny",
-      allowed_domains: [],
-      allow_local_network: false,
+      ...CLOSED_NETWORK_POLICY,
+      mode: "allowlist",
     });
   });
 
-  it("edits the tool's own default directly, with only a reset to the packaged values", async () => {
+  it("warns when unrestricted access is selected", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<Harness isToolDefault onChange={onChange} />);
+    render(<Harness />);
 
-    expect(screen.queryByText(t("setup.intelligence.network.inherited"))).not.toBeInTheDocument();
-    const mode = screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") });
-    expect(mode).toBeEnabled();
-    const reset = screen.getByRole("button", {
-      name: t("setup.intelligence.network.resetToPackaged"),
-    });
-    expect(reset).toBeDisabled();
-
-    await user.click(mode);
+    await user.click(screen.getByRole("combobox", { name: t("setup.intelligence.network.mode") }));
     await user.click(
       await screen.findByRole("option", {
         name: t("setup.intelligence.network.modes.unrestricted"),
       }),
     );
-    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "unrestricted" }));
 
-    await user.click(reset);
-    expect(onChange).toHaveBeenLastCalledWith(CLOSED_NETWORK_POLICY);
+    expect(screen.getByText(t("setup.intelligence.network.unrestrictedWarning"))).toBeVisible();
   });
 });

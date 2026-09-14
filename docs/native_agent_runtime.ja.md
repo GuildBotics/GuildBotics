@@ -34,8 +34,7 @@ antigravity: antigravity
 
 各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
 このファイルが持つのは`parameters:`と`effort:`のオーバーレイ（プロバイダ非依存の`low` / `high`を
-AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）と、
-後述の`network:`ブロックです。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
+AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）です。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
 `effort_fields:`を持ちます。
 
 ## エージェント隔離環境のアクセス許可
@@ -58,18 +57,18 @@ runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出
 ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
 bindします）。
 
-環境の中身（ベースイメージ、GuildBoticsが版を固定して導入するプロバイダCLI、
-`config/intelligences/agent_environment.yml`で宣言した追加パッケージ）はsnapshotとして端末ごとに
-ビルドし、宣言と一致しなければ再ビルドします。Desktopの **LLM・AI CLIツール** の
+環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLI）はsnapshotとして
+端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
+ベースイメージに入れます。Desktopの **LLM・AI CLIツール** の
 「エージェント隔離環境」カードがruntime、ベースイメージ、snapshotの状態（ビルドボタンつき）、
-DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
+network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
 `login`が同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
 自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
 見送りにします。turnが起動できない理由（runtime無し、宣言不正、ベースイメージ未読み込み、
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
-ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。apt / npm /
-uv toolの3枠では入れられないツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
+ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
+ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
 ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
 アーカイブを各端末で`guildbotics environment image load`で読み込み、**LLM・AI CLIツール → 詳細設定**
 の「環境の宣言」でこの端末に読み込み済みのimageから選ぶか、`guildbotics environment image declare`で
@@ -127,19 +126,22 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
     - Documents/shared-documents/private
   ```
 
-- **ネットワーク**: 選択したAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`
-  ブロックで、シェルコマンドとその子プロセス、ツール組み込みのweb検索・URL取得のどちらで
-  到達するかによらず1つの規則です（隔離環境のgatewayは両者を区別できません）。`mode`は
-  `deny` / `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため
-  使いません）、`allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostと
-  LANも開きます。同梱の既定は閉じています。`network:`を省いたスロットはツールの`default.yml`
-  からブロック全体を継承し、書いたスロットは全体を書きます。プロバイダ自身のAPIドメインと
-  localhostのmember brokerはモードによらず常に到達でき、設定ではなくGuildBoticsが決めます。
+- **ネットワーク**: `intelligences/agent_environment.yml`のworkspace共通`network:`ブロックで、
+  全メンバー・全スロットの接続先を1つの規則として決めます。シェルコマンドとその子プロセス、
+  ツール組み込みのweb検索・URL取得のどちらにも同じ規則が効きます。`mode`は`deny` /
+  `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため使いません）。
+  `allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostとLANも開きます。
+  `network:`省略時は`deny`です。同梱の宣言はGuildBotics開発で既知のGitHub・package registryを
+  allowlistにします。`unrestricted`は明示的なescape hatchで、turnが読めるworkspaceの内容を
+  任意のInternet hostへ送信したり、任意の外部payloadを取得したりできます。プロバイダ自身の
+  APIドメインとlocalhostのmember brokerはモードによらず常に到達できます。その他の接続先は
+  gatewayが拒否しますが、現在のmicrosandboxは拒否先をhostへ渡す公開SDK eventを持たないため、
+  GuildBoticsは内部ログから拒否先を推測しません。
 
   ```yaml
   network:
     mode: allowlist
-    allowed_domains: [registry.npmjs.org]
+    allowed_domains: [github.com, api.github.com, registry.npmjs.org]
     allow_local_network: false
   ```
 

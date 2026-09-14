@@ -17,8 +17,8 @@ from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
     LocalPathGrant,
+    NetworkPolicy,
     SharedGrants,
-    parse_network_policy,
     resolve_access,
 )
 from guildbotics.intelligences.agent_environment.image import (
@@ -46,13 +46,6 @@ from guildbotics.intelligences.cli_agents import CLI_AGENTS
 from guildbotics.utils.i18n_tool import t
 
 
-def _network(mode: str = "deny", **extra):
-    domains = ["example.com"] if mode == "allowlist" else []
-    return parse_network_policy(
-        {"mode": mode, "allowed_domains": domains, **extra}, where="test"
-    )
-
-
 def _executable(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("", encoding="utf-8")
@@ -68,12 +61,15 @@ def _device(
     credentials_saved: frozenset[str] = frozenset({"codex", "claude"}),
     filesystem_problem: str = "",
     image: ImageStatus | None = None,
+    network: NetworkPolicy | None = None,
 ) -> None:
     """Stand in for the device: its runtime, snapshot, DNS, and logins."""
     health = AgentEnvironmentHealth(
         runtime_ok, "" if runtime_ok else "no hypervisor", "0.6.17"
     )
-    declaration = ToolchainDeclaration(dns=DnsSettings(nameservers="host"))
+    declaration = ToolchainDeclaration(
+        network=network or NetworkPolicy(), dns=DnsSettings(nameservers="host")
+    )
     state = SnapshotStatus(
         snapshot_state,
         "guildbotics-abc",
@@ -125,9 +121,7 @@ def _codex_slot(monkeypatch) -> None:
     monkeypatch.setattr(
         module,
         "get_cli_agent_mapping",
-        lambda _person: {
-            "default": ExecutableInfo(adapter="codex", network=_network())
-        },
+        lambda _person: {"default": ExecutableInfo(adapter="codex")},
     )
 
 
@@ -135,7 +129,16 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     monkeypatch, home: Path
 ) -> None:
     _codex_slot(monkeypatch)
-    _device(monkeypatch, snapshot_state="failed", credentials_saved=frozenset())
+    _device(
+        monkeypatch,
+        snapshot_state="failed",
+        credentials_saved=frozenset(),
+        network=NetworkPolicy(
+            mode="allowlist",
+            allowed_domains=["github.com"],
+            allow_local_network=False,
+        ),
+    )
 
     status = agent_environment_status(
         ["aiko"], platform="darwin", build_output=["[apt]", "E: boom"]
@@ -148,6 +151,7 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
         "boom",
     )
     assert status.snapshot.output == ["[apt]", "E: boom"]
+    assert status.network.allowed_domains == ["github.com"]
     assert status.image.model_dump() == {
         "default": IMAGE,
         "architecture": module.device_architecture(),
@@ -356,12 +360,8 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
         device_module, "load_local_grants", lambda: LocalGrants(deny=[".local/share/x"])
     )
     mappings = {
-        "aiko": {
-            "default": ExecutableInfo(
-                adapter="codex", network=_network("deny", allow_local_network=True)
-            )
-        },
-        "kenji": {"default": ExecutableInfo(adapter="grok", network=_network())},
+        "aiko": {"default": ExecutableInfo(adapter="codex")},
+        "kenji": {"default": ExecutableInfo(adapter="grok")},
     }
     monkeypatch.setattr(
         module, "get_cli_agent_mapping", lambda person: mappings[person]
@@ -390,10 +390,9 @@ def test_status_resolves_the_grants_once_and_names_what_each_slot_cannot_get(
         (str(Path("$HOME/.ssh")), True),
         (str(Path("$HOME/.local/share/x")), False),
     ]
-    # The environment enforces every network setting the same way, so no
-    # slot is refused for what its tool could not do natively.
     aiko, kenji = status.members[0].slots[0], status.members[1].slots[0]
-    assert (aiko.tool, aiko.network.allow_local_network) == ("codex", True)
+    assert (aiko.tool, kenji.tool) == ("codex", "grok")
+    assert status.network.mode == "deny"
     assert aiko.problems == [] and kenji.problems == []
     # What does keep kenji's slot from starting is its tool, which is not
     # logged in here; that is reported once for the tool, not per slot.
@@ -423,9 +422,7 @@ def test_an_unresolvable_local_path_is_reported_on_every_slot(
     monkeypatch.setattr(
         module,
         "get_cli_agent_mapping",
-        lambda _person: {
-            "default": ExecutableInfo(adapter="codex", network=_network())
-        },
+        lambda _person: {"default": ExecutableInfo(adapter="codex")},
     )
 
     status = agent_environment_status(["aiko"], platform="darwin")

@@ -891,10 +891,6 @@ export type CliAgentDefinition = {
   // False when the tool's protocol has nowhere to put these settings, so the
   // editor explains rather than collecting configuration that would be dropped.
   effort_supported?: boolean;
-  // This definition's own `network` block; null when the file states none and
-  // the slot runs under `inherited_network`.
-  network?: NetworkPolicy | null;
-  inherited_network?: NetworkPolicy;
 };
 
 export type NetworkMode = "deny" | "allowlist" | "unrestricted";
@@ -904,12 +900,6 @@ export type NetworkPolicy = {
   mode: NetworkMode;
   allowed_domains: string[];
   allow_local_network: boolean;
-};
-
-export const CLOSED_NETWORK_POLICY: NetworkPolicy = {
-  mode: "deny",
-  allowed_domains: [],
-  allow_local_network: false,
 };
 
 export type GrantAccess = "read" | "read_write";
@@ -1075,14 +1065,13 @@ export type EnvironmentToolStatus = {
 // content digest; absent, the build starts from GuildBotics' own image.
 export type AgentEnvironmentDeclaration = {
   image?: { reference: string; digests: Record<string, string> } | null;
-  packages: { apt: string[]; npm: string[]; uv: string[] };
+  network: NetworkPolicy;
   dns: { nameservers: "host" | string[] };
 };
 
 export type EnvironmentSlotStatus = {
   slot: string;
   tool: string;
-  network: NetworkPolicy;
   problems: EnvironmentProblem[];
 };
 
@@ -1096,6 +1085,7 @@ export type AgentEnvironmentStatusResponse = {
   runtime: EnvironmentRuntimeStatus;
   snapshot: EnvironmentSnapshotStatus;
   image: EnvironmentImageStatus;
+  network: NetworkPolicy;
   dns: EnvironmentDnsStatus;
   tools: EnvironmentToolStatus[];
   // Why no turn at all can start on this device, or "" when one can.

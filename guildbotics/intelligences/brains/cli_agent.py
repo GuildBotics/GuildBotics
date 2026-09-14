@@ -17,10 +17,8 @@ from pydantic import BaseModel
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
     AccessContractError,
-    NetworkPolicy,
     load_local_grants,
     load_shared_grants,
-    parse_network_policy,
     resolve_access,
 )
 from guildbotics.intelligences.agent_environment.provider_state import (
@@ -28,6 +26,10 @@ from guildbotics.intelligences.agent_environment.provider_state import (
 )
 from guildbotics.intelligences.agent_environment.status import (
     filesystem_permission_problem,
+)
+from guildbotics.intelligences.agent_environment.toolchain import (
+    ToolchainError,
+    load_toolchain,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -115,8 +117,6 @@ class ExecutableInfo:
     adapter: str = ""
     effort: dict[str, dict] = field(default_factory=dict)
     parameters: dict = field(default_factory=dict)
-    #: Where the tool's commands and built-in web features may connect.
-    network: NetworkPolicy = field(default_factory=NetworkPolicy)
 
 
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
@@ -502,9 +502,6 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
                 definition.get("effort"), where=f"AI CLI tool '{slot}'"
             ),
             parameters=_parameters_of(definition),
-            network=parse_network_policy(
-                definition.get("network"), where=f"AI CLI tool '{slot}'"
-            ),
         )
     person_cli_agent_mapping[person_id] = cli_agent_mapping
     return cli_agent_mapping
@@ -776,10 +773,10 @@ class CliAgentBrain(Brain):
         try:
             try:
                 contract = AccessContract(
-                    network=self.executable_info.network,
+                    network=load_toolchain().network,
                     access=resolve_access(load_shared_grants(), load_local_grants()),
                 )
-            except (AccessContractError, PermissionError) as exc:
+            except (AccessContractError, ToolchainError, PermissionError) as exc:
                 return CliAgentExecutionResult(
                     stdout="",
                     stderr=(

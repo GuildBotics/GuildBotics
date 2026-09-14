@@ -3,11 +3,11 @@
 # This file is shared between the devices of the workspace, and each device
 # builds the same environment from it. GuildBotics provides the base image
 # (Debian with Node.js, npm, git and uv) and installs the AI CLI tools at the
-# versions it was verified with; what is declared here is added on top.
+# versions it was verified with.
 #
-# A workspace may instead start from an image it built itself, for toolchains
-# the package managers below cannot express (a Python interpreter, a Rust
-# toolchain, a browser). Build it FROM the default image, or from one that
+# A workspace may instead start from an image it built itself, for another
+# toolchain (a Python interpreter, Rust, a browser). Build it FROM the default
+# image, or from one that
 # gives the build the same: Debian's apt, Node.js with npm, curl and tar. Do
 # not ship bubblewrap (`bwrap`): Codex prefers it to the one it bundles and
 # cannot start a session with Debian's.
@@ -26,16 +26,26 @@
 #       arm64: sha256:<64 hex digits>
 #       amd64: sha256:<64 hex digits>
 #
-# Every entry is one argument to its package manager, so pin versions the way
-# that manager spells them. An unpinned entry changes with every rebuild
-# without the environment noticing.
-packages:
-  # Debian packages: `ripgrep=14.1.0-1`
-  apt: []
-  # npm packages, installed globally: `typescript@5.6.3`
-  npm: []
-  # Python tools, installed with `uv tool install`: `ruff==0.6.9`
-  uv: []
+# One rule covers every member, slot, command, and provider web feature. The
+# allowlist below is the known set used to develop GuildBotics itself. Omit
+# this block to deny all non-provider traffic. `unrestricted` is an explicit
+# escape hatch: a turn could then send readable workspace content anywhere
+# or fetch a payload from any Internet host.
+network:
+  mode: allowlist
+  allowed_domains:
+    - pypi.org
+    - files.pythonhosted.org
+    - registry.npmjs.org
+    - github.com
+    - api.github.com
+    - raw.githubusercontent.com
+    - codeload.github.com
+    - objects.githubusercontent.com
+    - release-assets.githubusercontent.com
+    - static.crates.io
+    - index.crates.io
+  allow_local_network: false
 
 # The upstream DNS resolvers the environment forwards queries to: a list of
 # IPv4 addresses, shared as written. The default is public resolvers, so the

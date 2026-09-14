@@ -4,13 +4,11 @@ A device holds one snapshot per workspace, under the workspace's device-local
 directory. Its name is a digest of everything that went into it -- the base
 image (the recipe's pinned tag, or the digest of the image this device holds
 under the declared reference, which is what the build starts from), the
-provider CLIs at the versions GuildBotics pins, the declared
-packages, and the version of this recipe -- so a snapshot built from an
-older declaration, or by an older GuildBotics, is recognised by its name
-alone and rebuilt. What the name cannot tell is the content of an entry the
-declaration did not pin; that is why the declaration asks for pins.
+provider CLIs at the versions GuildBotics pins, and the version of this recipe
+-- so a snapshot built from an older recipe or image is recognised by its name
+alone and rebuilt.
 
-The build is not interactive: it installs packages and nothing more, so the
+The build is not interactive: it installs provider CLIs and nothing more, so the
 CLI, the Desktop, and the background service all run the same one. Logging
 in to a provider is a separate, interactive step (:mod:`.provider_state`)
 whose result lives outside the snapshot.
@@ -57,8 +55,8 @@ from guildbotics.utils.advisory_lock import (
 from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 
-#: uv, for the Python tools a declaration asks for; installed from its
-#: release archive because the image has no Python of its own.
+#: uv, used by provider installation scripts; installed from its release
+#: archive because the default image has no Python of its own.
 UV_VERSION = "0.12.10"
 #: Bumped when the build steps change in a way the data above does not show.
 RECIPE_VERSION = 1
@@ -117,7 +115,7 @@ def provisioned_installs() -> dict[str, str]:
     }
 
 
-def snapshot_name(declaration: ToolchainDeclaration, image: ImageStatus) -> str:
+def snapshot_name(_: ToolchainDeclaration, image: ImageStatus) -> str:
     """The name of the snapshot ``declaration`` asks for on this device.
 
     ``image`` is the declared base image as this device holds it: the
@@ -129,26 +127,14 @@ def snapshot_name(declaration: ToolchainDeclaration, image: ImageStatus) -> str:
         "uv": UV_VERSION,
         "providers": provisioned_packages(),
         "installs": provisioned_installs(),
-        "packages": declaration.packages.model_dump(),
     }
     encoded = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
     return SNAPSHOT_PREFIX + hashlib.sha256(encoded).hexdigest()[:16]
 
 
-def build_steps(declaration: ToolchainDeclaration) -> tuple[BuildStep, ...]:
-    """The scripts that turn the base image into the declared environment."""
-    packages = declaration.packages
+def build_steps(_: ToolchainDeclaration) -> tuple[BuildStep, ...]:
+    """The scripts that install GuildBotics' provider CLIs into the base image."""
     steps = [BuildStep("home", 'install -d -m 0700 "$HOME"')]
-    if packages.apt:
-        steps.append(
-            BuildStep(
-                "apt",
-                "apt-get update\n"
-                f"apt-get install -y --no-install-recommends {_args(packages.apt)}\n"
-                "apt-get clean\n"
-                "rm -rf /var/lib/apt/lists/*",
-            )
-        )
     archive = "uv-${arch}-unknown-linux-gnu"
     steps.append(
         BuildStep(
@@ -164,23 +150,13 @@ def build_steps(declaration: ToolchainDeclaration) -> tuple[BuildStep, ...]:
     steps.append(
         BuildStep(
             "npm",
-            f"npm install -g {_args([*provisioned_packages().values(), *packages.npm])}\n"
+            f"npm install -g {_args(list(provisioned_packages().values()))}\n"
             "npm cache clean --force",
         )
     )
     steps.extend(
         BuildStep(name, script) for name, script in provisioned_installs().items()
     )
-    if packages.uv:
-        steps.append(
-            BuildStep(
-                "uv-tools",
-                "\n".join(
-                    f"UV_TOOL_BIN_DIR=/usr/local/bin uv tool install {shlex.quote(p)}"
-                    for p in packages.uv
-                ),
-            )
-        )
     return tuple(steps)
 
 

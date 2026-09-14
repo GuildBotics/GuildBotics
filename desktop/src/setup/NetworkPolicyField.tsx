@@ -1,77 +1,43 @@
-import { Button, Fieldset, Group, Select, Stack, Switch, TagsInput, Text } from "@mantine/core";
+import { Alert, Fieldset, Select, Stack, Switch, TagsInput, Text } from "@mantine/core";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { CLOSED_NETWORK_POLICY, type NetworkMode, type NetworkPolicy } from "../api/client";
+import { type NetworkMode, type NetworkPolicy } from "../api/client";
 
 const MODES: NetworkMode[] = ["deny", "allowlist", "unrestricted"];
 
 type Props = {
-  /** Anchor for a system alert to scroll to. */
-  id?: string;
-  /** The slot's own block, or null when it inherits `inherited`. */
-  value: NetworkPolicy | null;
-  inherited: NetworkPolicy;
-  tool: string;
-  /**
-   * Whether this is the tool's own default definition. It has nothing to
-   * inherit from but the packaged defaults, so it is always edited directly;
-   * only a custom slot chooses between inheriting and stating its own block.
-   */
-  isToolDefault: boolean;
-  onChange: (value: NetworkPolicy | null) => void;
+  value: NetworkPolicy;
+  onChange: (value: NetworkPolicy) => void;
+  onValidityChange?: (valid: boolean) => void;
 };
 
-/**
- * The `network` block of an AI CLI tool definition: one rule for the
- * commands the tool runs and its own web tools alike.
- *
- * A slot either inherits its tool's block whole or states its own whole:
- * there is no per-field merge, so the editor works on a complete copy. The
- * isolated agent environment enforces every mode the same way on every
- * device, so nothing here depends on the tool or the OS.
- */
-export function NetworkPolicyField({ id, value, inherited, tool, isToolDefault, onChange }: Props) {
-  const { t } = useTranslation();
-  const policy = value ?? inherited ?? CLOSED_NETWORK_POLICY;
-  const editable = isToolDefault || value !== null;
+function isDomain(domain: string): boolean {
+  return domain.trim().length > 0 && !/\s/.test(domain) && !domain.includes("/");
+}
 
-  const setPolicy = (patch: Partial<NetworkPolicy>) => onChange({ ...policy, ...patch });
+/** The workspace-wide network rule enforced for every AI CLI turn. */
+export function NetworkPolicyField({ value, onChange, onValidityChange }: Props) {
+  const { t } = useTranslation();
+  const [rejected, setRejected] = useState<string>();
+  const emptyAllowlist = value.mode === "allowlist" && value.allowed_domains.length === 0;
+  useEffect(() => {
+    onValidityChange?.(!emptyAllowlist && !rejected);
+  }, [emptyAllowlist, onValidityChange, rejected]);
+
+  const setPolicy = (patch: Partial<NetworkPolicy>) => onChange({ ...value, ...patch });
+  const setDomains = (domains: string[]) => {
+    const invalid = domains.find((domain) => !isDomain(domain));
+    setRejected(invalid ? t("setup.intelligence.network.invalidDomain") : undefined);
+    setPolicy({ allowed_domains: domains.filter(isDomain) });
+  };
 
   return (
-    <Fieldset
-      id={id}
-      legend={t("setup.intelligence.network.title")}
-      data-testid={`network:${tool}`}
-    >
+    <Fieldset legend={t("setup.intelligence.network.title")} data-testid="network:environment">
       <Stack gap="sm">
         <Text size="xs" c="dimmed">
           {t("setup.intelligence.network.description")}
         </Text>
-        <Group gap="xs" align="center">
-          {isToolDefault ? (
-            <Button
-              size="xs"
-              variant="subtle"
-              disabled={JSON.stringify(policy) === JSON.stringify(CLOSED_NETWORK_POLICY)}
-              onClick={() => onChange(structuredClone(CLOSED_NETWORK_POLICY))}
-            >
-              {t("setup.intelligence.network.resetToPackaged")}
-            </Button>
-          ) : editable ? (
-            <Button size="xs" variant="subtle" onClick={() => onChange(null)}>
-              {t("setup.intelligence.network.useDefault")}
-            </Button>
-          ) : (
-            <>
-              <Text size="xs" c="dimmed">
-                {t("setup.intelligence.network.inherited")}
-              </Text>
-              <Button size="xs" variant="light" onClick={() => onChange(structuredClone(policy))}>
-                {t("setup.intelligence.network.customize")}
-              </Button>
-            </>
-          )}
-        </Group>
         <Select
           label={t("setup.intelligence.network.mode")}
           size="xs"
@@ -79,32 +45,36 @@ export function NetworkPolicyField({ id, value, inherited, tool, isToolDefault, 
             value: mode,
             label: t(`setup.intelligence.network.modes.${mode}`),
           }))}
-          value={policy.mode}
-          disabled={!editable}
+          value={value.mode}
           onChange={(mode) => {
             if (!mode) return;
             const next = mode as NetworkMode;
             setPolicy({
               mode: next,
-              allowed_domains: next === "allowlist" ? policy.allowed_domains : [],
+              allowed_domains: next === "allowlist" ? value.allowed_domains : [],
             });
           }}
         />
-        {policy.mode === "allowlist" ? (
+        {value.mode === "allowlist" ? (
           <TagsInput
             label={t("setup.intelligence.network.allowedDomains")}
             placeholder={t("setup.intelligence.network.allowedDomainsPlaceholder")}
             size="xs"
-            value={policy.allowed_domains}
-            disabled={!editable}
-            onChange={(allowed_domains) => setPolicy({ allowed_domains })}
+            value={value.allowed_domains}
+            onChange={setDomains}
+            error={
+              rejected ??
+              (emptyAllowlist ? t("setup.intelligence.network.emptyAllowlist") : undefined)
+            }
           />
+        ) : null}
+        {value.mode === "unrestricted" ? (
+          <Alert color="warning">{t("setup.intelligence.network.unrestrictedWarning")}</Alert>
         ) : null}
         <Switch
           label={t("setup.intelligence.network.allowLocalNetwork")}
           size="xs"
-          checked={policy.allow_local_network}
-          disabled={!editable}
+          checked={value.allow_local_network}
           onChange={(event) => setPolicy({ allow_local_network: event.currentTarget.checked })}
         />
       </Stack>

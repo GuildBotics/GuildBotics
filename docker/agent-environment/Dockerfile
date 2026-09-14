@@ -15,8 +15,8 @@
 #
 # It keeps what GuildBotics' build recipe expects of a base image: Debian's apt,
 # Node.js with npm, curl and tar, and no bubblewrap (see the last step).
-# GuildBotics installs the AI CLI tools and the declared packages on top when
-# it builds the environment snapshot.
+# GuildBotics installs the AI CLI tools on top when it builds the environment
+# snapshot.
 #
 # `scripts/build-agent-environment-image.sh` builds it for every architecture
 # the workspace's devices run, loads it on the building device, and declares

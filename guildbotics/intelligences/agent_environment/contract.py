@@ -3,8 +3,8 @@
 Every turn an AI CLI tool runs for GuildBotics is confined the same way,
 whatever the turn is for: the agent may read and write its working directory
 and the directories the user granted under their home, and it reaches the
-network only as the selected tool definition allows, whether through a
-command it runs or the provider's built-in web tools. The agent's tools are
+network only as the workspace's environment declaration allows, whether
+through a command it runs or the provider's built-in web tools. The agent's tools are
 the environment's own, so nothing of this device's PATH is part of it. The
 contract is what GuildBotics asks for, as data; the isolated agent
 environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
@@ -23,6 +23,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from guildbotics.utils.fileio import (
@@ -62,7 +63,7 @@ class AccessContractError(ValueError):
 
 
 class NetworkPolicy(BaseModel):
-    """The ``network`` block of an AI CLI tool definition: what a turn may reach.
+    """The environment declaration's ``network`` block: what a turn may reach.
 
     One rule covers the provider's own web tools and every command it runs,
     because the environment that enforces it cannot tell the two apart. ``mode``
@@ -94,7 +95,8 @@ class NetworkPolicy(BaseModel):
                 )
         return domains
 
-    def check(self) -> None:
+    @model_validator(mode="after")
+    def _consistent(self) -> NetworkPolicy:
         if self.mode == "allowlist" and not self.allowed_domains:
             raise ValueError(
                 t("intelligences.agent_environment.grants.allowlist_needs_domain")
@@ -103,15 +105,11 @@ class NetworkPolicy(BaseModel):
             raise ValueError(
                 t("intelligences.agent_environment.grants.domains_need_allowlist")
             )
+        return self
 
 
 def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
-    """Validate a definition's ``network`` block; absent means closed.
-
-    A definition that states a block states all of it: there is no per-field
-    merge with the tool's default, so a partial block is a mistake to report,
-    not a shorthand to complete.
-    """
+    """Validate a declaration's ``network`` block; absent means closed."""
     if raw is None:
         return NetworkPolicy()
     if not isinstance(raw, dict):
@@ -122,9 +120,8 @@ def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
             )
         )
     try:
-        policy = NetworkPolicy.model_validate(raw)
-        policy.check()
-    except (ValidationError, ValueError) as exc:
+        return NetworkPolicy.model_validate(raw)
+    except ValidationError as exc:
         raise AccessContractError(
             t(
                 "intelligences.agent_environment.grants.network_invalid",
@@ -132,7 +129,6 @@ def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
                 error=exc,
             )
         ) from exc
-    return policy
 
 
 class DocumentGrant(BaseModel):
