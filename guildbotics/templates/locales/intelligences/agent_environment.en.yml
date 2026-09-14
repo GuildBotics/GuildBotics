@@ -27,7 +27,6 @@ en:
     launching_app: " (currently %{app})"
     permission_denied: "This GuildBotics cannot list '%{path}'. Allow its launching app or user to access this directory."
   declaration:
-    not_a_package: "'%{spec}' is not a package specification"
     not_an_image: "'%{reference}' is not an image reference"
     not_a_digest: "'%{digest}' is not an image digest (sha256:<64 hex digits>)"
     no_digests: "an image names at least one digest, by architecture"

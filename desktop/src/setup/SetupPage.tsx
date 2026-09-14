@@ -65,7 +65,6 @@ import { useSearchParams } from "react-router";
 import {
   type CommandOption,
   type DiagnosticCheck,
-  CLOSED_NETWORK_POLICY,
   type CliAgentDefinition,
   type EffortFieldSpec,
   type EffortOverlay,
@@ -139,7 +138,6 @@ import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
 import { GrantsCards } from "./GrantsCards";
-import { NetworkPolicyField } from "./NetworkPolicyField";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -1801,12 +1799,8 @@ function IntelligenceEditor({
   const draftKey = `${personId ?? "team"}:${querySerializedPayload}`;
   const activeDraftState = draftState?.key === draftKey ? draftState : null;
   const draft = activeDraftState?.config ?? query.data ?? null;
-  const focusedSlotPresent = Boolean(focusSlot && draft?.cli_agent_mapping[focusSlot]);
   // A focused slot lives inside the advanced settings too.
   const openAdvancedPanel = openAdvanced || Boolean(focusSlot);
-  useEffect(() => {
-    if (focusSlot && focusedSlotPresent) scrollToElement(`network-${focusSlot}`);
-  }, [focusSlot, focusedSlotPresent]);
   useEffect(() => {
     if (openAdvanced && focusElement && draft) scrollToElement(focusElement);
   }, [openAdvanced, focusElement, draft]);
@@ -2582,16 +2576,6 @@ function IntelligenceEditor({
                                 handleUpdateCliAgentDef(agentDef.path, {
                                   effort: effort as CliAgentDefinition["effort"],
                                 })
-                              }
-                            />
-                            <NetworkPolicyField
-                              id={`network-${slotKey}`}
-                              value={agentDef.network ?? null}
-                              inherited={agentDef.inherited_network ?? CLOSED_NETWORK_POLICY}
-                              tool={agentDef.name}
-                              isToolDefault={agentDef.path === cliToolDefaultPath(agentDef.path)}
-                              onChange={(network) =>
-                                handleUpdateCliAgentDef(agentDef.path, { network })
                               }
                             />
                           </Stack>

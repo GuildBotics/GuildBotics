@@ -703,8 +703,13 @@ class GitSyncManager:
 
 def build_git_sync_manager(workspace_root: Path | None = None) -> GitSyncManager:
     """Create the manager for a workspace, minting its identities on first use."""
+    repository = LocalSyncRepository(workspace_root)
+    # Existing repositories need the current generated ignore rules too. A
+    # product update must not leave their shared boundary frozen at the rules
+    # from the day synchronization was first enabled.
+    repository.initialize()
     return GitSyncManager(
-        LocalSyncRepository(workspace_root),
+        repository,
         workspace_id=ensure_workspace_identity(workspace_root).workspace_id,
         device_id=ensure_device_identity().device_id,
     )

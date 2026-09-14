@@ -20,7 +20,6 @@ ja:
     launching_app: "（いまは %{app}）"
     permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:
-    not_a_package: "'%{spec}' はパッケージ指定ではありません"
     not_an_image: "'%{reference}' は image の参照名ではありません"
     not_a_digest: "'%{digest}' は image の digest（sha256:<16進 64 桁>）ではありません"
     no_digests: "image にはアーキテクチャごとの digest を 1 つ以上書いてください"

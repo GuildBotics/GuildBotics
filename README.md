@@ -797,6 +797,10 @@ the same record. Synchronization does not stop, and no one is asked to resolve a
 Content that was not adopted when a machine with an existing `.guildbotics/` joined the hub
 is listed there the same way.
 
+Files and directories whose names start with `.` are not shared from `config/` or `state/`.
+Bookkeeping files created by Finder or an editor at any depth therefore do not appear as
+changes that cannot be sent.
+
 #### Recover a change that was not applied
 
 This is an exception procedure, not part of normal use. GuildBotics never restores a set
@@ -896,8 +900,8 @@ discarding; the activity history record stays either way.
 
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
 - `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: files handed over from the desktop app and what agents make for you go there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
-- `intelligences/cli_agents/<tool>/*.yml`: the effort mapping and the `network:` block (where commands and built-in web tools may connect) for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
-- `intelligences/agent_environment.yml`: the base image every machine builds its isolated agent environment from (`image`: GuildBotics' own Debian + Node.js unless set; for a toolchain apt / npm / uv tool cannot express, build an image yourself, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`. Images are per CPU architecture, so the declaration carries one digest per architecture; each machine runs on the image it loaded and keeps warning while its digest is not the declared one. `docker/agent-environment/Dockerfile` with `scripts/build-agent-environment-image.sh`, which builds every architecture and declares them, is the example for developing GuildBotics itself), what is added on top (`packages` for apt / npm / uv, pinned), and the DNS resolvers the environment uses (`dns.nameservers`: a list of IPv4 addresses, public resolvers by default, or `host` for this device's own resolvers on networks that block outside DNS). Shared by the workspace; changing the image or the packages rebuilds the environment on every machine
+- `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
+- `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian + Node.js unless set; for another toolchain, build an image yourself, load it on each machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), its network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and its DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Changing the image rebuilds the environment on every machine; network and DNS shape turns without rebuilding it
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 
 For the available values and security considerations, see [Native Agent Runtime](docs/native_agent_runtime.en.md#configuration).
@@ -922,7 +926,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 
 When an AI CLI usage refresh fails, the top notification area and the tool's settings row show the same problem. The row includes the last-check time. **Check again** bypasses the usage cache for that tool, and **Error details** opens the corresponding diagnostics session. A successful usage refresh clears the notification and the row's warning. The notification does not by itself mean credentials have expired; network errors and unavailable usage panels also prevent retrieval. **Refresh display** rereads saved state without probing the tools.
 
-**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session.
+**Diagnostics logs**: a searchable execution summary is recorded in `<workspace>/.guildbotics/local/run/diagnostics.jsonl`, and the full events, logs, spans, and inputs/outputs are stored per execution as JSONL under `run/sessions/`. The **Diagnostics** screen in the desktop app shows both the execution history and the latest global / system session. For a restricted AI CLI turn, `agent_environment.network_egress_candidate` records explicit URLs and host-and-port pairs from structured command/tool/runtime failure evidence after excluding known allowed domains and allowed local IP addresses. It is an informational clue rather than proof of a microsandbox denial; successful command output, bare hostnames/IP addresses, extra DEBUG logging, and agent self-report are not used.
 
 **Debug output**: environment variables for more verbose logging:
 

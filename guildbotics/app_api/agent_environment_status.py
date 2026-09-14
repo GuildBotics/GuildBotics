@@ -40,7 +40,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     AccessContractError,
     DocumentGrant,
     LocalGrants,
-    NetworkPolicy,
     ResolvedAccess,
     ResolvedGrant,
     SharedGrants,
@@ -108,7 +107,7 @@ def agent_environment_status(
         EnvironmentMemberStatus(
             person_id=person_id,
             slots=[
-                _slot_status(slot, info.adapter, info.network, problems)
+                _slot_status(slot, info.adapter, problems)
                 for slot, info in sorted(get_cli_agent_mapping(person_id).items())
             ],
         )
@@ -140,6 +139,7 @@ def agent_environment_status(
             warning=device.image.warning,
             load_command=image_load_command(platform=platform),
         ),
+        network=device.network,
         dns=EnvironmentDnsStatus(
             declared=device.dns.declared,
             nameservers=list(device.dns.nameservers),
@@ -225,12 +225,11 @@ def _access_status(
 
 
 def _slot_status(
-    slot: str, tool: str, network: NetworkPolicy, access_problems: list[str]
+    slot: str, tool: str, access_problems: list[str]
 ) -> EnvironmentSlotStatus:
     return EnvironmentSlotStatus(
         slot=slot,
         tool=tool,
-        network=network,
         problems=[
             EnvironmentProblem(setting="grants", reason=reason)
             for reason in dict.fromkeys(access_problems)

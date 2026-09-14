@@ -40,8 +40,7 @@ Each tool still reads its own definition under
 `intelligences/cli_agents/<tool>/`: that file carries the `parameters:` and
 `effort:` overlay described in the
 [custom command guide](custom_command_guide.en.md), which is how the
-provider-neutral `low` / `high` levels become provider settings, plus the
-`network:` block described below. The shipped defaults also declare
+provider-neutral `low` / `high` levels become provider settings. The shipped defaults also declare
 `effort_fields:`, the descriptors the settings editor uses for typed editing.
 
 ## Isolated agent environment: access permissions
@@ -68,13 +67,13 @@ created once with an elevation prompt. Inside the environment a Windows host
 path appears with its drive letter as the top-level directory (`C:\work`
 is `/c/work`); the working directory is bound under the same convention.
 
-What the environment holds -- the base image, the provider CLIs GuildBotics
-installs at pinned versions, and the extra packages declared in
-`config/intelligences/agent_environment.yml` -- is built per device as a
-snapshot and rebuilt when it no longer matches the declaration. The
+What the environment holds -- the base image and the provider CLIs GuildBotics
+installs at pinned versions -- is built per device as a snapshot and rebuilt
+when it no longer matches the declaration. Additional development tools belong
+in the base image, not in a package list. The
 **Isolated agent environment** card under **LLM / AI CLI tools** in the
 Desktop shows the runtime, the base image, the snapshot's state (with a
-build button), the DNS resolvers, and each tool's login; `guildbotics
+build button), the network policy, the DNS resolvers, and each tool's login; `guildbotics
 environment status` / `build` / `login` are the same state and actions from
 a terminal. While the service runs, a changed declaration (including one
 that arrived from another device through synchronization) is rebuilt by
@@ -85,11 +84,10 @@ loaded, an unbuilt snapshot, no login) is shown in the same words in the
 alert band at the top of the screen.
 
 The base image is GuildBotics' own by default (Debian + Node.js + npm + git
-+ uv). A workspace that needs a toolchain the three package slots (apt /
-npm / uv tool) cannot express -- a Python interpreter, Rust, a browser --
-declares an image it built itself. The image's content is not shared: load
-its `docker save` archive on each device with `guildbotics environment image
-load`, then pick it from the images loaded on this device under **LLM / AI
++ uv). A workspace that needs another toolchain -- a Python interpreter,
+Rust, a browser -- declares an image it built itself. The image's content is
+not shared: load its `docker save` archive on each device with `guildbotics
+environment image load`, then pick it from the images loaded on this device under **LLM / AI
 CLI tools → advanced settings → Environment declaration**, or declare it
 with `guildbotics environment image declare`. Images are per CPU
 architecture (the environment runs the device's own CPU), so the
@@ -106,7 +104,7 @@ band, and in `environment status` that says how to fall in line. The
 snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
-build steps what they use (Debian's `apt`, Node.js with `npm`, `curl` and
+build steps what they use (Node.js with `npm`, `curl` and
 `tar`), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
@@ -160,23 +158,37 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
     - Documents/shared-documents/private
   ```
 
-- **Network**: the `network:` block of the selected tool definition
-  (`cli_agents/<tool>/<slot>.yml`) states what the turn may reach, whether
-  through a shell command and its child processes or through the tool's
-  built-in web search / URL fetch: one rule, because the environment's
-  gateway cannot tell the two apart. `mode` is one of `deny` / `allowlist` /
-  `unrestricted` (`off` would read as a YAML boolean), `allowed_domains` is
-  used only with `allowlist`, and `allow_local_network` opens localhost and the
-  LAN as well. The shipped default is closed. A slot that omits `network:`
-  inherits the whole block from its tool's `default.yml`; a slot that states
-  it states all of it. The provider's own API domains and the localhost member
-  broker are always reachable, whatever the mode; they are GuildBotics'
-  choice, not a setting.
+- **Network**: one workspace-wide `network:` block in
+  `intelligences/agent_environment.yml` states what every member and slot may
+  reach, whether through a shell command and its child processes or through
+  the tool's built-in web search / URL fetch. `mode` is `deny`, `allowlist`, or
+  `unrestricted` (`off` would read as a YAML boolean). `allowed_domains` is
+  used only with `allowlist`; `allow_local_network` also opens localhost and
+  the LAN. Omitting `network:` means `deny`. The shipped declaration uses an
+  allowlist of common GitHub and package-registry hosts as a starting point
+  for coding work. `unrestricted` is only an explicit escape hatch: a turn can
+  then send workspace content it can read to any Internet host or fetch any
+  external payload. Provider API domains and the localhost member broker are
+  always reachable regardless of mode. The gateway still blocks every other
+  destination. microsandbox does not yet expose a public denied-egress event,
+  so GuildBotics records a deliberately narrow, indirect clue instead: explicit
+  URLs and host-and-port pairs in structured command, tool, or runtime failure
+  events become
+  `agent_environment.network_egress_candidate` records in that turn's local
+  Diagnostics after known allowed domains and permitted local IP addresses are
+  excluded. Successful command output, bare hostnames, and bare IP addresses are
+  not scanned, so filenames and timestamps do not become network candidates.
+  The extraction reads at most 8 KiB of each existing failure record and keeps
+  at most 32 candidates. It does not enable runtime DEBUG logging, start another
+  process, change the agent's prompt, or alter its final response. This is
+  information the provider emitted during a failure, not proof that microsandbox
+  denied the connection. A client that emits only a bare destination, or none at
+  all, still leaves no clue until microsandbox provides the event.
 
   ```yaml
   network:
     mode: allowlist
-    allowed_domains: [registry.npmjs.org]
+    allowed_domains: [github.com, api.github.com, registry.npmjs.org]
     allow_local_network: false
   ```
 

@@ -20,7 +20,7 @@ const DIGEST = "sha256:" + "c".repeat(64);
 const OTHER = "sha256:" + "d".repeat(64);
 
 const packaged: AgentEnvironmentDeclaration = {
-  packages: { apt: [], npm: [], uv: [] },
+  network: { mode: "deny", allowed_domains: [], allow_local_network: false },
   dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
 };
 const onHost: AgentEnvironmentDeclaration = { ...packaged, dns: { nameservers: "host" } };
@@ -260,36 +260,6 @@ describe("AgentEnvironmentDeclarationCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("adds a pinned package to its manager's list", async () => {
-    const onChange = vi.fn();
-    render(<Harness onChange={onChange} />);
-
-    const npm = screen.getByRole("combobox", {
-      name: t("setup.intelligence.environment.declaration.npm"),
-    });
-    await userEvent.type(npm, "typescript@5.6.3{enter}");
-
-    expect(onChange).toHaveBeenLastCalledWith({
-      packages: { apt: [], npm: ["typescript@5.6.3"], uv: [] },
-      dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
-    });
-  });
-
-  it("refuses an entry that is not one package argument", async () => {
-    const onChange = vi.fn();
-    render(<Harness onChange={onChange} />);
-
-    const apt = screen.getByRole("combobox", {
-      name: t("setup.intelligence.environment.declaration.apt"),
-    });
-    await userEvent.type(apt, "--force-yes{enter}");
-
-    expect(
-      screen.getByText(t("setup.intelligence.environment.declaration.invalidPackage")),
-    ).toBeInTheDocument();
-    expect(onChange).toHaveBeenLastCalledWith(packaged);
-  });
-
   it("switches the resolvers between this device's and a fixed IPv4 list", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -331,14 +301,17 @@ describe("AgentEnvironmentDeclarationCard", () => {
     render(
       <Harness
         initial={{
-          packages: { apt: ["ripgrep=14.1.0-1"], npm: [], uv: ["ruff==0.6.9"] },
+          network: {
+            mode: "allowlist",
+            allowed_domains: ["github.com"],
+            allow_local_network: false,
+          },
           dns: { nameservers: ["1.1.1.1", "1.0.0.1"] },
         }}
       />,
     );
 
-    expect(screen.getByText("ripgrep=14.1.0-1")).toBeInTheDocument();
-    expect(screen.getByText("ruff==0.6.9")).toBeInTheDocument();
+    expect(screen.getByText("github.com")).toBeInTheDocument();
     expect(screen.getByText("1.1.1.1")).toBeInTheDocument();
     expect(screen.getByText("1.0.0.1")).toBeInTheDocument();
   });

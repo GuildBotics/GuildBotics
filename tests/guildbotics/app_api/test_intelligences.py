@@ -22,7 +22,6 @@ from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
-    Packages,
     ToolchainDeclaration,
 )
 from guildbotics.intelligences.agent_environment.contract import (
@@ -1184,7 +1183,9 @@ _NETWORK = {
 }
 
 
-def test_read_config_returns_a_definitions_own_network_block(tmp_path: Path) -> None:
+def test_tool_definition_network_is_not_part_of_the_api_or_a_saved_definition(
+    tmp_path: Path,
+) -> None:
     _write_team_config(tmp_path)
     _write_yaml(
         _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
@@ -1193,45 +1194,14 @@ def test_read_config_returns_a_definitions_own_network_block(tmp_path: Path) -> 
 
     response = IntelligenceConfigService().read_config(config_dir=tmp_path)
 
-    codex = next(agent for agent in response.cli_agents if agent.name == "codex")
-    assert codex.network is not None
-    assert codex.network.model_dump(mode="json") == _NETWORK
-
-
-def test_a_save_that_omits_network_keeps_the_files_block(tmp_path: Path) -> None:
-    """The editor may not surface the block yet; a save must not drop it."""
-    _write_yaml(
-        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
-        {"effort": {}, "network": _NETWORK},
-    )
-
     IntelligenceConfigService().update_config(_team_update_request(tmp_path))
 
     stored = load_yaml_file(
         _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
     )
-    assert stored["network"] == _NETWORK
-
-
-def test_a_save_writes_the_network_block_it_was_given(tmp_path: Path) -> None:
-    request = _team_update_request(tmp_path).model_copy(
-        update={
-            "cli_agents": [
-                CliAgentDefinition(
-                    path="cli_agents/codex/default.yml",
-                    name="codex",
-                    network=NetworkPolicy.model_validate(_NETWORK),
-                )
-            ]
-        }
-    )
-
-    IntelligenceConfigService().update_config(request)
-
-    stored = load_yaml_file(
-        _team_intelligences(tmp_path) / "cli_agents/codex/default.yml"
-    )
-    assert stored["network"] == _NETWORK
+    codex = next(agent for agent in response.cli_agents if agent.name == "codex")
+    assert "network" not in codex.model_dump()
+    assert "network" not in stored
 
 
 # --- shared filesystem grants -----------------------------
@@ -1292,18 +1262,18 @@ def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> 
     # Without a file of its own the workspace inherits the packaged declaration.
     assert response.agent_environment is not None
     assert response.agent_environment.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
-    assert response.agent_environment.packages.npm == []
+    assert response.agent_environment.network.mode == "allowlist"
 
     _write_yaml(
         _team_intelligences(config_dir) / "agent_environment.yml",
         {
-            "packages": {"npm": ["typescript@5.6.3"]},
+            "network": _NETWORK,
             "dns": {"nameservers": ["1.1.1.1"]},
         },
     )
     response = IntelligenceConfigService().read_config(config_dir=config_dir)
     assert response.agent_environment is not None
-    assert response.agent_environment.packages.npm == ["typescript@5.6.3"]
+    assert response.agent_environment.network.allowed_domains == ["registry.npmjs.org"]
     assert response.agent_environment.dns.nameservers == ["1.1.1.1"]
     # A member scope reads the same declaration: it is the workspace's.
     member = IntelligenceConfigService().read_config(
@@ -1319,7 +1289,7 @@ def test_a_malformed_declaration_is_reported_where_it_is_edited(
     _write_team_config(config_dir)
     _write_yaml(
         _team_intelligences(config_dir) / "agent_environment.yml",
-        {"packages": {"npm": ["--bad"]}, "dns": {"nameservers": "host"}},
+        {"packages": {}, "dns": {"nameservers": "host"}},
     )
 
     with pytest.raises(SetupServiceError) as excinfo:
@@ -1340,7 +1310,7 @@ def test_a_team_save_replaces_the_declaration_and_an_omitted_value_keeps_it(
     request = _team_update_request(config_dir).model_copy(
         update={
             "agent_environment": ToolchainDeclaration(
-                packages=Packages(apt=["ripgrep=14.1.0-1"]),
+                network=NetworkPolicy.model_validate(_NETWORK),
                 dns=DnsSettings(nameservers=["10.0.0.53"]),
             )
         }
@@ -1349,7 +1319,7 @@ def test_a_team_save_replaces_the_declaration_and_an_omitted_value_keeps_it(
 
     assert declaration_file in {item.path for item in result.files}
     assert load_yaml_file(declaration_file) == {
-        "packages": {"apt": ["ripgrep=14.1.0-1"], "npm": [], "uv": []},
+        "network": _NETWORK,
         "dns": {"nameservers": ["10.0.0.53"]},
     }
     # A member scope never writes it, even when the payload carries one.
@@ -1418,9 +1388,7 @@ def test_a_malformed_grants_file_is_reported_where_it_is_edited(tmp_path: Path) 
     assert excinfo.value.code == "invalid_filesystem_grants"
 
 
-def test_a_slot_without_a_network_block_reports_what_it_inherits(
-    tmp_path: Path,
-) -> None:
+def test_slots_do_not_expose_tool_network_settings(tmp_path: Path) -> None:
     _write_yaml(
         _team_intelligences(tmp_path) / "cli_agents/codex/default.yml",
         {"effort": {}, "network": _NETWORK},
@@ -1438,9 +1406,4 @@ def test_a_slot_without_a_network_block_reports_what_it_inherits(
 
     response = IntelligenceConfigService().read_config(config_dir=tmp_path)
 
-    writer = next(a for a in response.cli_agents if a.path.endswith("writer.yml"))
-    assert writer.network is None
-    assert writer.inherited_network.model_dump(mode="json") == _NETWORK
-    # With no block anywhere, the packaged default (closed) is what is inherited.
-    claude = IntelligenceConfigService().read_config(config_dir=tmp_path)
-    assert all(a.inherited_network for a in claude.cli_agents)
+    assert all("network" not in agent.model_dump() for agent in response.cli_agents)

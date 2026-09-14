@@ -778,6 +778,9 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 既存の `.guildbotics/` を持つマシンが Hub へ参加したときに採用されなかった内容も、同じ一覧に
 退避として並びます。
 
+`config/` と `state/` の中でも、名前が `.` で始まるファイルとディレクトリは共有されません。
+Finder やエディタがどの階層に補助ファイルを作っても、「送信できない変更」にはなりません。
+
 #### 反映されなかった変更を回復する
 
 これは通常操作ではなく、例外的な手順です。GuildBotics が退避内容を自動で復元することはなく、
@@ -872,8 +875,8 @@ OS 秘密ストアがロックされている間は、送信も取得もでき�
 
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、デスクトップから渡したファイルとエージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
-- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの effort マッピングと、コマンド・組み込み Web 機能の接続先を決める `network:` ブロック。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
-- `intelligences/agent_environment.yml`: 各マシンがエージェント隔離環境をビルドする元になるベースイメージ（`image`: 省略時は GuildBotics 既定の Debian + Node.js。apt / npm / uv tool では入れられないツールチェーンが要るときは、自分で build した image を各マシンで `docker save` → `guildbotics environment image load` し、設定画面で選ぶか `guildbotics environment image declare` で宣言する。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入る。各マシンは読み込んだ image で動き、宣言と digest が違う間は警告を出し続ける。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh`（全アーキテクチャを build して宣言まで行う）が例）、その上へ足すもの（`packages` の apt / npm / uv。版を固定して書く）、環境が使う DNS リゾルバ（`dns.nameservers`: IPv4 アドレスの一覧で既定は公開リゾルバ。外部 DNS が遮断された網では `host` でその端末自身のリゾルバを使う）。ワークスペースで共有され、image やパッケージを変えると全マシンで環境が再ビルドされます
+- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
+- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian + Node.js。別のツールチェーンが必要なら自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、network と DNS は再ビルドせず各 turn を形作ります
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
@@ -898,7 +901,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 
 AI CLI の利用レート取得に失敗すると、画面上部と設定の対象行に同じ問題を表示します。対象行には最終確認時刻も表示します。**再確認** は対象ツールのキャッシュを使わずに取得し、**エラー詳細** は該当する診断セッションを開きます。再取得に成功すると通知と対象行の警告が解除されます。この通知だけで認証期限切れと断定するものではありません。通信障害や利用枠を表示できない認証方式でも取得に失敗するためです。**表示を更新** は保存状態を読み直し、ツールへの再取得は行いません。
 
-**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。
+**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。制限付きAI CLI turnでは、構造化されたcommand/tool/runtime失敗証拠に明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカルIPアドレスを除き、`agent_environment.network_egress_candidate`として記録します。これはmicrosandboxによる拒否の証明ではなく情報扱いの手掛かりです。成功commandの出力、bare hostname/IPアドレス、追加のDEBUG log、agentの自己報告は使用しません。
 
 **デバッグ出力**: 詳細なログを取得するための環境変数:
 

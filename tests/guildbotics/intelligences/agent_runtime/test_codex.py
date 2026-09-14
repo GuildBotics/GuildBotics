@@ -9,25 +9,21 @@ import pytest
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_environment.contract import (
-    AccessContract,
-    DeniedPath,
     NetworkPolicy,
-    ResolvedAccess,
-    ResolvedGrant,
     parse_network_policy,
 )
-from guildbotics.intelligences.agent_runtime import codex as codex_module
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentMount,
     EnvironmentNetwork,
 )
+from guildbotics.intelligences.agent_runtime import codex as codex_module
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
     _config_arguments,
-    _sandbox_overrides,
     _decode_notification,
+    _sandbox_overrides,
 )
 from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
@@ -593,14 +589,29 @@ def test_codex_command_and_file_items_are_normalized() -> None:
             }
         },
     )
+    failed = _decode_notification(
+        "item/completed",
+        {
+            "item": {
+                "id": "command-2",
+                "type": "commandExecution",
+                "command": ["curl", "https://blocked.example"],
+                "aggregatedOutput": "connection failed",
+                "status": "failed",
+                "exitCode": 7,
+            }
+        },
+    )
 
-    assert command is not None and changed is not None
+    assert command is not None and changed is not None and failed is not None
     assert command.kind is AgentEventKind.COMMAND
     assert command.command == "uv run pytest"
     assert command.message == "passed"
     assert changed.kind is AgentEventKind.FILE_CHANGE
     assert changed.path == "guildbotics/a.py"
     assert changed.details["paths"] == ["guildbotics/a.py", "tests/test_a.py"]
+    assert failed.kind is AgentEventKind.COMMAND
+    assert failed.details["status"] == "failed"
     assert _decode_notification("future/event", {"value": 1}) is None
 
 

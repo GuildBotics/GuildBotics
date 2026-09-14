@@ -150,7 +150,7 @@ def test_a_copy_keeps_device_only_content_out_of_the_repository(
 
     ignore = (tmp_path / "windows" / ".guildbotics" / ".gitignore").read_text()
     assert "local/" in ignore
-    assert ".env" in ignore
+    assert ".*" in ignore
 
 
 def test_a_folder_this_device_only_opened_can_still_take_a_copy(

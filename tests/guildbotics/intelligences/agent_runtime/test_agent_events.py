@@ -7,6 +7,10 @@ from typing import Any
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    NetworkPolicy,
+)
 from guildbotics.intelligences.agent_runtime import diagnostics
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -28,7 +32,12 @@ def recorded_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return calls
 
 
-def _record(event: AgentEvent, recorded: list[dict[str, Any]]) -> dict[str, Any]:
+def _record(
+    event: AgentEvent,
+    recorded: list[dict[str, Any]],
+    *,
+    contract: AccessContract | None = None,
+) -> dict[str, Any]:
     key = ConversationKey("aiko", "codex", "ticket", "issue-1")
     context = AgentExecutionContext(
         person_id="aiko",
@@ -37,6 +46,7 @@ def _record(event: AgentEvent, recorded: list[dict[str, Any]]) -> dict[str, Any]
         workspace_root=Path("."),
         workspace_data_root=Path("."),
         conversation_key=key,
+        contract=contract or AccessContract(),
     )
     diagnostics.record_agent_event(event, context, ConversationRecord(key=key))
     return recorded[-1]["payload"]
@@ -106,3 +116,160 @@ def test_synthesized_messages_are_redacted(recorded: list[dict[str, Any]]) -> No
     )
     assert "super-secret" not in payload["message"]
     assert payload["message"].startswith("deploy --api-key=")
+
+
+def test_failed_command_records_unmatched_destination_candidates(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.COMMAND,
+            "completed",
+            message=(
+                "connect to blocked.example port 443 failed; "
+                "direct connection to 203.0.113.8:8443 failed"
+            ),
+            command="curl https://blocked.example:443/upload",
+            details={"status": "failed"},
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == [
+        "agent_runtime.command",
+        "agent_environment.network_egress_candidate",
+    ]
+    assert recorded[1]["payload"] == {
+        "name": "network_egress_candidate",
+        "message": (
+            "A restricted turn emitted destination-shaped evidence that was "
+            "not matched to a known allowed destination."
+        ),
+        "evidence": "command_result",
+        "candidates": [
+            {
+                "destination": "blocked.example",
+                "kind": "domain",
+                "port": 443,
+            },
+            {
+                "destination": "203.0.113.8",
+                "kind": "ip",
+                "port": 8443,
+            },
+        ],
+    }
+
+
+def test_allowed_provider_user_and_local_destinations_are_not_candidates(
+    recorded: list[dict[str, Any]],
+) -> None:
+    contract = AccessContract(
+        network=NetworkPolicy(
+            mode="allowlist",
+            allowed_domains=["*.example.com"],
+            allow_local_network=True,
+        )
+    )
+    _record(
+        AgentEvent(
+            AgentEventKind.FAILED,
+            "provider",
+            message=(
+                "https://api.openai.com/v1 failed; "
+                "https://cdn.example.com/file failed; 192.168.1.20:443 failed"
+            ),
+        ),
+        recorded,
+        contract=contract,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
+
+
+def test_agent_response_is_not_treated_as_network_evidence(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.ASSISTANT,
+            "completed",
+            message="I tried https://blocked.example but it was denied.",
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.assistant"]
+
+
+def test_successful_command_output_is_not_treated_as_network_evidence(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.COMMAND,
+            "completed",
+            message=(
+                "README.md setup.py package.json src/app.tsx\n"
+                "18:32:08 users.noreply.github.com"
+            ),
+            command="ls",
+            details={"status": "completed"},
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.command"]
+
+
+def test_bare_hosts_ips_and_timestamps_are_not_destination_candidates(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.FAILED,
+            "provider",
+            message=('blocked.example 203.0.113.8 18:32:08 No module named "foo.bar"'),
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
+
+
+def test_unrestricted_turn_does_not_record_network_candidates(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.FAILED,
+            "provider",
+            message="https://blocked.example failed",
+        ),
+        recorded,
+        contract=AccessContract(network=NetworkPolicy(mode="unrestricted")),
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
+
+
+def test_failed_event_candidates_are_bounded(recorded: list[dict[str, Any]]) -> None:
+    key = ConversationKey("aiko", "codex", "ticket", "issue-1")
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="run-1",
+        cwd=Path("."),
+        workspace_root=Path("."),
+        workspace_data_root=Path("."),
+        conversation_key=key,
+    )
+    diagnostics.record_network_egress_candidates(
+        text=" ".join(f"https://host{index}.invalid/path" for index in range(40)),
+        context=context,
+        adapter_name="codex",
+        evidence="failed_event",
+    )
+
+    payload = recorded[0]["payload"]
+    assert payload["evidence"] == "failed_event"
+    assert len(payload["candidates"]) == diagnostics.MAX_NETWORK_CANDIDATES

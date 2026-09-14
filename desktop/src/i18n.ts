@@ -670,6 +670,7 @@ const resources = {
             system_finished: "System finished",
             session_pointer: "Session transcript",
             chat_receive_state_reset: "Chat receive state reset",
+            network_egress_candidate: "Network destination candidate",
           },
           messages: {
             scheduler_starting: "Member workers are starting.",
@@ -913,11 +914,7 @@ const resources = {
           network: {
             title: "Network",
             description:
-              "Where this tool may connect, through the commands it runs or its own web tools alike. It starts closed.",
-            inherited: "Inherited from the tool default",
-            customize: "Customize for this slot",
-            useDefault: "Use the tool default",
-            resetToPackaged: "Reset to the packaged defaults",
+              "Where every member and slot in this workspace may connect, through commands and provider web tools alike. Deny blocks everything except the provider's own API and the member broker.",
             mode: "Mode",
             modes: {
               deny: "Deny",
@@ -926,6 +923,10 @@ const resources = {
             },
             allowedDomains: "Allowed domains",
             allowedDomainsPlaceholder: "registry.npmjs.org",
+            invalidDomain: "Enter a host name without a scheme, path, or whitespace.",
+            emptyAllowlist: "Name at least one allowed domain.",
+            unrestrictedWarning:
+              "The environment can connect directly to any Internet host. A turn can send workspace content it can read or fetch arbitrary external payloads.",
             allowLocalNetwork: "Allow localhost and LAN",
           },
           environment: {
@@ -955,6 +956,10 @@ const resources = {
             imageDeclaredFor: "Declared for: {{architectures}}",
             imageLoadHint:
               "Load the image archive (docker save) on this device by running this command in a terminal:",
+            network: "Network",
+            networkLocal: "localhost and LAN allowed",
+            networkUnavailable: "Unavailable",
+            networkUnrestricted: "Can connect directly to any Internet host",
             dns: "DNS resolvers",
             dnsHost: "This device's resolvers",
             toolNotProvisioned: "Not available in the environment yet",
@@ -978,7 +983,7 @@ const resources = {
             declaration: {
               title: "Environment declaration",
               description:
-                "The base image every device builds its environment from, what each adds on top of it and the AI CLI tools GuildBotics installs, and the DNS resolvers the environment uses. Shared by the workspace; changing the image or the packages rebuilds the environment on every device.",
+                "The base image every device builds from, where every turn may connect, and the DNS resolvers the environment uses. Shared by the workspace; changing the image rebuilds the environment on every device.",
               image: "Base image",
               imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
               imageHint:
@@ -988,15 +993,6 @@ const resources = {
               imageNotDeclaredHere:
                 "{{reference}} is declared for {{declared}} but not for this device ({{architecture}}). Pick the image loaded here to declare it for {{architecture}}.",
               imageDeclared: "Declared: {{digests}}",
-              apt: "Debian packages (apt)",
-              npm: "npm packages",
-              uv: "Python tools (uv)",
-              aptPlaceholder: "ripgrep=14.1.0-1",
-              npmPlaceholder: "typescript@5.6.3",
-              uvPlaceholder: "ruff==0.6.9",
-              pinHint: "One entry per package. Pin the version the way that manager spells it.",
-              invalidPackage:
-                "A package is one argument to its manager: no spaces, and it cannot start with '-'.",
               nameservers: "DNS resolvers",
               nameserversHost:
                 "This device's resolvers, read when a turn starts (for networks that block outside DNS)",
@@ -2619,11 +2615,7 @@ const resources = {
           network: {
             title: "ネットワーク",
             description:
-              "このツールが実行するコマンドと組み込み Web 機能の両方について、どこへ接続できるかを決めます。既定では閉じています。",
-            inherited: "ツール既定を継承",
-            customize: "このスロット用に変更する",
-            useDefault: "ツール既定に戻す",
-            resetToPackaged: "同梱の既定値に戻す",
+              "このワークスペースの全メンバー・全スロットについて、コマンドと組み込み Web 機能が接続できる先を決めます。拒否を選ぶと、provider 自身の API と member broker 以外への通信をすべて遮断します。",
             mode: "モード",
             modes: {
               deny: "拒否",
@@ -2632,6 +2624,10 @@ const resources = {
             },
             allowedDomains: "許可ドメイン",
             allowedDomainsPlaceholder: "registry.npmjs.org",
+            invalidDomain: "scheme・path・空白を含まないホスト名を入力してください。",
+            emptyAllowlist: "許可ドメインを 1 つ以上指定してください。",
+            unrestrictedWarning:
+              "隔離環境から任意の Internet host へ直接接続できます。turn が読めるワークスペースの内容を外部送信したり、任意の外部 payload を取得したりできます。",
             allowLocalNetwork: "localhost と LAN への接続を許可",
           },
           environment: {
@@ -2661,6 +2657,10 @@ const resources = {
             imageDeclaredFor: "宣言済み: {{architectures}}",
             imageLoadHint:
               "image のアーカイブ（docker save）をこの端末に読み込むには、ターミナルで次を実行してください。",
+            network: "ネットワーク",
+            networkLocal: "localhost と LAN を許可",
+            networkUnavailable: "利用不可",
+            networkUnrestricted: "任意の Internet host へ直接通信可能",
             dns: "DNS リゾルバ",
             dnsHost: "この端末のリゾルバ",
             toolNotProvisioned: "環境への導入は未対応",
@@ -2685,7 +2685,7 @@ const resources = {
             declaration: {
               title: "環境の宣言",
               description:
-                "各端末が環境をビルドする元になるベースイメージ、その上に足すパッケージと GuildBotics が導入する AI CLIツール、環境が使う DNS リゾルバです。ワークスペースで共有され、イメージやパッケージを変えると全端末で環境が再ビルドされます。",
+                "各端末が環境をビルドする元になるベースイメージ、全 turn の接続先、環境が使う DNS リゾルバです。ワークスペースで共有され、image を変えると全端末で環境が再ビルドされます。",
               image: "ベースイメージ",
               imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
               imageHint:
@@ -2695,16 +2695,6 @@ const resources = {
               imageNotDeclaredHere:
                 "{{reference}} は {{declared}} 向けに宣言されていますが、この端末（{{architecture}}）向けには未宣言です。この端末に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
               imageDeclared: "宣言: {{digests}}",
-              apt: "Debian パッケージ（apt）",
-              npm: "npm パッケージ",
-              uv: "Python ツール（uv）",
-              aptPlaceholder: "ripgrep=14.1.0-1",
-              npmPlaceholder: "typescript@5.6.3",
-              uvPlaceholder: "ruff==0.6.9",
-              pinHint:
-                "1 項目に 1 パッケージ。版はそのパッケージマネージャの書き方で固定してください。",
-              invalidPackage:
-                "パッケージはマネージャへの 1 引数です。空白を含めず、'-' で始めないでください。",
               nameservers: "DNS リゾルバ",
               nameserversHost:
                 "この端末のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",
@@ -3413,6 +3403,7 @@ const resources = {
             system_finished: "システム完了",
             session_pointer: "セッショントランスクリプト",
             chat_receive_state_reset: "チャット受信状態リセット",
+            network_egress_candidate: "ネットワーク接続先候補",
           },
           messages: {
             scheduler_starting: "メンバーワーカーを開始しています。",

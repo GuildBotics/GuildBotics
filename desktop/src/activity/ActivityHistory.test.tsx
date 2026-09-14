@@ -264,6 +264,7 @@ beforeEach(() => {
       warning: "",
       load_command: "/Users/me/.guildbotics/bin/guildbotics environment image load <archive.tar>",
     },
+    network: { mode: "deny", allowed_domains: [], allow_local_network: false },
     dns: { declared: "host", nameservers: [], problem: "" },
     tools: [
       {

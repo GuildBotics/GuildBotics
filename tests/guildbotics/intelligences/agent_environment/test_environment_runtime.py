@@ -306,6 +306,7 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     assert created["name"].startswith("guildbotics-")
     assert created["from_snapshot"] == "guildbotics-toolchain"
     assert created["ephemeral"] is True
+    assert "log_level" not in created
     assert created["workdir"] == "/work/repo"
     volumes = created["volumes"]
     assert list(volumes) == ["/work/repo", "/home/u/Documents", "/work/repo/private"]

@@ -9,7 +9,7 @@ import pytest
 from git import Repo
 
 from guildbotics.sync import activation, enrollment
-from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.local_repository import GITIGNORE_CONTENT, LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
@@ -74,6 +74,18 @@ def test_an_enrolled_workspace_gets_a_running_queue(tmp_path: Path, hub: Path) -
 
     assert manager is not None
     assert get_workspace_sync_port() is manager
+
+
+def test_activation_refreshes_generated_ignore_rules(tmp_path: Path, hub: Path) -> None:
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+    ignore = root / ".guildbotics" / ".gitignore"
+    ignore.write_text("old rules\n")
+
+    manager = activation.activate_workspace_sync(root)
+
+    assert manager is not None
+    assert ignore.read_text() == GITIGNORE_CONTENT
 
 
 def test_activating_twice_keeps_the_one_queue(tmp_path: Path, hub: Path) -> None:

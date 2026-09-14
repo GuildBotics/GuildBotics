@@ -252,13 +252,13 @@ def _image_line(image: ImageInfo) -> str:
 def build_command(force: bool) -> None:
     """Build the environment the shared declaration asks for.
 
-    The build installs packages and nothing else, so it needs no input. A
+    The build installs provider CLIs and nothing else, so it needs no input. A
     build that fails is remembered until the declaration changes or this
     command runs again.
     """
     _require_runtime()
     declaration = _declaration()
-    status = snapshot.snapshot_status(declaration, image_status(declaration))
+    status = snapshot.snapshot_status(image_status(declaration))
     if status.state == "ready" and not force:
         click.echo(f"The environment {status.name} is already up to date.")
         return
@@ -283,7 +283,7 @@ def login_command(tool: str) -> None:
     _require_runtime()
     info = cli_agent_info(tool)
     declaration = _declaration()
-    status = snapshot.snapshot_status(declaration, image_status(declaration))
+    status = snapshot.snapshot_status(image_status(declaration))
     if status.state != "ready":
         raise click.ClickException(
             f"The environment is {status.state}; build it first with "
@@ -369,6 +369,19 @@ def status_command(output_format: str) -> None:
     detail = f" ({hint})" if hint else ""
     click.echo(f"snapshot: {state['state']} {state['name']}{detail}")
     click.echo(f"location: {state['path']}")
+    network = payload["network"]
+    if network is None:
+        click.echo("network: unavailable")
+    else:
+        network_details = ", ".join(network["allowed_domains"])
+        if network["allow_local_network"]:
+            network_details = ", ".join(
+                filter(None, (network_details, "localhost and LAN"))
+            )
+        click.echo(
+            f"network: {network['mode']}"
+            + (f" ({network_details})" if network_details else "")
+        )
     dns = payload["dns"]
     click.echo(
         f"dns: {dns['declared']} -> {', '.join(dns['nameservers']) or dns['problem']}"
@@ -408,6 +421,7 @@ def _status_payload() -> dict[str, Any]:
             "problem": status.image.refusal,
             "warning": status.image.warning,
         },
+        "network": status.network.model_dump(mode="json") if status.network else None,
         "dns": {
             "declared": status.dns.declared,
             "nameservers": list(status.dns.nameservers),

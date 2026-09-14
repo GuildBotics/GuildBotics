@@ -29,6 +29,7 @@ _GITHUB_LABELS = {
     "github.issue_comment": "github_issue_comment",
 }
 _EXACT_EVENT_LABELS = {
+    "agent_environment.network_egress_candidate": "network_egress_candidate",
     "scheduler.worker.failed": "scheduler_worker_failed",
     "workflow.completed": "workflow_completed",
     "workflow.completion_missing": "workflow_completion_missing",
@@ -93,6 +94,8 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
         return _service_presentation(payload, event_type)
     if event_type.startswith("agent_runtime."):
         return _agent_presentation(payload, event_type)
+    if event_type == "agent_environment.network_egress_candidate":
+        return _network_egress_candidate_presentation(payload, event_type)
     if event_type.startswith("span."):
         return _span_presentation(payload, event_type)
     if event_type in _GITHUB_LABELS:
@@ -244,6 +247,26 @@ def _agent_presentation(payload: dict[str, Any], event_type: str) -> TracePresen
         ),
         message=message or name or event_type,
         tone="danger" if subtype == "failed" else "neutral",
+    )
+
+
+def _network_egress_candidate_presentation(
+    payload: dict[str, Any], event_type: str
+) -> TracePresentation:
+    destinations = []
+    for candidate in payload.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        destination = str(candidate.get("destination") or "")
+        if not destination:
+            continue
+        port = candidate.get("port")
+        destinations.append(f"{destination}:{port}" if port else destination)
+    return _presentation(
+        label_key=_event_key("network_egress_candidate"),
+        label=event_type,
+        message=", ".join(destinations) or _first_text(payload, "message"),
+        tone="info",
     )
 
 

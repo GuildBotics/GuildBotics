@@ -34,8 +34,7 @@ antigravity: antigravity
 
 各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
 このファイルが持つのは`parameters:`と`effort:`のオーバーレイ（プロバイダ非依存の`low` / `high`を
-AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）と、
-後述の`network:`ブロックです。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
+AI CLIツールごとの設定へ翻訳するためのもの。書式は[カスタムコマンドガイド](custom_command_guide.ja.md)を参照）です。同梱の既定ファイルはこのほかに、設定エディタの型付き編集用の宣言である
 `effort_fields:`を持ちます。
 
 ## エージェント隔離環境のアクセス許可
@@ -58,18 +57,18 @@ runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出
 ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
 bindします）。
 
-環境の中身（ベースイメージ、GuildBoticsが版を固定して導入するプロバイダCLI、
-`config/intelligences/agent_environment.yml`で宣言した追加パッケージ）はsnapshotとして端末ごとに
-ビルドし、宣言と一致しなければ再ビルドします。Desktopの **LLM・AI CLIツール** の
+環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLI）はsnapshotとして
+端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
+ベースイメージに入れます。Desktopの **LLM・AI CLIツール** の
 「エージェント隔離環境」カードがruntime、ベースイメージ、snapshotの状態（ビルドボタンつき）、
-DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
+network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
 `login`が同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
 自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
 見送りにします。turnが起動できない理由（runtime無し、宣言不正、ベースイメージ未読み込み、
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
-ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。apt / npm /
-uv toolの3枠では入れられないツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
+ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
+ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
 ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
 アーカイブを各端末で`guildbotics environment image load`で読み込み、**LLM・AI CLIツール → 詳細設定**
 の「環境の宣言」でこの端末に読み込み済みのimageから選ぶか、`guildbotics environment image declare`で
@@ -82,7 +81,7 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt`、Node.jsと`npm`、`curl`と`tar`）を備えていれば
+するか、buildの手順が使うもの（Node.jsと`npm`、`curl`と`tar`）を備えていれば
 何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
@@ -127,19 +126,31 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
     - Documents/shared-documents/private
   ```
 
-- **ネットワーク**: 選択したAI CLIツール定義（`cli_agents/<tool>/<slot>.yml`）の`network:`
-  ブロックで、シェルコマンドとその子プロセス、ツール組み込みのweb検索・URL取得のどちらで
-  到達するかによらず1つの規則です（隔離環境のgatewayは両者を区別できません）。`mode`は
-  `deny` / `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため
-  使いません）、`allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostと
-  LANも開きます。同梱の既定は閉じています。`network:`を省いたスロットはツールの`default.yml`
-  からブロック全体を継承し、書いたスロットは全体を書きます。プロバイダ自身のAPIドメインと
-  localhostのmember brokerはモードによらず常に到達でき、設定ではなくGuildBoticsが決めます。
+- **ネットワーク**: `intelligences/agent_environment.yml`のworkspace共通`network:`ブロックで、
+  全メンバー・全スロットの接続先を1つの規則として決めます。シェルコマンドとその子プロセス、
+  ツール組み込みのweb検索・URL取得のどちらにも同じ規則が効きます。`mode`は`deny` /
+  `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため使いません）。
+  `allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostとLANも開きます。
+  `network:`省略時は`deny`です。同梱の宣言は一般的なcoding作業の出発点として、主要なGitHub・
+  package registryをallowlistにします。`unrestricted`は明示的なescape hatchで、turnが読める
+  workspaceの内容を
+  任意のInternet hostへ送信したり、任意の外部payloadを取得したりできます。プロバイダ自身の
+  APIドメインとlocalhostのmember brokerはモードによらず常に到達できます。その他の接続先は
+  gatewayが拒否します。microsandboxは拒否された外向き通信の公開eventをまだ提供していないため、
+  GuildBoticsは意図的に範囲を絞った間接的な手掛かりを記録します。構造化されたcommand・tool・
+  runtime失敗eventに明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカル
+  IPアドレスを除き、同じturnの端末ローカルDiagnosticsへ
+  `agent_environment.network_egress_candidate`として残します。成功commandの出力、bare hostname、
+  bare IPアドレスは解析しないため、ファイル名や時刻を接続先候補にしません。既存の失敗recordごとに
+  最大8 KiBを解析し、最大32件だけを残します。runtimeのDEBUG logや別processは使わず、agentの
+  promptと最終responseも変更しません。これはproviderが失敗時に出力した情報であり、microsandboxが
+  拒否したことの証明ではありません。接続先をbare値だけで出力するclientや、接続先を出力しないclientは、
+  microsandboxがeventを提供するまで手掛かりを残せません。
 
   ```yaml
   network:
     mode: allowlist
-    allowed_domains: [registry.npmjs.org]
+    allowed_domains: [github.com, api.github.com, registry.npmjs.org]
     allow_local_network: false
   ```
 

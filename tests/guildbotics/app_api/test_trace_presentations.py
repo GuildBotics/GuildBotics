@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 
 import pytest
-import guildbotics
 
+import guildbotics
 from guildbotics.app_api.trace_presentations import (
     normalize_trace_presentation,
     supports_trace_event,
@@ -248,6 +248,7 @@ def test_literal_diagnostics_emitters_have_intentional_presentations() -> None:
         "agent_runtime.approval",
         "agent_runtime.usage",
         "agent_runtime.failed",
+        "agent_environment.network_egress_candidate",
         "scheduler.starting",
         "scheduler.stopping",
         "scheduler.stopped",
@@ -284,6 +285,27 @@ def _string_literals(value: ast.AST) -> set[str]:
         and isinstance(child.value, str)
         and _EVENT_TYPE_RE.fullmatch(child.value)
     }
+
+
+def test_network_egress_candidates_show_destinations_without_calling_them_denials() -> (
+    None
+):
+    presentation = normalize_trace_presentation(
+        _event(
+            "agent_environment.network_egress_candidate",
+            payload={
+                "message": "indirect evidence",
+                "candidates": [
+                    {"destination": "blocked.example", "port": 443},
+                    {"destination": "203.0.113.8"},
+                ],
+            },
+        )
+    )
+
+    assert presentation.label_key.endswith("network_egress_candidate")
+    assert presentation.message == "blocked.example:443, 203.0.113.8"
+    assert presentation.tone == "info"
 
 
 def test_reasoning_is_labelled_apart_from_the_reply() -> None:
