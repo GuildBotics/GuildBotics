@@ -170,8 +170,22 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   then send workspace content it can read to any Internet host or fetch any
   external payload. Provider API domains and the localhost member broker are
   always reachable regardless of mode. The gateway still blocks every other
-  destination; microsandbox currently exposes no public SDK event for a denied
-  destination, so GuildBotics does not infer one from internal logs.
+  destination. microsandbox does not yet expose a public denied-egress event,
+  so GuildBotics records an indirect clue instead: destination-shaped values
+  found in completed command output, failed tool/runtime events, or provider
+  stderr become
+  `agent_environment.network_egress_candidate` records in that turn's local
+  Diagnostics after known allowed domains and permitted local IP addresses are
+  excluded. URLs, host-and-port pairs, and IP addresses are syntactically
+  high-confidence candidates; a bare hostname is medium-confidence. Confidence
+  describes how explicitly the destination was written, not whether
+  microsandbox denied it. The extraction reads at most 8 KiB of each existing
+  record and keeps at most 32 candidates. It does not enable runtime DEBUG
+  logging, start another process, change the agent's prompt, or alter its final
+  response. This is evidence the provider emitted, not proof that microsandbox
+  denied the connection; an IP address cannot be correlated back to an allowed
+  domain, and a client that emits no destination still leaves no clue until
+  microsandbox provides the event.
 
   ```yaml
   network:

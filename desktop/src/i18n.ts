@@ -670,6 +670,7 @@ const resources = {
             system_finished: "System finished",
             session_pointer: "Session transcript",
             chat_receive_state_reset: "Chat receive state reset",
+            network_egress_candidate: "Network destination candidate",
           },
           messages: {
             scheduler_starting: "Member workers are starting.",
@@ -3402,6 +3403,7 @@ const resources = {
             system_finished: "システム完了",
             session_pointer: "セッショントランスクリプト",
             chat_receive_state_reset: "チャット受信状態リセット",
+            network_egress_candidate: "ネットワーク接続先候補",
           },
           messages: {
             scheduler_starting: "メンバーワーカーを開始しています。",

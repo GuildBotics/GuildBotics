@@ -845,6 +845,7 @@ class CliAgentBrain(Brain):
     ) -> CliAgentExecutionResult:
         from guildbotics.intelligences.agent_runtime.diagnostics import (
             record_agent_event,
+            record_network_egress_candidates,
         )
         from guildbotics.intelligences.agent_runtime.models import (
             AgentEvent,
@@ -977,6 +978,12 @@ class CliAgentBrain(Brain):
         if compacted:
             conversation.rotation_reason = "context_compaction"
         store.save(conversation)
+        record_network_egress_candidates(
+            text=terminal.stderr,
+            context=context,
+            adapter_name=adapter_name,
+            evidence="provider_stderr",
+        )
         return CliAgentExecutionResult(
             stdout=terminal.output.strip(),
             stderr=terminal.stderr.strip(),
