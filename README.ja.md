@@ -901,7 +901,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 
 AI CLI の利用レート取得に失敗すると、画面上部と設定の対象行に同じ問題を表示します。対象行には最終確認時刻も表示します。**再確認** は対象ツールのキャッシュを使わずに取得し、**エラー詳細** は該当する診断セッションを開きます。再取得に成功すると通知と対象行の警告が解除されます。この通知だけで認証期限切れと断定するものではありません。通信障害や利用枠を表示できない認証方式でも取得に失敗するためです。**表示を更新** は保存状態を読み直し、ツールへの再取得は行いません。
 
-**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。制限付きAI CLI turnでは、command/toolの失敗証拠またはprovider stderrに現れた接続先らしき値から、既知の許可ドメインと許可されたローカルIPアドレスを除き、`agent_environment.network_egress_candidate`として記録します。これはmicrosandboxによる拒否の証明ではなく間接的な手掛かりです。追加のDEBUG logやagentの自己報告は使用しません。
+**診断ログ**: 検索用の実行サマリーは `<workspace>/.guildbotics/local/run/diagnostics.jsonl` に記録され、イベント・ログ・span・入出力の全文は実行ごとの JSONL として `run/sessions/` に保存されます。デスクトップアプリの **診断** 画面では、実行履歴と最新の Global / system session の両方を確認できます。制限付きAI CLI turnでは、構造化されたcommand/tool/runtime失敗証拠に明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカルIPアドレスを除き、`agent_environment.network_egress_candidate`として記録します。これはmicrosandboxによる拒否の証明ではなく情報扱いの手掛かりです。成功commandの出力、bare hostname/IPアドレス、追加のDEBUG log、agentの自己報告は使用しません。
 
 **デバッグ出力**: 詳細なログを取得するための環境変数:
 

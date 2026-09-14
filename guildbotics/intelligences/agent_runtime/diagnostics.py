@@ -38,16 +38,6 @@ _IP_PORT = re.compile(
     r"(?P<ipv4>[0-9]{1,3}(?:\.[0-9]{1,3}){3}))"
     r":(?P<port>[1-9][0-9]{0,4})(?![0-9])"
 )
-_DOMAIN = re.compile(
-    r"(?<![A-Za-z0-9_.-])"
-    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-    r"[A-Za-z]{2,63}(?![A-Za-z0-9_.-])"
-)
-_IP = re.compile(
-    r"(?<![A-Za-z0-9:.])"
-    r"(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9A-Fa-f]*:[0-9A-Fa-f:.]+)"
-    r"(?![A-Za-z0-9:.])"
-)
 _FAILED_STATUSES = frozenset({"error", "failed"})
 
 
@@ -144,9 +134,7 @@ def record_network_egress_candidates(
 def _network_evidence(event: AgentEvent) -> str | None:
     if event.kind is AgentEventKind.FAILED:
         return "failed_event"
-    if event.kind is AgentEventKind.COMMAND and (
-        event.name == "completed" or _structured_failure(event.details)
-    ):
+    if event.kind is AgentEventKind.COMMAND and _structured_failure(event.details):
         return "command_result"
     if event.kind is AgentEventKind.TOOL and _structured_failure(event.details):
         return "tool_failure"
@@ -178,13 +166,17 @@ def _destination_candidates(
 ) -> list[dict[str, Any]]:
     found: dict[tuple[str, int | None], dict[str, Any]] = {}
 
-    def add(host: str, port: int | None, kind: str, confidence: str) -> None:
+    def add(host: str, port: int | None, kind: str) -> None:
         normalized, ip = _normalize_host(host)
-        if not normalized or _destination_allowed(
-            normalized,
-            ip,
-            allowed_domains=allowed_domains,
-            allow_local_network=allow_local_network,
+        if (
+            not normalized
+            or (kind == "ip" and ip is None)
+            or _destination_allowed(
+                normalized,
+                ip,
+                allowed_domains=allowed_domains,
+                allow_local_network=allow_local_network,
+            )
         ):
             return
         key = (normalized, port)
@@ -195,31 +187,24 @@ def _destination_candidates(
         candidate = {
             "destination": normalized,
             "kind": "ip" if ip is not None else kind,
-            "confidence": confidence,
             **({"port": port} if port is not None else {}),
         }
-        previous = found.get(key)
-        if previous is None or previous["confidence"] == "medium":
-            found[key] = candidate
+        found[key] = candidate
 
     for match in _URL.finditer(text):
         try:
             parsed = urlsplit(match.group(0).rstrip(".,;"))
-            add(parsed.hostname or "", parsed.port, "domain", "high")
+            add(parsed.hostname or "", parsed.port, "domain")
         except ValueError:
             continue
     for match in _HOST_PORT.finditer(text):
         port = int(match.group("port"))
         if port <= _MAX_PORT:
-            add(match.group("host"), port, "domain", "high")
+            add(match.group("host"), port, "domain")
     for match in _IP_PORT.finditer(text):
         port = int(match.group("port"))
         if port <= _MAX_PORT:
-            add(match.group("ipv6") or match.group("ipv4"), port, "ip", "high")
-    for match in _IP.finditer(text):
-        add(match.group(0), None, "ip", "high")
-    for match in _DOMAIN.finditer(text):
-        add(match.group(0), None, "domain", "medium")
+            add(match.group("ipv6") or match.group("ipv4"), port, "ip")
     return list(found.values())[:MAX_NETWORK_CANDIDATES]
 
 

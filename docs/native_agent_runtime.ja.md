@@ -137,16 +137,15 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   任意のInternet hostへ送信したり、任意の外部payloadを取得したりできます。プロバイダ自身の
   APIドメインとlocalhostのmember brokerはモードによらず常に到達できます。その他の接続先は
   gatewayが拒否します。microsandboxは拒否された外向き通信の公開eventをまだ提供していないため、
-  GuildBoticsは間接的な手掛かりを記録します。完了したcommandの出力、失敗したtool/runtime event、
-  provider stderrに現れた接続先らしき値から、既知の許可ドメインと許可されたローカルIPアドレスを
-  除き、同じturnの端末ローカルDiagnosticsへ
-  `agent_environment.network_egress_candidate`として残します。URL・hostとportの組・IPアドレスは
-  構文上の高信頼候補、bare hostnameは中信頼候補です。この信頼度は接続先の書かれ方を示し、
-  microsandboxによる拒否の確度ではありません。既存recordごとに最大8 KiBを解析し、最大32件だけを
-  残します。runtimeのDEBUG logや別processは使わず、agentのpromptと最終responseも変更しません。
-  これはproviderが出力した証拠であり、microsandboxが拒否したことの証明ではありません。IPアドレスを
-  許可ドメインへ逆対応させることはできず、接続先を出力しないclientは、microsandboxがeventを提供する
-  まで手掛かりを残せません。
+  GuildBoticsは意図的に範囲を絞った間接的な手掛かりを記録します。構造化されたcommand・tool・
+  runtime失敗eventに明示されたURLとhost・portの組から、既知の許可ドメインと許可されたローカル
+  IPアドレスを除き、同じturnの端末ローカルDiagnosticsへ
+  `agent_environment.network_egress_candidate`として残します。成功commandの出力、bare hostname、
+  bare IPアドレスは解析しないため、ファイル名や時刻を接続先候補にしません。既存の失敗recordごとに
+  最大8 KiBを解析し、最大32件だけを残します。runtimeのDEBUG logや別processは使わず、agentの
+  promptと最終responseも変更しません。これはproviderが失敗時に出力した情報であり、microsandboxが
+  拒否したことの証明ではありません。接続先をbare値だけで出力するclientや、接続先を出力しないclientは、
+  microsandboxがeventを提供するまで手掛かりを残せません。
 
   ```yaml
   network:

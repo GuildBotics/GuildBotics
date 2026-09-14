@@ -305,7 +305,7 @@ def test_network_egress_candidates_show_destinations_without_calling_them_denial
 
     assert presentation.label_key.endswith("network_egress_candidate")
     assert presentation.message == "blocked.example:443, 203.0.113.8"
-    assert presentation.tone == "warning"
+    assert presentation.tone == "info"
 
 
 def test_reasoning_is_labelled_apart_from_the_reply() -> None:

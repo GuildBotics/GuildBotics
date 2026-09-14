@@ -266,7 +266,7 @@ def _network_egress_candidate_presentation(
         label_key=_event_key("network_egress_candidate"),
         label=event_type,
         message=", ".join(destinations) or _first_text(payload, "message"),
-        tone="warning",
+        tone="info",
     )
 
 

@@ -130,6 +130,7 @@ def test_failed_command_records_unmatched_destination_candidates(
                 "direct connection to 203.0.113.8:8443 failed"
             ),
             command="curl https://blocked.example:443/upload",
+            details={"status": "failed"},
         ),
         recorded,
     )
@@ -149,13 +150,11 @@ def test_failed_command_records_unmatched_destination_candidates(
             {
                 "destination": "blocked.example",
                 "kind": "domain",
-                "confidence": "high",
                 "port": 443,
             },
             {
                 "destination": "203.0.113.8",
                 "kind": "ip",
-                "confidence": "high",
                 "port": 8443,
             },
         ],
@@ -203,6 +202,41 @@ def test_agent_response_is_not_treated_as_network_evidence(
     assert [call["event_type"] for call in recorded] == ["agent_runtime.assistant"]
 
 
+def test_successful_command_output_is_not_treated_as_network_evidence(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.COMMAND,
+            "completed",
+            message=(
+                "README.md setup.py package.json src/app.tsx\n"
+                "18:32:08 users.noreply.github.com"
+            ),
+            command="ls",
+            details={"status": "completed"},
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.command"]
+
+
+def test_bare_hosts_ips_and_timestamps_are_not_destination_candidates(
+    recorded: list[dict[str, Any]],
+) -> None:
+    _record(
+        AgentEvent(
+            AgentEventKind.FAILED,
+            "provider",
+            message=('blocked.example 203.0.113.8 18:32:08 No module named "foo.bar"'),
+        ),
+        recorded,
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
+
+
 def test_unrestricted_turn_does_not_record_network_candidates(
     recorded: list[dict[str, Any]],
 ) -> None:
@@ -219,7 +253,7 @@ def test_unrestricted_turn_does_not_record_network_candidates(
     assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
 
 
-def test_provider_stderr_candidates_are_bounded(recorded: list[dict[str, Any]]) -> None:
+def test_failed_event_candidates_are_bounded(recorded: list[dict[str, Any]]) -> None:
     key = ConversationKey("aiko", "codex", "ticket", "issue-1")
     context = AgentExecutionContext(
         person_id="aiko",
@@ -230,12 +264,12 @@ def test_provider_stderr_candidates_are_bounded(recorded: list[dict[str, Any]]) 
         conversation_key=key,
     )
     diagnostics.record_network_egress_candidates(
-        text=" ".join(f"host{index}.invalid" for index in range(40)),
+        text=" ".join(f"https://host{index}.invalid/path" for index in range(40)),
         context=context,
         adapter_name="codex",
-        evidence="provider_stderr",
+        evidence="failed_event",
     )
 
     payload = recorded[0]["payload"]
-    assert payload["evidence"] == "provider_stderr"
+    assert payload["evidence"] == "failed_event"
     assert len(payload["candidates"]) == diagnostics.MAX_NETWORK_CANDIDATES
