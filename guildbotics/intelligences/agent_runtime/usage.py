@@ -33,11 +33,11 @@ from guildbotics.intelligences.agent_environment.runtime import (
     EnvironmentProcess,
 )
 from guildbotics.intelligences.agent_runtime.environment import (
-    STREAM_READ_LIMIT,
     start_probe_environment,
 )
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
 from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 LIMIT_REACHED_PERCENT = 100.0
 

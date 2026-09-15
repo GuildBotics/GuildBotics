@@ -28,7 +28,6 @@ from uvicorn import Config, Server
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.environment import (
-    STREAM_READ_LIMIT,
     create_agent_subprocess,
     member_command_environment,
     terminate_process_tree,
@@ -40,6 +39,7 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 _HOST = "127.0.0.1"
 _SCOPE = "member:execute"

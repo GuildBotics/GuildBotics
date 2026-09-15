@@ -21,10 +21,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import (
-    STREAM_READ_LIMIT,
-    start_turn_environment,
-)
+from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
@@ -46,6 +43,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 ACP_PROTOCOL_VERSION = 1
 #: Version of the GuildBotics client contract, matching the Codex adapter's.

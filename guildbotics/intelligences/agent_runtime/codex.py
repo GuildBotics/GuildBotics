@@ -17,10 +17,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     guest_path,
 )
-from guildbotics.intelligences.agent_runtime.environment import (
-    STREAM_READ_LIMIT,
-    start_turn_environment,
-)
+from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
@@ -44,6 +41,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     EventSink,
 )
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 _MODERN_APPROVAL_METHODS = frozenset(
     {

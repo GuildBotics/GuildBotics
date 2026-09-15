@@ -18,7 +18,6 @@ from guildbotics.intelligences.agent_runtime.antigravity import (
     _result_error,
     _usage,
 )
-from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -35,6 +34,7 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "antigravity_stream_1_1_10.jsonl"
