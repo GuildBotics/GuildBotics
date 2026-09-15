@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,7 +38,7 @@ def _workspace(root: Path, **files: str) -> Path:
     for relative, text in files.items():
         path = root / ".guildbotics" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
     (root / ".guildbotics" / "state").mkdir(parents=True, exist_ok=True)
     return root
 
@@ -70,7 +69,7 @@ def _write(root: Path, relative: str, text: str) -> None:
     """Write a shared file into an existing workspace."""
     path = root / ".guildbotics" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
 
 
 def _hub_file(hub: Path, path: str) -> str | None:
@@ -464,7 +463,7 @@ def test_a_hub_rebuilt_at_the_same_address_receives_the_content_again(
     # Fetching at least once is what leaves a remote-tracking ref behind.
     device.manager.synchronize()
 
-    shutil.rmtree(hub)
+    hub.rename(tmp_path / "retired-hub.git")
     Repo.init(hub, bare=True, initial_branch="main")
     enrollment.enroll(str(hub), root)
 
@@ -532,7 +531,7 @@ def test_a_reconnecting_device_keeps_changes_the_hub_never_saw(
     other = tmp_path / "windows"
     with _as_machine(tmp_path, "windows"):
         enrollment.clone_workspace(str(hub), other)
-        (other / ".guildbotics" / CONFIG).write_text("name: edited\n", encoding="utf-8")
+        (other / ".guildbotics" / CONFIG).write_bytes(b"name: edited\n")
     with _as_machine(tmp_path, "mac"):
         rebuilt = _rebuilt_hub(tmp_path, origin)
 
@@ -556,8 +555,8 @@ def test_a_reconnecting_device_still_yields_where_both_sides_changed(
     other = tmp_path / "windows"
     with _as_machine(tmp_path, "windows"):
         enrollment.clone_workspace(str(hub), other)
-        (other / ".guildbotics" / CONFIG).write_text("name: mine\n", encoding="utf-8")
-    (origin / ".guildbotics" / CONFIG).write_text("name: theirs\n", encoding="utf-8")
+        (other / ".guildbotics" / CONFIG).write_bytes(b"name: mine\n")
+    (origin / ".guildbotics" / CONFIG).write_bytes(b"name: theirs\n")
     with _as_machine(tmp_path, "mac"):
         rebuilt = _rebuilt_hub(tmp_path, origin)
 
@@ -704,7 +703,7 @@ def test_a_failed_hub_change_keeps_the_hub_that_was_working(
     with pytest.raises(enrollment.EnrollmentError):
         enrollment.enroll(str(tmp_path / "no-such-hub.git"), root)
 
-    assert LocalSyncRepository(root).remote_url() == str(hub)
+    assert Path(LocalSyncRepository(root).remote_url()) == hub
 
 
 def test_a_workspace_still_synchronizes_after_a_failed_hub_change(

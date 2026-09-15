@@ -46,7 +46,7 @@ def _stop_after_each_test() -> None:
 def _workspace(root: Path) -> Path:
     path = root / ".guildbotics" / CONFIG
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("name: demo\n", encoding="utf-8")
+    path.write_bytes(b"name: demo\n")
     (root / ".guildbotics" / "state").mkdir(parents=True, exist_ok=True)
     return root
 
