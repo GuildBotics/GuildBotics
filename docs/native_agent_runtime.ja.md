@@ -230,6 +230,11 @@ turnの構造化された認証失敗は、端末・ツールごとにプロバ�
 含む後続の正常実行で解除します。それ以外のエラーは前回の認証結果を変えません。
 過去の認証失敗は案内として扱い、turnの起動を拒否しないため、再試行できます。
 GuildBoticsによる認証probeやトークン更新は行いません。
+トークンの更新はツール自身がturnの中で行います。そのため、各ツールの更新先はturnが常に届く
+プロバイダのドメインに含め、更新した認証情報がstoreへ書き戻されるようにbindします。
+ファイル単位のbindは上書きには追従しますが、別ファイルをrenameで重ねる置き換えは失敗します。
+認証情報をrenameで置き換えるGrok Buildは、認証情報を専用ディレクトリ
+（`~/.grok/auth/auth.json`、`GROK_AUTH_PATH`で指定）に置き、ディレクトリごとbindします。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか
@@ -237,7 +242,7 @@ Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保�
 ブラウザを開く`grok.com`の対話認証は、headless実行
 中に自動で開始しません。保存済みの認証がない場合は認証エラーとして停止し、`grok login`
 （または`grok login --device-auth`）の実行を案内します。診断記録に残すのは選択した認証方式の
-識別子だけで、`~/.grok/auth.json`の内容は読み取りません。
+識別子だけで、`~/.grok/auth/auth.json`の内容は読み取りません。
 
 GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、その付随情報には「端末で
 `copilot login`を実行する」と記載されています。GuildBoticsはこの方式でACPの`authenticate`を
