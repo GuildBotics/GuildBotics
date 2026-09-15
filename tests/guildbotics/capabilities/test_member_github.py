@@ -442,6 +442,7 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
                         ),
                     },
                     {"id": 91, "name": "lint", "conclusion": "success"},
+                    {"id": 92, "name": "matrix peer", "conclusion": "cancelled"},
                 ]
             },
             "/repos/owner/repo/actions/runs/9/artifacts": {
@@ -486,6 +487,9 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
             "truncated": True,
         }
     ]
+    assert "/repos/owner/repo/actions/jobs/92/logs" not in {
+        endpoint for endpoint, _params, _headers in fake.gets
+    }
 
 
 @pytest.mark.asyncio
