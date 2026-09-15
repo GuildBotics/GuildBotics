@@ -937,6 +937,9 @@ const resources = {
             runtime: "Runtime",
             runtimeAvailable: "Available ({{version}})",
             runtimeUnavailable: "Unavailable",
+            resources: "Resources",
+            resourceValues: "{{memory}} MiB · {{cpus}} vCPU",
+            resourcesUnavailable: "The declaration could not be read",
             snapshot: "Environment",
             snapshotStates: {
               missing: "Not built",
@@ -984,7 +987,7 @@ const resources = {
             declaration: {
               title: "Environment declaration",
               description:
-                "The base image every device builds from, where every turn may connect, and the DNS resolvers the environment uses. Shared by the workspace; changing the image rebuilds the environment on every device.",
+                "The base image every device builds from, the resources assigned at boot, where every turn may connect, and the DNS resolvers the environment uses. Shared by the workspace; only changing the image rebuilds the environment on every device.",
               image: "Base image",
               imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
               imageHint:
@@ -994,6 +997,13 @@ const resources = {
               imageNotDeclaredHere:
                 "{{reference}} is declared for {{declared}} but not for this device ({{architecture}}). Pick the image loaded here to declare it for {{architecture}}.",
               imageDeclared: "Declared: {{digests}}",
+              memory: "Memory (MiB)",
+              memoryHint:
+                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the least memory. Assigned to every turn and snapshot build. Default: 4096.",
+              cpus: "Virtual CPUs",
+              cpusHint:
+                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the fewest CPU cores. Assigned to every turn and snapshot build. Default: 2.",
+              positiveInteger: "Enter a whole number greater than zero.",
               nameservers: "DNS resolvers",
               nameserversHost:
                 "This device's resolvers, read when a turn starts (for networks that block outside DNS)",
@@ -2639,6 +2649,9 @@ const resources = {
             runtime: "ランタイム",
             runtimeAvailable: "利用可（{{version}}）",
             runtimeUnavailable: "利用不可",
+            resources: "リソース",
+            resourceValues: "{{memory}} MiB・{{cpus}} vCPU",
+            resourcesUnavailable: "宣言を読み取れません",
             snapshot: "環境",
             snapshotStates: {
               missing: "未ビルド",
@@ -2687,7 +2700,7 @@ const resources = {
             declaration: {
               title: "環境の宣言",
               description:
-                "各端末が環境をビルドする元になるベースイメージ、全 turn の接続先、環境が使う DNS リゾルバです。ワークスペースで共有され、image を変えると全端末で環境が再ビルドされます。",
+                "各端末が環境をビルドする元になるベースイメージ、起動時に割り当てるリソース、全 turn の接続先、環境が使う DNS リゾルバです。ワークスペースで共有され、image を変えたときだけ全端末で環境が再ビルドされます。",
               image: "ベースイメージ",
               imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
               imageHint:
@@ -2697,6 +2710,13 @@ const resources = {
               imageNotDeclaredHere:
                 "{{reference}} は {{declared}} 向けに宣言されていますが、この端末（{{architecture}}）向けには未宣言です。この端末に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
               imageDeclared: "宣言: {{digests}}",
+              memory: "メモリ（MiB）",
+              memoryHint:
+                "ワークスペース共通で、全端末に同じ値を使います。メモリが最も小さい端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 4096。",
+              cpus: "仮想 CPU 数",
+              cpusHint:
+                "ワークスペース共通で、全端末に同じ値を使います。CPU コア数が最も少ない端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 2。",
+              positiveInteger: "1 以上の整数を入力してください。",
               nameservers: "DNS リゾルバ",
               nameserversHost:
                 "この端末のリゾルバ（turn 開始時に読む。外部 DNS が遮断された網向け）",

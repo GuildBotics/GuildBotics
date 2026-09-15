@@ -12,6 +12,7 @@ from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
 from guildbotics.intelligences.agent_environment.toolchain import (
     TOOLCHAIN_PATH,
     DnsSettings,
+    EnvironmentResources,
     ToolchainError,
     device_nameservers,
     load_toolchain,
@@ -34,6 +35,7 @@ def test_a_full_declaration_parses() -> None:
                     "amd64": "sha256:" + "d" * 64,
                 },
             },
+            "resources": {"memory_mib": 3072, "cpus": 3},
             "network": {
                 "mode": "allowlist",
                 "allowed_domains": ["github.com", "pypi.org"],
@@ -49,14 +51,17 @@ def test_a_full_declaration_parses() -> None:
     assert declaration.image.digest_for("arm64") == "sha256:" + "c" * 64
     assert declaration.image.digest_for("amd64") == "sha256:" + "d" * 64
     assert declaration.image.digest_for("riscv64") == ""
+    assert declaration.resources == EnvironmentResources(memory_mib=3072, cpus=3)
     assert declaration.network.mode == "allowlist"
     assert declaration.network.allowed_domains == ["github.com", "pypi.org"]
     assert declaration.dns.nameservers == ["10.0.0.53", "1.1.1.1"]
 
 
 def test_network_defaults_to_deny_but_dns_is_required() -> None:
-    assert parse_toolchain({"dns": _DNS}, where="t").network == NetworkPolicy()
-    assert parse_toolchain({"dns": _DNS}, where="t").image is None
+    declaration = parse_toolchain({"dns": _DNS}, where="t")
+    assert declaration.network == NetworkPolicy()
+    assert declaration.image is None
+    assert declaration.resources == EnvironmentResources(memory_mib=4096, cpus=2)
     with pytest.raises(ToolchainError, match="dns"):
         parse_toolchain({"network": {}}, where="t")
 
@@ -92,6 +97,10 @@ def test_network_defaults_to_deny_but_dns_is_required() -> None:
         {"dns": _DNS, "packages": {}},
         {"dns": _DNS, "network": "deny"},
         {"dns": _DNS, "network": {"mode": "allowlist"}},
+        {"dns": _DNS, "resources": {"memory_mib": 0, "cpus": 2}},
+        {"dns": _DNS, "resources": {"memory_mib": 4096, "cpus": 0}},
+        {"dns": _DNS, "resources": {"memory_mib": "4096", "cpus": 2}},
+        {"dns": _DNS, "resources": {"memory_mib": 4096, "cpus": 2, "gpu": 1}},
         {
             "dns": _DNS,
             "network": {"mode": "deny", "allowed_domains": ["github.com"]},
@@ -117,6 +126,7 @@ def test_the_template_is_a_valid_declaration() -> None:
     declaration = parse_toolchain(load_yaml_file(template), where="template")
 
     assert declaration.network.mode == "allowlist"
+    assert declaration.resources == EnvironmentResources(memory_mib=4096, cpus=2)
     assert "api.github.com" in declaration.network.allowed_domains
     assert declaration.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
 

@@ -61,9 +61,10 @@ bindします）。
 端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
 ベースイメージに入れます。Desktopの **LLM・AI CLIツール** の
 「エージェント隔離環境」カードがruntime、ベースイメージ、snapshotの状態（ビルドボタンつき）、
-network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
+割り当てリソース、network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
 `login`が同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
-自動で再ビルドし、ビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
+受け取り、ベースイメージが変われば自動で再ビルドします。リソース・network・DNSの変更は次の
+microVM起動時に適用します。imageのビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
 見送りにします。turnが起動できない理由（runtime無し、宣言不正、ベースイメージ未読み込み、
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
 
@@ -125,6 +126,21 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   deny:
     - Documents/shared-documents/private
   ```
+
+- **リソース**: `intelligences/agent_environment.yml`の`resources:`で、すべてのturnと
+  snapshot buildへ割り当てるメモリ（MiB）と仮想CPU数を指定します。省略時は4096 MiB・
+  2 vCPUです。この宣言はワークスペース共通で、全端末に同じ値を使います。メモリが最も
+  小さく、CPUコア数が最も少ない端末に収まる値を指定してください。
+
+  ```yaml
+  resources:
+    memory_mib: 4096
+    cpus: 2
+  ```
+
+  値は次にmicroVMを起動するときから効きます。変更してもdisk snapshotの再ビルドは不要です。
+  `guildbotics environment status`とDesktopの**エージェント隔離環境**カードに割り当て値を
+  表示します。
 
 - **ネットワーク**: `intelligences/agent_environment.yml`のworkspace共通`network:`ブロックで、
   全メンバー・全スロットの接続先を1つの規則として決めます。シェルコマンドとその子プロセス、

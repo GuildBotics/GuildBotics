@@ -20,6 +20,7 @@ const DIGEST = "sha256:" + "c".repeat(64);
 const OTHER = "sha256:" + "d".repeat(64);
 
 const packaged: AgentEnvironmentDeclaration = {
+  resources: { memory_mib: 4096, cpus: 2 },
   network: { mode: "deny", allowed_domains: [], allow_local_network: false },
   dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
 };
@@ -27,14 +28,17 @@ const onHost: AgentEnvironmentDeclaration = { ...packaged, dns: { nameservers: "
 
 function Harness({
   initial = packaged,
+  value: controlledValue,
   onChange,
   onValidityChange,
 }: {
   initial?: AgentEnvironmentDeclaration;
+  value?: AgentEnvironmentDeclaration;
   onChange?: (value: AgentEnvironmentDeclaration) => void;
   onValidityChange?: (valid: boolean) => void;
 }) {
-  const [value, setValue] = useState(initial);
+  const [storedValue, setValue] = useState(initial);
+  const value = controlledValue ?? storedValue;
   const [client] = useState(
     () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
   );
@@ -70,6 +74,61 @@ describe("AgentEnvironmentDeclarationCard", () => {
       ],
       problem: "",
     });
+  });
+
+  it("updates the resources assigned when each microVM boots", async () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    const memory = screen.getByRole("textbox", {
+      name: t("setup.intelligence.environment.declaration.memory"),
+    });
+    const cpus = screen.getByRole("textbox", {
+      name: t("setup.intelligence.environment.declaration.cpus"),
+    });
+    expect(
+      screen.getByText(t("setup.intelligence.environment.declaration.memoryHint")),
+    ).toBeVisible();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.declaration.cpusHint")),
+    ).toBeVisible();
+
+    await userEvent.clear(memory);
+    await userEvent.type(memory, "3072");
+    await userEvent.clear(cpus);
+    await userEvent.type(cpus, "3");
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...packaged,
+      resources: { memory_mib: 3072, cpus: 2 },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      resources: { memory_mib: 3072, cpus: 3 },
+    });
+  });
+
+  it("shows resource values received after the declaration is synchronized", () => {
+    const { rerender } = render(<Harness value={packaged} />);
+
+    rerender(
+      <Harness
+        value={{
+          ...packaged,
+          resources: { memory_mib: 3072, cpus: 3 },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("textbox", {
+        name: t("setup.intelligence.environment.declaration.memory"),
+      }),
+    ).toHaveValue("3072");
+    expect(
+      screen.getByRole("textbox", {
+        name: t("setup.intelligence.environment.declaration.cpus"),
+      }),
+    ).toHaveValue("3");
   });
 
   it("names the base image by the digest of the image loaded on this device", async () => {
@@ -301,6 +360,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     render(
       <Harness
         initial={{
+          resources: { memory_mib: 4096, cpus: 2 },
           network: {
             mode: "allowlist",
             allowed_domains: ["github.com"],

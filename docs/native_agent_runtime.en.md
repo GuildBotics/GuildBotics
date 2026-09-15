@@ -73,11 +73,13 @@ when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
 **Isolated agent environment** card under **LLM / AI CLI tools** in the
 Desktop shows the runtime, the base image, the snapshot's state (with a
-build button), the network policy, the DNS resolvers, and each tool's login; `guildbotics
+build button), the assigned resources, the network policy, the DNS resolvers,
+and each tool's login; `guildbotics
 environment status` / `build` / `login` are the same state and actions from
-a terminal. While the service runs, a changed declaration (including one
-that arrived from another device through synchronization) is rebuilt by
-itself, and while it builds, or whenever the environment is unusable, the
+a terminal. While the service runs, a changed base image (including one that
+arrived from another device through synchronization) is rebuilt by itself;
+resource, network, and DNS changes apply when the next microVM boots. While
+the image builds, or whenever the environment is unusable, the
 ticket patrol and chat dispatch are deferred rather than failed. Why a turn
 cannot start here (no runtime, an unreadable declaration, a base image not
 loaded, an unbuilt snapshot, no login) is shown in the same words in the
@@ -157,6 +159,22 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   deny:
     - Documents/shared-documents/private
   ```
+
+- **Resources**: `resources:` in `intelligences/agent_environment.yml` assigns
+  memory in MiB and virtual CPUs to every turn and snapshot build. Omitting it
+  uses 4096 MiB and 2 vCPUs. This declaration is workspace-wide and the same
+  values are used on every device, so choose values that fit the device with
+  the least memory and fewest CPU cores.
+
+  ```yaml
+  resources:
+    memory_mib: 4096
+    cpus: 2
+  ```
+
+  The values apply when the next microVM boots. Changing them does not rebuild
+  the disk snapshot. `guildbotics environment status` and the Desktop's
+  **Isolated agent environment** card show the assigned values.
 
 - **Network**: one workspace-wide `network:` block in
   `intelligences/agent_environment.yml` states what every member and slot may

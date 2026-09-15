@@ -24,7 +24,10 @@ from guildbotics.intelligences.agent_environment.image import (
 )
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotState
 from guildbotics.intelligences.agent_environment.status import DeviceSetting
-from guildbotics.intelligences.agent_environment.toolchain import ToolchainDeclaration
+from guildbotics.intelligences.agent_environment.toolchain import (
+    EnvironmentResources,
+    ToolchainDeclaration,
+)
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -1300,6 +1303,7 @@ class AgentEnvironmentStatusResponse(BaseModel):
 
     platform: str
     runtime: EnvironmentRuntimeStatus
+    resources: EnvironmentResources | None = None
     snapshot: EnvironmentSnapshotStatus
     image: EnvironmentImageStatus = Field(
         default_factory=lambda: EnvironmentImageStatus(

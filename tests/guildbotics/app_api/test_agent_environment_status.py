@@ -146,6 +146,8 @@ def test_status_reports_the_device_in_the_words_a_turn_is_refused_with(
     )
 
     assert (status.runtime.available, status.runtime.version) == (True, "0.6.17")
+    assert status.resources is not None
+    assert status.resources.model_dump() == {"memory_mib": 4096, "cpus": 2}
     assert (status.snapshot.state, status.snapshot.name, status.snapshot.detail) == (
         "failed",
         "guildbotics-abc",

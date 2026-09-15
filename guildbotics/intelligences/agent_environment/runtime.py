@@ -72,6 +72,14 @@ class AgentEnvironmentError(RuntimeError):
     """The environment could not be created or the runtime refused a step."""
 
 
+def _start_failure(*, build: bool, error: Exception, memory_mib: int, cpus: int) -> str:
+    """Describe a failed boot with facts GuildBotics knows about the request."""
+    values = {"error": error, "memory_mib": memory_mib, "cpus": cpus}
+    if build:
+        return t("intelligences.agent_environment.runtime.build_start_failed", **values)
+    return t("intelligences.agent_environment.runtime.start_failed", **values)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentEnvironmentHealth:
     """Whether this device can create an environment, and if not, why."""
@@ -347,7 +355,12 @@ class AgentEnvironment:
 
     @classmethod
     async def start(
-        cls, spec: AgentEnvironmentSpec, *, snapshot: str
+        cls,
+        spec: AgentEnvironmentSpec,
+        *,
+        snapshot: str,
+        memory_mib: int,
+        cpus: int,
     ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
@@ -362,13 +375,20 @@ class AgentEnvironment:
                 name,
                 from_snapshot=snapshot,
                 ephemeral=True,
+                memory=memory_mib,
+                cpus=cpus,
                 workdir=spec.cwd,
                 volumes=_volumes(spec),
                 network=_network(spec),
             )
         except Exception as exc:
             raise AgentEnvironmentError(
-                t("intelligences.agent_environment.runtime.start_failed", error=exc)
+                _start_failure(
+                    build=False,
+                    error=exc,
+                    memory_mib=memory_mib,
+                    cpus=cpus,
+                )
             ) from exc
         environment = cls(sandbox, spec)
         try:
@@ -441,6 +461,8 @@ async def build_snapshot(
     home: str,
     steps: Sequence[BuildStep],
     nameservers: Iterable[str],
+    memory_mib: int,
+    cpus: int,
     on_line: Callable[[str], None],
 ) -> Path:
     """Run ``steps`` on ``image`` and keep the result as a snapshot.
@@ -482,12 +504,19 @@ async def build_snapshot(
                 image=image,
                 pull_policy=PullPolicy.IF_MISSING if pull else PullPolicy.NEVER,
                 replace=True,
+                memory=memory_mib,
+                cpus=cpus,
                 workdir="/",
                 network=_network_of(network),
             )
     except Exception as exc:
         raise AgentEnvironmentError(
-            t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
+            _start_failure(
+                build=True,
+                error=exc,
+                memory_mib=memory_mib,
+                cpus=cpus,
+            )
         ) from exc
     try:
         snapshot_name = name(await _built_from(Sandbox))

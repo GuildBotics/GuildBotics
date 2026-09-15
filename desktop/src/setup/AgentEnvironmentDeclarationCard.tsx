@@ -1,4 +1,4 @@
-import { Card, Select, Stack, TagsInput, Text } from "@mantine/core";
+import { Card, Group, NumberInput, Select, Stack, TagsInput, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,10 +18,11 @@ function shortDigest(digest: string): string {
 
 /**
  * The shared declaration of the agent environment: the base image every
- * device builds from, where every turn may connect, and the resolvers the
- * environment forwards DNS to. It is saved with the rest of the intelligence
- * settings, so the card only edits; what it rejects never reaches the draft,
- * and an empty resolver list is reported so the save button can wait for it.
+ * device builds from, the resources assigned at boot, where every turn may
+ * connect, and the resolvers the environment forwards DNS to. It is saved with
+ * the rest of the intelligence settings, so the card only edits; what it
+ * rejects never reaches the draft, and an empty resolver list is reported so
+ * the save button can wait for it.
  * The image is picked from those loaded on this device, so the declaration
  * carries the digest of what will actually be built from; a declared image
  * this device lacks stays selectable as declared.
@@ -41,12 +42,18 @@ export function AgentEnvironmentDeclarationCard({
   const { t } = useTranslation();
   const [rejectedDns, setRejectedDns] = useState<string>();
   const [networkValid, setNetworkValid] = useState(true);
+  const [memoryDraft, setMemoryDraft] = useState<string | number>();
+  const [cpusDraft, setCpusDraft] = useState<string | number>();
+  const memory = memoryDraft ?? value.resources.memory_mib;
+  const cpus = cpusDraft ?? value.resources.cpus;
   const nameservers = Array.isArray(value.dns.nameservers) ? value.dns.nameservers : [];
   const useHost = !Array.isArray(value.dns.nameservers);
   const emptyList = !useHost && nameservers.length === 0;
+  const resourcesValid =
+    typeof memory === "number" && memory >= 1 && typeof cpus === "number" && cpus >= 1;
   useEffect(() => {
-    onValidityChange?.(!emptyList && networkValid && !rejectedDns);
-  }, [emptyList, networkValid, onValidityChange, rejectedDns]);
+    onValidityChange?.(!emptyList && networkValid && !rejectedDns && resourcesValid);
+  }, [emptyList, networkValid, onValidityChange, rejectedDns, resourcesValid]);
   const images = useQuery({
     queryKey: ["agent-environment-images"],
     queryFn: getAgentEnvironmentImages,
@@ -157,6 +164,52 @@ export function AgentEnvironmentDeclarationCard({
             })}
           </Text>
         ) : null}
+        <Group grow align="start">
+          <NumberInput
+            size="xs"
+            label={t("setup.intelligence.environment.declaration.memory")}
+            description={t("setup.intelligence.environment.declaration.memoryHint")}
+            value={memory}
+            min={1}
+            allowDecimal={false}
+            allowNegative={false}
+            error={
+              typeof memory === "number" && memory >= 1
+                ? undefined
+                : t("setup.intelligence.environment.declaration.positiveInteger")
+            }
+            onChange={(memory_mib) => {
+              if (typeof memory_mib === "number" && memory_mib >= 1) {
+                setMemoryDraft(undefined);
+                onChange({ ...value, resources: { ...value.resources, memory_mib } });
+              } else {
+                setMemoryDraft(memory_mib);
+              }
+            }}
+          />
+          <NumberInput
+            size="xs"
+            label={t("setup.intelligence.environment.declaration.cpus")}
+            description={t("setup.intelligence.environment.declaration.cpusHint")}
+            value={cpus}
+            min={1}
+            allowDecimal={false}
+            allowNegative={false}
+            error={
+              typeof cpus === "number" && cpus >= 1
+                ? undefined
+                : t("setup.intelligence.environment.declaration.positiveInteger")
+            }
+            onChange={(next) => {
+              if (typeof next === "number" && next >= 1) {
+                setCpusDraft(undefined);
+                onChange({ ...value, resources: { ...value.resources, cpus: next } });
+              } else {
+                setCpusDraft(next);
+              }
+            }}
+          />
+        </Group>
         <NetworkPolicyField
           value={value.network}
           onChange={(network) => onChange({ ...value, network })}

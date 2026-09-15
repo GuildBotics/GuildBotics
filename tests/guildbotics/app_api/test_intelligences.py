@@ -1262,6 +1262,8 @@ def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> 
     # Without a file of its own the workspace inherits the packaged declaration.
     assert response.agent_environment is not None
     assert response.agent_environment.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
+    assert response.agent_environment.resources.memory_mib == 4096
+    assert response.agent_environment.resources.cpus == 2
     assert response.agent_environment.network.mode == "allowlist"
 
     _write_yaml(
@@ -1319,6 +1321,7 @@ def test_a_team_save_replaces_the_declaration_and_an_omitted_value_keeps_it(
 
     assert declaration_file in {item.path for item in result.files}
     assert load_yaml_file(declaration_file) == {
+        "resources": {"memory_mib": 4096, "cpus": 2},
         "network": _NETWORK,
         "dns": {"nameservers": ["10.0.0.53"]},
     }

@@ -3,9 +3,10 @@
 ``config/intelligences/agent_environment.yml`` is shared between the devices
 of a workspace, so every device builds the same environment from it: the
 base image the build starts from (GuildBotics' own unless the workspace names
-one it built itself), where the environment may connect, and the upstream
-resolvers its DNS gateway forwards to. Provider CLI installation belongs to
-the build recipe (:mod:`.snapshot`), not to the declaration.
+one it built itself), the resources assigned when its microVM boots, where the
+environment may connect, and the upstream resolvers its DNS gateway forwards
+to. Provider CLI installation belongs to the build recipe (:mod:`.snapshot`),
+not to the declaration.
 """
 
 from __future__ import annotations
@@ -212,6 +213,15 @@ def device_nameservers() -> tuple[str, ...]:
     return tuple(resolvers)
 
 
+class EnvironmentResources(BaseModel):
+    """Memory and virtual CPUs assigned when an environment boots."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    memory_mib: int = Field(default=4096, ge=1)
+    cpus: int = Field(default=2, ge=1)
+
+
 class ToolchainDeclaration(BaseModel):
     """The shared declaration file as a whole."""
 
@@ -219,6 +229,7 @@ class ToolchainDeclaration(BaseModel):
 
     #: Absent, the build starts from the image the recipe pins.
     image: BaseImage | None = None
+    resources: EnvironmentResources = Field(default_factory=EnvironmentResources)
     network: NetworkPolicy = Field(default_factory=NetworkPolicy)
     dns: DnsSettings
 

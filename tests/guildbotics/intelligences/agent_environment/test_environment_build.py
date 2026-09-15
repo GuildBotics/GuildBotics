@@ -22,6 +22,8 @@ from guildbotics.intelligences.agent_environment.runtime import (
 )
 from guildbotics.utils.i18n_tool import t
 
+_RESOURCES = {"memory_mib": 3072, "cpus": 3}
+
 
 def _event(kind: str, **fields: Any) -> SimpleNamespace:
     return SimpleNamespace(
@@ -177,6 +179,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
         home="/Users/u",
         steps=_STEPS,
         nameservers=("10.0.0.53",),
+        **_RESOURCES,
         on_line=lines.append,
     )
 
@@ -185,6 +188,7 @@ async def test_a_build_runs_every_step_with_the_home_and_keeps_the_result(
     assert created["image"] == "node:22.23.2-bookworm"
     assert created["pull_policy"] == microsandbox.PullPolicy.IF_MISSING
     assert created["replace"] is True
+    assert (created["memory"], created["cpus"]) == (3072, 3)
     assert "volumes" not in created
     policy = created["network"].policy
     assert (policy.default_egress, policy.default_ingress) == (
@@ -232,6 +236,7 @@ async def test_a_build_from_an_image_the_store_cannot_name_reports_no_digest(
         home="/h",
         steps=(),
         nameservers=(),
+        **_RESOURCES,
         on_line=lambda _: None,
     )
 
@@ -254,6 +259,7 @@ async def test_the_pull_ignores_the_docker_clients_configuration(
         home="/h",
         steps=(),
         nameservers=(),
+        **_RESOURCES,
         on_line=lambda _: None,
     )
 
@@ -277,6 +283,7 @@ async def test_an_image_loaded_here_is_never_asked_of_a_registry(
         home="/h",
         steps=(),
         nameservers=(),
+        **_RESOURCES,
         on_line=lambda _: None,
     )
 
@@ -301,6 +308,7 @@ async def test_a_failing_step_names_itself_and_the_build_sandbox_is_dropped(
             home="/h",
             steps=(BuildStep("apt", "apt-get install fail"), _STEPS[1]),
             nameservers=(),
+            **_RESOURCES,
             on_line=lines.append,
         )
 
@@ -316,7 +324,12 @@ async def test_a_sandbox_that_cannot_start_is_reported(
 ) -> None:
     _Sandbox.create_error = microsandbox.MicrosandboxError("no hypervisor")
 
-    with pytest.raises(AgentEnvironmentError, match="build environment: no hypervisor"):
+    failure = t(
+        "intelligences.agent_environment.runtime.build_start_failed",
+        error="no hypervisor",
+        **_RESOURCES,
+    )
+    with pytest.raises(AgentEnvironmentError, match=re.escape(failure)):
         await build_snapshot(
             _named("n"),
             dest_dir=tmp_path,
@@ -325,6 +338,7 @@ async def test_a_sandbox_that_cannot_start_is_reported(
             home="/h",
             steps=_STEPS,
             nameservers=(),
+            **_RESOURCES,
             on_line=lambda _: None,
         )
 

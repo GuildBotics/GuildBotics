@@ -36,6 +36,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_home,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_environment.toolchain import EnvironmentResources
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -85,7 +86,7 @@ async def start_turn_environment(
             ``process`` when the microVM does not start. Nothing is widened:
             a turn that cannot be confined does not run.
     """
-    tool, status, nameservers = _ready(tool_name)
+    tool, status, nameservers, resources = _ready(tool_name)
     home = guest_home()
     spec = build_environment_spec(
         context.contract,
@@ -96,13 +97,13 @@ async def start_turn_environment(
         nameservers=nameservers,
         mounts=(*state_mounts(tool), *mounts),
     )
-    return await _start(spec, status)
+    return await _start(spec, status, resources)
 
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:
     """Boot an environment for asking the tool about itself: its usage, its
     model catalog. Only the tool's state is bound, and only its API is open."""
-    tool, status, nameservers = _ready(tool_name)
+    tool, status, nameservers, resources = _ready(tool_name)
     home = guest_home()
     spec = AgentEnvironmentSpec(
         cwd=home,
@@ -117,10 +118,12 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
         ),
         env={**_PROVIDER_ENV, **tool.provision.environment(home)},
     )
-    return await _start(spec, status)
+    return await _start(spec, status, resources)
 
 
-def _ready(tool_name: str) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...]]:
+def _ready(
+    tool_name: str,
+) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...], EnvironmentResources]:
     """Everything a start needs from this device, or the reason it cannot start.
 
     The reasons are the device's own words (:mod:`..agent_environment.status`),
@@ -145,14 +148,22 @@ def _ready(tool_name: str) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...
             ),
             tool_status.refusal,
         )
-    return tool, status.snapshot, status.dns.nameservers
+    assert status.declaration is not None
+    return tool, status.snapshot, status.dns.nameservers, status.declaration.resources
 
 
 async def _start(
-    spec: AgentEnvironmentSpec, status: SnapshotStatus
+    spec: AgentEnvironmentSpec,
+    status: SnapshotStatus,
+    resources: EnvironmentResources,
 ) -> AgentEnvironment:
     try:
-        return await AgentEnvironment.start(spec, snapshot=str(status.path))
+        return await AgentEnvironment.start(
+            spec,
+            snapshot=str(status.path),
+            memory_mib=resources.memory_mib,
+            cpus=resources.cpus,
+        )
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 

@@ -251,6 +251,7 @@ beforeEach(() => {
       version: "0.6.17",
       home: "/Users/me/.guildbotics/data/msb",
     },
+    resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
       default: "node:22.23.2-bookworm",

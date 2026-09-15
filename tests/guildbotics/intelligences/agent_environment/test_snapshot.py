@@ -258,6 +258,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert (call["image"], call["pull"]) == (image_module.IMAGE, True)
     assert call["home"] == home.resolve().as_posix()
     assert call["nameservers"] == ("10.0.0.53",)
+    assert (call["memory_mib"], call["cpus"]) == (4096, 2)
     assert [s.label for s in call["steps"]] == [
         "home",
         "uv",
