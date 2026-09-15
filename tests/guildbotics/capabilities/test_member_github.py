@@ -434,9 +434,7 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
                 ]
             },
             "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/actions/runs": {
-                "workflow_runs": [workflow_run]
-            },
+            "/repos/owner/repo/actions/runs": {"workflow_runs": [workflow_run]},
             "/repos/owner/repo/actions/runs/9/jobs": {
                 "jobs": [
                     {

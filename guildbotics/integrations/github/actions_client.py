@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from http import HTTPStatus
 from tempfile import TemporaryFile
 from typing import Any, BinaryIO
@@ -21,7 +22,7 @@ class GitHubActionsClientError(RuntimeError):
     """A GitHub Checks or Actions request failed."""
 
 
-Download = Callable[[str, int], Awaitable[BinaryIO]]
+Download = Callable[[str, int], AbstractAsyncContextManager[BinaryIO]]
 DownloadTail = Callable[[str, int], Awaitable[tuple[bytes, bool]]]
 
 
@@ -107,28 +108,35 @@ class GitHubActionsClient:
             endpoint, "artifacts", extra_params=extra_params
         )
 
+    @asynccontextmanager
     async def artifact_archive(
         self, owner: str, repo: str, artifact_id: int, max_bytes: int
-    ) -> BinaryIO:
-        return await self._download_endpoint(
+    ) -> AsyncIterator[BinaryIO]:
+        async with self._download_endpoint(
             f"/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip", max_bytes
-        )
+        ) as archive:
+            yield archive
 
-    async def _download_endpoint(self, endpoint: str, max_bytes: int) -> BinaryIO:
+    @asynccontextmanager
+    async def _download_endpoint(
+        self, endpoint: str, max_bytes: int
+    ) -> AsyncIterator[BinaryIO]:
         response = await self._get(endpoint)
         _raise_for_status(response, permission_guidance=True)
         location = response.headers.get("location", "")
         if location:
-            return await self._download(location, max_bytes)
+            async with self._download(location, max_bytes) as archive:
+                yield archive
+            return
         content = response.content
         if len(content) > max_bytes:
             raise GitHubActionsClientError(
                 f"GitHub download exceeds the {max_bytes} byte limit."
             )
-        archive = TemporaryFile()
-        archive.write(content)
-        archive.seek(0)
-        return archive
+        with TemporaryFile() as archive:
+            archive.write(content)
+            archive.seek(0)
+            yield archive
 
     async def _paginated_items(
         self,
@@ -169,10 +177,12 @@ class GitHubActionsClient:
             ) from exc
 
 
-async def _download_without_credentials(url: str, max_bytes: int) -> BinaryIO:
+@asynccontextmanager
+async def _download_without_credentials(
+    url: str, max_bytes: int
+) -> AsyncIterator[BinaryIO]:
     """Download a short-lived GitHub URL without forwarding GitHub credentials."""
-    archive = TemporaryFile()
-    try:
+    with TemporaryFile() as archive:
         total = 0
         async with (
             httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client,
@@ -192,10 +202,7 @@ async def _download_without_credentials(url: str, max_bytes: int) -> BinaryIO:
                     )
                 archive.write(chunk)
         archive.seek(0)
-        return archive
-    except Exception:
-        archive.close()
-        raise
+        yield archive
 
 
 async def _download_tail_without_credentials(

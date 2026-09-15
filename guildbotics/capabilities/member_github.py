@@ -479,18 +479,15 @@ class MemberGitHubCapabilityService:
                     f"{MAX_ARTIFACT_BYTES} byte limit. Inspect the artifact from "
                     "the Actions run URL or ask a human to retrieve it."
                 )
-            archive = await actions.artifact_archive(
+            async with actions.artifact_archive(
                 resource.owner,
                 resource.repo,
                 artifact_id,
                 MAX_ARTIFACT_BYTES,
-            )
+            ) as archive:
+                files = _extract_artifact(archive, destination)
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
-        try:
-            files = _extract_artifact(archive, destination)
-        finally:
-            archive.close()
         return {
             "repo": resource.full_repo,
             "run_id": run_id or (artifact.get("workflow_run") or {}).get("id"),

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from io import BytesIO
 
 import pytest
@@ -72,7 +73,8 @@ async def test_artifact_archive_applies_limit_to_direct_response():
     client = GitHubActionsClient(api)
 
     with pytest.raises(GitHubActionsClientError, match="exceeds the 3 byte limit"):
-        await client.artifact_archive("owner", "repo", 9, 3)
+        async with client.artifact_archive("owner", "repo", 9, 3):
+            pass
 
 
 @pytest.mark.asyncio
@@ -86,16 +88,15 @@ async def test_artifact_archive_passes_limit_to_signed_download():
     )
     downloads = []
 
+    @asynccontextmanager
     async def download(url, max_bytes):
         downloads.append((url, max_bytes))
-        return BytesIO(b"zip")
+        yield BytesIO(b"zip")
 
     client = GitHubActionsClient(api, download=download)
 
-    result = await client.artifact_archive("owner", "repo", 9, 1024)
-
-    assert result.read() == b"zip"
-    result.close()
+    async with client.artifact_archive("owner", "repo", 9, 1024) as result:
+        assert result.read() == b"zip"
     assert downloads == [("https://signed.example.test/artifact", 1024)]
 
 

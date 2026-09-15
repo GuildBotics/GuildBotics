@@ -2559,9 +2559,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
                     for item_key, item_value in item.items()
                     if item_key != "log"
                 }
-                lines.append(
-                    json.dumps(metadata, ensure_ascii=False, sort_keys=True)
-                )
+                lines.append(json.dumps(metadata, ensure_ascii=False, sort_keys=True))
                 log = str(item.get("log") or "")
                 longest_ticks = max(
                     (len(match.group(0)) for match in re.finditer(r"`+", log)),
