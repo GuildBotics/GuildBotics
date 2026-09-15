@@ -70,6 +70,16 @@ class HubTimeoutError(SyncRepositoryError):
     """Raised when a Git command that reaches the hub does not answer in time."""
 
 
+class HubCommandError(SyncRepositoryError):
+    """Raised when a Git command that reaches the hub fails.
+
+    The message is what Git, ssh, and the hub printed, exactly as printed. It
+    is the only place the reason survives: a name that does not resolve, a key
+    the hub has not registered, and a hub whose own ``git`` cannot run all end
+    in the same exit code.
+    """
+
+
 def _kill_command_tree(process: subprocess.Popen[str]) -> None:
     """Kill a remote Git command together with the ssh child it spawned.
 
@@ -104,7 +114,7 @@ def _run_remote_git(
 
     Raises:
         HubTimeoutError: When the hub does not answer within the bound.
-        GitCommandError: When Git itself reports the command failed.
+        HubCommandError: When Git itself reports the command failed.
     """
     argv: list[str] = [Git.GIT_PYTHON_GIT_EXECUTABLE or "git", *arguments]
     process = subprocess.Popen(
@@ -126,7 +136,10 @@ def _run_remote_git(
             f"{int(timeout)} seconds."
         ) from exc
     if process.returncode != 0:
-        raise GitCommandError(argv, process.returncode, stderr, stdout)
+        raise HubCommandError(
+            stderr.strip()
+            or f"'git {arguments[0]}' exited with code {process.returncode}."
+        )
     return stdout
 
 
@@ -474,7 +487,7 @@ class LocalSyncRepository:
             str | None: The hub's commit, or None when the hub is still empty.
 
         Raises:
-            GitCommandError: When the hub cannot be reached.
+            HubCommandError: When the hub cannot be reached.
         """
         listing = _run_remote_git(
             self._repo(), "ls-remote", url, f"refs/heads/{SYNC_BRANCH}"

@@ -1225,6 +1225,7 @@ export type WorkspaceSyncStatus = {
   rejected_changes: RejectedChange[];
   last_success_at: string | null;
   last_error_code: string | null;
+  last_error_detail: string | null;
   live_error_code: string | null;
 };
 

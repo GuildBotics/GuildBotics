@@ -7,11 +7,12 @@ import time
 from pathlib import Path
 
 import pytest
-from git import Git, GitCommandError, Repo
+from git import Git, Repo
 
 from guildbotics.sync.local_repository import (
     GITIGNORE_CONTENT,
     REJECTED_REF_PREFIX,
+    HubCommandError,
     HubTimeoutError,
     LocalSyncRepository,
     SyncRepositoryError,
@@ -217,10 +218,14 @@ def test_remote_git_returns_output_and_reports_failures(
     output = _run_remote_git(repository._repo(), "-c", "print('answered')")
     assert output.strip() == "answered"
 
-    with pytest.raises(GitCommandError) as excinfo:
+    with pytest.raises(HubCommandError) as excinfo:
         _run_remote_git(
             repository._repo(),
             "-c",
-            "import sys; sys.stderr.write('non-fast-forward'); sys.exit(1)",
+            "import sys; sys.stderr.write('hub said no\\nfatal: gone\\n'); sys.exit(128)",
         )
-    assert "non-fast-forward" in str(excinfo.value)
+    assert str(excinfo.value) == "hub said no\nfatal: gone"
+
+    with pytest.raises(HubCommandError) as silent:
+        _run_remote_git(repository._repo(), "-c", "import sys; sys.exit(3)")
+    assert str(silent.value) == "'git -c' exited with code 3."

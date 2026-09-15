@@ -325,9 +325,9 @@ const resources = {
             detail: "Content from the hub is being taken in.",
           },
           unreachable: {
-            label: "Hub unreachable",
+            label: "Hub sync failed",
             detail:
-              "This workspace still works, and changes are kept until the hub can be reached again.",
+              "This workspace still works, and changes are kept until they can be synchronized with the hub.",
           },
           unsendable: {
             label: "Changes that cannot be sent",
@@ -347,7 +347,7 @@ const resources = {
         },
         alerts: {
           unreachable:
-            "The hub cannot be reached. Local work continues; sharing resumes automatically.",
+            "Synchronization with the hub is failing. Local work continues, and sharing resumes automatically once the cause is resolved.",
           unsendable_one: "One change cannot be sent until the file is repaired.",
           unsendable_other: "{{count}} changes cannot be sent until the files are repaired.",
           invalid_shared_state:
@@ -367,6 +367,7 @@ const resources = {
           unsendable_other: "{{count}} changes cannot be sent",
           lastSuccess: "Last synchronized: {{time}}",
         },
+        failureDetail: "Error details",
         actions: {
           retry: "Try again",
           settings: "Sync settings",
@@ -2338,9 +2339,9 @@ const resources = {
             detail: "Hub の更新を取り込んでいます。",
           },
           unreachable: {
-            label: "Hub 不達",
+            label: "Hub 同期エラー",
             detail:
-              "このワークスペースはこのまま使えます。変更は Hub に接続できるまで保持されます。",
+              "このワークスペースはこのまま使えます。変更は Hub と同期できるまで保持されます。",
           },
           unsendable: {
             label: "送信できない変更",
@@ -2359,7 +2360,7 @@ const resources = {
         },
         alerts: {
           unreachable:
-            "Hub に接続できません。このマシンでの作業は続けられ、共有は自動で再開します。",
+            "Hub と同期できません。このマシンでの作業は続けられ、原因が解消すると共有は自動で再開します。",
           unsendable_one: "1 件の変更は、ファイルを直すまで送信できません。",
           unsendable_other: "{{count}} 件の変更は、ファイルを直すまで送信できません。",
           invalid_shared_state: "共有内容を収束できなかったため、同期を停止しました。",
@@ -2379,6 +2380,7 @@ const resources = {
           unsendable_other: "送信できない変更 {{count}} 件",
           lastSuccess: "最終同期: {{time}}",
         },
+        failureDetail: "エラー内容",
         actions: {
           retry: "再試行",
           settings: "同期設定",

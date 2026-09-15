@@ -220,6 +220,7 @@ class WorkspaceSyncStatus(BaseModel):
     rejected_changes: list[RejectedChangeModel] = Field(default_factory=list)
     last_success_at: str | None = None
     last_error_code: str | None = None
+    last_error_detail: str | None = None
     live_error_code: str | None = None
 
 

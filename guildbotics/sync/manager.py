@@ -36,7 +36,11 @@ from guildbotics.sync.commits import (
     commit_shared_changes,
     validate_received,
 )
-from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
+from guildbotics.sync.local_repository import (
+    HubCommandError,
+    LocalSyncRepository,
+    SyncRepositoryError,
+)
 from guildbotics.sync.rejections import RejectionRecorder, record_update_rejected
 from guildbotics.utils.shared_write_lock import (
     SharedWriteBusyError,
@@ -122,6 +126,18 @@ class GitSyncStatus:
     invalid_paths: tuple[UnsendableChange, ...]
     last_success_at: str | None
     last_error_code: str | None
+    last_error_detail: str | None
+
+    @property
+    def failure(self) -> str | None:
+        """Say what kept the last cycle from sharing everything, or None.
+
+        What the hub printed says the most, so it comes first; a state with no
+        failure behind it -- a push still being redone -- is named by its code.
+        """
+        if self.state == "idle" and self.last_error_code is None:
+            return None
+        return self.last_error_detail or self.last_error_code or self.state
 
 
 @dataclass
@@ -173,6 +189,7 @@ class GitSyncManager:
         self._invalid_paths: tuple[UnsendableChange, ...] = ()
         self._last_success_at: str | None = None
         self._last_error_code: str | None = None
+        self._last_error_detail: str | None = None
 
         self._pending: dict[str, _Pending] = {}
         self._pending_lock = threading.Lock()
@@ -323,8 +340,7 @@ class GitSyncManager:
                 self._verify_local_identity()
                 self._commit_working_tree()
                 if not self._repository.has_remote():
-                    self._state = "unreachable"
-                    self._last_error_code = "hub_not_configured"
+                    self._unreachable("hub_not_configured")
                     return self.status()
                 self._state = "pushing"
                 self._repository.push()
@@ -335,13 +351,9 @@ class GitSyncManager:
                 self._last_error_code = "local_write_busy"
                 return self.status()
             except (GitCommandError, SyncRepositoryError, OSError) as exc:
-                self._state = "unreachable"
-                self._last_error_code = type(exc).__name__
+                self._unreachable(type(exc).__name__, str(exc))
                 return self.status()
-            self._state = "idle"
-            self._last_error_code = None
-            self._last_success_at = utc_now_iso()
-            self._resolve_shared()
+            self._shared()
             return self.status()
 
     def synchronize_once(self, *, timeout: float | None = None) -> GitSyncStatus:
@@ -385,8 +397,7 @@ class GitSyncManager:
             # as it was rather than claiming unreachable.
             self._last_error_code = "local_write_busy"
         except (GitCommandError, SyncRepositoryError, OSError) as exc:
-            self._state = "unreachable"
-            self._last_error_code = type(exc).__name__
+            self._unreachable(type(exc).__name__, str(exc))
         return self.status()
 
     def status(self) -> GitSyncStatus:
@@ -410,6 +421,9 @@ class GitSyncManager:
             invalid_paths=self._invalid_paths,
             last_success_at=self._last_success_at,
             last_error_code=self._last_error_code,
+            last_error_detail=(
+                self._last_error_detail if self._state == "unreachable" else None
+            ),
         )
 
     def _synchronize(self) -> None:
@@ -417,15 +431,11 @@ class GitSyncManager:
         self._verify_local_identity()
         self._commit_working_tree()
         if not self._repository.has_remote():
-            self._state = "unreachable"
-            self._last_error_code = "hub_not_configured"
+            self._unreachable("hub_not_configured")
             return
         for _ in range(self._max_push_attempts):
             if self._synchronize_once():
-                self._state = "idle"
-                self._last_error_code = None
-                self._last_success_at = utc_now_iso()
-                self._resolve_shared()
+                self._shared()
                 return
         self._state = "idle"
         self._last_error_code = "push_retry_exhausted"
@@ -539,7 +549,7 @@ class GitSyncManager:
         self._state = "pushing"
         try:
             self._repository.push()
-        except GitCommandError as exc:
+        except HubCommandError as exc:
             # A push can succeed and still fail to report it. The hub's own
             # head decides, so a lost response never creates a second commit.
             self._repository.fetch()
@@ -662,6 +672,26 @@ class GitSyncManager:
         self._settle(
             lambda change: bool(rejected.intersection(change.paths)), shared=False
         )
+
+    def _shared(self) -> None:
+        """Record that everything committed here has reached the hub."""
+        self._state = "idle"
+        self._last_error_code = None
+        self._last_error_detail = None
+        self._last_success_at = utc_now_iso()
+        self._resolve_shared()
+
+    def _unreachable(self, code: str, detail: str | None = None) -> None:
+        """Stop at an unreachable hub, keeping what the failure said.
+
+        The detail is logged only when it changes: the queue retries on every
+        cycle, and one line per reason is what makes diagnostics readable.
+        """
+        if detail and detail != self._last_error_detail:
+            LOGGER.warning("Workspace synchronization failed: %s", detail)
+        self._state = "unreachable"
+        self._last_error_code = code
+        self._last_error_detail = detail
 
     def _halt(self, anomaly: SharedDataAnomaly) -> None:
         self._state = anomaly.state

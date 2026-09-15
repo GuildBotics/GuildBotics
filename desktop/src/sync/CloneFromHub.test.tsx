@@ -44,6 +44,7 @@ function syncStatus(workspaceId: string | null): WorkspaceSyncStatus {
     rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
+    last_error_detail: null,
     live_error_code: null,
   };
 }

@@ -17,6 +17,7 @@ import {
   retryWorkspaceSync,
   type WorkspaceSyncStatus,
 } from "../api/client";
+import { SyncFailureDetail } from "./SyncFailureDetail";
 import { syncCanRetry, syncIndicatorState, syncTone, type SyncIndicatorState } from "./syncState";
 
 /** Where the settings for hubs, devices, and unsendable changes live. */
@@ -89,6 +90,7 @@ export function SyncIndicator() {
           <Text c="dimmed" size="xs">
             {t(`sync.state.${state}.detail`)}
           </Text>
+          <SyncFailureDetail status={status.data} />
           <SyncCounts status={status.data} />
           <Group gap="xs">
             {syncCanRetry(state) ? (
