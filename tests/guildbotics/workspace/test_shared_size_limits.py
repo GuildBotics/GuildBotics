@@ -105,6 +105,12 @@ NOT_SHARED = {
     "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_STDIN_BYTES": (
         "what is piped into a member command"
     ),
+    "guildbotics/capabilities/member_github.py:DEFAULT_LOG_TAIL_BYTES": (
+        "the local command output retained from one GitHub Actions job log"
+    ),
+    "guildbotics/capabilities/member_github.py:MAX_ARTIFACT_BYTES": (
+        "a temporary GitHub Actions artifact outside shared workspace state"
+    ),
     "guildbotics/observability/diagnostics_store.py:DEFAULT_DIAGNOSTICS_MAX_BYTES": (
         "local/run diagnostics, which stay on this device"
     ),

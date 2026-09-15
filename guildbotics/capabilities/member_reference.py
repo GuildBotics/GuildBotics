@@ -114,6 +114,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Read a PR, optionally including review threads and diff comment coordinates.",
             ),
             (
+                "guildbotics member github pr checks --person <person> --url <pr_url> "
+                "[--failed-logs] [--log-tail-bytes <n>]",
+                "Read a PR head's check rollup and optional failed Actions log tails.",
+            ),
+            (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
                 "[--issue-url <url>] [--draft true|false]",
@@ -138,6 +143,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member github pr reply --person <person> --url <pr_url> "
                 "--reply-target-id <id> --content-file <file>",
                 "Reply to an inline review thread.",
+            ),
+            (
+                "guildbotics member github run artifact download --person <person> "
+                "--url <pr_url|run_url> --name <artifact> [--dest <dir>]",
+                "Download and extract a size-limited GitHub Actions artifact; remove "
+                "repository files after inspection.",
             ),
             (
                 "guildbotics member github reaction add --person <person> --repo <owner/repo> "
@@ -281,6 +292,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
+    "After opening or updating a PR, inspect its CI with `member github pr checks`. "
+    "If a check fails, use `member github pr checks --failed-logs` to "
+    "identify the cause, fix failures caused by the change, publish the fix, and "
+    "check CI again. Do not report the work complete while checks are "
+    "pending or failing; if an unrelated failure or an unavailable check blocks "
+    "completion, follow the failure-handling rule above and report that blocker.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating issue or PR for issue-driven work, the review thread or PR "
@@ -290,9 +307,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
 ]
 
 _CROSS_CUTTING_RULES: list[str] = [
-    "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
-    "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
-    "raw `git commit` / `git push`, or raw Slack HTTP calls for those.",
+    "All GitHub and Slack access, reads and writes alike, goes through the "
+    "corresponding `guildbotics member ...` commands. Never use `gh`, raw "
+    "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. When a needed read has "
+    "no member command, ask a human for the information instead of using `gh` or "
+    "a raw API. Publishing git commits and pushes also goes through member "
+    "commands; never use raw `git commit` or `git push`.",
     "Opening an issue and closing or reopening one stay human decisions. Pass "
     "`--human-approved` only when a human in the originating conversation asked for or "
     "approved that specific issue, never on the member's own judgment and never because "

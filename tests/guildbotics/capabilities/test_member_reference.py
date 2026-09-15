@@ -29,6 +29,10 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member github pr create" in text
     assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
+    assert "guildbotics member github pr checks" in text
+    assert "--failed-logs" in text
+    assert "guildbotics member github run artifact download" in text
+    assert "remove repository files after inspection" in text
     assert "--content-file" in text
     assert "guildbotics member chat reply" in text
     assert "guildbotics member task complete" in text
@@ -57,6 +61,10 @@ def test_reference_includes_standard_work_procedure():
     assert "--start-line" in text
     assert "--start-side" in text
     assert "reply_target_id" in text
+    assert "After opening or updating a PR" in text
+    assert "member github pr checks --failed-logs" in text
+    assert "check CI again" in text
+    assert "pending or failing" in text
     # Observable-outcome principle: leave externally visible traces at the
     # work's entry point, and avoid duplicate / unwanted posts.
     assert "externally visible trace" in text
@@ -112,6 +120,9 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
+    assert "All GitHub and Slack access, reads and writes alike" in text
+    assert "Never use `gh`" in text
+    assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
     assert "`~/Documents/GuildBotics/tmp/`" in text
     assert "never leave a result there" in text
