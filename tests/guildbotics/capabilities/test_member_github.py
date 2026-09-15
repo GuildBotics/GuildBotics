@@ -19,8 +19,9 @@ ROOT_REVIEW_COMMENT_ID = 101
 LATEST_REVIEW_COMMENT_ID = 102
 
 
-def test_ci_download_limits_derive_from_the_broker_stream_boundary():
-    assert MAX_ARTIFACT_BYTES == STREAM_READ_LIMIT
+def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary():
+    assert MAX_ARTIFACT_BYTES == 100 * 1024 * 1024
+    assert MAX_ARTIFACT_BYTES > STREAM_READ_LIMIT
     assert DEFAULT_LOG_TAIL_BYTES == STREAM_READ_LIMIT // 32
 
 
@@ -427,7 +428,9 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
                 ]
             },
             "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/actions/runs": {"workflow_runs": [{"id": 9}]},
+            "/repos/owner/repo/actions/runs": {
+                "workflow_runs": [{"id": 9, "run_attempt": 2}]
+            },
             "/repos/owner/repo/actions/runs/9/jobs": {
                 "jobs": [
                     {
@@ -439,6 +442,12 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
                         ),
                     },
                     {"id": 91, "name": "lint", "conclusion": "success"},
+                ]
+            },
+            "/repos/owner/repo/actions/runs/9/artifacts": {
+                "artifacts": [
+                    {"name": "playwright-head-9-2", "expired": False},
+                    {"name": "old", "expired": True},
                 ]
             },
         }
@@ -465,10 +474,12 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
     assert result["failed_logs"] == [
         {
             "run_id": 9,
+            "run_attempt": 2,
             "job_id": 90,
             "name": "Playwright (base)",
             "conclusion": "failure",
             "html_url": "https://github.com/owner/repo/actions/runs/9/job/90",
+            "artifact_names": ["playwright-head-9-2"],
             "log": "last line\n",
             "log_bytes": 10,
             "tail_limit_bytes": 10,
@@ -517,7 +528,7 @@ async def test_pr_checks_reports_permission_failure():
     fake.get_status_codes[endpoint] = 403
     service._client = fake
 
-    with pytest.raises(MemberCapabilityError, match="status 403"):
+    with pytest.raises(MemberCapabilityError, match="approve the permission update"):
         await service.pr_checks("https://github.com/owner/repo/pull/7")
 
 
@@ -585,7 +596,7 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
     }
     service._client = fake
 
-    with pytest.raises(MemberCapabilityError, match="above the"):
+    with pytest.raises(MemberCapabilityError, match="ask a human to retrieve it"):
         await service.artifact_download(
             "https://github.com/owner/repo/actions/runs/9", "large", tmp_path
         )

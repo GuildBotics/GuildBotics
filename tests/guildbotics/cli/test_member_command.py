@@ -651,6 +651,27 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
     assert "Keep JSON factual." in result.output
 
 
+def test_markdown_renders_failed_logs_as_multiline_code_blocks():
+    rendered = member_module._to_markdown(
+        {
+            "rollup": "failure",
+            "failed_logs": [
+                {
+                    "name": "test",
+                    "conclusion": "failure",
+                    "run_id": 9,
+                    "log": "first line\nsecond line\n",
+                }
+            ],
+        }
+    )
+
+    assert "## Failed job logs" in rendered
+    assert "### test (failure)" in rendered
+    assert "```text\nfirst line\nsecond line\n```" in rendered
+    assert "first line\\nsecond line" not in rendered
+
+
 def test_member_context_uses_active_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))

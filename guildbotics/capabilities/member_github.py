@@ -17,6 +17,7 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.actions_client import (
+    GITHUB_PAGE_SIZE,
     GitHubActionsClient,
     GitHubActionsClientError,
 )
@@ -31,9 +32,10 @@ from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
 GITHUB_ACTIONS_RUN_MIN_PART_COUNT = 5
-GITHUB_PAGE_SIZE = 100
 DEFAULT_LOG_TAIL_BYTES = STREAM_READ_LIMIT // 32
-MAX_ARTIFACT_BYTES = STREAM_READ_LIMIT
+# Artifacts are written to the isolated workspace instead of the broker output,
+# so they can be larger than the shared stdout boundary while remaining bounded.
+MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 PATCH_HUNK_RE = re.compile(
     r"^@@ -(?P<left>\d+)(?:,(?P<left_count>\d+))? "
     r"\+(?P<right>\d+)(?:,(?P<right_count>\d+))? @@"
@@ -44,6 +46,12 @@ _FAILED_CONCLUSIONS = {
     "failure",
     "startup_failure",
     "stale",
+    "timed_out",
+}
+_PRIMARY_FAILED_CONCLUSIONS = {
+    "action_required",
+    "failure",
+    "startup_failure",
     "timed_out",
 }
 _SUCCESS_CONCLUSIONS = {"neutral", "skipped", "success"}
@@ -468,7 +476,8 @@ class MemberGitHubCapabilityService:
             if archive_size > MAX_ARTIFACT_BYTES:
                 raise MemberCapabilityError(
                     f"Artifact '{name}' is {archive_size} bytes, above the "
-                    f"{MAX_ARTIFACT_BYTES} byte limit."
+                    f"{MAX_ARTIFACT_BYTES} byte limit. Inspect the artifact from "
+                    "the Actions run URL or ask a human to retrieve it."
                 )
             archive = await actions.artifact_archive(
                 resource.owner,
@@ -504,7 +513,7 @@ class MemberGitHubCapabilityService:
             if item.get("conclusion") in _FAILED_CONCLUSIONS
             and int((item.get("check_suite") or {}).get("id", 0))
         }
-        failed_jobs: list[tuple[int, dict[str, Any]]] = []
+        failed_jobs: list[tuple[int, int, list[str], dict[str, Any]]] = []
         for run in runs:
             run_id = int(run.get("id", 0))
             if not run_id:
@@ -524,23 +533,48 @@ class MemberGitHubCapabilityService:
             ):
                 continue
             jobs = await actions.jobs(resource.owner, resource.repo, run_id)
-            for job in jobs:
-                if job.get("conclusion") in _FAILED_CONCLUSIONS and int(
-                    job.get("id", 0)
-                ):
-                    failed_jobs.append((run_id, job))
+            run_failed_jobs = [
+                job
+                for job in jobs
+                if job.get("conclusion") in _FAILED_CONCLUSIONS
+                and int(job.get("id", 0))
+            ]
+            if not run_failed_jobs:
+                continue
+            artifacts = await actions.artifacts(
+                resource.owner, resource.repo, run_id=run_id
+            )
+            artifact_names = sorted(
+                {
+                    str(artifact.get("name", ""))
+                    for artifact in artifacts
+                    if artifact.get("name") and not artifact.get("expired", False)
+                }
+            )
+            run_attempt = int(run.get("run_attempt", 0))
+            failed_jobs.extend(
+                (run_id, run_attempt, artifact_names, job) for job in run_failed_jobs
+            )
         if not failed_jobs:
             return []
+        primary_failed_jobs = [
+            item
+            for item in failed_jobs
+            if item[3].get("conclusion") in _PRIMARY_FAILED_CONCLUSIONS
+        ]
+        # Cancelled and stale matrix jobs are usually fallout from the real
+        # failure. Return them only when there is no primary failure to inspect.
+        selected_jobs = primary_failed_jobs or failed_jobs
         # Leave room for JSON escaping and per-job metadata inside the broker's
         # output boundary. With a small failed set this remains the requested
         # per-job tail; a large matrix is divided fairly instead of producing
         # truncated, invalid JSON at the broker boundary.
         effective_tail_bytes = min(
             log_tail_bytes,
-            max(1, STREAM_READ_LIMIT // (8 * len(failed_jobs))),
+            max(1, STREAM_READ_LIMIT // (8 * len(selected_jobs))),
         )
         logs: list[dict[str, Any]] = []
-        for run_id, job in failed_jobs:
+        for run_id, run_attempt, artifact_names, job in selected_jobs:
             job_id = int(job["id"])
             tail, truncated = await actions.job_log_tail(
                 resource.owner,
@@ -551,10 +585,12 @@ class MemberGitHubCapabilityService:
             logs.append(
                 {
                     "run_id": run_id,
+                    "run_attempt": run_attempt,
                     "job_id": job_id,
                     "name": job.get("name", ""),
                     "conclusion": job.get("conclusion", ""),
                     "html_url": job.get("html_url", ""),
+                    "artifact_names": artifact_names,
                     "log": tail.decode("utf-8", errors="replace"),
                     "log_bytes": len(tail),
                     "tail_limit_bytes": effective_tail_bytes,
@@ -1378,7 +1414,8 @@ def _extract_artifact(archive: bytes, destination: Path) -> list[Path]:
             ]
             if collisions:
                 raise MemberCapabilityError(
-                    f"Artifact destination already exists: {collisions[0]}"
+                    f"Artifact destination already exists: {collisions[0]}. "
+                    "Choose a different --dest or remove the existing file, then retry."
                 )
             destination.mkdir(parents=True, exist_ok=True)
             files: list[Path] = []

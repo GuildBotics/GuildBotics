@@ -8,6 +8,10 @@ from typing import Any
 import httpx
 
 GITHUB_PAGE_SIZE = 100
+_PERMISSION_GUIDANCE = (
+    " Check Actions, Checks, and Commit statuses read permissions, and approve "
+    "the permission update for the GitHub App installation."
+)
 
 
 class GitHubActionsClientError(RuntimeError):
@@ -89,14 +93,15 @@ class GitHubActionsClient:
         owner: str,
         repo: str,
         *,
-        name: str,
+        name: str | None = None,
         run_id: int | None = None,
     ) -> list[dict[str, Any]]:
         endpoint = f"/repos/{owner}/{repo}/actions/artifacts"
         if run_id is not None:
             endpoint = f"/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
+        extra_params = {"name": name} if name else None
         return await self._paginated_items(
-            endpoint, "artifacts", extra_params={"name": name}
+            endpoint, "artifacts", extra_params=extra_params
         )
 
     async def artifact_archive(
@@ -211,6 +216,7 @@ def _raise_for_status(response: Any) -> None:
         response.raise_for_status()
     except Exception as exc:
         status_code = getattr(response, "status_code", "")
+        guidance = _PERMISSION_GUIDANCE if status_code in {403, 404} else ""
         raise GitHubActionsClientError(
-            f"GitHub API request failed with status {status_code}."
+            f"GitHub API request failed with status {status_code}.{guidance}"
         ) from exc
