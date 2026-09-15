@@ -390,14 +390,14 @@ uv run --no-sync ruff format --check guildbotics tests
 uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
-uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
+uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
 
 Windows では、Git repository を作るテストの一時 path が `MAX_PATH` を超えないよう、
 短いテスト専用の base directory を指定する:
 
 ```powershell
-uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml --basetemp=C:/gb-pytest
+uv run --no-sync python -m pytest tests/ -n auto --durations=30 --basetemp=C:/gb-pytest
 ```
 
 Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ

@@ -76,6 +76,7 @@ test = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "pytest-cov>=5.0",
+  "pytest-xdist>=3.6",
 ]
 redis = [
   "redis>=5.0",
