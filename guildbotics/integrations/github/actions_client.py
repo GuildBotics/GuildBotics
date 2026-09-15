@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from http import HTTPStatus
+from tempfile import TemporaryFile
+from typing import Any, BinaryIO
 
 import httpx
 
 GITHUB_PAGE_SIZE = 100
 _PERMISSION_GUIDANCE = (
-    " Check Actions, Checks, and Commit statuses read permissions, and approve "
-    "the permission update for the GitHub App installation."
+    " Check that the token or GitHub App has Actions, Checks, and Commit statuses "
+    "read permissions. For a GitHub App, also approve the permission update for "
+    "the installation."
 )
 
 
@@ -18,7 +21,7 @@ class GitHubActionsClientError(RuntimeError):
     """A GitHub Checks or Actions request failed."""
 
 
-Download = Callable[[str, int], Awaitable[bytes]]
+Download = Callable[[str, int], Awaitable[BinaryIO]]
 DownloadTail = Callable[[str, int], Awaitable[tuple[bytes, bool]]]
 
 
@@ -51,7 +54,7 @@ class GitHubActionsClient:
             response = await self._get(
                 endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
             )
-            _raise_for_status(response)
+            _raise_for_status(response, permission_guidance=True)
             payload = response.json()
             if not isinstance(payload, dict):
                 raise GitHubActionsClientError(
@@ -81,7 +84,7 @@ class GitHubActionsClient:
         self, owner: str, repo: str, job_id: int, tail_bytes: int
     ) -> tuple[bytes, bool]:
         response = await self._get(f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
-        _raise_for_status(response)
+        _raise_for_status(response, permission_guidance=True)
         location = response.headers.get("location", "")
         if location:
             return await self._download_tail(location, tail_bytes)
@@ -106,14 +109,14 @@ class GitHubActionsClient:
 
     async def artifact_archive(
         self, owner: str, repo: str, artifact_id: int, max_bytes: int
-    ) -> bytes:
+    ) -> BinaryIO:
         return await self._download_endpoint(
             f"/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip", max_bytes
         )
 
-    async def _download_endpoint(self, endpoint: str, max_bytes: int) -> bytes:
+    async def _download_endpoint(self, endpoint: str, max_bytes: int) -> BinaryIO:
         response = await self._get(endpoint)
-        _raise_for_status(response)
+        _raise_for_status(response, permission_guidance=True)
         location = response.headers.get("location", "")
         if location:
             return await self._download(location, max_bytes)
@@ -122,7 +125,10 @@ class GitHubActionsClient:
             raise GitHubActionsClientError(
                 f"GitHub download exceeds the {max_bytes} byte limit."
             )
-        return content
+        archive = TemporaryFile()
+        archive.write(content)
+        archive.seek(0)
+        return archive
 
     async def _paginated_items(
         self,
@@ -140,7 +146,7 @@ class GitHubActionsClient:
                 **(extra_params or {}),
             }
             response = await self._get(endpoint, params=params)
-            _raise_for_status(response)
+            _raise_for_status(response, permission_guidance=True)
             payload = response.json()
             if not isinstance(payload, dict):
                 raise GitHubActionsClientError(
@@ -163,26 +169,33 @@ class GitHubActionsClient:
             ) from exc
 
 
-async def _download_without_credentials(url: str, max_bytes: int) -> bytes:
+async def _download_without_credentials(url: str, max_bytes: int) -> BinaryIO:
     """Download a short-lived GitHub URL without forwarding GitHub credentials."""
-    content = bytearray()
-    async with (
-        httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client,
-        client.stream("GET", url) as response,
-    ):
-        _raise_for_status(response)
-        content_length = response.headers.get("content-length")
-        if content_length and int(content_length) > max_bytes:
-            raise GitHubActionsClientError(
-                f"GitHub download exceeds the {max_bytes} byte limit."
-            )
-        async for chunk in response.aiter_bytes():
-            content.extend(chunk)
-            if len(content) > max_bytes:
+    archive = TemporaryFile()
+    try:
+        total = 0
+        async with (
+            httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client,
+            client.stream("GET", url) as response,
+        ):
+            _raise_for_status(response)
+            content_length = response.headers.get("content-length")
+            if content_length and int(content_length) > max_bytes:
                 raise GitHubActionsClientError(
                     f"GitHub download exceeds the {max_bytes} byte limit."
                 )
-    return bytes(content)
+            async for chunk in response.aiter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise GitHubActionsClientError(
+                        f"GitHub download exceeds the {max_bytes} byte limit."
+                    )
+                archive.write(chunk)
+        archive.seek(0)
+        return archive
+    except Exception:
+        archive.close()
+        raise
 
 
 async def _download_tail_without_credentials(
@@ -211,12 +224,17 @@ def _dict_items(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
     return value
 
 
-def _raise_for_status(response: Any) -> None:
+def _raise_for_status(response: Any, *, permission_guidance: bool = False) -> None:
     try:
         response.raise_for_status()
     except Exception as exc:
         status_code = getattr(response, "status_code", "")
-        guidance = _PERMISSION_GUIDANCE if status_code in {403, 404} else ""
+        guidance = (
+            _PERMISSION_GUIDANCE
+            if permission_guidance
+            and status_code in {HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND}
+            else ""
+        )
         raise GitHubActionsClientError(
             f"GitHub API request failed with status {status_code}.{guidance}"
         ) from exc

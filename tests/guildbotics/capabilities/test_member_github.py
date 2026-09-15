@@ -404,7 +404,13 @@ async def test_pr_inspect_rejects_unexpected_pull_request_payload():
 
 
 @pytest.mark.asyncio
-async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
+@pytest.mark.parametrize(
+    ("workflow_run", "expected_run_attempt"),
+    [({"id": 9, "run_attempt": 2}, 2), ({"id": 9}, 1)],
+)
+async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
+    workflow_run, expected_run_attempt
+):
     service = _service()
     fake = FakeClient()
     fake.get_payloads.update(
@@ -429,7 +435,7 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
             },
             "/repos/owner/repo/commits/abc123/status": {"statuses": []},
             "/repos/owner/repo/actions/runs": {
-                "workflow_runs": [{"id": 9, "run_attempt": 2}]
+                "workflow_runs": [workflow_run]
             },
             "/repos/owner/repo/actions/runs/9/jobs": {
                 "jobs": [
@@ -475,7 +481,7 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
     assert result["failed_logs"] == [
         {
             "run_id": 9,
-            "run_attempt": 2,
+            "run_attempt": expected_run_attempt,
             "job_id": 90,
             "name": "Playwright (base)",
             "conclusion": "failure",

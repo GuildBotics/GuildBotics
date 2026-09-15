@@ -5,9 +5,9 @@ import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Any
+from shutil import copyfileobj
+from typing import Any, BinaryIO
 from urllib.parse import quote, urlparse
 from zipfile import BadZipFile, ZipFile
 
@@ -487,7 +487,10 @@ class MemberGitHubCapabilityService:
             )
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
-        files = _extract_artifact(archive, destination)
+        try:
+            files = _extract_artifact(archive, destination)
+        finally:
+            archive.close()
         return {
             "repo": resource.full_repo,
             "run_id": run_id or (artifact.get("workflow_run") or {}).get("id"),
@@ -551,7 +554,7 @@ class MemberGitHubCapabilityService:
                     if artifact.get("name") and not artifact.get("expired", False)
                 }
             )
-            run_attempt = int(run.get("run_attempt", 0))
+            run_attempt = int(run.get("run_attempt", 1))
             failed_jobs.extend(
                 (run_id, run_attempt, artifact_names, job) for job in run_failed_jobs
             )
@@ -1368,10 +1371,10 @@ def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
     return run_ids
 
 
-def _extract_artifact(archive: bytes, destination: Path) -> list[Path]:
+def _extract_artifact(archive: BinaryIO, destination: Path) -> list[Path]:
     destination = destination.resolve()
     try:
-        with ZipFile(BytesIO(archive)) as bundle:
+        with ZipFile(archive) as bundle:
             members = bundle.infolist()
             total_size = sum(member.file_size for member in members)
             if total_size > MAX_ARTIFACT_BYTES:
@@ -1424,7 +1427,8 @@ def _extract_artifact(archive: bytes, destination: Path) -> list[Path]:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(bundle.read(member))
+                with bundle.open(member) as source, target.open("wb") as output:
+                    copyfileobj(source, output)
                 files.append(target)
             return files
     except BadZipFile as exc:

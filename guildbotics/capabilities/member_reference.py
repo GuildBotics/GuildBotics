@@ -292,10 +292,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
-    "After pushing or opening a PR, inspect its CI with `member github pr checks`. "
-    "If a required check fails, use `member github pr checks --failed-logs` to "
+    "After opening or updating a PR, inspect its CI with `member github pr checks`. "
+    "If a check fails, use `member github pr checks --failed-logs` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
-    "check CI again. Do not report the work complete while required checks are "
+    "check CI again. Do not report the work complete while checks are "
     "pending or failing; if an unrelated failure or an unavailable check blocks "
     "completion, follow the failure-handling rule above and report that blocker.",
     "On completion, leave an externally visible trace at the place that "

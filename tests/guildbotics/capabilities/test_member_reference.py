@@ -61,7 +61,7 @@ def test_reference_includes_standard_work_procedure():
     assert "--start-line" in text
     assert "--start-side" in text
     assert "reply_target_id" in text
-    assert "After pushing or opening a PR" in text
+    assert "After opening or updating a PR" in text
     assert "member github pr checks --failed-logs" in text
     assert "check CI again" in text
     assert "pending or failing" in text
