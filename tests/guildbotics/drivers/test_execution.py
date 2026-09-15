@@ -4,12 +4,14 @@ import threading
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
     ExecutionStatusPublisher,
     TaskRunCoordinator,
     WorkRejectedError,
 )
+from guildbotics.entities.task_run import TASK_RUN_TERMINAL_STATES
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
@@ -378,3 +380,111 @@ def test_autonomous_work_checks_owner_before_command_start() -> None:
         pass
 
     assert excinfo.value.reason == "not_owner"
+
+
+@pytest.mark.parametrize("terminal_status", sorted(TASK_RUN_TERMINAL_STATES))
+def test_task_run_begin_retries_every_terminal_state_that_left_work_undone(
+    terminal_status: str,
+) -> None:
+    """Only a state that proves the work did not happen releases an identity.
+
+    Parametrizing over the terminal states keeps this a statement about the
+    whole population: a state added later has to be classified here, as one
+    that frees its input for another attempt or one that keeps it.
+    """
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        started = coordinator.begin(
+            "event-retry", "alice", "device-1", run_id="run-retry"
+        )
+        assert started.accepted is True
+        RunStore().append_evidence("run-retry", "chat_reply", {"text": "partial"})
+        coordinator.finish("run-retry", terminal_status, "stopped")
+
+        retried = coordinator.begin(
+            "event-retry", "alice", "device-1", run_id="run-retry"
+        )
+
+        if terminal_status in {"succeeded", "result_unknown"}:
+            # ``succeeded`` recorded the outcome; ``result_unknown`` means the
+            # outcome could not be observed, so the work may already have taken
+            # effect and is never repeated without the user asking for it.
+            assert retried.accepted is False
+            assert retried.reason == "already_finished"
+            return
+        # Nothing acted on the work, so the next attempt runs under the same
+        # run id and keeps the evidence earlier attempts already recorded.
+        assert retried.accepted is True
+        assert retried.record is not None
+        assert retried.record.run_id == "run-retry"
+        assert retried.record.status == "running"
+        assert retried.record.finished_at is None
+        assert len(retried.record.provider_evidence) == 1
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_task_run_begin_moves_a_reopened_run_to_the_device_running_it() -> None:
+    """A retry accepted elsewhere owns the run, so handoffs can still reach it.
+
+    ``mark_interrupted`` finds the previous owner's work by ``device_id``; a
+    run left recorded on the device whose attempt failed would stay ``running``
+    forever after the next handoff and reject every later attempt.
+    """
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        started = coordinator.begin(
+            "event-owner", "alice", "device-a", run_id="run-owner"
+        )
+        assert started.accepted is True
+        coordinator.finish("run-owner", "failed", "stopped")
+
+        retried = coordinator.begin(
+            "event-owner", "alice", "device-b", run_id="run-owner"
+        )
+
+        assert retried.accepted is True
+        assert retried.record is not None
+        assert retried.record.device_id == "device-b"
+
+        interrupted = coordinator.mark_interrupted("device-b")
+
+        assert [record.run_id for record in interrupted] == ["run-owner"]
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_task_run_begin_keeps_a_recorded_asking_completion_terminal() -> None:
+    """An ``asking`` completion is stored as ``failed`` but is still an outcome."""
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        started = coordinator.begin(
+            "event-asking", "alice", "device-1", run_id="run-asking"
+        )
+        assert started.accepted is True
+        store = RunStore()
+        store.append_evidence("run-asking", "chat_reply", {"text": "which one?"})
+        completed = store.complete_run(
+            "run-asking",
+            "asking",
+            "asked the requester",
+            subject_type="chat",
+            subject_id="slack:C1:100.1",
+            person_id="alice",
+        )
+        assert completed.status == "asking"
+
+        again = coordinator.begin(
+            "event-asking", "alice", "device-1", run_id="run-asking"
+        )
+
+        assert again.accepted is False
+        assert again.reason == "already_finished"
+    finally:
+        set_workspace_sync_port(None)
