@@ -1528,15 +1528,11 @@ def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     refs_ref = rf"\b{_ISSUE_REFS_KEYWORD}\s+#{issue_number}\b"
     if re.search(closing_ref, body, re.I):
         return body
-    if closes:
-        replaced, n = re.subn(refs_ref, f"Closes #{issue_number}", body, flags=re.I)
-        if n:
-            return replaced
-        trailer = f"Closes #{issue_number}"
-    else:
-        if re.search(refs_ref, body, re.I):
+    if re.search(refs_ref, body, re.I):
+        if not closes:
             return body
-        trailer = f"Refs #{issue_number}"
+        return re.sub(refs_ref, f"Closes #{issue_number}", body, flags=re.I)
+    trailer = f"Closes #{issue_number}" if closes else f"Refs #{issue_number}"
     return f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
 
 

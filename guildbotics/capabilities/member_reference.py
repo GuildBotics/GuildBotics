@@ -287,7 +287,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When issue work changed code, open or reuse a PR with `member github pr "
-    "create`. When creating new PR inline feedback, first inspect the PR with "
+    "create`. Pass `--issue-url`, and add `--closes-issue` only when merging "
+    "this PR into the default branch completes the whole issue; keep the "
+    "default `Refs` for stacked PRs, partial steps, and tracking or parent "
+    "issues. `Closes` only states intent — the issue closes when a human "
+    "merges the PR, so this is not the human-only issue closing decision. "
+    "When creating new PR inline feedback, first inspect the PR with "
     "`member github pr inspect --include-diff`, then use `member github pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "

@@ -58,6 +58,10 @@ def test_reference_includes_standard_work_procedure():
     assert "Inspect first" in text
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
+    assert (
+        "add `--closes-issue` only when merging this PR into the default "
+        "branch completes the whole issue"
+    ) in text
     assert "files[].commentable_lines" in text
     assert "path`, `line`, `side`" in text
     assert "--start-line" in text
