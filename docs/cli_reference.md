@@ -1201,7 +1201,7 @@ guildbotics member github pr comment [OPTIONS]
 
 ## `guildbotics member github pr create`
 
-Open a PR, or return the existing open PR for the same head and base branches.
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url appends Refs #<n> unless --closes-issue is set.
 
 ```text
 guildbotics member github pr create [OPTIONS]
@@ -1217,6 +1217,7 @@ guildbotics member github pr create [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
+| `--closes-issue / --refs-issue` | When --issue-url is set, append Closes #\<n\> or Refs #\<n\> to the PR body. Defaults to Refs. [default: refs-issue] |
 | `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |

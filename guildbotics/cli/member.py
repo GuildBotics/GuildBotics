@@ -1786,6 +1786,15 @@ async def _pr_checks(
 @_required_content_stdin_option
 @click.option("--issue-url", default="", help="Related issue URL to link to the PR.")
 @click.option(
+    "--closes-issue/--refs-issue",
+    "closes_issue",
+    default=False,
+    help=(
+        "When --issue-url is set, append Closes #<n> or Refs #<n> to the PR "
+        "body. Defaults to Refs."
+    ),
+)
+@click.option(
     "--draft",
     type=click.Choice(["true", "false"]),
     default="false",
@@ -1799,13 +1808,18 @@ def pr_create(
     base: str,
     title: str,
     issue_url: str,
+    closes_issue: bool,
     draft: str,
     output_format: str,
 ) -> None:
     title = _validate_title(title)
+    if closes_issue and not issue_url.strip():
+        raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
     _run(
-        _pr_create(person, repo, head, base, title, body, issue_url, draft),
+        _pr_create(
+            person, repo, head, base, title, body, issue_url, draft, closes_issue
+        ),
         output_format=output_format,
     )
 
@@ -1819,12 +1833,13 @@ async def _pr_create(
     body: str,
     issue_url: str,
     draft: str,
+    closes_issue: bool,
 ) -> dict[str, Any]:
     context, member_person = _resolve(person)
     service = MemberGitHubCapabilityService(member_person, context.team)
     try:
         result = await service.pr_create(
-            repo, head, base, title, body, issue_url, draft
+            repo, head, base, title, body, issue_url, draft, closes_issue
         )
         TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
         record_member_pr_create_event(member_person, repo, title, result)

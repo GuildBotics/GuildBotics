@@ -27,6 +27,8 @@ def test_reference_covers_every_member_domain():
     assert "guildbotics member git commit" in text
     assert "--include-diff" in text
     assert "guildbotics member github pr create" in text
+    assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
+    assert "--issue-url appends Refs #<n> unless --closes-issue is set." in text
     assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
     assert "guildbotics member github pr checks" in text

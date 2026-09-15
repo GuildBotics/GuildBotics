@@ -8,6 +8,7 @@ from guildbotics.capabilities.member_github import (
     MAX_ARTIFACT_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
+    _append_issue_link,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -1663,6 +1664,84 @@ async def test_pr_create_returns_matching_open_pr_without_updating_it():
     ]
     assert fake.posts == []
     assert fake.patches == []
+
+
+ISSUE_URL = "https://github.com/owner/repo/issues/42"
+
+
+@pytest.mark.parametrize(
+    ("body", "issue_url", "closes", "expected"),
+    [
+        ("Body", ISSUE_URL, False, "Body\n\nRefs #42"),
+        ("Body", ISSUE_URL, True, "Body\n\nCloses #42"),
+        ("", ISSUE_URL, True, "Closes #42"),
+        ("Body", "", True, "Body"),
+        ("Body", "https://github.com/owner/repo/pull/1", True, "Body"),
+        ("Closes #42", ISSUE_URL, True, "Closes #42"),
+        ("Fixes #42", ISSUE_URL, True, "Fixes #42"),
+        ("Resolved #42", ISSUE_URL, True, "Resolved #42"),
+        ("Refs #42", ISSUE_URL, False, "Refs #42"),
+        ("Refs #42", ISSUE_URL, True, "Refs #42"),
+        ("Closes #42", ISSUE_URL, False, "Closes #42"),
+        ("See #42", ISSUE_URL, False, "See #42\n\nRefs #42"),
+        ("Closes #41", ISSUE_URL, True, "Closes #41\n\nCloses #42"),
+    ],
+)
+def test_append_issue_link_chooses_trailer_and_skips_existing_keywords(
+    body, issue_url, closes, expected
+):
+    assert _append_issue_link(body, issue_url, closes=closes) == expected
+
+
+@pytest.mark.asyncio
+async def test_pr_create_appends_refs_when_issue_url_is_set():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/pulls"] = {
+        "number": 8,
+        "html_url": "https://github.com/owner/repo/pull/8",
+        "draft": False,
+    }
+    service._client = fake
+
+    await service.pr_create(
+        "owner/repo",
+        "feature",
+        "ticket-driven-workflow",
+        "Title",
+        "Body",
+        ISSUE_URL,
+        "false",
+    )
+
+    assert fake.posts[0][1]["body"] == "Body\n\nRefs #42"
+
+
+@pytest.mark.asyncio
+async def test_pr_create_appends_closes_when_closes_issue_is_true():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/pulls"] = {
+        "number": 8,
+        "html_url": "https://github.com/owner/repo/pull/8",
+        "draft": False,
+    }
+    service._client = fake
+
+    await service.pr_create(
+        "owner/repo",
+        "feature",
+        "main",
+        "Title",
+        "Body",
+        ISSUE_URL,
+        "false",
+        True,
+    )
+
+    assert fake.posts[0][1]["body"] == "Body\n\nCloses #42"
 
 
 @pytest.mark.asyncio

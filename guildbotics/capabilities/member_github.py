@@ -630,6 +630,7 @@ class MemberGitHubCapabilityService:
         body: str,
         issue_url: str,
         draft: str,
+        closes_issue: bool = False,
     ) -> dict[str, Any]:
         owner, repo_name = self.parse_repo(repo)
         client = await self._get_client()
@@ -650,7 +651,7 @@ class MemberGitHubCapabilityService:
                 "base": base_branch,
             }
 
-        body = _append_closes(body, issue_url)
+        body = _append_issue_link(body, issue_url, closes=closes_issue)
         payload: dict[str, Any] = {
             "title": title,
             "head": head,
@@ -1512,19 +1513,21 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _append_closes(body: str, issue_url: str) -> str:
+def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not issue_url:
         return body
     match = re.search(r"/issues/(\d+)", issue_url)
     if not match:
         return body
     issue_number = match.group(1)
-    closes = f"Closes #{issue_number}"
     if re.search(
-        rf"\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#{issue_number}\b", body, re.I
+        rf"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|refs?)\s+#{issue_number}\b",
+        body,
+        re.I,
     ):
         return body
-    return f"{body.rstrip()}\n\n{closes}" if body.strip() else closes
+    trailer = f"{'Closes' if closes else 'Refs'} #{issue_number}"
+    return f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
 
 
 def _remote_web_url(remote_url: str) -> str:

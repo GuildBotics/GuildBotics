@@ -121,8 +121,9 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
                 "[--base <branch>] --title <title> --content-file <file> "
-                "[--issue-url <url>] [--draft true|false]",
-                "Open a PR, or return the existing open PR for the same head and base branches.",
+                "[--issue-url <url> [--closes-issue|--refs-issue]] [--draft true|false]",
+                "Open a PR, or return the existing open PR for the same head and base branches. "
+                "--issue-url appends Refs #<n> unless --closes-issue is set.",
             ),
             (
                 "guildbotics member github pr update --person <person> --url <pr_url> "
