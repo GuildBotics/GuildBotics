@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.execution import ExecutionCoordinator, TaskRunCoordinator
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
@@ -706,3 +707,146 @@ async def test_dispatcher_side_abandon_records_abandoned_event(monkeypatch, tmp_
     # record_chat_dispatch_abandoned itself caps the diagnostics payload's
     # attempt_count at max_attempts (this monkeypatch captures the dispatcher's
     # raw call args, which still legitimately go one over before capping).
+
+
+@pytest.mark.asyncio
+async def test_failed_event_runs_again_once_its_retry_time_arrives(
+    monkeypatch, tmp_path
+):
+    """A failed attempt must really be retried, not swallowed as a duplicate.
+
+    The first attempt records a terminal TaskRun under the event's stable work
+    identity. The retry enters the same coordinator with the same identity, so
+    it is the real ``TaskRunCoordinator`` -- not a stub -- that has to tell a
+    failed attempt apart from an event another device already handled.
+    """
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    ran: list[int] = []
+
+    class _FailsOnceRunner:
+        def __init__(self, *a):
+            pass
+
+        async def run(self):
+            ran.append(len(ran) + 1)
+            if len(ran) == 1:
+                raise RuntimeError("boom")
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FailsOnceRunner
+    )
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    assert await dispatcher.process_person(person) == 0
+    pending = store.load_pending_events("slack", "alice", "C1")[0]
+    assert pending.attempt_count == 1
+    # Reaching the scheduled retry time is the only thing the queue waits for.
+    pending.next_attempt_at = "2000-01-01T00:00:00+00:00"
+    store.save_pending_event("slack", "alice", "C1", pending)
+
+    assert await dispatcher.process_person(person) == 1
+
+    assert ran == [1, 2]
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+    assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_event_completed_elsewhere_is_processed_without_running_again(
+    monkeypatch, tmp_path
+):
+    """An event whose run recorded a result stays a duplicate, as before."""
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    run_store = RunStore()
+    run_store.start_record(
+        "prior-run",
+        work_kind="workflows/chat_conversation_workflow",
+        execution_mode="autonomous",
+        member_id="alice",
+        work_identity={
+            "kind": "chat-event",
+            "event_id": "E1",
+            "service": "slack",
+            "channel_id": "C1",
+        },
+    )
+    run_store.append_evidence("prior-run", "chat_reply", {"text": "answered"})
+    run_store.complete_run(
+        "prior-run",
+        "done",
+        "answered",
+        subject_type="chat",
+        subject_id="slack:C1:100.1",
+        person_id="alice",
+    )
+
+    class _NeverRuns:
+        def __init__(self, *a):
+            raise AssertionError("a completed event must not run again")
+
+        async def run(self):
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _NeverRuns
+    )
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    processed = await dispatcher.process_person(
+        Person(person_id="alice", name="A", is_active=True)
+    )
+
+    assert processed == 1
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+    assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_failures_use_the_whole_attempt_budget_then_abandon(
+    monkeypatch, tmp_path
+):
+    """The budget is spent on real attempts, and only its end abandons the event."""
+    monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "3")
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    store.upsert_pending_event("slack", "alice", "C1", _event())
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran, fail_events={"E1"})
+    abandoned: list[dict] = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.record_chat_dispatch_abandoned",
+        lambda **kwargs: abandoned.append(kwargs),
+    )
+    context = _FakeContext()
+    context.logger.error = lambda *a, **k: None
+    person = Person(person_id="alice", name="A", is_active=True)
+    dispatcher = PendingChatDispatcher(
+        context,  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    for _ in range(3):
+        assert await dispatcher.process_person(person) == 0
+        pending = store.load_pending_events("slack", "alice", "C1")
+        if not pending:
+            break
+        # Only the backoff wait is skipped; everything else is the real path.
+        pending[0].next_attempt_at = "2000-01-01T00:00:00+00:00"
+        store.save_pending_event("slack", "alice", "C1", pending[0])
+
+    assert ran == ["E1", "E1", "E1"]
+    assert [event["attempt_count"] for event in abandoned] == [3]
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+    assert store.load_pending_events("slack", "alice", "C1") == []

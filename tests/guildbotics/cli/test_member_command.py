@@ -1799,7 +1799,9 @@ def test_member_github_pr_create_passes_base(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+        async def pr_create(
+            self, repo, head, base, title, body, issue_url, draft, closes_issue=False
+        ):
             calls.update(
                 {
                     "repo": repo,
@@ -1809,6 +1811,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
                     "body": body,
                     "issue_url": issue_url,
                     "draft": draft,
+                    "closes_issue": closes_issue,
                 }
             )
             return {
@@ -1863,6 +1866,7 @@ def test_member_github_pr_create_passes_base(monkeypatch):
         "body": "PR body\n",
         "issue_url": "https://github.com/owner/repo/issues/42",
         "draft": "false",
+        "closes_issue": False,
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
@@ -1902,7 +1906,9 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
         def __init__(self, *_args):
             pass
 
-        async def pr_create(self, repo, head, base, title, body, issue_url, draft):
+        async def pr_create(
+            self, repo, head, base, title, body, issue_url, draft, closes_issue=False
+        ):
             calls.update(
                 {
                     "repo": repo,
@@ -1912,6 +1918,7 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
                     "body": body,
                     "issue_url": issue_url,
                     "draft": draft,
+                    "closes_issue": closes_issue,
                 }
             )
             return {
@@ -1962,9 +1969,98 @@ def test_member_github_pr_create_reads_content_from_stdin(monkeypatch):
         "body": "## Summary\n\nPR body\n",
         "issue_url": "",
         "draft": "false",
+        "closes_issue": False,
         "closed": True,
     }
     assert '"base": "ticket-driven-workflow"' in result.output
+
+
+def test_member_github_pr_create_passes_closes_issue(monkeypatch):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_create(
+            self, repo, head, base, title, body, issue_url, draft, closes_issue=False
+        ):
+            calls["closes_issue"] = closes_issue
+            calls["issue_url"] = issue_url
+            return {
+                "pr_number": 1,
+                "pr_url": "https://github.com/owner/repo/pull/1",
+                "created": True,
+                "draft": False,
+                "head": head,
+                "base": base,
+            }
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--title",
+            "PR title",
+            "--content-stdin",
+            "--issue-url",
+            "https://github.com/owner/repo/issues/42",
+            "--closes-issue",
+        ],
+        input="PR body\n",
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "closes_issue": True,
+        "issue_url": "https://github.com/owner/repo/issues/42",
+    }
+
+
+def test_member_github_pr_create_rejects_closes_issue_without_issue_url():
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "owner/repo",
+            "--head",
+            "feature",
+            "--title",
+            "PR title",
+            "--content-stdin",
+            "--closes-issue",
+        ],
+        input="PR body\n",
+    )
+
+    assert result.exit_code != 0
+    assert "--closes-issue requires --issue-url." in result.output
 
 
 def test_member_github_pr_create_rejects_unknown_draft_value():
