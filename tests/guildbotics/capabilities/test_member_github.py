@@ -603,13 +603,16 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
         ]
     }
     service._client = fake
+    # The destination is a directory of its own: ``tmp_path`` also holds the
+    # isolated HOME, which anything in the process may write to.
+    destination = tmp_path / "artifact"
 
     with pytest.raises(MemberCapabilityError, match="ask a human to retrieve it"):
         await service.artifact_download(
-            "https://github.com/owner/repo/actions/runs/9", "large", tmp_path
+            "https://github.com/owner/repo/actions/runs/9", "large", destination
         )
 
-    assert list(tmp_path.iterdir()) == []
+    assert list(destination.rglob("*")) == []
 
 
 @pytest.mark.asyncio
