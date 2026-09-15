@@ -37,6 +37,7 @@ def default_memory_audit_dir() -> Path:
 def append_memory_event(
     *,
     action: str,
+    device_id: str,
     person_id: str,
     scope: str,
     doc_id: str,
@@ -112,7 +113,7 @@ def append_memory_event(
         "attributes": attributes,
         "payload": payload,
     }
-    MemoryAuditStore().record(item)
+    MemoryAuditStore(device_id=device_id).record(item)
 
 
 class MemoryAuditStore:

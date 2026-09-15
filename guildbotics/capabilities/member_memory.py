@@ -14,10 +14,7 @@ from typing import Any, Literal
 
 import yaml  # type: ignore
 
-from guildbotics.capabilities.member_memory_audit import (
-    MemoryAuditStore,
-    append_memory_event,
-)
+from guildbotics.capabilities.member_memory_audit import append_memory_event
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
@@ -32,9 +29,12 @@ from guildbotics.utils.shared_write_lock import (
 )
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
+    dump_shared_json,
     notify_shared_state_changed,
+    update_shared_json,
     write_shared_text,
 )
+from guildbotics.workspace.identity import ensure_device_identity
 from guildbotics.workspace.validation import MAX_SHARED_FILE_BYTES
 
 Scope = Literal["personal", "team"]
@@ -43,10 +43,9 @@ MIN_SECRET_VALUE_LENGTH = 4
 RG_NO_MATCH_EXIT_CODE = 1
 BODY_FILE = "body.md"
 META_FILE = "meta.yml"
+RECENCY_DIR = "recency"
 ARCHIVED_DIR = "archived"
 RESERVED_DOC_IDS = {ARCHIVED_DIR}
-#: The audited actions that mean a member used a document, and so order the digest.
-DIGEST_ACTIONS = frozenset({"record", "update", "touch", "promote"})
 POLICY_BASELINE_BODY = """- Keep only reusable lessons: pitfalls, solution steps, and design rationale.
 - Do not keep trivial logs, temporary trial-and-error, or information useful only for one task.
 - Store work records tied to PRs, issues, or team-shared Slack threads in team memory so other members can discover and continue the work.
@@ -91,15 +90,21 @@ class MemberMemoryService:
     Each operation therefore holds the workspace's shared-write lock from the
     read it derives from to the last file it writes. Declaring it here rather
     than leaving it to the write helpers is what the shape of these operations
-    forces: a document is two files, and archiving and promoting rename a
-    directory -- neither of which any single write can infer. The audit
-    journal is written after that span and takes its own, so a journal that
-    cannot be written does not undo a document that already was.
+    forces: a document is two files, this device's recency record is a third,
+    and archiving and promoting rename a directory -- none of which any single
+    write can infer. The audit journal is written after that span and takes its
+    own, so a journal that cannot be written does not undo a document that
+    already was.
+
+    The device is identified before any operation rather than when its recency
+    or audit entry is written: an identity that fails to load after the
+    document was changed would report a completed change as failed.
     """
 
     def __init__(self, person: Person) -> None:
         self.person = person
         self.root = get_workspace_state_path("documents")
+        self.device_id = ensure_device_identity().device_id
 
     def record(
         self,
@@ -165,6 +170,7 @@ class MemberMemoryService:
             if params:
                 meta.update(params)
             self._write_doc(scope_dir / doc_id, meta, body)
+            self._touch_recent(doc_id)
         self._record_audit("record", self._read_doc(scope, scope_dir / doc_id))
         return self._document_result(scope, scope_dir / doc_id)
 
@@ -364,6 +370,7 @@ class MemberMemoryService:
             meta["updated_at"] = _now()
             meta["updated_by"] = self.person.person_id
             self._write_doc(doc.path, meta, doc.body if body is None else body)
+            self._touch_recent(doc.doc_id)
         self._record_audit(
             "update",
             self._read_doc(doc.scope, doc.path),
@@ -372,7 +379,9 @@ class MemberMemoryService:
         return self._document_result(doc.scope, doc.path)
 
     def touch(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
-        doc = self._resolve_doc(doc_id, scope)
+        with shared_write_lock():
+            doc = self._resolve_doc(doc_id, scope)
+            self._touch_recent(doc.doc_id)
         self._record_audit("touch", doc)
         return {"doc_id": doc.doc_id, "path": _document_path(doc)}
 
@@ -416,6 +425,7 @@ class MemberMemoryService:
                 raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
             doc.path.rename(target)
             _notify_document_moved(doc.path, target)
+            self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
             self._read_doc("team", target),
@@ -433,27 +443,22 @@ class MemberMemoryService:
     def load_digest(self, *, limit: int = DEFAULT_DIGEST_N) -> list[dict[str, Any]]:
         """Return this member's most recently used documents, newest first.
 
-        The order is derived from every device's audit journal rather than kept
-        in a list of its own: a list every device rewrites conflicts whenever
-        two devices use memory while apart, and the side set aside loses its
-        order. Documents archived or no longer present are left out.
+        A document's recency is the latest use any device recorded for it.
+        Archived and missing documents are left out.
         """
-        digest: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for event in MemoryAuditStore().list_events(
-            person_id=self.person.person_id, limit=None
-        ):
-            attributes = event.get("attributes")
-            if not isinstance(attributes, dict):
-                continue
-            doc_id = attributes.get("memory.doc_id")
-            if (
-                attributes.get("memory.action") not in DIGEST_ACTIONS
-                or not isinstance(doc_id, str)
-                or doc_id in seen
+        latest: dict[str, str] = {}
+        recency_dir = self.root / RECENCY_DIR
+        paths = sorted(recency_dir.glob("*.json")) if recency_dir.is_dir() else []
+        for path in paths:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            for doc_id, used_at in (
+                record["members"].get(self.person.person_id, {}).items()
             ):
-                continue
-            seen.add(doc_id)
+                latest[doc_id] = max(used_at, latest.get(doc_id, ""))
+        digest: list[dict[str, Any]] = []
+        for doc_id in sorted(
+            latest, key=lambda item: (latest[item], item), reverse=True
+        ):
             try:
                 doc = self._resolve_doc(doc_id, None)
             except MemberMemoryError:
@@ -496,6 +501,7 @@ class MemberMemoryService:
         try:
             append_memory_event(
                 action=action,
+                device_id=self.device_id,
                 person_id=self.person.person_id,
                 scope=doc.scope,
                 doc_id=doc.doc_id,
@@ -519,6 +525,7 @@ class MemberMemoryService:
         try:
             append_memory_event(
                 action="recall",
+                device_id=self.device_id,
                 person_id=self.person.person_id,
                 scope="",
                 doc_id="",
@@ -636,6 +643,28 @@ class MemberMemoryService:
             return self.root / "team"
         return self.root / "personal" / self.person.person_id
 
+    def _touch_recent(self, doc_id: str) -> None:
+        """Record that this member used a document, in this device's record.
+
+        Each device writes only its own record, so two devices using memory
+        while apart never change the same shared file. The record is written
+        inside the operation's span, unlike the best-effort audit journal, so
+        a completed operation always leaves its recency behind. Entries are not
+        removed when a document is archived -- the digest skips what no longer
+        resolves -- and the oldest are dropped only when the record would grow
+        past what synchronization accepts.
+        """
+        person_id = self.person.person_id
+
+        def _used(current: Any | None) -> dict[str, Any]:
+            members = dict(current["members"]) if current else {}
+            members[person_id] = {**members.get(person_id, {}), doc_id: _used_at()}
+            return _within_shared_size(
+                {"schema_version": SHARED_RECORD_SCHEMA_VERSION, "members": members}
+            )
+
+        update_shared_json(self.root / RECENCY_DIR / f"{self.device_id}.json", _used)
+
     def _new_doc_id(self, scope_dir: Path) -> str:
         while True:
             doc_id = uuid.uuid4().hex[:12]
@@ -736,6 +765,27 @@ def _source_entries_from_meta(meta: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _used_at() -> str:
+    """Return a fixed-width UTC timestamp, so recency compares as text."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _within_shared_size(record: dict[str, Any]) -> dict[str, Any]:
+    """Drop the oldest uses until the recency record fits a shared file."""
+    members = record["members"]
+    uses = sorted(
+        (used_at, person_id, doc_id)
+        for person_id, used in members.items()
+        for doc_id, used_at in used.items()
+    )
+    while (
+        uses and len(dump_shared_json(record).encode("utf-8")) > MAX_SHARED_FILE_BYTES
+    ):
+        _, person_id, doc_id = uses.pop(0)
+        del members[person_id][doc_id]
+    return record
 
 
 def _require_shareable_size(filename: str, text: str) -> None:

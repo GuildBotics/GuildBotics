@@ -413,12 +413,14 @@ Members persist knowledge across runs as a document store (mechanism in
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
   over meta+body; `--meta-only` for source-URL pinpointing), `get`, `update`,
   `touch` ("this note actually helped" — recency only), `archive`, `promote`.
-- **Recency (MRU)**: derived from the memory audit journals of every device, not
-  kept in a file of its own. A member's documents are ordered by the latest
-  `record`/`update`/`touch`/`promote` event that member made on any device; read
-  operations (`recall`/`get`) do not count, and archived or missing documents are
-  left out. A recency list rewritten by every device would conflict whenever two
-  devices use memory while apart, and the side set aside would lose its order.
+- **Recency (MRU)**: each device keeps its own record,
+  `documents/recency/<device_id>.json`, of when each member last used each document
+  (`record`/`update`/`touch`/`promote`; read operations do not count). The record is
+  written inside the operation's shared-write span, so it is not lost when the
+  best-effort audit journal fails or trims. The digest takes each document's latest
+  use across every device's record and leaves out archived or missing documents. One
+  list rewritten by every device would conflict whenever two devices use memory while
+  apart, and the side set aside would lose its order.
   `member context` output includes a `memory` block: `digest` (top-N recent metas —
   hints that a relevant note exists) and `pinned` (always-on documents, body
   included).

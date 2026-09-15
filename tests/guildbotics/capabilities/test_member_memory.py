@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.capabilities import member_memory
 from guildbotics.capabilities.member_memory import (
@@ -17,6 +18,7 @@ from guildbotics.utils.fileio import (
     dump_yaml,
     load_yaml_file,
 )
+from guildbotics.workspace.identity import device_identity_path
 
 EXPECTED_DIGEST_N = 3
 
@@ -513,53 +515,74 @@ def test_digest_orders_documents_by_latest_use_on_any_device(
     person: Person, data_root: Path
 ) -> None:
     service = MemberMemoryService(person)
-    older = service.record(scope="personal", title="Older", body="older")["doc_id"]
+    older = service.record(scope="personal", title="Older", body="o")["doc_id"]
     updated = service.record(scope="personal", title="Updated", body="u")["doc_id"]
-    touched = service.record(scope="personal", title="Touched", body="t")["doc_id"]
-    promoted = service.record(scope="team", title="Promoted", body="p")["doc_id"]
+    promoted = service.record(scope="personal", title="Promoted", body="p")["doc_id"]
+    elsewhere = service.record(scope="team", title="Elsewhere", body="e")["doc_id"]
     archived = service.record(scope="personal", title="Archived", body="a")["doc_id"]
+    service.update(doc_id=updated, summary="Updated.")
+    service.promote(doc_id=promoted)
     service.archive(doc_id=archived)
-    audit_dir = data_root / "documents" / "memory_events"
-    for journal in audit_dir.iterdir():
-        journal.unlink()
-
-    device_a = MemoryAuditStore(audit_dir, device_id="device-a")
-    device_b = MemoryAuditStore(audit_dir, device_id="device-b")
-    # A "+09:00" timestamp sorts after these "Z" ones as text, not as instants.
-    device_a.record(_audit_event("update", updated, "2026-09-15T10:00:00+09:00"))
-    device_a.record(_audit_event("get", older, "2026-09-15T03:00:00Z"))
-    device_a.record(_audit_event("touch", archived, "2026-09-15T02:30:00Z"))
-    device_b.record(_audit_event("record", updated, "2026-09-15T00:00:00Z"))
-    device_b.record(_audit_event("record", older, "2026-09-15T00:30:00Z"))
-    device_b.record(_audit_event("touch", touched, "2026-09-15T01:30:00Z"))
-    device_b.record(_audit_event("recall", "", "2026-09-15T02:00:00Z"))
-    device_b.record(_audit_event("promote", promoted, "2026-09-15T02:15:00Z"))
-    device_b.record(
-        _audit_event("touch", older, "2026-09-15T11:45:00+09:00", person_id="hana")
+    service.get(doc_id=older)
+    service.recall(queries=["Older"])
+    recency = data_root / "documents" / "recency"
+    (recency / "device-b.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "members": {
+                    "aiko": {
+                        elsewhere: "2999-01-01T00:00:00.000000Z",
+                        archived: "2999-01-02T00:00:00.000000Z",
+                        older: "2000-01-01T00:00:00.000000Z",
+                    },
+                    "hana": {older: "2999-01-03T00:00:00.000000Z"},
+                },
+            }
+        ),
+        encoding="utf-8",
     )
 
+    assert sorted(path.name for path in recency.iterdir()) == [
+        f"{service.device_id}.json",
+        "device-b.json",
+    ]
     assert [item["doc_id"] for item in service.load_digest()] == [
+        elsewhere,
         promoted,
-        touched,
         updated,
         older,
     ]
     assert [item["doc_id"] for item in service.load_digest(limit=2)] == [
+        elsewhere,
         promoted,
-        touched,
     ]
 
 
-def _audit_event(
-    action: str, doc_id: str, timestamp: str, *, person_id: str = "aiko"
-) -> dict[str, object]:
-    return {
-        "kind": "memory",
-        "type": f"memory.{action}",
-        "timestamp": timestamp,
-        "person_id": person_id,
-        "attributes": {"memory.action": action, "memory.doc_id": doc_id},
-    }
+def test_the_digest_keeps_uses_the_audit_journal_trimmed_away(
+    person: Person,
+) -> None:
+    service = MemberMemoryService(person)
+    recorded = service.record(scope="personal", title="Kept", body="kept")
+    journal = MemoryAuditStore(device_id=service.device_id, max_file_bytes=400)
+    for index in range(10):
+        journal.record({"kind": "memory", "type": "memory.recall", "n": index})
+
+    assert "memory.record" not in {event.get("type") for event in journal.list_events()}
+    assert [item["doc_id"] for item in service.load_digest()] == [recorded["doc_id"]]
+
+
+def test_an_unreadable_device_identity_fails_before_any_document_is_written(
+    person: Person, data_root: Path
+) -> None:
+    identity = device_identity_path()
+    identity.parent.mkdir(parents=True, exist_ok=True)
+    identity.write_text('{"device_id": "not a uuid"}', encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        MemberMemoryService(person).record(scope="personal", title="t", body="b")
+
+    assert not (data_root / "documents").exists()
 
 
 def test_baseline_policy_defines_memory_scope(person: Person) -> None:
