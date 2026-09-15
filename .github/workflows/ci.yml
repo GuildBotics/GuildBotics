@@ -66,4 +66,4 @@ jobs:
         run: uv run --no-sync pylint guildbotics
 
       - name: Run tests
-        run: uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
+        run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
