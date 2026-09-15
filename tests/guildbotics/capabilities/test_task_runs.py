@@ -300,3 +300,48 @@ def test_chat_run_blocked_requires_summary_but_no_evidence(tmp_path):
 
     assert status.status == "blocked"
     assert status.evidence_types == []
+
+
+def test_start_record_reopens_a_run_that_ended_without_a_result(tmp_path):
+    store = RunStore(tmp_path)
+    start_args = {
+        "work_kind": "chat-event",
+        "execution_mode": "autonomous",
+        "member_id": "aiko",
+        "work_identity": {"kind": "chat-event", "event_id": "event-1"},
+    }
+    store.start_record("run-1", **start_args)
+    store.append_evidence("run-1", "chat_reply", {"text": "partial"})
+    store.finish_record("run-1", status="failed", safe_summary="Execution failed.")
+
+    reopened = store.start_record("run-1", **start_args)
+
+    # The next attempt of the same work continues this run instead of being
+    # stranded under a new id: its evidence stays where the completion lands.
+    assert reopened.status == "running"
+    assert reopened.finished_at is None
+    assert len(reopened.provider_evidence) == 1
+
+
+def test_start_record_never_restarts_a_completed_run(tmp_path):
+    store = RunStore(tmp_path)
+    store.append_evidence("run-1", "chat_reply", {"text": "answered"})
+    store.complete_run(
+        "run-1",
+        "done",
+        "answered",
+        subject_type="chat",
+        subject_id="slack:C1:100.1",
+        person_id="aiko",
+    )
+
+    unchanged = store.start_record(
+        "run-1",
+        work_kind="chat-event",
+        execution_mode="autonomous",
+        member_id="aiko",
+    )
+
+    assert unchanged.status == "succeeded"
+    assert unchanged.finished_at is not None
+    assert unchanged.result is not None

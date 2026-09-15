@@ -196,10 +196,16 @@ class RunStore:
         member_id: str,
         work_identity: dict[str, str] | None = None,
     ) -> tuple[TaskRunRecord, ChangeSet | None]:
-        """Create a running record and expose its sync notification."""
+        """Create a running record and expose its sync notification.
+
+        A run that ended without a result is re-opened for its next attempt
+        instead of being kept terminal, so every attempt of one logical unit
+        of work accumulates its evidence under a single run id. A run that
+        recorded a result is never restarted.
+        """
 
         def _start(current: TaskRunRecord) -> TaskRunRecord:
-            if current.finished_at:
+            if current.finished_at and not current.ended_without_result:
                 return current
             return current.model_copy(
                 update={
@@ -208,6 +214,7 @@ class RunStore:
                     "member_id": member_id,
                     "work_identity": work_identity,
                     "status": "running",
+                    "finished_at": None,
                 }
             )
 

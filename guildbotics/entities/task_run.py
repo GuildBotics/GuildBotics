@@ -51,3 +51,15 @@ class TaskRunRecord(BaseModel):
     safe_summary: str = ""
     result: TaskRunResult | None = None
     provider_evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def ended_without_result(self) -> bool:
+        """Whether the run stopped before producing an outcome.
+
+        A run that raised, was cancelled, or lost its owner device left the
+        work undone, so the same work identity may be attempted again under
+        this run. A run that recorded a result is done, including the
+        ``asking`` and ``blocked`` completions stored with a ``failed``
+        status, and so is a succeeded run that carries no subject result.
+        """
+        return self.status not in {"running", "succeeded"} and self.result is None

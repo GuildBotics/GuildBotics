@@ -199,6 +199,10 @@ class PendingChatDispatcher:
                     )
                     await self._run_workflow(person, service, channel_id, pending)
             except WorkRejectedError as exc:
+                # A finished run is only reported as a duplicate once it
+                # recorded a result, so the event really was handled (usually
+                # by another device). A previous attempt that merely failed is
+                # accepted again and retried above, never marked processed.
                 if (
                     exc.reason == "duplicate"
                     and isinstance(exc.holder, TaskRunRecord)
