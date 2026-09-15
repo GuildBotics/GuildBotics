@@ -59,9 +59,7 @@ class Device:
 
     def write(self, relative: str, text: str) -> ChangeSet:
         """Write a shared file and announce it the way a storage layer would."""
-        path = self.shared / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        self.write_bytes(relative, text.encode("utf-8"))
         change = ChangeSet(
             change_id=new_uuid7(),
             operation="update",

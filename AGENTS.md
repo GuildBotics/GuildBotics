@@ -393,6 +393,13 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml
 ```
 
+Windows では、Git repository を作るテストの一時 path が `MAX_PATH` を超えないよう、
+短いテスト専用の base directory を指定する:
+
+```powershell
+uv run --no-sync python -m pytest tests/ --cov=guildbotics --cov-report=xml --basetemp=C:/gb-pytest
+```
+
 Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ
 [`lychee` v0.24.2](https://github.com/lycheeverse/lychee/releases/tag/lychee-v0.24.2)
 をインストールする。Rust toolchain がある場合は

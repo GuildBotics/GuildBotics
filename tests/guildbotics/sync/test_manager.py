@@ -137,7 +137,7 @@ def test_an_edit_made_outside_guildbotics_is_recovered_by_the_rescan(
     what picks the change up, so no file watcher is needed."""
     path = first.shared / CONFIG
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("language: en\n", encoding="utf-8")
+    path.write_bytes(b"language: en\n")
 
     first.manager.synchronize()
 
