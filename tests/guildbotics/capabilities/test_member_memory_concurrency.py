@@ -33,6 +33,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(shared_write_lock_module, "LOCK_TIMEOUT_SECONDS", 0.05)

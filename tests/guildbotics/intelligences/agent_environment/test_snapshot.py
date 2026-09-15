@@ -37,6 +37,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     parse_toolchain,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.i18n_tool import t
 
@@ -256,7 +257,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert call["name"] == status.name == snapshot_name(ImageStatus())
     assert call["dest_dir"] == directory
     assert (call["image"], call["pull"]) == (image_module.IMAGE, True)
-    assert call["home"] == home.resolve().as_posix()
+    assert call["home"] == guest_path(home.resolve())
     assert call["nameservers"] == ("10.0.0.53",)
     assert (call["memory_mib"], call["cpus"]) == (4096, 2)
     assert [s.label for s in call["steps"]] == [

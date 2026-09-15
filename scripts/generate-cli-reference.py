@@ -165,7 +165,11 @@ def main() -> int:
     )
     check = parser.parse_args().check
     generated = build_reference()
-    committed = OUTPUT_PATH.read_text() if OUTPUT_PATH.exists() else None
+    committed = (
+        OUTPUT_PATH.read_text(encoding="utf-8", newline="")
+        if OUTPUT_PATH.exists()
+        else None
+    )
     if check:
         if committed != generated:
             print(
@@ -179,7 +183,10 @@ def main() -> int:
     if committed == generated:
         print(f"{OUTPUT_PATH} is already up to date.")
         return 0
-    OUTPUT_PATH.write_text(generated)
+    # Byte-for-byte what CI generates: the committed file is compared with
+    # `--check` there, so neither the encoding nor the line endings may come
+    # from whichever machine regenerated it.
+    OUTPUT_PATH.write_text(generated, encoding="utf-8", newline="\n")
     print(f"Wrote {OUTPUT_PATH}.")
     return 0
 

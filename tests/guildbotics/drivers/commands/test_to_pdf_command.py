@@ -56,7 +56,9 @@ def _make_spec(
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_generates_pdf_from_markdown_message(tmp_path: Path):
+async def test_to_pdf_generates_pdf_from_markdown_message(
+    tmp_path: Path, weasyprint_libraries
+):
     ctx = _make_context("# PDF Title")
     spec = _make_spec(tmp_path)
     command = ToPdfCommand(ctx, spec, tmp_path)
@@ -70,7 +72,9 @@ async def test_to_pdf_generates_pdf_from_markdown_message(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_writes_output_file_when_requested(tmp_path: Path):
+async def test_to_pdf_writes_output_file_when_requested(
+    tmp_path: Path, weasyprint_libraries
+):
     ctx = _make_context("Hello PDF")
     output_path = Path("out/report.pdf")
     spec = _make_spec(tmp_path, params={"output": str(output_path)})
@@ -86,7 +90,7 @@ async def test_to_pdf_writes_output_file_when_requested(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_accepts_html_input(tmp_path: Path):
+async def test_to_pdf_accepts_html_input(tmp_path: Path, weasyprint_libraries):
     html_path = tmp_path / "snippet.html"
     html_path.write_text("<div><h1>HTML</h1><p>content</p></div>", encoding="utf-8")
 
@@ -100,7 +104,7 @@ async def test_to_pdf_accepts_html_input(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_handles_full_html_document(tmp_path: Path):
+async def test_to_pdf_handles_full_html_document(tmp_path: Path, weasyprint_libraries):
     html_path = tmp_path / "document.html"
     html_path.write_text(
         "<!DOCTYPE html><html><head><title>Doc</title></head>"
@@ -272,7 +276,9 @@ def test_homebrew_library_path_does_not_interleave_across_threads(
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_accepts_string_inline_syntax(tmp_path: Path):
+async def test_to_pdf_accepts_string_inline_syntax(
+    tmp_path: Path, weasyprint_libraries
+):
     css_path = tmp_path / "custom.css"
     css_path.write_text(".markdown-body { color: blue; }", encoding="utf-8")
     output_path = Path("inline/output.pdf")

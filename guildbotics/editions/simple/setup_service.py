@@ -1235,7 +1235,7 @@ class SimplePersonSetupService:
             return False
         key_file = Path(config.github_private_key_path).expanduser()
         try:
-            pem = key_file.read_text()
+            pem = key_file.read_text(encoding="utf-8")
         except OSError:
             return False
         prefix = self._person_env_prefix(config.person_id)

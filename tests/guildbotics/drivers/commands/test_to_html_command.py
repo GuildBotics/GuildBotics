@@ -114,7 +114,9 @@ async def test_to_html_accepts_string_inline_syntax(tmp_path: Path):
     spec = _make_spec(
         tmp_path,
         params={},
-        config={"to_html": f"{output_relative} css={css_path.name}"},
+        # The inline syntax is split like a shell word list, so the path is
+        # written the way a command file writes it.
+        config={"to_html": f"{output_relative.as_posix()} css={css_path.name}"},
     )
     command = ToHtmlCommand(ctx, spec, tmp_path)
 

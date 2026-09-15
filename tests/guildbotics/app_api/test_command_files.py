@@ -43,7 +43,9 @@ def _service(language: str = "en") -> CommandFileService:
 
 def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    # Byte-for-byte: the service returns what is on disk, so a newline
+    # translated by the platform here would come back as a difference.
+    path.write_text(content, encoding="utf-8", newline="\n")
     return path
 
 
@@ -122,7 +124,7 @@ def test_create_nested_command(env: SimpleNamespace) -> None:
     assert detail.command == "workflows/review"
 
 
-def test_create_shell_is_executable(env: SimpleNamespace) -> None:
+def test_create_shell_is_executable(env: SimpleNamespace, posix_permissions) -> None:
     _service().create_file("deploy", "shell")
     mode = stat.S_IMODE((env.commands / "deploy.sh").stat().st_mode)
     assert mode == 0o755
@@ -348,7 +350,7 @@ def test_update_rejects_oversized_content(env: SimpleNamespace) -> None:
     assert exc.value.code == "command_file_too_large"
 
 
-def test_update_preserves_mode(env: SimpleNamespace) -> None:
+def test_update_preserves_mode(env: SimpleNamespace, posix_permissions) -> None:
     path = _write(env.commands / "deploy.sh", "#!/usr/bin/env bash\necho hi\n")
     os.chmod(path, 0o755)
     service = _service()
@@ -455,7 +457,9 @@ def test_update_shadowed_file_rejected(env: SimpleNamespace) -> None:
     assert exc.value.code == "command_file_not_found"
 
 
-def test_symlink_escape_rejected(env: SimpleNamespace, tmp_path: Path) -> None:
+def test_symlink_escape_rejected(
+    env: SimpleNamespace, tmp_path: Path, symlinks
+) -> None:
     outside = _write(tmp_path / "outside.md", "---\nname: Outside\n---\nBody\n")
     link = env.commands / "escape.md"
     link.symlink_to(outside)

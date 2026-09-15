@@ -42,6 +42,7 @@ from guildbotics.utils.i18n_tool import t
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     root = tmp_path / "workspace"
     (root / ".guildbotics" / "config").mkdir(parents=True)

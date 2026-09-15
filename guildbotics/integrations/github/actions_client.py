@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from http import HTTPStatus
 from tempfile import TemporaryFile
-from typing import Any, BinaryIO
+from typing import IO, Any
 
 import httpx
 
@@ -22,7 +22,7 @@ class GitHubActionsClientError(RuntimeError):
     """A GitHub Checks or Actions request failed."""
 
 
-Download = Callable[[str, int], AbstractAsyncContextManager[BinaryIO]]
+Download = Callable[[str, int], AbstractAsyncContextManager[IO[bytes]]]
 DownloadTail = Callable[[str, int], Awaitable[tuple[bytes, bool]]]
 
 
@@ -111,7 +111,7 @@ class GitHubActionsClient:
     @asynccontextmanager
     async def artifact_archive(
         self, owner: str, repo: str, artifact_id: int, max_bytes: int
-    ) -> AsyncIterator[BinaryIO]:
+    ) -> AsyncIterator[IO[bytes]]:
         async with self._download_endpoint(
             f"/repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip", max_bytes
         ) as archive:
@@ -120,7 +120,7 @@ class GitHubActionsClient:
     @asynccontextmanager
     async def _download_endpoint(
         self, endpoint: str, max_bytes: int
-    ) -> AsyncIterator[BinaryIO]:
+    ) -> AsyncIterator[IO[bytes]]:
         response = await self._get(endpoint)
         _raise_for_status(response, permission_guidance=True)
         location = response.headers.get("location", "")
@@ -180,7 +180,7 @@ class GitHubActionsClient:
 @asynccontextmanager
 async def _download_without_credentials(
     url: str, max_bytes: int
-) -> AsyncIterator[BinaryIO]:
+) -> AsyncIterator[IO[bytes]]:
     """Download a short-lived GitHub URL without forwarding GitHub credentials."""
     with TemporaryFile() as archive:
         total = 0

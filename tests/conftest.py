@@ -30,8 +30,9 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # Not created here: many tests create this same directory themselves, and
     # writers make their own parents anyway.
     home = tmp_path / "home"
+    # ``Path.home()`` reads USERPROFILE on Windows and HOME everywhere else, so
+    # both are set wherever a test points the home directory somewhere.
     monkeypatch.setenv("HOME", str(home))
-    # ``Path.home()`` reads USERPROFILE on Windows and HOME everywhere else.
     monkeypatch.setenv("USERPROFILE", str(home))
 
 
@@ -115,6 +116,51 @@ def fake_keyring():
     keyring.set_keyring(backend)
     yield backend
     keyring.set_keyring(original)
+
+
+@pytest.fixture
+def posix_permissions() -> None:
+    """Skip on a device whose file system has no POSIX permission bits.
+
+    Windows keeps no owner/group/other bits, and ``chmod`` there only toggles
+    the read-only attribute, so an assertion on ``0o600`` describes the test's
+    own platform rather than the code under test.
+    """
+    if os.name == "nt":
+        pytest.skip("Windows has no POSIX permission bits.")
+
+
+@pytest.fixture
+def symlinks(tmp_path) -> None:
+    """Skip on a device where this session may not create a symbolic link.
+
+    Windows grants that privilege to an elevated session or to one running
+    with Developer Mode enabled, and CI runs elevated. A developer without it
+    would otherwise read a privilege error as a failure of the code.
+    """
+    probe = tmp_path / "symlink-probe"
+    try:
+        probe.symlink_to(tmp_path)
+    except OSError as exc:
+        pytest.skip(f"This session cannot create a symbolic link: {exc}")
+    probe.unlink()
+
+
+@pytest.fixture
+def weasyprint_libraries() -> None:
+    """Skip where WeasyPrint's GTK libraries are not installed on the device.
+
+    They are native rather than Python, so the dependency resolver cannot
+    supply them: Windows and a bare Linux both need them installed separately.
+    A device without them gets the ``CommandError`` its own test covers, and
+    only a device with them can render anything.
+    """
+    import importlib
+
+    try:
+        importlib.import_module("weasyprint")
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"WeasyPrint's native libraries are not available: {exc}")
 
 
 class FakeProject:

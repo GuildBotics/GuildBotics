@@ -513,6 +513,7 @@ def test_app_runtime_command_options_exclude_template_commands(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     person = type("PersonStub", (), {"person_id": "bot", "name": "Bot"})()
     project = type("ProjectStub", (), {"get_language_code": lambda self: "en"})()
@@ -542,6 +543,7 @@ def test_app_runtime_command_options_do_not_seed_empty_workspace(
     # project setup, not on every options request.
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     project_file = tmp_path / ".guildbotics/config/team/project.yml"
     project_file.parent.mkdir(parents=True)
@@ -574,6 +576,7 @@ def test_app_runtime_command_options_propagate_nested_requirements(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     commands_dir = tmp_path / ".guildbotics/config/commands"
     commands_dir.mkdir(parents=True)
@@ -621,6 +624,7 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     config_dir = tmp_path / ".guildbotics/config"
     commands_dir = config_dir / "commands"
@@ -691,6 +695,7 @@ def test_app_runtime_command_options_extract_markdown_arguments(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     command_file = tmp_path / ".guildbotics/config/commands/translate.md"
     command_file.parent.mkdir(parents=True)

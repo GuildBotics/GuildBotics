@@ -67,3 +67,37 @@ jobs:
 
       - name: Run tests
         run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
+
+  test-windows:
+    # Windows in parallel with the Linux job, because a change that only breaks
+    # Windows is otherwise found weeks later by whoever happens to run the
+    # suite there. Only the checks whose result can differ by operating system
+    # run here: Ruff, Pylint and the CLI reference cannot.
+    runs-on: windows-latest
+    env:
+      UV_LOCKED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --extra test --extra dev
+
+      - name: Run Mypy
+        run: uv run --no-sync mypy guildbotics
+
+      - name: Run tests
+        # A short base directory: tests create Git repositories, whose own
+        # paths are long enough to pass MAX_PATH from the default one.
+        run: >-
+          uv run --no-sync python -m pytest tests/ -n auto --durations=30
+          --basetemp=${{ runner.temp }}/gb
