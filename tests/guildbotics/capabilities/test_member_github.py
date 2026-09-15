@@ -427,9 +427,7 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs():
                 ]
             },
             "/repos/owner/repo/commits/abc123/status": {"statuses": []},
-            "/repos/owner/repo/actions/runs": {
-                "workflow_runs": [{"id": 9}]
-            },
+            "/repos/owner/repo/actions/runs": {"workflow_runs": [{"id": 9}]},
             "/repos/owner/repo/actions/runs/9/jobs": {
                 "jobs": [
                     {
@@ -575,9 +573,7 @@ async def test_artifact_download_extracts_named_pr_artifact(tmp_path):
 async def test_artifact_download_rejects_oversized_artifact(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads[
-        "/repos/owner/repo/actions/runs/9/artifacts"
-    ] = {
+    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
         "artifacts": [
             {
                 "id": 12,
@@ -601,9 +597,7 @@ async def test_artifact_download_rejects_oversized_artifact(tmp_path):
 async def test_artifact_download_rejects_path_traversal(tmp_path):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads[
-        "/repos/owner/repo/actions/runs/9/artifacts"
-    ] = {
+    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
         "artifacts": [
             {
                 "id": 12,

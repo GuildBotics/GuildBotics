@@ -454,8 +454,7 @@ class MemberGitHubCapabilityService:
                 and not artifact.get("expired", False)
                 and (
                     head_sha is None
-                    or (artifact.get("workflow_run") or {}).get("head_sha")
-                    == head_sha
+                    or (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
                 )
             ]
             if not candidates:
@@ -525,9 +524,8 @@ class MemberGitHubCapabilityService:
                 continue
             jobs = await actions.jobs(resource.owner, resource.repo, run_id)
             for job in jobs:
-                if (
-                    job.get("conclusion") in _FAILED_CONCLUSIONS
-                    and int(job.get("id", 0))
+                if job.get("conclusion") in _FAILED_CONCLUSIONS and int(
+                    job.get("id", 0)
                 ):
                     failed_jobs.append((run_id, job))
         if not failed_jobs:
@@ -1301,8 +1299,7 @@ def _check_rollup(checks: list[dict[str, Any]]) -> str:
     if not checks:
         return "no_checks"
     if any(
-        item.get("conclusion") in _FAILED_CONCLUSIONS | {"error"}
-        for item in checks
+        item.get("conclusion") in _FAILED_CONCLUSIONS | {"error"} for item in checks
     ):
         return "failure"
     if any(item.get("status") != "completed" for item in checks):

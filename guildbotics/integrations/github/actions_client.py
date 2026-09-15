@@ -42,9 +42,7 @@ class GitHubActionsClient:
         statuses: list[dict[str, Any]] = []
         page = 1
         while True:
-            response = await self._get(
-                endpoint, params={"per_page": 100, "page": page}
-            )
+            response = await self._get(endpoint, params={"per_page": 100, "page": page})
             _raise_for_status(response)
             payload = response.json()
             if not isinstance(payload, dict):
@@ -74,9 +72,7 @@ class GitHubActionsClient:
     async def job_log_tail(
         self, owner: str, repo: str, job_id: int, tail_bytes: int
     ) -> tuple[bytes, bool]:
-        response = await self._get(
-            f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
-        )
+        response = await self._get(f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
         _raise_for_status(response)
         location = response.headers.get("location", "")
         if location:
