@@ -20,6 +20,7 @@ const DIGEST = "sha256:" + "c".repeat(64);
 const OTHER = "sha256:" + "d".repeat(64);
 
 const packaged: AgentEnvironmentDeclaration = {
+  resources: { memory_mib: 4096, cpus: 2 },
   network: { mode: "deny", allowed_domains: [], allow_local_network: false },
   dns: { nameservers: ["1.1.1.1", "8.8.8.8"] },
 };
@@ -69,6 +70,31 @@ describe("AgentEnvironmentDeclarationCard", () => {
         { reference: "local/agent:1", digest: DIGEST, size_bytes: 900, declared: false },
       ],
       problem: "",
+    });
+  });
+
+  it("updates the resources assigned when each microVM boots", async () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    const memory = screen.getByRole("textbox", {
+      name: t("setup.intelligence.environment.declaration.memory"),
+    });
+    const cpus = screen.getByRole("textbox", {
+      name: t("setup.intelligence.environment.declaration.cpus"),
+    });
+
+    await userEvent.clear(memory);
+    await userEvent.type(memory, "3072");
+    await userEvent.clear(cpus);
+    await userEvent.type(cpus, "3");
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...packaged,
+      resources: { memory_mib: 3072, cpus: 2 },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...packaged,
+      resources: { memory_mib: 3072, cpus: 3 },
     });
   });
 
@@ -301,6 +327,7 @@ describe("AgentEnvironmentDeclarationCard", () => {
     render(
       <Harness
         initial={{
+          resources: { memory_mib: 4096, cpus: 2 },
           network: {
             mode: "allowlist",
             allowed_domains: ["github.com"],

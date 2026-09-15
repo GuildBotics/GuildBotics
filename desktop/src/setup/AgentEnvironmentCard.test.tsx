@@ -36,6 +36,7 @@ function status(
       version: "0.6.17",
       home: "/Users/me/.guildbotics/data/msb",
     },
+    resources: { memory_mib: 4096, cpus: 2 },
     snapshot: { state: "ready", name: "guildbotics-abc", detail: "", output: [] },
     image: {
       default: "node:22.23.2-bookworm",
@@ -122,6 +123,27 @@ describe("AgentEnvironmentCard", () => {
     vi.mocked(buildAgentEnvironment).mockReset();
     vi.mocked(recheckCliAgentUsage).mockReset();
   });
+
+  it.each(["en", "ja"])(
+    "shows the resources assigned to each environment in %s",
+    async (language) => {
+      await i18n.changeLanguage(language);
+      const tr = i18n.getFixedT(language);
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(status());
+
+      renderCard();
+
+      expect(await screen.findByText(tr("setup.intelligence.environment.resources"))).toBeVisible();
+      expect(
+        screen.getByText(
+          tr("setup.intelligence.environment.resourceValues", {
+            memory: "4,096",
+            cpus: 2,
+          }),
+        ),
+      ).toBeVisible();
+    },
+  );
 
   it.each(["en", "ja"])(
     "shows a failed usage check and verifies recovery in %s",

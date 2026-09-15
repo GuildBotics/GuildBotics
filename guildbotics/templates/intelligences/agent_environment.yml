@@ -26,6 +26,13 @@
 #       arm64: sha256:<64 hex digits>
 #       amd64: sha256:<64 hex digits>
 #
+# Memory and virtual CPUs assigned whenever a turn or snapshot-build microVM
+# boots. These values take effect on the next boot; changing them does not
+# rebuild the disk snapshot.
+resources:
+  memory_mib: 4096
+  cpus: 2
+
 # One rule covers every member, slot, command, and provider web feature. The
 # allowlist below is a starting point for common coding work with package
 # registries and GitHub. Omit this block to deny all non-provider traffic.

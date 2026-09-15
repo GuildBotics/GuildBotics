@@ -150,6 +150,19 @@ export function AgentEnvironmentCard({
                   </Group>
                 </Table.Td>
               </Table.Tr>
+              <Table.Tr>
+                <Table.Th style={narrow}>{t("setup.intelligence.environment.resources")}</Table.Th>
+                <Table.Td>
+                  <Text size="sm">
+                    {data.resources
+                      ? t("setup.intelligence.environment.resourceValues", {
+                          memory: data.resources.memory_mib.toLocaleString(),
+                          cpus: data.resources.cpus,
+                        })
+                      : t("setup.intelligence.environment.resourcesUnavailable")}
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
               <Table.Tr
                 id={`${AGENT_ENVIRONMENT_CARD_ID}-image`}
                 style={{

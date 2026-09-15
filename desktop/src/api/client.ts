@@ -1065,6 +1065,7 @@ export type EnvironmentToolStatus = {
 // content digest; absent, the build starts from GuildBotics' own image.
 export type AgentEnvironmentDeclaration = {
   image?: { reference: string; digests: Record<string, string> } | null;
+  resources: { memory_mib: number; cpus: number };
   network: NetworkPolicy;
   dns: { nameservers: "host" | string[] };
 };
@@ -1083,6 +1084,7 @@ export type EnvironmentMemberStatus = {
 export type AgentEnvironmentStatusResponse = {
   platform: string;
   runtime: EnvironmentRuntimeStatus;
+  resources: { memory_mib: number; cpus: number } | null;
   snapshot: EnvironmentSnapshotStatus;
   image: EnvironmentImageStatus;
   network: NetworkPolicy | null;

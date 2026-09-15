@@ -339,6 +339,13 @@ def status_command(output_format: str) -> None:
     )
     if health["home"]:
         click.echo(f"runtime home: {health['home']}")
+    resources = payload["resources"]
+    if resources is None:
+        click.echo("resources: unavailable")
+    else:
+        click.echo(
+            f"resources: {resources['memory_mib']} MiB, {resources['cpus']} vCPU"
+        )
     image = payload["image"]
     if image["reference"]:
         held = (
@@ -405,6 +412,11 @@ def _status_payload() -> dict[str, Any]:
             "version": status.runtime.runtime_version,
             "home": status.runtime.home,
         },
+        "resources": (
+            status.declaration.resources.model_dump(mode="json")
+            if status.declaration
+            else None
+        ),
         "snapshot": {
             "state": state.state if state else "missing",
             "name": state.name if state else "",

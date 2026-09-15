@@ -255,6 +255,8 @@ async def build_snapshot(
                         home=guest_home(home),
                         steps=build_steps(),
                         nameservers=nameservers,
+                        memory_mib=declaration.resources.memory_mib,
+                        cpus=declaration.resources.cpus,
                         on_line=on_line,
                     ),
                     BUILD_TIMEOUT_SECONDS,

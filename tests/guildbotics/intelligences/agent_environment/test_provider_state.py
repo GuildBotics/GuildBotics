@@ -147,8 +147,15 @@ class _Environment:
     closed = False
 
     @classmethod
-    async def start(cls, spec: Any, *, snapshot: str) -> _Environment:
-        cls.started = {"spec": spec, "snapshot": snapshot}
+    async def start(
+        cls, spec: Any, *, snapshot: str, memory_mib: int, cpus: int
+    ) -> _Environment:
+        cls.started = {
+            "spec": spec,
+            "snapshot": snapshot,
+            "memory_mib": memory_mib,
+            "cpus": cpus,
+        }
         cls.process = _Process()
         return cls()
 
@@ -185,6 +192,10 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
 
     assert code == 0
     assert _Environment.started["snapshot"] == str(tmp_path / "snap")
+    assert (_Environment.started["memory_mib"], _Environment.started["cpus"]) == (
+        DECLARATION.resources.memory_mib,
+        DECLARATION.resources.cpus,
+    )
     assert _Environment.started["command"] == ("codex", "login", "--device-auth")
     assert _Environment.started["spec"].network.unrestricted
     # A terminal, so a tool that asks before storing credentials can ask.

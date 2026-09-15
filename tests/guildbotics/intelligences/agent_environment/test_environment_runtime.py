@@ -32,6 +32,8 @@ from guildbotics.intelligences.agent_environment.spec import (
 )
 from guildbotics.utils.i18n_tool import t
 
+_RESOURCES = {"memory_mib": 3072, "cpus": 3}
+
 
 def _event(kind: str, **fields: Any) -> SimpleNamespace:
     return SimpleNamespace(
@@ -300,12 +302,15 @@ def test_doctor_survives_a_platform_without_the_sdk(monkeypatch) -> None:
 async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await AgentEnvironment.start(_spec(), snapshot="guildbotics-toolchain")
+    boundary = await AgentEnvironment.start(
+        _spec(), snapshot="guildbotics-toolchain", **_RESOURCES
+    )
 
     created = sandbox.created
     assert created["name"].startswith("guildbotics-")
     assert created["from_snapshot"] == "guildbotics-toolchain"
     assert created["ephemeral"] is True
+    assert (created["memory"], created["cpus"]) == (3072, 3)
     assert "log_level" not in created
     assert created["workdir"] == "/work/repo"
     volumes = created["volumes"]
@@ -331,7 +336,7 @@ async def test_start_ends_the_sandbox_when_ipv6_cannot_be_switched_off(
     sandbox.ipv4_only_code = 2
 
     with pytest.raises(AgentEnvironmentError, match="IPv4 only.*exit code 2"):
-        await AgentEnvironment.start(_spec(), snapshot="s")
+        await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
     assert sandbox.instance.stopped  # type: ignore[union-attr]
 
@@ -349,7 +354,7 @@ async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
     link.symlink_to(real, target_is_directory=True)
     spec = _spec(mounts=(EnvironmentMount("/work/link", link, readonly=False),))
 
-    await AgentEnvironment.start(spec, snapshot="s")
+    await AgentEnvironment.start(spec, snapshot="s", **_RESOURCES)
 
     volume = sandbox.created["volumes"]["/work/link"]
     assert (volume.kind, volume.bind) == (MountKind.BIND, str(real.resolve()))
@@ -359,7 +364,7 @@ async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
 async def test_a_closed_network_allows_only_dns_domains_and_host_ports(
     sandbox: type[_Sandbox],
 ) -> None:
-    await AgentEnvironment.start(_spec(), snapshot="s")
+    await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
     network = sandbox.created["network"]
     policy = network.policy
@@ -383,7 +388,7 @@ async def test_local_network_opens_the_host_and_private_ranges(
     sandbox: type[_Sandbox],
 ) -> None:
     network = EnvironmentNetwork(False, (), (), local_network=True, nameservers=())
-    await AgentEnvironment.start(_spec(network=network), snapshot="s")
+    await AgentEnvironment.start(_spec(network=network), snapshot="s", **_RESOURCES)
 
     groups = [
         r.destination.value
@@ -400,7 +405,7 @@ async def test_an_unrestricted_network_allows_all_egress_and_no_ingress(
     network = EnvironmentNetwork(
         True, (), (43123,), local_network=False, nameservers=()
     )
-    await AgentEnvironment.start(_spec(network=network), snapshot="s")
+    await AgentEnvironment.start(_spec(network=network), snapshot="s", **_RESOURCES)
 
     policy = sandbox.created["network"].policy
     assert (policy.default_egress, policy.default_ingress) == (
@@ -418,7 +423,7 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
     monkeypatch.setattr(runtime, "_NAME_PREFIX", "fail-")
 
     with pytest.raises(AgentEnvironmentError, match="no hypervisor"):
-        await AgentEnvironment.start(_spec(), snapshot="s")
+        await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
 
 # --- run ------------------------------------------------------------------------
@@ -428,7 +433,7 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
 async def test_run_starts_the_command_in_the_cwd_with_the_spec_environment(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await AgentEnvironment.start(_spec(), snapshot="s")
+    boundary = await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
     await boundary.run("codex", "app-server", "-c", "x=1", limit=1024)
 
@@ -516,7 +521,7 @@ async def test_kill_ends_a_running_process_and_a_closed_stdin_raises() -> None:
 async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     sandbox: type[_Sandbox],
 ) -> None:
-    boundary = await AgentEnvironment.start(_spec(), snapshot="s")
+    boundary = await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
     instance = sandbox.instance
     assert instance is not None
 
@@ -524,7 +529,7 @@ async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     await boundary.close()
     assert instance.stopped and not instance.destroyed
 
-    stuck = await AgentEnvironment.start(_spec(), snapshot="s")
+    stuck = await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
     assert sandbox.instance is not None
     sandbox.instance.stop_error = microsandbox.MicrosandboxError("stuck")
     await stuck.close()

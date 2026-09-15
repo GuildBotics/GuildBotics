@@ -166,7 +166,10 @@ async def login(
         The login command's exit code.
     """
     environment = await AgentEnvironment.start(
-        login_spec(tool, declaration, home), snapshot=str(snapshot)
+        login_spec(tool, declaration, home),
+        snapshot=str(snapshot),
+        memory_mib=declaration.resources.memory_mib,
+        cpus=declaration.resources.cpus,
     )
     try:
         process = await environment.run(

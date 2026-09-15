@@ -68,6 +68,7 @@ def test_status_reports_runtime_snapshot_and_logins(workspace: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "runtime: available 0.6.17" in result.output
+    assert "resources: 4096 MiB, 2 vCPU" in result.output
     assert f"image: {image_module.IMAGE} (GuildBotics default)" in result.output
     assert (
         f"snapshot: missing {snapshot_name(ImageStatus())} "
@@ -96,6 +97,7 @@ def test_status_json_has_the_same_facts(workspace: Path) -> None:
         "version": "0.6.17",
         "home": "",
     }
+    assert payload["resources"] == {"memory_mib": 4096, "cpus": 2}
     assert payload["snapshot"]["state"] == "missing"
     assert payload["warning"] == ""
     assert payload["image"] == {
@@ -141,7 +143,9 @@ def test_an_unreadable_declaration_does_not_look_like_deny(workspace: Path) -> N
 
     assert text.exit_code == payload.exit_code == 0
     assert "network: unavailable" in text.output
+    assert "resources: unavailable" in text.output
     assert json.loads(payload.output)["network"] is None
+    assert json.loads(payload.output)["resources"] is None
 
 
 def test_status_displays_the_device_filesystem_refusal(workspace, monkeypatch):
