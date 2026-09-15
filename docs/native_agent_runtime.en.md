@@ -290,6 +290,12 @@ credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
 not startup refusals, so another turn can retry. No authentication probe or token
 refresh is performed by GuildBotics.
+Each tool refreshes its own tokens during a turn, so its refresh endpoint is among the
+provider domains every turn reaches, and its credentials are bound so that a refresh is
+written back to the store. A file bind follows a file rewritten in place, but renaming
+another file over it fails. Grok Build renames its credentials into place, so they
+live in a directory of their own (`~/.grok/auth/auth.json`, set through
+`GROK_AUTH_PATH`) that is bound whole.
 
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the
@@ -297,7 +303,7 @@ process through the environment, and credential-named variables are stripped fro
 CLI environment as described below. The browser-based `grok.com` flow is never started
 during a headless run; without a saved login the turn fails as an authentication error
 that points at `grok login` (or `grok login --device-auth`). Only the chosen method id
-is recorded; the contents of `~/.grok/auth.json` are never read.
+is recorded; the contents of `~/.grok/auth/auth.json` are never read.
 
 GitHub Copilot advertises one method, `copilot-login`, whose metadata tells the client
 to run `copilot login` in a terminal. GuildBotics verifies the saved login by calling

@@ -36,6 +36,14 @@ class CliAgentProvision(BaseModel):
     Everything else under the root -- settings, skills, plugins -- is the
     snapshot's and returns to it every turn, so nothing an agent changes
     there reaches the next turn or another member.
+
+    The tool refreshes its login in the middle of turns, so a turn must reach
+    the refresh endpoint (it belongs in ``api_domains``) and the refreshed
+    credentials must land in the store. A persisted file is bound as that one
+    file: the tool may rewrite it in place, but replacing it by renaming
+    another file over it fails (``EBUSY``) and the refresh is lost. A tool that
+    renames its credentials into place keeps them in a persisted directory of
+    their own instead, where ``auth_env`` points it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -46,8 +54,12 @@ class CliAgentProvision(BaseModel):
     install: str = ""
     state_root: str = ""
     state_root_env: str = ""
-    #: The persisted file whose presence means the tool is logged in.
+    #: The file whose presence means the tool is logged in: persisted itself,
+    #: or inside a persisted directory.
     auth: str = ""
+    #: The variable that points the tool at ``auth``, for a tool whose
+    #: credentials do not stay at their default place under the state root.
+    auth_env: str = ""
     persisted: tuple[str, ...] = ()
     #: The login command, run interactively inside the environment.
     login: tuple[str, ...] = ()
@@ -62,10 +74,12 @@ class CliAgentProvision(BaseModel):
         return bool(self.package or self.install)
 
     def environment(self, home: str) -> dict[str, str]:
-        """The variables that point the tool at its state root under ``home``."""
-        if not self.state_root_env:
-            return {}
-        return {self.state_root_env: f"{home}/{self.state_root}"}
+        """The variables that point the tool at its state under ``home``."""
+        root = f"{home}/{self.state_root}"
+        variables = {self.state_root_env: root} if self.state_root_env else {}
+        if self.auth_env:
+            variables[self.auth_env] = f"{root}/{self.auth}"
+        return variables
 
 
 class CliAgentInfo(BaseModel):
@@ -118,6 +132,8 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         config_reference=f"{CLI_AGENT_ROOT}/claude/{CLI_AGENT_DEFAULT_FILENAME}",
         # With CLAUDE_CONFIG_DIR set, the account file `.claude.json` moves
         # under it beside the credentials, so the whole state sits in one root.
+        # Claude Code renames its files into place, but writes them in place
+        # when the rename fails, so the bound files keep every refresh.
         provision=CliAgentProvision(
             package="@anthropic-ai/claude-code@2.1.263",
             state_root=".claude",
@@ -125,9 +141,13 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             auth=".credentials.json",
             persisted=(".credentials.json", ".claude.json", "projects/"),
             login=("claude", "auth", "login"),
-            # To be confirmed against a real turn when the adapter moves
-            # into the environment.
-            api_domains=("api.anthropic.com", "*.anthropic.com", "claude.ai"),
+            # A subscription login refreshes through platform.claude.com.
+            api_domains=(
+                "api.anthropic.com",
+                "*.anthropic.com",
+                "claude.ai",
+                "platform.claude.com",
+            ),
         ),
     ),
     CliAgentInfo(
@@ -140,6 +160,8 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # takes the version to install and the directory to link it from; the
         # binary itself lands under the home, so it is copied into place and
         # the installer's leftovers are removed from the snapshot's home.
+        # auth.json is renamed into place beside its lock file, so both live
+        # in a directory of their own that is bound whole.
         provision=CliAgentProvision(
             install=(
                 "curl -fsSL https://x.ai/cli/install.sh"
@@ -152,8 +174,9 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             ),
             state_root=".grok",
             state_root_env="GROK_HOME",
-            auth="auth.json",
-            persisted=("auth.json", "agent_id", "sessions/"),
+            auth="auth/auth.json",
+            auth_env="GROK_AUTH_PATH",
+            persisted=("auth/", "agent_id", "sessions/"),
             login=("grok", "login", "--device-auth"),
             api_domains=("x.ai", "*.x.ai", "grok.com", "*.grok.com"),
         ),

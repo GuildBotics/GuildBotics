@@ -237,10 +237,37 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
-        assert provision.auth in provision.persisted, agent.name
+        assert provision.auth in provision.persisted or any(
+            entry.endswith("/") and provision.auth.startswith(entry)
+            for entry in provision.persisted
+        ), agent.name
         expected = (
             {provision.state_root_env: f"/h/{provision.state_root}"}
             if provision.state_root_env
             else {}
         )
+        if provision.auth_env:
+            expected[provision.auth_env] = f"/h/{provision.state_root}/{provision.auth}"
         assert provision.environment("/h") == expected, agent.name
+
+
+#: Where each tool refreshes its login, as observed from the tool itself.
+#: A tool added to the catalog must be looked up and listed here.
+_REFRESH_HOSTS = {
+    "codex": "auth.openai.com",
+    "claude": "platform.claude.com",
+    "grok": "auth.x.ai",
+    "copilot": "api.github.com",
+    "antigravity": "oauth2.googleapis.com",
+}
+
+
+def test_every_tool_reaches_its_login_refresh_from_a_turn() -> None:
+    """A login outlives an access token only if a turn can refresh it."""
+    assert set(_REFRESH_HOSTS) == {agent.name for agent in CLI_AGENTS}
+    for agent in CLI_AGENTS:
+        host = _REFRESH_HOSTS[agent.name]
+        assert any(
+            host == domain or (domain.startswith("*.") and host.endswith(domain[1:]))
+            for domain in agent.provision.api_domains
+        ), agent.name

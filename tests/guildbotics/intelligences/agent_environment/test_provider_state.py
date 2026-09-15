@@ -82,6 +82,38 @@ def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) 
     )
 
 
+def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
+    machine: Path, tmp_path: Path
+) -> None:
+    """A tool that renames its credentials into place cannot do so over a
+    file bind, so its credentials directory is bound instead, and the tool
+    is pointed at the file inside it -- in a turn and at login alike."""
+    grok = cli_agent_info("grok")
+    home = tmp_path / "home"
+    store = provider_state_dir(grok)
+    guest = f"{home.as_posix()}/.grok"
+
+    (store / "auth").mkdir(parents=True)
+    (store / "auth/auth.json").write_text("{}")
+
+    assert has_credentials(grok)
+    assert EnvironmentMount(f"{guest}/auth", store / "auth", False) in state_mounts(
+        grok, home
+    )
+    assert not any(
+        mount.guest == f"{guest}/auth/auth.json" for mount in state_mounts(grok, home)
+    )
+    assert grok.provision.environment(guest.removesuffix("/.grok")) == {
+        "GROK_HOME": guest,
+        "GROK_AUTH_PATH": f"{guest}/auth/auth.json",
+    }
+    login_guest = home.resolve().as_posix()
+    assert login_spec(grok, DECLARATION, home).env == {
+        "GROK_HOME": f"{login_guest}/.grok",
+        "GROK_AUTH_PATH": f"{login_guest}/.grok/auth/auth.json",
+    }
+
+
 def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
     machine: Path, tmp_path: Path
 ) -> None:
