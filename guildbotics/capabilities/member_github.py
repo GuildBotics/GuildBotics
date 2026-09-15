@@ -1513,6 +1513,10 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
+_ISSUE_REFS_KEYWORD = r"refs?"
+
+
 def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not issue_url:
         return body
@@ -1520,13 +1524,19 @@ def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not match:
         return body
     issue_number = match.group(1)
-    if re.search(
-        rf"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|refs?)\s+#{issue_number}\b",
-        body,
-        re.I,
-    ):
+    closing_ref = rf"\b{_ISSUE_CLOSING_KEYWORD}\s+#{issue_number}\b"
+    refs_ref = rf"\b{_ISSUE_REFS_KEYWORD}\s+#{issue_number}\b"
+    if re.search(closing_ref, body, re.I):
         return body
-    trailer = f"{'Closes' if closes else 'Refs'} #{issue_number}"
+    if closes:
+        replaced, n = re.subn(refs_ref, f"Closes #{issue_number}", body, flags=re.I)
+        if n:
+            return replaced
+        trailer = f"Closes #{issue_number}"
+    else:
+        if re.search(refs_ref, body, re.I):
+            return body
+        trailer = f"Refs #{issue_number}"
     return f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
 
 
