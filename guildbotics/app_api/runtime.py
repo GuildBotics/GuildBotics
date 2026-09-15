@@ -91,7 +91,6 @@ from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
 from guildbotics.capabilities.member_memory_audit import (
-    DEFAULT_MEMORY_AUDIT_MAX_BYTES,
     MemoryAuditStore,
     parse_memory_audit_timestamp,
 )
@@ -1240,11 +1239,7 @@ class AppRuntime:
                 "index_size_bytes": 0,
             }
         )
-        memory_path = MemoryAuditStore().path
-        try:
-            memory_size = memory_path.stat().st_size
-        except OSError:
-            memory_size = 0
+        memory_size, memory_max_size = MemoryAuditStore().usage()
         return TranscriptSettingsStatus(
             detail=cast(Any, transcript_detail()),
             retention_days=transcript_retention_days(),
@@ -1253,7 +1248,7 @@ class AppRuntime:
             index_size_bytes=int(usage["index_size_bytes"]),
             index_rewrite_threshold_bytes=DEFAULT_DIAGNOSTICS_MAX_BYTES,
             memory_size_bytes=memory_size,
-            memory_max_size_bytes=DEFAULT_MEMORY_AUDIT_MAX_BYTES,
+            memory_max_size_bytes=memory_max_size,
         )
 
     def update_transcript_settings(

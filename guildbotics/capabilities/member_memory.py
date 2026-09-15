@@ -14,7 +14,10 @@ from typing import Any, Literal
 
 import yaml  # type: ignore
 
-from guildbotics.capabilities.member_memory_audit import append_memory_event
+from guildbotics.capabilities.member_memory_audit import (
+    MemoryAuditStore,
+    append_memory_event,
+)
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.utils.fileio import (
@@ -40,9 +43,10 @@ MIN_SECRET_VALUE_LENGTH = 4
 RG_NO_MATCH_EXIT_CODE = 1
 BODY_FILE = "body.md"
 META_FILE = "meta.yml"
-RECENT_FILE = "recent.txt"
 ARCHIVED_DIR = "archived"
-RESERVED_DOC_IDS = {RECENT_FILE, ARCHIVED_DIR}
+RESERVED_DOC_IDS = {ARCHIVED_DIR}
+#: The audited actions that mean a member used a document, and so order the digest.
+DIGEST_ACTIONS = frozenset({"record", "update", "touch", "promote"})
 POLICY_BASELINE_BODY = """- Keep only reusable lessons: pitfalls, solution steps, and design rationale.
 - Do not keep trivial logs, temporary trial-and-error, or information useful only for one task.
 - Store work records tied to PRs, issues, or team-shared Slack threads in team memory so other members can discover and continue the work.
@@ -87,10 +91,10 @@ class MemberMemoryService:
     Each operation therefore holds the workspace's shared-write lock from the
     read it derives from to the last file it writes. Declaring it here rather
     than leaving it to the write helpers is what the shape of these operations
-    forces: a document is two files, the recency list is a third, and archiving
-    and promoting rename a directory -- none of which any single write can
-    infer. The audit journal is written after that span and takes its own, so
-    a journal that cannot be written does not undo a document that already was.
+    forces: a document is two files, and archiving and promoting rename a
+    directory -- neither of which any single write can infer. The audit
+    journal is written after that span and takes its own, so a journal that
+    cannot be written does not undo a document that already was.
     """
 
     def __init__(self, person: Person) -> None:
@@ -161,7 +165,6 @@ class MemberMemoryService:
             if params:
                 meta.update(params)
             self._write_doc(scope_dir / doc_id, meta, body)
-            self._touch_recent(doc_id)
         self._record_audit("record", self._read_doc(scope, scope_dir / doc_id))
         return self._document_result(scope, scope_dir / doc_id)
 
@@ -361,7 +364,6 @@ class MemberMemoryService:
             meta["updated_at"] = _now()
             meta["updated_by"] = self.person.person_id
             self._write_doc(doc.path, meta, doc.body if body is None else body)
-            self._touch_recent(doc.doc_id)
         self._record_audit(
             "update",
             self._read_doc(doc.scope, doc.path),
@@ -370,9 +372,7 @@ class MemberMemoryService:
         return self._document_result(doc.scope, doc.path)
 
     def touch(self, *, doc_id: str, scope: Scope | None = None) -> dict[str, Any]:
-        with shared_write_lock():
-            doc = self._resolve_doc(doc_id, scope)
-            self._touch_recent(doc.doc_id)
+        doc = self._resolve_doc(doc_id, scope)
         self._record_audit("touch", doc)
         return {"doc_id": doc.doc_id, "path": _document_path(doc)}
 
@@ -394,7 +394,6 @@ class MemberMemoryService:
                 raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
             doc.path.rename(target)
             _notify_document_moved(doc.path, target)
-            self._remove_recent(doc.doc_id)
         self._record_audit(
             "archive",
             doc,
@@ -417,7 +416,6 @@ class MemberMemoryService:
                 raise MemberMemoryError(f"Team memory already exists: {doc.doc_id}")
             doc.path.rename(target)
             _notify_document_moved(doc.path, target)
-            self._touch_recent(doc.doc_id)
         self._record_audit(
             "promote",
             self._read_doc("team", target),
@@ -433,8 +431,29 @@ class MemberMemoryService:
         }
 
     def load_digest(self, *, limit: int = DEFAULT_DIGEST_N) -> list[dict[str, Any]]:
+        """Return this member's most recently used documents, newest first.
+
+        The order is derived from every device's audit journal rather than kept
+        in a list of its own: a list every device rewrites conflicts whenever
+        two devices use memory while apart, and the side set aside loses its
+        order. Documents archived or no longer present are left out.
+        """
         digest: list[dict[str, Any]] = []
-        for doc_id in self._read_recent():
+        seen: set[str] = set()
+        for event in MemoryAuditStore().list_events(
+            person_id=self.person.person_id, limit=None
+        ):
+            attributes = event.get("attributes")
+            if not isinstance(attributes, dict):
+                continue
+            doc_id = attributes.get("memory.doc_id")
+            if (
+                attributes.get("memory.action") not in DIGEST_ACTIONS
+                or not isinstance(doc_id, str)
+                or doc_id in seen
+            ):
+                continue
+            seen.add(doc_id)
             try:
                 doc = self._resolve_doc(doc_id, None)
             except MemberMemoryError:
@@ -616,31 +635,6 @@ class MemberMemoryService:
         if scope == "team":
             return self.root / "team"
         return self.root / "personal" / self.person.person_id
-
-    def _recent_path(self) -> Path:
-        return self._scope_dir("personal") / RECENT_FILE
-
-    def _read_recent(self) -> list[str]:
-        path = self._recent_path()
-        if not path.is_file():
-            return []
-        return [
-            line.strip()
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-
-    def _write_recent(self, doc_ids: list[str]) -> None:
-        write_shared_text(
-            self._recent_path(), "\n".join(doc_ids) + ("\n" if doc_ids else "")
-        )
-
-    def _touch_recent(self, doc_id: str) -> None:
-        current = [item for item in self._read_recent() if item != doc_id]
-        self._write_recent([doc_id, *current])
-
-    def _remove_recent(self, doc_id: str) -> None:
-        self._write_recent([item for item in self._read_recent() if item != doc_id])
 
     def _new_doc_id(self, scope_dir: Path) -> str:
         while True:

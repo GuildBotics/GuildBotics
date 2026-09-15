@@ -18,9 +18,11 @@ from guildbotics.utils.workspace_sync_port import (
     append_shared_text,
     write_shared_text,
 )
+from guildbotics.workspace.identity import ensure_device_identity
 from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
-MEMORY_AUDIT_FILE = "memory_events.jsonl"
+MEMORY_AUDIT_DIR = "memory_events"
+MEMORY_AUDIT_SUFFIX = ".jsonl"
 DEFAULT_MEMORY_AUDIT_LIMIT = 5000
 # The audit journal is shared between devices, so its self-imposed bound is the
 # same one the commit boundary enforces for append journals.
@@ -28,8 +30,8 @@ DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES
 _MEMORY_AUDIT_LOCK = threading.Lock()
 
 
-def default_memory_audit_path() -> Path:
-    return get_workspace_state_path("documents", MEMORY_AUDIT_FILE)
+def default_memory_audit_dir() -> Path:
+    return get_workspace_state_path("documents", MEMORY_AUDIT_DIR)
 
 
 def append_memory_event(
@@ -114,18 +116,53 @@ def append_memory_event(
 
 
 class MemoryAuditStore:
+    """The memory audit journal: one file per device, read as one log.
+
+    Every device and member writes memory events, including reads such as
+    ``recall``. A single file written by all of them changes on both sides of
+    nearly every reconnection, and synchronization sets the later side's commit
+    aside although nothing in it contradicts the other. Each device therefore
+    appends to, and trims, only its own file, and reading merges every
+    device's file so the log still reads as one.
+    """
+
     def __init__(
         self,
-        path: Path | None = None,
+        directory: Path | None = None,
         *,
+        device_id: str | None = None,
         max_file_bytes: int = DEFAULT_MEMORY_AUDIT_MAX_BYTES,
     ) -> None:
-        self._path = path
+        self._directory = directory
+        self._device_id = device_id
         self._max_file_bytes = max_file_bytes
 
     @property
+    def directory(self) -> Path:
+        return self._directory or default_memory_audit_dir()
+
+    @property
     def path(self) -> Path:
-        return self._path or default_memory_audit_path()
+        """Return this device's journal, the only file this store writes."""
+        device_id = self._device_id or ensure_device_identity().device_id
+        return self.directory / f"{device_id}{MEMORY_AUDIT_SUFFIX}"
+
+    def usage(self) -> tuple[int, int]:
+        """Return the size of every device's journal and the bound on that sum.
+
+        Each journal is bounded on its own, so the sum is bounded by the
+        per-file bound times the number of journals.
+
+        Returns:
+            tuple[int, int]: The total size in bytes and its maximum.
+        """
+        sizes = []
+        for path in self._journal_paths():
+            try:
+                sizes.append(path.stat().st_size)
+            except OSError:
+                continue
+        return sum(sizes), self._max_file_bytes * max(1, len(sizes))
 
     def record(self, item: dict[str, Any]) -> None:
         """Append one event, trimming the journal once it reaches its bound.
@@ -140,11 +177,11 @@ class MemoryAuditStore:
         all but the trimming one need only the file's size and an append.
         """
         notify_diagnostics_record(item)
-        path = self.path
         line = self._bounded_line(item)
         if not line:
             return
         try:
+            path = self.path
             with shared_write_lock(), _MEMORY_AUDIT_LOCK:
                 current_size = path.stat().st_size if path.exists() else 0
                 if current_size + len(line.encode("utf-8")) + 1 > self._max_file_bytes:
@@ -165,11 +202,18 @@ class MemoryAuditStore:
         since: str | None = None,
         until: str | None = None,
         trace_id: str | None = None,
-        limit: int = DEFAULT_MEMORY_AUDIT_LIMIT,
+        limit: int | None = DEFAULT_MEMORY_AUDIT_LIMIT,
     ) -> list[dict[str, Any]]:
+        """Return matching events from every device's journal, newest first.
+
+        Args:
+            limit (int | None): The most events to return, or None for all.
+        """
+        # Read backwards so that events sharing a timestamp keep the newest
+        # first: the sort below is stable, and a journal is in append order.
         matches = [
             item
-            for item in self._read_events()
+            for item in reversed(self._read_events())
             if _matches_event(
                 item,
                 person_id=person_id,
@@ -183,17 +227,22 @@ class MemoryAuditStore:
             )
         ]
         matches.sort(key=_timestamp_sort_key, reverse=True)
-        return matches[: max(1, limit)]
+        return matches if limit is None else matches[: max(1, limit)]
+
+    def _journal_paths(self) -> list[Path]:
+        directory = self.directory
+        if not directory.is_dir():
+            return []
+        return sorted(directory.glob(f"*{MEMORY_AUDIT_SUFFIX}"))
 
     def _read_events(self) -> list[dict[str, Any]]:
-        path = self.path
-        if not path.is_file():
-            return []
-        try:
-            with _MEMORY_AUDIT_LOCK:
-                lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return []
+        lines: list[str] = []
+        with _MEMORY_AUDIT_LOCK:
+            for path in self._journal_paths():
+                try:
+                    lines.extend(path.read_text(encoding="utf-8").splitlines())
+                except OSError:
+                    continue
         return [
             item
             for item in (_json_object(line.strip()) for line in lines)

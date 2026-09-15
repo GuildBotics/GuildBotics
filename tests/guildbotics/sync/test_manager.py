@@ -18,6 +18,7 @@ from guildbotics.sync.local_repository import (
     HubCommandError,
     LocalSyncRepository,
 )
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 import guildbotics.sync.manager as manager_module
 import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
@@ -159,6 +160,31 @@ def test_changes_to_different_files_are_both_kept(
     assert second.read(CONFIG) == "language: ja\n"
     assert _hub_file(hub, "state/events/2026/08/e1.json") is not None
     assert second.rejections == []
+
+
+def test_memory_used_on_two_devices_while_apart_is_never_set_aside(
+    first: Device, second: Device
+) -> None:
+    """Every memory operation is audited, reads included, so both devices
+    write the journal whenever both use memory. Each writes only its own
+    journal, which leaves the late device nothing that overlaps the hub."""
+    audit_dir = "state/documents/memory_events"
+    for device, action in ((first, "recall"), (second, "get")):
+        MemoryAuditStore(device.shared / audit_dir, device_id=device.root.name).record(
+            {"kind": "memory", "type": f"memory.{action}"}
+        )
+    first.manager.synchronize()
+
+    second.manager.synchronize()
+    first.manager.synchronize()
+
+    assert second.rejections == []
+    for device in (first, second):
+        events = MemoryAuditStore(device.shared / audit_dir).list_events()
+        assert sorted(event["type"] for event in events) == [
+            "memory.get",
+            "memory.recall",
+        ]
 
 
 def test_the_change_that_reached_the_hub_first_wins(
