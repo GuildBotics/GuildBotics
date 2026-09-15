@@ -42,8 +42,10 @@ export function AgentEnvironmentDeclarationCard({
   const { t } = useTranslation();
   const [rejectedDns, setRejectedDns] = useState<string>();
   const [networkValid, setNetworkValid] = useState(true);
-  const [memory, setMemory] = useState<string | number>(value.resources.memory_mib);
-  const [cpus, setCpus] = useState<string | number>(value.resources.cpus);
+  const [memoryDraft, setMemoryDraft] = useState<string | number>();
+  const [cpusDraft, setCpusDraft] = useState<string | number>();
+  const memory = memoryDraft ?? value.resources.memory_mib;
+  const cpus = cpusDraft ?? value.resources.cpus;
   const nameservers = Array.isArray(value.dns.nameservers) ? value.dns.nameservers : [];
   const useHost = !Array.isArray(value.dns.nameservers);
   const emptyList = !useHost && nameservers.length === 0;
@@ -177,9 +179,11 @@ export function AgentEnvironmentDeclarationCard({
                 : t("setup.intelligence.environment.declaration.positiveInteger")
             }
             onChange={(memory_mib) => {
-              setMemory(memory_mib);
               if (typeof memory_mib === "number" && memory_mib >= 1) {
+                setMemoryDraft(undefined);
                 onChange({ ...value, resources: { ...value.resources, memory_mib } });
+              } else {
+                setMemoryDraft(memory_mib);
               }
             }}
           />
@@ -197,9 +201,11 @@ export function AgentEnvironmentDeclarationCard({
                 : t("setup.intelligence.environment.declaration.positiveInteger")
             }
             onChange={(next) => {
-              setCpus(next);
               if (typeof next === "number" && next >= 1) {
+                setCpusDraft(undefined);
                 onChange({ ...value, resources: { ...value.resources, cpus: next } });
+              } else {
+                setCpusDraft(next);
               }
             }}
           />

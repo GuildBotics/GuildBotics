@@ -137,9 +137,40 @@ describe("AgentEnvironmentCard", () => {
       expect(
         screen.getByText(
           tr("setup.intelligence.environment.resourceValues", {
-            memory: "4,096",
+            memory: 4096,
             cpus: 2,
           }),
+        ),
+      ).toBeVisible();
+      expect(
+        screen
+          .getAllByRole("columnheader")
+          .slice(0, 6)
+          .map((header) => header.textContent),
+      ).toEqual([
+        tr("setup.intelligence.environment.runtime"),
+        tr("setup.intelligence.environment.image"),
+        tr("setup.intelligence.environment.snapshot"),
+        tr("setup.intelligence.environment.resources"),
+        tr("setup.intelligence.environment.network"),
+        tr("setup.intelligence.environment.dns"),
+      ]);
+    },
+  );
+
+  it.each(["en", "ja"])(
+    "says when the resource declaration cannot be read in %s",
+    async (language) => {
+      await i18n.changeLanguage(language);
+      const tr = i18n.getFixedT(language);
+      vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(status({ resources: null }));
+
+      renderCard();
+
+      const label = await screen.findByText(tr("setup.intelligence.environment.resources"));
+      expect(
+        within(label.closest("tr")!).getByText(
+          tr("setup.intelligence.environment.resourcesUnavailable"),
         ),
       ).toBeVisible();
     },

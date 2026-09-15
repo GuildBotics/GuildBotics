@@ -129,7 +129,8 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
 
 - **リソース**: `intelligences/agent_environment.yml`の`resources:`で、すべてのturnと
   snapshot buildへ割り当てるメモリ（MiB）と仮想CPU数を指定します。省略時は4096 MiB・
-  2 vCPUです。
+  2 vCPUです。この宣言はワークスペース共通で、全端末に同じ値を使います。メモリが最も
+  小さく、CPUコア数が最も少ない端末に収まる値を指定してください。
 
   ```yaml
   resources:

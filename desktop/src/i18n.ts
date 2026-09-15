@@ -939,7 +939,7 @@ const resources = {
             runtimeUnavailable: "Unavailable",
             resources: "Resources",
             resourceValues: "{{memory}} MiB · {{cpus}} vCPU",
-            resourcesUnavailable: "Unavailable",
+            resourcesUnavailable: "The declaration could not be read",
             snapshot: "Environment",
             snapshotStates: {
               missing: "Not built",
@@ -998,9 +998,11 @@ const resources = {
                 "{{reference}} is declared for {{declared}} but not for this device ({{architecture}}). Pick the image loaded here to declare it for {{architecture}}.",
               imageDeclared: "Declared: {{digests}}",
               memory: "Memory (MiB)",
-              memoryHint: "Assigned to every turn and snapshot build. Default: 4096.",
+              memoryHint:
+                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the least memory. Assigned to every turn and snapshot build. Default: 4096.",
               cpus: "Virtual CPUs",
-              cpusHint: "Assigned to every turn and snapshot build. Default: 2.",
+              cpusHint:
+                "Workspace-wide and used unchanged on every device. Choose a value that fits the device with the fewest CPU cores. Assigned to every turn and snapshot build. Default: 2.",
               positiveInteger: "Enter a whole number greater than zero.",
               nameservers: "DNS resolvers",
               nameserversHost:
@@ -2649,7 +2651,7 @@ const resources = {
             runtimeUnavailable: "利用不可",
             resources: "リソース",
             resourceValues: "{{memory}} MiB・{{cpus}} vCPU",
-            resourcesUnavailable: "利用不可",
+            resourcesUnavailable: "宣言を読み取れません",
             snapshot: "環境",
             snapshotStates: {
               missing: "未ビルド",
@@ -2709,9 +2711,11 @@ const resources = {
                 "{{reference}} は {{declared}} 向けに宣言されていますが、この端末（{{architecture}}）向けには未宣言です。この端末に読み込み済みの image を選ぶと {{architecture}} 向けに宣言されます。",
               imageDeclared: "宣言: {{digests}}",
               memory: "メモリ（MiB）",
-              memoryHint: "すべての turn と snapshot build に割り当てます。既定値: 4096。",
+              memoryHint:
+                "ワークスペース共通で、全端末に同じ値を使います。メモリが最も小さい端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 4096。",
               cpus: "仮想 CPU 数",
-              cpusHint: "すべての turn と snapshot build に割り当てます。既定値: 2。",
+              cpusHint:
+                "ワークスペース共通で、全端末に同じ値を使います。CPU コア数が最も少ない端末に収まる値を指定してください。すべての turn と snapshot build に割り当てます。既定値: 2。",
               positiveInteger: "1 以上の整数を入力してください。",
               nameservers: "DNS リゾルバ",
               nameserversHost:

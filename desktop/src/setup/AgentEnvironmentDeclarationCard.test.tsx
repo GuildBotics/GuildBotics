@@ -28,14 +28,17 @@ const onHost: AgentEnvironmentDeclaration = { ...packaged, dns: { nameservers: "
 
 function Harness({
   initial = packaged,
+  value: controlledValue,
   onChange,
   onValidityChange,
 }: {
   initial?: AgentEnvironmentDeclaration;
+  value?: AgentEnvironmentDeclaration;
   onChange?: (value: AgentEnvironmentDeclaration) => void;
   onValidityChange?: (valid: boolean) => void;
 }) {
-  const [value, setValue] = useState(initial);
+  const [storedValue, setValue] = useState(initial);
+  const value = controlledValue ?? storedValue;
   const [client] = useState(
     () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
   );
@@ -82,6 +85,12 @@ describe("AgentEnvironmentDeclarationCard", () => {
     const cpus = screen.getByRole("textbox", {
       name: t("setup.intelligence.environment.declaration.cpus"),
     });
+    expect(
+      screen.getByText(t("setup.intelligence.environment.declaration.memoryHint")),
+    ).toBeVisible();
+    expect(
+      screen.getByText(t("setup.intelligence.environment.declaration.cpusHint")),
+    ).toBeVisible();
 
     await userEvent.clear(memory);
     await userEvent.type(memory, "3072");
@@ -96,6 +105,30 @@ describe("AgentEnvironmentDeclarationCard", () => {
       ...packaged,
       resources: { memory_mib: 3072, cpus: 3 },
     });
+  });
+
+  it("shows resource values received after the declaration is synchronized", () => {
+    const { rerender } = render(<Harness value={packaged} />);
+
+    rerender(
+      <Harness
+        value={{
+          ...packaged,
+          resources: { memory_mib: 3072, cpus: 3 },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("textbox", {
+        name: t("setup.intelligence.environment.declaration.memory"),
+      }),
+    ).toHaveValue("3072");
+    expect(
+      screen.getByRole("textbox", {
+        name: t("setup.intelligence.environment.declaration.cpus"),
+      }),
+    ).toHaveValue("3");
   });
 
   it("names the base image by the digest of the image loaded on this device", async () => {

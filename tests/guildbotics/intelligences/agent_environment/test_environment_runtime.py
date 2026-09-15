@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -422,7 +423,12 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
     monkeypatch.setattr(runtime.secrets, "token_hex", lambda n: "x")
     monkeypatch.setattr(runtime, "_NAME_PREFIX", "fail-")
 
-    with pytest.raises(AgentEnvironmentError, match="no hypervisor"):
+    failure = t(
+        "intelligences.agent_environment.runtime.start_failed",
+        error="no hypervisor",
+        **_RESOURCES,
+    )
+    with pytest.raises(AgentEnvironmentError, match=re.escape(failure)):
         await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
 

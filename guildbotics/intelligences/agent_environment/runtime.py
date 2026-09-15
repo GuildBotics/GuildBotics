@@ -72,6 +72,14 @@ class AgentEnvironmentError(RuntimeError):
     """The environment could not be created or the runtime refused a step."""
 
 
+def _start_failure(*, build: bool, error: Exception, memory_mib: int, cpus: int) -> str:
+    """Describe a failed boot with facts GuildBotics knows about the request."""
+    values = {"error": error, "memory_mib": memory_mib, "cpus": cpus}
+    if build:
+        return t("intelligences.agent_environment.runtime.build_start_failed", **values)
+    return t("intelligences.agent_environment.runtime.start_failed", **values)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentEnvironmentHealth:
     """Whether this device can create an environment, and if not, why."""
@@ -375,7 +383,12 @@ class AgentEnvironment:
             )
         except Exception as exc:
             raise AgentEnvironmentError(
-                t("intelligences.agent_environment.runtime.start_failed", error=exc)
+                _start_failure(
+                    build=False,
+                    error=exc,
+                    memory_mib=memory_mib,
+                    cpus=cpus,
+                )
             ) from exc
         environment = cls(sandbox, spec)
         try:
@@ -498,7 +511,12 @@ async def build_snapshot(
             )
     except Exception as exc:
         raise AgentEnvironmentError(
-            t("intelligences.agent_environment.runtime.build_start_failed", error=exc)
+            _start_failure(
+                build=True,
+                error=exc,
+                memory_mib=memory_mib,
+                cpus=cpus,
+            )
         ) from exc
     try:
         snapshot_name = name(await _built_from(Sandbox))

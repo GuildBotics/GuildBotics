@@ -162,7 +162,9 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 - **Resources**: `resources:` in `intelligences/agent_environment.yml` assigns
   memory in MiB and virtual CPUs to every turn and snapshot build. Omitting it
-  uses 4096 MiB and 2 vCPUs.
+  uses 4096 MiB and 2 vCPUs. This declaration is workspace-wide and the same
+  values are used on every device, so choose values that fit the device with
+  the least memory and fewest CPU cores.
 
   ```yaml
   resources:

@@ -324,7 +324,12 @@ async def test_a_sandbox_that_cannot_start_is_reported(
 ) -> None:
     _Sandbox.create_error = microsandbox.MicrosandboxError("no hypervisor")
 
-    with pytest.raises(AgentEnvironmentError, match="build environment: no hypervisor"):
+    failure = t(
+        "intelligences.agent_environment.runtime.build_start_failed",
+        error="no hypervisor",
+        **_RESOURCES,
+    )
+    with pytest.raises(AgentEnvironmentError, match=re.escape(failure)):
         await build_snapshot(
             _named("n"),
             dest_dir=tmp_path,
