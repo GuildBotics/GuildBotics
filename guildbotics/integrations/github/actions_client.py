@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+GITHUB_PAGE_SIZE = 100
+
 
 class GitHubActionsClientError(RuntimeError):
     """A GitHub Checks or Actions request failed."""
@@ -42,7 +44,9 @@ class GitHubActionsClient:
         statuses: list[dict[str, Any]] = []
         page = 1
         while True:
-            response = await self._get(endpoint, params={"per_page": 100, "page": page})
+            response = await self._get(
+                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
+            )
             _raise_for_status(response)
             payload = response.json()
             if not isinstance(payload, dict):
@@ -51,7 +55,7 @@ class GitHubActionsClient:
                 )
             page_items = _dict_items(payload, "statuses")
             statuses.extend(page_items)
-            if len(page_items) < 100:
+            if len(page_items) < GITHUB_PAGE_SIZE:
                 return statuses
             page += 1
 
@@ -125,7 +129,11 @@ class GitHubActionsClient:
         items: list[dict[str, Any]] = []
         page = 1
         while True:
-            params = {"per_page": 100, "page": page, **(extra_params or {})}
+            params = {
+                "per_page": GITHUB_PAGE_SIZE,
+                "page": page,
+                **(extra_params or {}),
+            }
             response = await self._get(endpoint, params=params)
             _raise_for_status(response)
             payload = response.json()
@@ -135,7 +143,7 @@ class GitHubActionsClient:
                 )
             page_items = _dict_items(payload, key)
             items.extend(page_items)
-            if len(page_items) < 100:
+            if len(page_items) < GITHUB_PAGE_SIZE:
                 return items
             page += 1
 

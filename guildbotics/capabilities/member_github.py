@@ -30,6 +30,7 @@ from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
+GITHUB_ACTIONS_RUN_MIN_PART_COUNT = 5
 GITHUB_PAGE_SIZE = 100
 DEFAULT_LOG_TAIL_BYTES = STREAM_READ_LIMIT // 32
 MAX_ARTIFACT_BYTES = STREAM_READ_LIMIT
@@ -567,7 +568,10 @@ class MemberGitHubCapabilityService:
     ) -> tuple[GitHubResource, int | None, str | None]:
         parsed = urlparse(url)
         parts = [part for part in parsed.path.strip("/").split("/") if part]
-        if len(parts) >= 5 and parts[2:4] == ["actions", "runs"]:
+        if len(parts) >= GITHUB_ACTIONS_RUN_MIN_PART_COUNT and parts[2:4] == [
+            "actions",
+            "runs",
+        ]:
             try:
                 run_id = int(parts[4])
             except ValueError as exc:
@@ -1316,7 +1320,10 @@ def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
             continue
         parsed = urlparse(str(check.get("details_url", "")))
         parts = [part for part in parsed.path.strip("/").split("/") if part]
-        if len(parts) < 5 or parts[2:4] != ["actions", "runs"]:
+        if len(parts) < GITHUB_ACTIONS_RUN_MIN_PART_COUNT or parts[2:4] != [
+            "actions",
+            "runs",
+        ]:
             continue
         try:
             run_ids.add(int(parts[4]))
