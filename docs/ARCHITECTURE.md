@@ -495,10 +495,12 @@ transfer is allowed only after the user has directly confirmed that the old
 service stopped; ownership is never changed by a live timeout. The same boundary
 records TaskRun start and terminal state and waits for the corresponding sync
 barrier, which prevents a running or completed input from being accepted again
-after a service handoff. Completed means the run recorded a result: a run that
-ended without one (it raised, was cancelled, or lost its owner device) left the
-work undone, so the same input is accepted again and its next attempt continues
-under that run id, keeping the evidence earlier attempts recorded.
+after a service handoff. An input is accepted again only when its run ended
+proving the work did not happen: it raised, was cancelled, or lost its owner
+device. That next attempt continues under the same run id, on the device now
+doing the work, keeping the evidence earlier attempts recorded. A run whose
+outcome could not be observed (`result_unknown`) keeps its input, because the
+work may already have taken effect elsewhere; only the user starts it again.
 
 **Workspace Sync Port** (`utils/workspace_sync_port.py`). Storage layers announce a
 completed shared write as a `ChangeSet` and never learn that Git is involved. Writes go

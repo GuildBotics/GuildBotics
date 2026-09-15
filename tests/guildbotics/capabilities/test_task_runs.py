@@ -302,7 +302,7 @@ def test_chat_run_blocked_requires_summary_but_no_evidence(tmp_path):
     assert status.evidence_types == []
 
 
-def test_start_record_reopens_a_run_that_ended_without_a_result(tmp_path):
+def test_start_record_reopens_a_run_that_left_its_work_undone(tmp_path):
     store = RunStore(tmp_path)
     start_args = {
         "work_kind": "chat-event",
@@ -345,3 +345,23 @@ def test_start_record_never_restarts_a_completed_run(tmp_path):
     assert unchanged.status == "succeeded"
     assert unchanged.finished_at is not None
     assert unchanged.result is not None
+
+
+def test_start_record_never_restarts_a_run_whose_outcome_is_unknown(tmp_path):
+    """The work may already have taken effect, so nothing repeats it on its own."""
+    store = RunStore(tmp_path)
+    start_args = {
+        "work_kind": "remote-job",
+        "execution_mode": "remote",
+        "member_id": "aiko",
+        "work_identity": {"kind": "remote-job", "job_id": "job-1"},
+    }
+    store.start_record("run-1", **start_args)
+    store.finish_record(
+        "run-1", status="result_unknown", safe_summary="The process stopped."
+    )
+
+    unchanged = store.start_record("run-1", **start_args)
+
+    assert unchanged.status == "result_unknown"
+    assert unchanged.finished_at is not None

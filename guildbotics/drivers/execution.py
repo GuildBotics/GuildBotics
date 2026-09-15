@@ -362,11 +362,13 @@ class TaskRunCoordinator(ExecutionCoordinator):
         outside that local lock; a failed barrier never starts the caller's
         workflow.
 
-        Only a run that is still running, or that recorded a result, holds an
-        identity. A run that ended without a result (it raised, was cancelled,
-        or lost its owner device) left the work undone, so the caller's retry
-        is accepted and re-opens that run rather than being reported as a
-        duplicate of work that never happened.
+        A run holds an identity while it is running, and keeps holding it
+        unless it ended proving that its work did not happen. A run that
+        raised, was cancelled, or lost its owner device left the work undone,
+        so the caller's retry is accepted and re-opens that run rather than
+        being reported as a duplicate of work that never happened. A
+        ``result_unknown`` run keeps its identity: its outcome could not be
+        observed, so it is never retried on its own.
         """
         owner_state = self._owner_state()
         if owner_state is False:
@@ -386,7 +388,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
             existing = [
                 record
                 for record in store.find_by_work_identity(identity)
-                if record.member_id == member_id and not record.ended_without_result
+                if record.member_id == member_id and not record.left_work_undone
             ]
             if existing:
                 record = max(existing, key=lambda item: item.started_at)

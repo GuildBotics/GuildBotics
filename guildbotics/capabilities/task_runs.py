@@ -198,20 +198,24 @@ class RunStore:
     ) -> tuple[TaskRunRecord, ChangeSet | None]:
         """Create a running record and expose its sync notification.
 
-        A run that ended without a result is re-opened for its next attempt
-        instead of being kept terminal, so every attempt of one logical unit
-        of work accumulates its evidence under a single run id. A run that
-        recorded a result is never restarted.
+        A run that ended leaving its work undone is re-opened for its next
+        attempt instead of being kept terminal, so every attempt of one
+        logical unit of work accumulates its evidence under a single run id.
+        A run that recorded a result, or whose outcome could not be observed,
+        is never restarted. Re-opening moves the record's ownership to the
+        device that is starting this attempt, which is the device the run is
+        now running on.
         """
 
         def _start(current: TaskRunRecord) -> TaskRunRecord:
-            if current.finished_at and not current.ended_without_result:
+            if current.finished_at and not current.left_work_undone:
                 return current
             return current.model_copy(
                 update={
                     "work_kind": work_kind,
                     "execution_mode": execution_mode,
                     "member_id": member_id,
+                    "device_id": self.device_id,
                     "work_identity": work_identity,
                     "status": "running",
                     "finished_at": None,
