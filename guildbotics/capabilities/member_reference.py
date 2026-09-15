@@ -292,6 +292,12 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
+    "After pushing or opening a PR, inspect its CI with `member github pr checks`. "
+    "If a required check fails, use `member github pr checks --failed-logs` to "
+    "identify the cause, fix failures caused by the change, publish the fix, and "
+    "check CI again. Do not report the work complete while required checks are "
+    "pending or failing; if an unrelated failure or an unavailable check blocks "
+    "completion, follow the failure-handling rule above and report that blocker.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating issue or PR for issue-driven work, the review thread or PR "
@@ -301,9 +307,11 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
 ]
 
 _CROSS_CUTTING_RULES: list[str] = [
-    "Publishing writes go through these `guildbotics member ...` commands: commits, pushes, PRs, "
-    "issue/PR comments, and Slack posts/reactions. Never use gh, raw GitHub/Slack tokens or APIs, "
-    "raw `git commit` / `git push`, or raw Slack HTTP calls for those.",
+    "All GitHub and Slack access, reads and writes alike, goes through the "
+    "corresponding `guildbotics member ...` commands. Never use `gh`, raw "
+    "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. Publishing git commits "
+    "and pushes also goes through member commands; never use raw `git commit` or "
+    "`git push`.",
     "Opening an issue and closing or reopening one stay human decisions. Pass "
     "`--human-approved` only when a human in the originating conversation asked for or "
     "approved that specific issue, never on the member's own judgment and never because "
