@@ -24,6 +24,7 @@ from guildbotics.integrations.file_chat_state_store import FileConversationState
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.utils import workspace_sync_port
 from guildbotics.utils.fileio import get_workspace_local_path, get_workspace_state_path
+from guildbotics.workspace.identity import ensure_device_identity
 from tests.guildbotics.utils.test_workspace_sync_port import RecordingPort
 
 
@@ -103,7 +104,8 @@ def test_task_run_records_are_announced(port: RecordingPort) -> None:
 def test_the_memory_audit_journal_is_announced(port: RecordingPort) -> None:
     MemoryAuditStore().record({"kind": "memory", "type": "memory.record"})
 
-    assert announced_paths(port) == ["state/documents/memory_events.jsonl"]
+    device_id = ensure_device_identity().device_id
+    assert announced_paths(port) == [f"state/documents/memory_events/{device_id}.jsonl"]
 
 
 def test_recording_memory_announces_the_document(

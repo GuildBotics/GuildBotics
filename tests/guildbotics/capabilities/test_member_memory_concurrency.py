@@ -131,6 +131,7 @@ def test_a_busy_audit_journal_does_not_undo_the_document(
 
     assert calls == ["record"]
     assert service.get(doc_id=recorded["doc_id"])["body"] == "b"
+    assert [item["doc_id"] for item in service.load_digest()] == [recorded["doc_id"]]
 
 
 def test_a_busy_audit_journal_does_not_undo_an_update(

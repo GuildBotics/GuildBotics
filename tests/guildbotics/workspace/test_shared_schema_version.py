@@ -54,7 +54,6 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[3] / "guildbotics"
 #: names are generated.
 WITHOUT_A_GENERATION = {
     ".md": "a document's prose, written by the member",
-    ".txt": "a list of document ids, one per line",
 }
 
 #: File kinds that carry one record, or one per line, and must declare it.

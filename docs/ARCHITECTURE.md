@@ -413,10 +413,17 @@ Members persist knowledge across runs as a document store (mechanism in
 - **Operations** (`guildbotics member memory ...`): `record`, `recall` (lexical grep
   over meta+body; `--meta-only` for source-URL pinpointing), `get`, `update`,
   `touch` ("this note actually helped" — recency only), `archive`, `promote`.
-- **Recency (MRU)**: `recent.txt` per member; `record`/`update`/`touch` move a doc-id
-  to the top, read operations do not. `member context` output includes a `memory`
-  block: `digest` (top-N recent metas — hints that a relevant note exists) and
-  `pinned` (always-on documents, body included).
+- **Recency (MRU)**: each device keeps its own record,
+  `documents/recency/<device_id>.json`, of when each member last used each document
+  (`record`/`update`/`touch`/`promote`; read operations do not count). The record is
+  written inside the operation's shared-write span, so it is not lost when the
+  best-effort audit journal fails or trims. The digest takes each document's latest
+  use across every device's record and leaves out archived or missing documents. One
+  list rewritten by every device would conflict whenever two devices use memory while
+  apart, and the side set aside would lose its order.
+  `member context` output includes a `memory` block: `digest` (top-N recent metas —
+  hints that a relevant note exists) and `pinned` (always-on documents, body
+  included).
 - **Mechanism vs policy**: the code fixes only the mechanism above. What to record and
   how to classify it is team-owned policy, kept as a pinned team document
   (`kind: policy`) that agents may not change autonomously (human-approved updates
@@ -722,8 +729,10 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   spans, and request/response I/O are stored as one JSONL transcript per execution or system
   session under `run/sessions/` (`session_transcripts.py`). `standard` detail omits high-volume
   thinking/delta events and bounds AI CLI tool stderr to its final 8 KiB; `full` keeps them.
-  Session transcripts default to 30-day retention. Memory audit remains a separate bounded
-  store under `documents/memory_events.jsonl`.
+  Session transcripts default to 30-day retention. Memory audit remains a separate store
+  under `documents/memory_events/<device_id>.jsonl`: each device appends to and trims only
+  its own bounded journal, so two devices never write the same shared path, and readers
+  merge every device's journal in timestamp order.
 - **Consumption**: `app_api` reads the index, selected execution transcript, and memory
   audit, and converts provider payloads into provider-neutral activity
   events/links/titles for the desktop Activity History (`activity_events.py`,

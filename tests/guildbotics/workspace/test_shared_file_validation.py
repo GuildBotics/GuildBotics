@@ -41,6 +41,9 @@ ACTIVITY_EVENT_JSON = json.dumps(
         "kind": "github.push",
     }
 ).encode()
+MEMORY_JOURNAL = (
+    "state/documents/memory_events/019c5e8d-31ce-7a62-a8a9-6ce16cb88945.jsonl"
+)
 SECRETS_INDEX = yaml.safe_dump(
     {"store_id": "abc", "keys": {"GITHUB_TOKEN": {"generation": 2}}}
 ).encode()
@@ -60,7 +63,7 @@ SECRETS_INDEX = yaml.safe_dump(
         ),
         ("state/events/2026/08/e1.json", ACTIVITY_EVENT_JSON),
         ("state/documents/team/abc/body.md", "note\n".encode()),
-        ("state/documents/memory_events.jsonl", b'{"kind": "memory"}\n\n'),
+        (MEMORY_JOURNAL, b'{"kind": "memory"}\n\n'),
         ("config/team/members/yuki/avatar.png", b"\x89PNG\r\n\x1a\n"),
     ],
 )
@@ -103,7 +106,7 @@ def test_files_a_person_authors_travel_as_written(
     [
         ("config/team/project.yml", b"name: [unclosed", "is not valid YAML"),
         ("state/chat_state/pending/e1.json", b"{not json}", "is not valid JSON"),
-        ("state/documents/memory_events.jsonl", b"{}\nnope\n", "line 2"),
+        (MEMORY_JOURNAL, b"{}\nnope\n", "line 2"),
         ("state/documents/team/abc/body.md", b"\xff\xfe", "is not valid UTF-8"),
     ],
 )
@@ -194,11 +197,11 @@ def test_a_journal_may_exceed_the_record_limit_but_not_its_own() -> None:
     within = line * (MAX_SHARED_FILE_BYTES // len(line) + 1)
     assert len(within) > MAX_SHARED_FILE_BYTES
 
-    validate_shared_file("state/documents/memory_events.jsonl", within)
+    validate_shared_file(MEMORY_JOURNAL, within)
 
     beyond = line * (MAX_SHARED_JOURNAL_BYTES // len(line) + 1)
     with pytest.raises(SharedFileInvalidError):
-        validate_shared_file("state/documents/memory_events.jsonl", beyond)
+        validate_shared_file(MEMORY_JOURNAL, beyond)
 
 
 def test_an_avatar_must_be_a_supported_image_kind() -> None:

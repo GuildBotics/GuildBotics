@@ -18,6 +18,10 @@ from guildbotics.sync.local_repository import (
     HubCommandError,
     LocalSyncRepository,
 )
+from guildbotics.capabilities.member_memory import MemberMemoryService
+from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.entities.team import Person
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 import guildbotics.sync.manager as manager_module
 import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
@@ -159,6 +163,44 @@ def test_changes_to_different_files_are_both_kept(
     assert second.read(CONFIG) == "language: ja\n"
     assert _hub_file(hub, "state/events/2026/08/e1.json") is not None
     assert second.rejections == []
+
+
+def test_memory_used_on_two_devices_while_apart_is_never_set_aside(
+    first: Device, second: Device, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every memory operation is audited, reads included, and every use of a
+    document is recorded for the digest, so both devices write those records
+    whenever both use memory. Each writes only its own, which leaves the late
+    device nothing that overlaps the hub."""
+
+    def memory_on(device: Device) -> MemberMemoryService:
+        home = device.root / "home"
+        monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(device.root))
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        return MemberMemoryService(Person(person_id="aiko", name="Aiko"))
+
+    doc_id = memory_on(first).record(scope="team", title="Shared", body="b")["doc_id"]
+    first.manager.synchronize()
+    second.manager.synchronize()
+
+    for device in (first, second):
+        memory = memory_on(device)
+        memory.touch(doc_id=doc_id)
+        memory.recall(queries=["Shared"])
+    first.manager.synchronize()
+    second.manager.synchronize()
+    first.manager.synchronize()
+
+    assert second.rejections == []
+    for device in (first, second):
+        memory = memory_on(device)
+        assert [item["doc_id"] for item in memory.load_digest()] == [doc_id]
+        assert len(list((device.shared / "state/documents/recency").iterdir())) == 2
+        events = MemoryAuditStore(device.shared / "state/documents/memory_events")
+        assert [event["type"] for event in events.list_events()].count(
+            "memory.recall"
+        ) == 2
 
 
 def test_the_change_that_reached_the_hub_first_wins(
