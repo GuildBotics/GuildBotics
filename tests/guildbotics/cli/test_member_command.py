@@ -280,6 +280,17 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
         assert member_module._member_command_needs_lease() is False
 
 
+def test_ci_inspection_commands_are_read_only() -> None:
+    github = member_module.member.commands["github"]
+    pr = github.commands["pr"]
+    run = github.commands["run"]
+    artifact = run.commands["artifact"]
+
+    for command in (pr.commands["checks"], artifact.commands["download"]):
+        with click.Context(command):
+            assert member_module._member_command_needs_lease() is False
+
+
 def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
     from guildbotics.intelligences.agent_runtime.models import (
         ConversationKey,
@@ -638,6 +649,27 @@ def test_member_context_markdown_highlights_communication_style(monkeypatch):
     assert "## Communication Style" in result.output
     assert "Treat Aiko as active." in result.output
     assert "Keep JSON factual." in result.output
+
+
+def test_markdown_renders_failed_logs_as_multiline_code_blocks():
+    rendered = member_module._to_markdown(
+        {
+            "rollup": "failure",
+            "failed_logs": [
+                {
+                    "name": "test",
+                    "conclusion": "failure",
+                    "run_id": 9,
+                    "log": "first line\nsecond line\n",
+                }
+            ],
+        }
+    )
+
+    assert "## Failed job logs" in rendered
+    assert "### test (failure)" in rendered
+    assert "```text\nfirst line\nsecond line\n```" in rendered
+    assert "first line\\nsecond line" not in rendered
 
 
 def test_member_context_uses_active_workspace(monkeypatch, tmp_path):

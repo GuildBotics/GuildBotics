@@ -1,31 +1,60 @@
 from __future__ import annotations
 
 import re
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any
+from pathlib import Path, PurePosixPath
+from shutil import copyfileobj
+from typing import Any, BinaryIO
 from urllib.parse import quote, urlparse
+from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
 
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
+from guildbotics.integrations.github.actions_client import (
+    GITHUB_PAGE_SIZE,
+    GitHubActionsClient,
+    GitHubActionsClientError,
+)
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
     get_github_username,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
-GITHUB_PAGE_SIZE = 100
+GITHUB_ACTIONS_RUN_MIN_PART_COUNT = 5
+DEFAULT_LOG_TAIL_BYTES = STREAM_READ_LIMIT // 32
+# Artifacts are written to the isolated workspace instead of the broker output,
+# so they can be larger than the shared stdout boundary while remaining bounded.
+MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 PATCH_HUNK_RE = re.compile(
     r"^@@ -(?P<left>\d+)(?:,(?P<left_count>\d+))? "
     r"\+(?P<right>\d+)(?:,(?P<right_count>\d+))? @@"
 )
+_FAILED_CONCLUSIONS = {
+    "action_required",
+    "cancelled",
+    "failure",
+    "startup_failure",
+    "stale",
+    "timed_out",
+}
+_PRIMARY_FAILED_CONCLUSIONS = {
+    "action_required",
+    "failure",
+    "startup_failure",
+    "timed_out",
+}
+_SUCCESS_CONCLUSIONS = {"neutral", "skipped", "success"}
 
 
 class MemberCapabilityError(RuntimeError):
@@ -369,6 +398,228 @@ class MemberGitHubCapabilityService:
         if include_diff:
             result["files"] = await self._pull_request_files(resource)
         return result
+
+    async def pr_checks(
+        self,
+        url: str,
+        *,
+        failed_logs: bool = False,
+        log_tail_bytes: int = DEFAULT_LOG_TAIL_BYTES,
+    ) -> dict[str, Any]:
+        """Return the checks for a PR head and optional failed Actions logs."""
+        if log_tail_bytes < 1 or log_tail_bytes > STREAM_READ_LIMIT:
+            raise MemberCapabilityError(
+                f"log_tail_bytes must be between 1 and {STREAM_READ_LIMIT}."
+            )
+        resource = self.parse_url(url, expected_kind="pull")
+        pr = await self._pull_request(resource)
+        head_sha = self._pull_request_head_sha(resource, pr)
+        actions = GitHubActionsClient(await self._get_client())
+        try:
+            check_runs = await actions.check_runs(
+                resource.owner, resource.repo, head_sha
+            )
+            statuses = await actions.commit_statuses(
+                resource.owner, resource.repo, head_sha
+            )
+            checks = _check_summaries(check_runs, statuses)
+            result: dict[str, Any] = {
+                "repo": resource.full_repo,
+                "pr_number": resource.number,
+                "pr_url": pr.get("html_url", url),
+                "head_sha": head_sha,
+                "rollup": _check_rollup(checks),
+                "checks": checks,
+            }
+            if failed_logs:
+                result["failed_logs"] = await self._failed_action_logs(
+                    actions,
+                    resource,
+                    head_sha,
+                    log_tail_bytes,
+                    check_runs,
+                )
+            return result
+        except GitHubActionsClientError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
+
+    async def artifact_download(
+        self, url: str, name: str, destination: Path
+    ) -> dict[str, Any]:
+        """Download and safely extract one Actions artifact."""
+        name = name.strip()
+        if not name:
+            raise MemberCapabilityError("Artifact name is required.")
+        resource, run_id, head_sha = await self._artifact_target(url)
+        actions = GitHubActionsClient(await self._get_client())
+        try:
+            artifacts = await actions.artifacts(
+                resource.owner, resource.repo, name=name, run_id=run_id
+            )
+            candidates = [
+                artifact
+                for artifact in artifacts
+                if artifact.get("name") == name
+                and not artifact.get("expired", False)
+                and (
+                    head_sha is None
+                    or (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
+                )
+            ]
+            if not candidates:
+                raise MemberCapabilityError(
+                    f"Artifact '{name}' was not found for {url}."
+                )
+            artifact = max(candidates, key=lambda item: int(item.get("id", 0)))
+            artifact_id = int(artifact["id"])
+            archive_size = int(artifact.get("size_in_bytes", 0))
+            if archive_size > MAX_ARTIFACT_BYTES:
+                raise MemberCapabilityError(
+                    f"Artifact '{name}' is {archive_size} bytes, above the "
+                    f"{MAX_ARTIFACT_BYTES} byte limit. Inspect the artifact from "
+                    "the Actions run URL or ask a human to retrieve it."
+                )
+            async with actions.artifact_archive(
+                resource.owner,
+                resource.repo,
+                artifact_id,
+                MAX_ARTIFACT_BYTES,
+            ) as archive:
+                files = _extract_artifact(archive, destination)
+        except GitHubActionsClientError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
+        return {
+            "repo": resource.full_repo,
+            "run_id": run_id or (artifact.get("workflow_run") or {}).get("id"),
+            "artifact_id": artifact_id,
+            "artifact_name": name,
+            "destination": str(destination.resolve()),
+            "files": [str(path.resolve()) for path in files],
+        }
+
+    async def _failed_action_logs(
+        self,
+        actions: GitHubActionsClient,
+        resource: GitHubResource,
+        head_sha: str,
+        log_tail_bytes: int,
+        check_runs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        runs = await actions.workflow_runs(resource.owner, resource.repo, head_sha)
+        failed_run_ids = _failed_actions_run_ids(check_runs)
+        failed_suite_ids = {
+            int((item.get("check_suite") or {}).get("id", 0))
+            for item in check_runs
+            if item.get("conclusion") in _FAILED_CONCLUSIONS
+            and int((item.get("check_suite") or {}).get("id", 0))
+        }
+        failed_jobs: list[tuple[int, int, list[str], dict[str, Any]]] = []
+        for run in runs:
+            run_id = int(run.get("id", 0))
+            if not run_id:
+                continue
+            if failed_run_ids and run_id not in failed_run_ids:
+                continue
+            if (
+                not failed_run_ids
+                and failed_suite_ids
+                and int(run.get("check_suite_id", 0)) not in failed_suite_ids
+            ):
+                continue
+            if (
+                not failed_run_ids
+                and not failed_suite_ids
+                and run.get("conclusion") not in _FAILED_CONCLUSIONS
+            ):
+                continue
+            jobs = await actions.jobs(resource.owner, resource.repo, run_id)
+            run_failed_jobs = [
+                job
+                for job in jobs
+                if job.get("conclusion") in _FAILED_CONCLUSIONS
+                and int(job.get("id", 0))
+            ]
+            if not run_failed_jobs:
+                continue
+            artifacts = await actions.artifacts(
+                resource.owner, resource.repo, run_id=run_id
+            )
+            artifact_names = sorted(
+                {
+                    str(artifact.get("name", ""))
+                    for artifact in artifacts
+                    if artifact.get("name") and not artifact.get("expired", False)
+                }
+            )
+            run_attempt = int(run.get("run_attempt", 1))
+            failed_jobs.extend(
+                (run_id, run_attempt, artifact_names, job) for job in run_failed_jobs
+            )
+        if not failed_jobs:
+            return []
+        primary_failed_jobs = [
+            item
+            for item in failed_jobs
+            if item[3].get("conclusion") in _PRIMARY_FAILED_CONCLUSIONS
+        ]
+        # Cancelled and stale matrix jobs are usually fallout from the real
+        # failure. Return them only when there is no primary failure to inspect.
+        selected_jobs = primary_failed_jobs or failed_jobs
+        # Leave room for JSON escaping and per-job metadata inside the broker's
+        # output boundary. With a small failed set this remains the requested
+        # per-job tail; a large matrix is divided fairly instead of producing
+        # truncated, invalid JSON at the broker boundary.
+        effective_tail_bytes = min(
+            log_tail_bytes,
+            max(1, STREAM_READ_LIMIT // (8 * len(selected_jobs))),
+        )
+        logs: list[dict[str, Any]] = []
+        for run_id, run_attempt, artifact_names, job in selected_jobs:
+            job_id = int(job["id"])
+            tail, truncated = await actions.job_log_tail(
+                resource.owner,
+                resource.repo,
+                job_id,
+                effective_tail_bytes,
+            )
+            logs.append(
+                {
+                    "run_id": run_id,
+                    "run_attempt": run_attempt,
+                    "job_id": job_id,
+                    "name": job.get("name", ""),
+                    "conclusion": job.get("conclusion", ""),
+                    "html_url": job.get("html_url", ""),
+                    "artifact_names": artifact_names,
+                    "log": tail.decode("utf-8", errors="replace"),
+                    "log_bytes": len(tail),
+                    "tail_limit_bytes": effective_tail_bytes,
+                    "truncated": truncated,
+                }
+            )
+        return logs
+
+    async def _artifact_target(
+        self, url: str
+    ) -> tuple[GitHubResource, int | None, str | None]:
+        parsed = urlparse(url)
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) >= GITHUB_ACTIONS_RUN_MIN_PART_COUNT and parts[2:4] == [
+            "actions",
+            "runs",
+        ]:
+            try:
+                run_id = int(parts[4])
+            except ValueError as exc:
+                raise MemberCapabilityError(
+                    f"Unsupported GitHub Actions URL: {url}"
+                ) from exc
+            if run_id < 1:
+                raise MemberCapabilityError(f"Unsupported GitHub Actions URL: {url}")
+            return GitHubResource(parts[0], parts[1], run_id, "run"), run_id, None
+        resource = self.parse_url(url, expected_kind="pull")
+        pr = await self._pull_request(resource)
+        return resource, None, self._pull_request_head_sha(resource, pr)
 
     async def pr_create(
         self,
@@ -1056,6 +1307,131 @@ def _comment_result(comment: dict[str, Any]) -> dict[str, Any]:
         "author": user.get("login", ""),
         "created_at": comment.get("created_at"),
     }
+
+
+def _check_summaries(
+    check_runs: list[dict[str, Any]], statuses: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    checks = [
+        {
+            "name": item.get("name", ""),
+            "status": item.get("status", ""),
+            "conclusion": item.get("conclusion"),
+            "details_url": item.get("details_url", ""),
+            "source": "check_run",
+        }
+        for item in check_runs
+    ]
+    checks.extend(
+        {
+            "name": item.get("context", ""),
+            "status": "completed" if item.get("state") != "pending" else "pending",
+            "conclusion": item.get("state"),
+            "details_url": item.get("target_url", ""),
+            "source": "commit_status",
+        }
+        for item in statuses
+    )
+    return checks
+
+
+def _check_rollup(checks: list[dict[str, Any]]) -> str:
+    if not checks:
+        return "no_checks"
+    if any(
+        item.get("conclusion") in _FAILED_CONCLUSIONS | {"error"} for item in checks
+    ):
+        return "failure"
+    if any(item.get("status") != "completed" for item in checks):
+        return "pending"
+    if all(item.get("conclusion") in _SUCCESS_CONCLUSIONS for item in checks):
+        return "success"
+    return "pending"
+
+
+def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
+    run_ids: set[int] = set()
+    for check in check_runs:
+        if check.get("conclusion") not in _FAILED_CONCLUSIONS:
+            continue
+        parsed = urlparse(str(check.get("details_url", "")))
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < GITHUB_ACTIONS_RUN_MIN_PART_COUNT or parts[2:4] != [
+            "actions",
+            "runs",
+        ]:
+            continue
+        try:
+            run_ids.add(int(parts[4]))
+        except ValueError:
+            continue
+    return run_ids
+
+
+def _extract_artifact(archive: BinaryIO, destination: Path) -> list[Path]:
+    destination = destination.resolve()
+    try:
+        with ZipFile(archive) as bundle:
+            members = bundle.infolist()
+            total_size = sum(member.file_size for member in members)
+            if total_size > MAX_ARTIFACT_BYTES:
+                raise MemberCapabilityError(
+                    "Expanded artifact is "
+                    f"{total_size} bytes, above the {MAX_ARTIFACT_BYTES} byte limit."
+                )
+            targets: list[tuple[Any, Path]] = []
+            seen: set[Path] = set()
+            for member in members:
+                relative = PurePosixPath(member.filename.replace("\\", "/"))
+                if (
+                    relative == PurePosixPath(".")
+                    or relative.is_absolute()
+                    or ".." in relative.parts
+                ):
+                    raise MemberCapabilityError(
+                        f"Artifact contains an unsafe path: {member.filename}"
+                    )
+                mode = member.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise MemberCapabilityError(
+                        f"Artifact contains an unsupported symlink: {member.filename}"
+                    )
+                target = destination.joinpath(*relative.parts)
+                if not target.resolve().is_relative_to(destination):
+                    raise MemberCapabilityError(
+                        f"Artifact contains an unsafe path: {member.filename}"
+                    )
+                if target in seen:
+                    raise MemberCapabilityError(
+                        f"Artifact contains a duplicate path: {member.filename}"
+                    )
+                seen.add(target)
+                targets.append((member, target))
+            collisions = [
+                target
+                for member, target in targets
+                if not member.is_dir() and target.exists()
+            ]
+            if collisions:
+                raise MemberCapabilityError(
+                    f"Artifact destination already exists: {collisions[0]}. "
+                    "Choose a different --dest or remove the existing file, then retry."
+                )
+            destination.mkdir(parents=True, exist_ok=True)
+            files: list[Path] = []
+            for member, target in targets:
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(member) as source, target.open("wb") as output:
+                    copyfileobj(source, output)
+                files.append(target)
+            return files
+    except BadZipFile as exc:
+        raise MemberCapabilityError(
+            "GitHub artifact is not a valid ZIP archive."
+        ) from exc
 
 
 def _commentable_lines_from_patch(path: str, patch: str) -> list[dict[str, Any]]:

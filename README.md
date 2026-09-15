@@ -222,6 +222,9 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
    - **Resource owner**: select the target **organization**, not the machine account itself
    - **Repository access**: choose **Only select repositories** and select only the repositories that member works on
    - **Repository permissions**:
+     - **Actions**: Read-only (reading workflow runs, failed job logs, and artifacts)
+     - **Checks**: Read-only (reading check runs for pull request commits)
+     - **Commit statuses**: Read-only (reading external CI statuses for pull request commits)
      - **Contents**: Read and write (cloning the repository and pushing the working branch)
      - **Issues**: Read and write (reading and writing issues, comments, labels, open/close, reactions)
      - **Metadata**: Read-only (added automatically once any other permission is selected)
@@ -239,10 +242,10 @@ The member edit screen in the desktop app (select "GitHub Apps" on the GitHub ta
 
 When creating the GitHub App manually, configure the following permissions.
 
-- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
+- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
 - **Organization permissions**: **Projects** as Read & Write
 
-When adding **Workflows** to an existing App, approve the requested permission update for each installation before using the App again.
+When adding **Actions**, **Checks**, **Commit statuses**, or **Workflows** to an existing App, approve the requested permission update for each installation before using the App again.
 
 After creating the GitHub App:
 

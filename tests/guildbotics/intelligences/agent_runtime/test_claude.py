@@ -14,7 +14,6 @@ from guildbotics.intelligences.agent_runtime.claude import (
     _decode_events,
     _session_limit_error,
 )
-from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
 )
@@ -33,6 +32,7 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 
 class _Input:

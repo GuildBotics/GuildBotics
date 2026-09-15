@@ -25,7 +25,6 @@ from guildbotics.intelligences.agent_runtime.codex import (
     _decode_notification,
     _sandbox_overrides,
 )
-from guildbotics.intelligences.agent_runtime.environment import STREAM_READ_LIMIT
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
@@ -46,6 +45,7 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 
 class _Writer:

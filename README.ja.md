@@ -221,6 +221,9 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
    - **Resource owner**: マシンアカウント自身ではなく、対象の **organization** を選択します
    - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します
    - **Repository permissions**:
+     - **Actions**: Read-only（workflow run・失敗 job のログ・artifact の読み取り）
+     - **Checks**: Read-only（pull request の commit に対する check run の読み取り）
+     - **Commit statuses**: Read-only（pull request の commit に対する外部 CI status の読み取り）
      - **Contents**: Read and write（リポジトリの複製と作業ブランチの push）
      - **Issues**: Read and write（Issue の読み書き、コメント、ラベル、開閉、リアクション）
      - **Metadata**: Read-only（他の権限を選ぶと自動で付きます）
@@ -238,10 +241,10 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
-- **Repository permissions**: **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
+- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** を Read-only、**Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
 - **Organization permissions**: **Projects** を Read & Write
 
-既存 App に **Workflows** を追加した場合は、再利用する前に各インストール先で権限変更を承認してください。
+既存 App に **Actions** / **Checks** / **Commit statuses** / **Workflows** を追加した場合は、再利用する前に各インストール先で権限変更を承認してください。
 
 GitHub App 作成後に以下の作業を行ってください。
 

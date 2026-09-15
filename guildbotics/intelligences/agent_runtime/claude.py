@@ -16,10 +16,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     EnvironmentProcess,
 )
-from guildbotics.intelligences.agent_runtime.environment import (
-    STREAM_READ_LIMIT,
-    start_turn_environment,
-)
+from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
     MemberCapabilityBroker,
@@ -36,6 +33,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
+from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))

@@ -47,10 +47,13 @@ def test_build_app_manifest_contains_required_permissions() -> None:
         == "http://127.0.0.1:8765/github-app/registrations/callback"
     )
     assert manifest["default_permissions"] == {
+        "actions": "read",
+        "checks": "read",
         "contents": "write",
         "issues": "write",
         "pull_requests": "write",
         "repository_projects": "write",
+        "statuses": "read",
         "organization_projects": "write",
         "workflows": "write",
         "metadata": "read",
