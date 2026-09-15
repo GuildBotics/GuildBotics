@@ -461,12 +461,11 @@ class WorkspaceSyncService:
         manager = current_sync_manager()
         if manager is None:
             return None
-        status = manager.synchronize()
-        if status.state != "idle" or status.last_error_code is not None:
-            detail = status.last_error_code or status.state
+        failure = manager.synchronize().failure
+        if failure is not None:
             raise AppApiError(
                 "service_start_sync_failed",
-                context={"detail": detail},
+                context={"detail": failure},
                 status_code=409,
             )
         runtime = self._relay_runtime
@@ -952,6 +951,7 @@ def _status_model(
         rejected_changes=rejected,
         last_success_at=status.last_success_at,
         last_error_code=status.last_error_code,
+        last_error_detail=status.last_error_detail,
         live_error_code=live_error_code,
     )
 

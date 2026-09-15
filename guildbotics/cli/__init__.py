@@ -243,10 +243,10 @@ def _prepare_service_owner(
 ) -> RelayRuntime | None:
     """Settle synchronization, then require this device to own the service."""
     status = sync_manager.synchronize()
-    if status.state != "idle" or status.last_error_code is not None:
-        detail = status.last_error_code or status.state
+    if status.failure is not None:
         raise click.ClickException(
-            f"The service cannot start because workspace synchronization failed: {detail}."
+            "The service cannot start because workspace synchronization failed: "
+            f"{status.failure}"
         )
     repository = LocalSyncRepository(workspace)
     remote_url = repository.remote_url()

@@ -13,7 +13,11 @@ from typing import Any
 import pytest
 from git import GitCommandError, Repo
 
-from guildbotics.sync.local_repository import REJECTED_REF_PREFIX, LocalSyncRepository
+from guildbotics.sync.local_repository import (
+    REJECTED_REF_PREFIX,
+    HubCommandError,
+    LocalSyncRepository,
+)
 import guildbotics.sync.manager as manager_module
 import guildbotics.utils.sync_lock as sync_lock_module
 from guildbotics.sync.manager import SharedDataAnomaly
@@ -237,7 +241,7 @@ def test_a_lost_push_response_is_settled_by_the_hub_head(
 
     def push_then_lose_the_answer() -> None:
         real_push()
-        raise GitCommandError("push", 128, b"connection reset")
+        raise HubCommandError("connection reset")
 
     first.repository.push = push_then_lose_the_answer  # type: ignore[method-assign]
     status = first.manager.synchronize()
@@ -282,9 +286,7 @@ def test_a_hub_that_keeps_moving_is_redone_a_bounded_number_of_times(
     def always_behind() -> None:
         nonlocal attempts
         attempts += 1
-        raise GitCommandError(
-            "push", 1, b"! [rejected] main -> main (non-fast-forward)"
-        )
+        raise HubCommandError("! [rejected] main -> main (non-fast-forward)")
 
     first.write(CONFIG, "language: ja\n")
     first.repository.push = always_behind  # type: ignore[method-assign]
@@ -934,6 +936,41 @@ def test_one_shot_commits_even_when_push_fails(
     assert Repo(first.shared).head.commit.message.startswith("Sync shared state")
 
 
+def test_what_the_hub_printed_is_kept_until_the_hub_is_reached_again(
+    first: Device, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A hub whose own git cannot run is reachable over ssh, so only its output
+    tells the user why nothing is shared -- and it is logged once, not per cycle."""
+    printed = (
+        "You have not agreed to the Xcode license agreements.\n"
+        "fatal: Could not read from remote repository."
+    )
+    real_fetch = first.repository.fetch
+
+    def refuse() -> None:
+        raise HubCommandError(printed)
+
+    monkeypatch.setattr(first.repository, "fetch", refuse)
+    with caplog.at_level("WARNING", logger=manager_module.__name__):
+        first.manager.synchronize()
+        status = first.manager.synchronize()
+
+    assert status.state == "unreachable"
+    assert status.last_error_code == "HubCommandError"
+    assert status.last_error_detail == printed
+    assert status.failure == printed
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Workspace synchronization failed: {printed}"
+    ]
+
+    monkeypatch.setattr(first.repository, "fetch", real_fetch)
+    status = first.manager.synchronize()
+
+    assert status.state == "idle"
+    assert status.last_error_detail is None
+    assert status.failure is None
+
+
 def test_synchronize_is_serialized_between_threads(first: Device) -> None:
     first.write(CONFIG, "language: ja\n")
     results: list[str] = []
@@ -963,6 +1000,8 @@ def test_a_workspace_with_no_hub_keeps_its_commits(tmp_path: Path) -> None:
 
     assert status.state == "unreachable"
     assert status.last_error_code == "hub_not_configured"
+    assert status.last_error_detail is None
+    assert status.failure == "hub_not_configured"
     assert status.local_head is not None
 
 

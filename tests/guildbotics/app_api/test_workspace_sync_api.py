@@ -11,6 +11,7 @@ from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.hub.host import hub_root
 from guildbotics.runtime.live_state import LiveState
 from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
 from guildbotics.sync.manager import GitSyncManager
@@ -291,7 +292,23 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
 
     assert payload["enabled"] is True
     assert payload["last_error_code"] is None
+    assert payload["last_error_detail"] is None
     assert payload["state"] != "disabled"
+
+
+def test_a_hub_that_fails_reports_what_it_printed(
+    client: TestClient, workspace: Path
+) -> None:
+    """The Desktop shows why the hub failed, in the words Git used."""
+    client.post("/hub", headers=AUTH_HEADERS)
+    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    hub_root().rename(hub_root().with_name("gone"))
+
+    payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
+
+    assert payload["state"] == "unreachable"
+    assert payload["last_error_code"] == "HubCommandError"
+    assert "fatal:" in payload["last_error_detail"]
 
 
 # -- Taking a workspace from a hub --------------------------------------------

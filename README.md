@@ -869,7 +869,7 @@ discarding; the activity history record stays either way.
 | In sync | This machine and the hub hold the same content | Nothing |
 | Waiting to send | Local changes have not reached the hub yet | Nothing; they are sent automatically |
 | Receiving | Content from the hub is being taken in | Wait |
-| Hub unreachable | Local work continues; sharing is delayed | Wait, or select **Try again**. If it never recovers, check the SSH prerequisites in [Set up the first machine](#set-up-the-first-machine) |
+| Hub sync failed | Local work continues; sharing is delayed | Read the **Error details** shown with it, fix the cause, and select **Try again**. If SSH is the cause, check the prerequisites in [Set up the first machine](#set-up-the-first-machine) |
 | Changes that cannot be sent | Some files cannot be shared until repaired here | Open **Sync** for the list and the reason |
 | Shared data problem | Content could not be reconciled automatically | Open **Sync** |
 | Update required | Another machine wrote something a newer version produced | Update GuildBotics on this machine |

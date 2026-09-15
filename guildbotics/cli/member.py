@@ -2270,9 +2270,7 @@ def _sync_member_result(result: dict[str, Any]) -> dict[str, Any]:
         status = commit_and_push_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
     except SyncRepositoryBusyError:
         return {**result, "sync": "pending"}
-    if status is not None and (
-        status.state != "idle" or status.last_error_code is not None
-    ):
+    if status is not None and status.failure is not None:
         return {**result, "sync": "pending"}
     return result
 

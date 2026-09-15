@@ -58,6 +58,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
+    last_error_detail: null,
     live_error_code: null,
     ...overrides,
   };
@@ -137,5 +138,31 @@ describe("the synchronization warning band", () => {
 
     expect(await screen.findByText(t("sync.state.unreachable.label"))).toBeInTheDocument();
     expect(screen.getByText(t("sync.rejected.alertTitle"))).toBeInTheDocument();
+  });
+
+  it("shows what the hub printed when synchronization fails", async () => {
+    // The hub answers ssh but its own git cannot run: only its words tell the
+    // user that the fix is on the hub machine.
+    const printed =
+      "You have not agreed to the Xcode license agreements.\nfatal: Could not read from remote repository.";
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ state: "unreachable", last_error_detail: printed }),
+    );
+    renderAlerts();
+
+    expect(await screen.findByText(t("sync.failureDetail"))).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        (_, element) => element?.tagName === "PRE" && element.textContent === printed,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no error details when the failure left none", async () => {
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(status({ state: "unreachable" }));
+    renderAlerts();
+
+    expect(await screen.findByText(t("sync.state.unreachable.label"))).toBeInTheDocument();
+    expect(screen.queryByText(t("sync.failureDetail"))).toBe(null);
   });
 });

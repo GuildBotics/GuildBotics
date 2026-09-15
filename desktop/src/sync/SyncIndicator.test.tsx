@@ -40,6 +40,7 @@ function status(overrides: Partial<WorkspaceSyncStatus> = {}): WorkspaceSyncStat
     rejected_changes: [],
     last_success_at: null,
     last_error_code: null,
+    last_error_detail: null,
     live_error_code: null,
     ...overrides,
   };
@@ -95,10 +96,27 @@ describe("SyncIndicator", () => {
     vi.mocked(retryWorkspaceSync).mockResolvedValue(status());
     renderWith(<SyncIndicator />);
 
-    await user.click(await screen.findByRole("button", { name: /Hub unreachable/ }));
+    await user.click(
+      await screen.findByRole("button", { name: new RegExp(t("sync.state.unreachable.label")) }),
+    );
     await user.click(await screen.findByRole("button", { name: t("sync.actions.retry") }));
 
     expect(retryWorkspaceSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the failure with what the hub printed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(
+      status({ state: "unreachable", last_error_detail: "fatal: Could not read from remote." }),
+    );
+    renderWith(<SyncIndicator />);
+
+    await user.click(
+      await screen.findByRole("button", { name: new RegExp(t("sync.state.unreachable.label")) }),
+    );
+
+    expect(await screen.findByText(t("sync.failureDetail"))).toBeInTheDocument();
+    expect(screen.getByText("fatal: Could not read from remote.")).toBeInTheDocument();
   });
 
   it("does not offer a retry for changes that would only be rejected again", async () => {

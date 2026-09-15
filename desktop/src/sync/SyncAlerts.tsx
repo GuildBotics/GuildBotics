@@ -1,4 +1,4 @@
-import { Alert, Anchor, Button, Group, Text } from "@mantine/core";
+import { Alert, Anchor, Button, Group, Stack, Text } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import { getWorkspaceSecrets, getWorkspaceSyncStatus, retryWorkspaceSync } from "../api/client";
 import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert } from "./secretState";
+import { SyncFailureDetail } from "./SyncFailureDetail";
 import { SYNC_SETTINGS_PATH } from "./SyncIndicator";
 import { syncCanRetry, syncIndicatorState, syncNeedsAttention, syncTone } from "./syncState";
 
@@ -54,24 +55,27 @@ export function SyncAlerts() {
           icon={<TriangleAlert size={18} />}
           title={t(`sync.state.${state}.label`)}
         >
-          <Group align="center" gap="md" wrap="wrap">
-            <Text size="sm">{t(`sync.alerts.${state}`, { count })}</Text>
-            <Group gap="xs">
-              {syncCanRetry(state) ? (
-                <Button
-                  loading={retry.isPending}
-                  onClick={() => retry.mutate()}
-                  size="xs"
-                  variant="light"
-                >
-                  {t("sync.actions.retry")}
-                </Button>
-              ) : null}
-              <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
-                {t("sync.actions.settings")}
-              </Anchor>
+          <Stack gap="xs">
+            <Group align="center" gap="md" wrap="wrap">
+              <Text size="sm">{t(`sync.alerts.${state}`, { count })}</Text>
+              <Group gap="xs">
+                {syncCanRetry(state) ? (
+                  <Button
+                    loading={retry.isPending}
+                    onClick={() => retry.mutate()}
+                    size="xs"
+                    variant="light"
+                  >
+                    {t("sync.actions.retry")}
+                  </Button>
+                ) : null}
+                <Anchor component={NavLink} size="sm" to={SYNC_SETTINGS_PATH} underline="hover">
+                  {t("sync.actions.settings")}
+                </Anchor>
+              </Group>
             </Group>
-          </Group>
+            <SyncFailureDetail status={status.data} />
+          </Stack>
         </Alert>
       ) : null}
       {rejected > 0 ? <RejectedAlert count={rejected} /> : null}
