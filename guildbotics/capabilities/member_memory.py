@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from time import perf_counter
 from typing import Any, Literal
 
@@ -383,7 +383,7 @@ class MemberMemoryService:
             doc = self._resolve_doc(doc_id, scope)
             self._touch_recent(doc.doc_id)
         self._record_audit("touch", doc)
-        return {"doc_id": doc.doc_id, "path": _document_path(doc)}
+        return {"doc_id": doc.doc_id, "path": _document_path(doc.root, doc.path)}
 
     def archive(
         self,
@@ -403,15 +403,9 @@ class MemberMemoryService:
                 raise MemberMemoryError(f"Archived memory already exists: {doc.doc_id}")
             doc.path.rename(target)
             _notify_document_moved(doc.path, target)
-        self._record_audit(
-            "archive",
-            doc,
-            path=f"documents/{target.relative_to(self.root)}",
-        )
-        return {
-            "doc_id": doc.doc_id,
-            "path": f"documents/{target.relative_to(self.root)}",
-        }
+        archived_path = _document_path(self.root, target)
+        self._record_audit("archive", doc, path=archived_path)
+        return {"doc_id": doc.doc_id, "path": archived_path}
 
     def promote(self, *, doc_id: str) -> dict[str, Any]:
         with shared_write_lock():
@@ -505,7 +499,7 @@ class MemberMemoryService:
                 person_id=self.person.person_id,
                 scope=doc.scope,
                 doc_id=doc.doc_id,
-                path=(path or _document_path(doc)).replace("\\", "/"),
+                path=path or _document_path(doc.root, doc.path),
                 title=str(doc.meta.get("title") or ""),
                 summary=str(doc.meta.get("summary") or ""),
                 kind=str(doc.meta.get("kind") or "note"),
@@ -720,7 +714,7 @@ def _notify_document_moved(source: Path, target: Path) -> None:
 def _summary_payload(doc: _MemoryDoc, *, snippet: str = "") -> dict[str, Any]:
     payload = {
         "doc_id": doc.doc_id,
-        "path": _document_path(doc),
+        "path": _document_path(doc.root, doc.path),
         "title": str(doc.meta.get("title") or ""),
         "summary": str(doc.meta.get("summary") or ""),
     }
@@ -739,8 +733,13 @@ def _baseline_policy_payload() -> dict[str, Any]:
     }
 
 
-def _document_path(doc: _MemoryDoc) -> str:
-    return f"documents/{doc.path.relative_to(doc.root)}"
+def _document_path(root: PurePath, path: PurePath) -> str:
+    """Return a document's logical ``documents/...`` path.
+
+    Memory paths reach agents and other devices, so they are spelled with
+    forward slashes everywhere instead of in the writing device's separators.
+    """
+    return f"documents/{path.relative_to(root).as_posix()}"
 
 
 def _changed_fields(
