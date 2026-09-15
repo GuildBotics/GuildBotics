@@ -161,20 +161,22 @@ class GitHubActionsClient:
 async def _download_without_credentials(url: str, max_bytes: int) -> bytes:
     """Download a short-lived GitHub URL without forwarding GitHub credentials."""
     content = bytearray()
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        async with client.stream("GET", url) as response:
-            _raise_for_status(response)
-            content_length = response.headers.get("content-length")
-            if content_length and int(content_length) > max_bytes:
+    async with (
+        httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client,
+        client.stream("GET", url) as response,
+    ):
+        _raise_for_status(response)
+        content_length = response.headers.get("content-length")
+        if content_length and int(content_length) > max_bytes:
+            raise GitHubActionsClientError(
+                f"GitHub download exceeds the {max_bytes} byte limit."
+            )
+        async for chunk in response.aiter_bytes():
+            content.extend(chunk)
+            if len(content) > max_bytes:
                 raise GitHubActionsClientError(
                     f"GitHub download exceeds the {max_bytes} byte limit."
                 )
-            async for chunk in response.aiter_bytes():
-                content.extend(chunk)
-                if len(content) > max_bytes:
-                    raise GitHubActionsClientError(
-                        f"GitHub download exceeds the {max_bytes} byte limit."
-                    )
     return bytes(content)
 
 
@@ -184,14 +186,16 @@ async def _download_tail_without_credentials(
     """Keep only the tail while streaming a potentially large job log."""
     content = bytearray()
     total = 0
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        async with client.stream("GET", url) as response:
-            _raise_for_status(response)
-            async for chunk in response.aiter_bytes():
-                total += len(chunk)
-                content.extend(chunk)
-                if len(content) > tail_bytes:
-                    del content[:-tail_bytes]
+    async with (
+        httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client,
+        client.stream("GET", url) as response,
+    ):
+        _raise_for_status(response)
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            content.extend(chunk)
+            if len(content) > tail_bytes:
+                del content[:-tail_bytes]
     return bytes(content), total > len(content)
 
 
