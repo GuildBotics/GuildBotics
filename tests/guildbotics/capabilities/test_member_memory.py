@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 import pytest
 from pydantic import ValidationError
@@ -452,7 +452,7 @@ def test_memory_audit_preserves_file_when_no_record_fits(tmp_path: Path) -> None
     assert path.read_text(encoding="utf-8") == original
 
 
-def test_memory_audit_normalizes_document_path(
+def test_memory_audit_path_matches_the_path_the_caller_is_given(
     monkeypatch: pytest.MonkeyPatch, person: Person
 ) -> None:
     captured: list[dict[str, object]] = []
@@ -461,16 +461,13 @@ def test_memory_audit_normalizes_document_path(
         captured.append(kwargs)
 
     monkeypatch.setattr(member_memory, "append_memory_event", fake_append_memory_event)
-    monkeypatch.setattr(
-        member_memory,
-        "_document_path",
-        lambda _doc: "documents\\personal\\aiko\\doc-1",
-    )
     service = MemberMemoryService(person)
 
-    service.record(scope="personal", title="Path note", body="body")
+    recorded = service.record(scope="personal", title="Path note", body="body")
+    archived = service.archive(doc_id=str(recorded["doc_id"]), scope="personal")
 
-    assert captured[0]["path"] == "documents/personal/aiko/doc-1"
+    assert captured[0]["path"] == recorded["path"]
+    assert captured[-1]["path"] == archived["path"]
 
 
 def test_memory_audit_writes_and_trims_only_this_devices_journal(
@@ -640,3 +637,27 @@ def test_policy_memory_requires_approval_and_controls_context(
             body="New policy",
             policy_approved=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("root", "target"),
+    [
+        (
+            PureWindowsPath(r"C:\ws\state\memory"),
+            PureWindowsPath(r"C:\ws\state\memory\personal\aiko\abc123"),
+        ),
+        (
+            PurePosixPath("/ws/state/memory"),
+            PurePosixPath("/ws/state/memory/personal/aiko/abc123"),
+        ),
+    ],
+    ids=["windows", "posix"],
+)
+def test_document_path_is_posix_on_every_device(
+    root: PurePath, target: PurePath
+) -> None:
+    """Document paths reach agents and other devices, so the writing device's
+    separators must not show through."""
+    assert (
+        member_memory._document_path(root, target) == "documents/personal/aiko/abc123"
+    )
