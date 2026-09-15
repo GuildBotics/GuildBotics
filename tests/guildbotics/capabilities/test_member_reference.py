@@ -122,6 +122,7 @@ def test_reference_states_cross_cutting_rules():
     assert "Never display, infer, store, or copy secrets" in text
     assert "All GitHub and Slack access, reads and writes alike" in text
     assert "Never use `gh`" in text
+    assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
     assert "`~/Documents/GuildBotics/tmp/`" in text
     assert "never leave a result there" in text

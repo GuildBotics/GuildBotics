@@ -309,9 +309,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
 _CROSS_CUTTING_RULES: list[str] = [
     "All GitHub and Slack access, reads and writes alike, goes through the "
     "corresponding `guildbotics member ...` commands. Never use `gh`, raw "
-    "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. Publishing git commits "
-    "and pushes also goes through member commands; never use raw `git commit` or "
-    "`git push`.",
+    "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. When a needed read has "
+    "no member command, ask a human for the information instead of using `gh` or "
+    "a raw API. Publishing git commits and pushes also goes through member "
+    "commands; never use raw `git commit` or `git push`.",
     "Opening an issue and closing or reopening one stay human decisions. Pass "
     "`--human-approved` only when a human in the originating conversation asked for or "
     "approved that specific issue, never on the member's own judgment and never because "
