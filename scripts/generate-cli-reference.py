@@ -154,6 +154,24 @@ def build_reference() -> str:
     return "".join(parts).rstrip() + "\n"
 
 
+def _read_committed() -> str:
+    """Read the committed reference exactly as it is on disk."""
+    with OUTPUT_PATH.open(encoding="utf-8", newline="") as stream:
+        return stream.read()
+
+
+def _write_committed(generated: str) -> None:
+    """Write the reference byte-for-byte the way CI generates it.
+
+    The committed file is compared with ``--check`` there, so neither the
+    encoding nor the line endings may come from whichever machine regenerated
+    it. ``Path.open`` rather than ``Path.write_text``: the latter only takes
+    ``newline`` from Python 3.13, and this repository supports 3.12.
+    """
+    with OUTPUT_PATH.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(generated)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate docs/cli_reference.md from the Click definitions."
@@ -165,11 +183,7 @@ def main() -> int:
     )
     check = parser.parse_args().check
     generated = build_reference()
-    committed = (
-        OUTPUT_PATH.read_text(encoding="utf-8", newline="")
-        if OUTPUT_PATH.exists()
-        else None
-    )
+    committed = _read_committed() if OUTPUT_PATH.exists() else None
     if check:
         if committed != generated:
             print(
@@ -183,10 +197,7 @@ def main() -> int:
     if committed == generated:
         print(f"{OUTPUT_PATH} is already up to date.")
         return 0
-    # Byte-for-byte what CI generates: the committed file is compared with
-    # `--check` there, so neither the encoding nor the line endings may come
-    # from whichever machine regenerated it.
-    OUTPUT_PATH.write_text(generated, encoding="utf-8", newline="\n")
+    _write_committed(generated)
     print(f"Wrote {OUTPUT_PATH}.")
     return 0
 

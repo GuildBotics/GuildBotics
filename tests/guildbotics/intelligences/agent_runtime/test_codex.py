@@ -719,7 +719,11 @@ async def test_codex_timeout_interrupts_and_rotates_session(
         return process
 
     interrupted = False
-    adapter = CodexAppServerAdapter(timeout=0.01)
+    # The adapter derives its per-request deadline from the turn timeout, so a
+    # turn timeout below the platform's timer granularity (about 16ms on
+    # Windows) races the requests that set the turn up: whichever fires first
+    # decides the error, and only the turn's own timeout interrupts.
+    adapter = CodexAppServerAdapter(timeout=0.15)
 
     async def interrupt() -> None:
         nonlocal interrupted
