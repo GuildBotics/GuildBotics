@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import textwrap
 from pathlib import Path
 
@@ -43,10 +42,10 @@ def _make_context(
 
 
 @pytest.mark.parametrize(
-    ("system_language", "project_language", "expected"),
+    ("system_language", "system_language_name", "project_language", "expected"),
     [
-        ("en", "ja", "日本語"),
-        ("fr", "en", "français"),
+        ("en", "English", "ja", "日本語"),
+        ("fr", "français", "en", "français"),
     ],
 )
 @pytest.mark.asyncio
@@ -54,12 +53,26 @@ async def test_quickstart_os_ui_language_without_args(
     tmp_path,
     monkeypatch,
     system_language: str,
+    system_language_name: str,
     project_language: str,
     expected: str,
 ):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("LANGUAGE", system_language)
+    # The workspace's own `functions/get_os_ui_language` answers in place of
+    # the bundled one. How that command asks each operating system is covered
+    # branch by branch in its own tests; answering for it here means the
+    # platform is never faked while this pipeline imports what it needs.
+    _write(
+        tmp_path / "commands/functions/get_os_ui_language.py",
+        f"""
+        def main(context):
+            return {{
+                "input": context.pipe,
+                "language_code": {system_language!r},
+                "language_name": {system_language_name!r},
+            }}
+        """,
+    )
     _write(
         tmp_path / "commands/translate.md",
         """

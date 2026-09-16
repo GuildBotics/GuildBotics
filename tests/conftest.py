@@ -1,6 +1,10 @@
 import contextlib
 import logging
 import os
+import sys
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -116,6 +120,41 @@ def fake_keyring():
     keyring.set_keyring(backend)
     yield backend
     keyring.set_keyring(original)
+
+
+class _PlatformView:
+    """``sys`` as one module sees it when told it runs on another platform.
+
+    Everything but ``platform`` reads through to the real module, and whatever
+    a test sets on the view stays on the view.
+    """
+
+    def __init__(self, platform: str) -> None:
+        self.platform = platform
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(sys, name)
+
+
+@pytest.fixture
+def fake_platform(monkeypatch) -> Callable[[ModuleType, str], Any]:
+    """Make one module under test believe it runs on ``platform``.
+
+    ``module.sys`` is the interpreter's own ``sys``, so setting ``platform`` on
+    it fakes the platform for every import that happens while the test runs.
+    A library imported for the first time in that window takes the branch for
+    a platform it is not on -- ``mcp.server.stdio`` imports ``fcntl`` on
+    Windows -- and whether the test passes then depends on which tests the
+    same worker ran first. Only the module under test gets the view here; the
+    returned view also takes any other ``sys`` attribute the test needs to set.
+    """
+
+    def fake(module: ModuleType, platform: str) -> Any:
+        view = _PlatformView(platform)
+        monkeypatch.setattr(module, "sys", view)
+        return view
+
+    return fake
 
 
 @pytest.fixture

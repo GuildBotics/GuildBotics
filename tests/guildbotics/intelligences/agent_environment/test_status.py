@@ -265,7 +265,7 @@ def test_a_build_this_process_just_started_reads_as_building(device) -> None:
 @pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
 @pytest.mark.parametrize("app", ["Visual Studio Code", ""])
 def test_unreadable_exchange_directory_refuses_with_macos_guidance(
-    device, monkeypatch, tmp_path, error_number, app
+    device, monkeypatch, tmp_path, error_number, app, fake_platform
 ):
     target = tmp_path / "Documents/GuildBotics"
     target.mkdir(parents=True)
@@ -277,7 +277,7 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    monkeypatch.setattr(module.sys, "platform", "darwin")
+    fake_platform(module, "darwin")
     monkeypatch.setattr(module, "launching_app_name", lambda: app)
 
     status = device_status()
@@ -295,7 +295,7 @@ def test_unreadable_exchange_directory_refuses_with_macos_guidance(
 
 
 def test_grant_preflight_checks_parents_without_creating_directories(
-    device, monkeypatch, tmp_path
+    device, monkeypatch, tmp_path, fake_platform
 ):
     documents = tmp_path / "Documents"
     documents.mkdir()
@@ -307,7 +307,7 @@ def test_grant_preflight_checks_parents_without_creating_directories(
         return original(path)
 
     monkeypatch.setattr(module.os, "scandir", scandir)
-    monkeypatch.setattr(module.sys, "platform", "linux")
+    fake_platform(module, "linux")
     status = device_status()
     assert status.setting == "filesystem"
     assert status.refusal == t(
@@ -394,7 +394,7 @@ def test_preflight_reports_filesystem_changes_during_enumeration(
 @pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
 @pytest.mark.parametrize("language", ["en", "ja"])
 def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
-    monkeypatch, tmp_path, platform, language
+    monkeypatch, tmp_path, platform, language, fake_platform
 ):
     import shlex
 
@@ -403,7 +403,7 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
 
     home = tmp_path / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(module.sys, "platform", platform)
+    fake_platform(module, platform)
     set_language(language)
     command = login_command("codex")
     if platform == "win32":

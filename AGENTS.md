@@ -421,6 +421,12 @@ POSIX のパーミッションビットを検証するテストは Windows で�
 `posix_permissions` fixture が skip する。OS の能力差はこの 3 つの fixture に集約し、
 テストの中で `os.name` を見て分岐しない。
 
+別の OS を装うときは `fake_platform` fixture を使い、`sys.platform` を直接差し替えない
+（`module.sys` も共有の `sys` そのものなので同じ）。差し替え中に初めて import された
+ライブラリが別 OS の分岐に入り（Windows で `mcp.server.stdio` が `fcntl` を読む）、
+同じ worker が先に何を import したかで成否が変わる。`tests/test_platform_fake_boundary.py`
+が全テストファイルを検査する。
+
 Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ
 [`lychee` v0.24.2](https://github.com/lycheeverse/lychee/releases/tag/lychee-v0.24.2)
 をインストールする。Rust toolchain がある場合は
