@@ -179,6 +179,7 @@ def no_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
 
 def test_load_returns_defaults_without_workspace(no_workspace: None) -> None:

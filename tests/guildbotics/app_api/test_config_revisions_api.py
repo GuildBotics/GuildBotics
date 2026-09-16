@@ -29,6 +29,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     return tmp_path

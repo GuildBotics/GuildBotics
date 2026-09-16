@@ -335,17 +335,22 @@ async def test_python_main_receives_context_positional_and_keyword(config_dir: P
 async def test_shell_runs_in_spec_cwd(config_dir: Path, tmp_path: Path):
     work = tmp_path / "work"
     work.mkdir()
+    # The directory is read back through a relative path rather than through
+    # ``pwd``: a shell may spell the same directory its own way -- Git for
+    # Windows answers ``/c/...`` -- while a relative read either finds the
+    # marker or does not.
+    (work / "marker.txt").write_text("in-the-spec-cwd\n", encoding="utf-8")
     commands = config_dir / "commands"
     (commands / "pwd.yml").write_text(
         f"commands:\n  - command: print_pwd\n    cwd: {work}\n", encoding="utf-8"
     )
     (commands / "print_pwd.sh").write_text(
-        "#!/usr/bin/env bash\npwd\n", encoding="utf-8"
+        "#!/usr/bin/env bash\ncat marker.txt\n", encoding="utf-8"
     )
 
     ctx = await _run_main(config_dir, "pwd")
 
-    assert ctx.shared_state["print_pwd"].strip() == str(work.resolve())
+    assert ctx.shared_state["print_pwd"].strip() == "in-the-spec-cwd"
 
 
 @pytest.mark.asyncio

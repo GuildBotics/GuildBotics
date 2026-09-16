@@ -23,7 +23,9 @@
 
 ## プロジェクト概要（実装ベース）
 
-- 言語: Python 3.12+
+- 言語: Python 3.12+（開発環境は `.python-version` で 3.12 に固定する。対応範囲の下限であり
+  CI が検査する版でもあるので、手元だけ新しい版を使うと、その版で入った API を使ったことに
+  CI まで気づけない）
 - パッケージ: `guildbotics`
 - CLI: Click (`guildbotics.cli:main`)
 - 主用途: AI エージェント協調のための CLI / スケジューラ / カスタムコマンド実行基盤
@@ -399,6 +401,25 @@ Windows では、Git repository を作るテストの一時 path が `MAX_PATH` 
 ```powershell
 uv run --no-sync python -m pytest tests/ -n auto --durations=30 --basetemp=C:/gb-pytest
 ```
+
+CI は `mypy` と `pytest` を Windows でも実行する（`.github/workflows/ci.yml` の
+`test-windows` job）。OS で結果が変わらない検査（ruff / pylint / CLI reference /
+Markdown リンク）は Linux のみ。手元の Windows で CI と同じ結果にするには、
+次の 3 つが要る:
+
+- **開発者モードを有効にする**（設定 → システム → 開発者向け）。symlink を作る
+  テストは、昇格していないセッションでは作成権限が無く skip される（`tests/conftest.py`
+  の `symlinks` fixture）。CI の Windows runner は管理者で動くので実行される
+- **`bash` が使えること**。`.sh` コマンドは Windows では必ず shell 経由で動く
+  （`CreateProcess` は `.sh` を実行できない）。PATH に `bash` が無い場合は Git for
+  Windows の同梱 bash（`<git>/bin/bash.exe`）を使う
+- **WeasyPrint の GTK ランタイム**は必須ではない。無い場合、PDF を描画するテストは
+  `weasyprint_libraries` fixture が skip する（`to_pdf` コマンド自体は、native 依存が
+  無いことを伝える `CommandError` を返す）
+
+POSIX のパーミッションビットを検証するテストは Windows では意味を持たないため、
+`posix_permissions` fixture が skip する。OS の能力差はこの 3 つの fixture に集約し、
+テストの中で `os.name` を見て分岐しない。
 
 Markdown の内部リンク・見出しアンカー検査（リポジトリルートで実行。CI と同じ
 [`lychee` v0.24.2](https://github.com/lycheeverse/lychee/releases/tag/lychee-v0.24.2)

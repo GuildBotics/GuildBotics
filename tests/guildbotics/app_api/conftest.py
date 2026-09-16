@@ -9,3 +9,4 @@ import pytest
 def isolate_machine_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep App API service locks out of the developer's real home directory."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))

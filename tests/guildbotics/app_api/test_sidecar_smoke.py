@@ -231,6 +231,9 @@ def test_sidecar_shuts_down_cleanly(sidecar: _Sidecar) -> None:
     process.terminate()
     return_code = process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
 
-    # SIGTERM-initiated shutdown should not surface as a crash.
+    # A terminate-initiated shutdown should not surface as a crash. Windows has
+    # no SIGTERM: `terminate()` is `TerminateProcess`, which ends the process
+    # with exit code 1 whatever the process itself would have returned, so
+    # there the only thing the exit code can say is that it stopped when asked.
     assert process.poll() is not None
-    assert return_code in {0, -15}
+    assert return_code in ({1} if os.name == "nt" else {0, -15})

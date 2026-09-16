@@ -746,6 +746,7 @@ def test_member_context_workspace_option_overrides_active_workspace(
 
 def test_member_workspace_without_env_does_not_load_cwd_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv(GUILDBOTICS_CONFIG_DIR, raising=False)
     monkeypatch.delenv("CWD_ONLY_MARKER", raising=False)
     caller = tmp_path / "caller"
@@ -2698,6 +2699,7 @@ def test_member_github_pr_review_comment_rejects_partial_range():
 
 def test_member_task_status_cli(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     store = TaskRunStore()
     store.append_evidence("run-1", "issue_comment", {"comment_id": 1})
     store.complete(
@@ -2723,6 +2725,7 @@ def test_member_task_status_ignores_missing_context_for_interactive_trace(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
 
     def missing_context(_identifier):
@@ -2753,6 +2756,7 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
     monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
 
@@ -2782,6 +2786,7 @@ def test_member_task_status_skips_interactive_trace_under_workflow(
 
 def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2853,6 +2858,7 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
 
 def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     # The run id is injected by the workflow via env, not a CLI flag; the write
     # command records its evidence under the env-provided run id.
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
@@ -2914,6 +2920,7 @@ def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp
 
 def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -2972,6 +2979,7 @@ def test_member_chat_reply_accepts_channel_name_and_message_url(monkeypatch, tmp
 def test_member_chat_inspect_thread_accepts_message_url(monkeypatch, tmp_path):
     expected_limit = 20
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -3030,6 +3038,7 @@ def test_member_chat_inspect_thread_accepts_message_url(monkeypatch, tmp_path):
 
 def test_member_chat_inspect_channel_accepts_channel_name(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -3115,6 +3124,7 @@ def test_member_chat_rejects_empty_content():
 
 def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -3171,6 +3181,7 @@ def test_member_chat_reaction_accepts_message_url(monkeypatch, tmp_path):
 
 def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
 
     def fake_resolve_member_context(identifier):
@@ -3232,6 +3243,7 @@ def test_member_chat_noop_and_complete(tmp_path, monkeypatch):
 
 def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     person = Person(person_id="aiko", name="Aiko")
 
     def fake_resolve_member_context(identifier):

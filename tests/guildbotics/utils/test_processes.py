@@ -18,7 +18,8 @@ def test_launching_app_name_walks_parents_and_reads_bundle_name(monkeypatch, tmp
     )
     monkeypatch.setattr(processes.sys, "platform", "darwin")
     monkeypatch.setattr(processes.os, "getpid", lambda: 42)
-    rows = {"42": "41 /usr/bin/python", "41": f"1 {contents}/MacOS/Electron"}
+    # The fake `ps` answers as macOS would, in POSIX spelling.
+    rows = {"42": "41 /usr/bin/python", "41": f"1 {contents.as_posix()}/MacOS/Electron"}
     calls = []
 
     def ps(argv, **kwargs):

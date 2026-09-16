@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
-from typing import Any, BinaryIO
+from typing import IO, Any
 from urllib.parse import quote, urlparse
 from zipfile import BadZipFile, ZipFile
 
@@ -1369,7 +1369,7 @@ def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
     return run_ids
 
 
-def _extract_artifact(archive: BinaryIO, destination: Path) -> list[Path]:
+def _extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:
     destination = destination.resolve()
     try:
         with ZipFile(archive) as bundle:

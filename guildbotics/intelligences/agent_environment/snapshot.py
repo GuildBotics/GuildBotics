@@ -176,7 +176,9 @@ def snapshot_status(
         return SnapshotStatus("building", name, path)
     failed = directory / (name + _FAILED_SUFFIX)
     if failed.is_file():
-        return SnapshotStatus("failed", name, path, failed.read_text().strip())
+        return SnapshotStatus(
+            "failed", name, path, failed.read_text(encoding="utf-8").strip()
+        )
     if path.is_dir():
         return SnapshotStatus("ready", name, path)
     if _snapshots_in(directory):
@@ -270,7 +272,7 @@ async def build_snapshot(
                         minutes=int(BUILD_TIMEOUT_SECONDS // 60),
                     )
                 )
-                failed.write_text(f"{reason}\n")
+                failed.write_text(f"{reason}\n", encoding="utf-8")
                 raise AgentEnvironmentError(reason) from exc
             for other in _snapshots_in(directory):
                 if other.name != path.name:

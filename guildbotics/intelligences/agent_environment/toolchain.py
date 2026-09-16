@@ -194,7 +194,7 @@ def device_nameservers() -> tuple[str, ...]:
         candidates = completed.stdout.split()
     else:
         try:
-            lines = _RESOLV_CONF.read_text().splitlines()
+            lines = _RESOLV_CONF.read_text(encoding="utf-8").splitlines()
         except OSError:
             lines = []
         candidates = [

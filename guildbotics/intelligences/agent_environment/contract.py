@@ -12,7 +12,6 @@ environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -581,19 +580,22 @@ def grant_spelling(path: PurePath, home: PurePath) -> str:
 
 
 def redact_path(
-    path: Path, home: Path | None = None, workspace_root: Path | None = None
+    path: PurePath, home: PurePath | None = None, workspace_root: PurePath | None = None
 ) -> str:
-    """Spell a device path with ``$HOME`` / ``<workspace>`` in place of its root."""
-    text = str(path)
+    """Spell a device path with ``$HOME`` / ``<workspace>`` in place of its root.
+
+    The result still names a path on that device, so it keeps that device's
+    separators. Joining the token through the path's own class is what makes
+    that true wherever the path came from, rather than wherever this runs.
+    """
     for root, token in (
         (workspace_root, _WORKSPACE_TOKEN),
         (home or Path.home(), _HOME_TOKEN),
     ):
         if root is None:
             continue
-        prefix = str(root)
-        if text == prefix:
+        if path == root:
             return token
-        if text.startswith(prefix + os.sep):
-            return token + text[len(prefix) :]
-    return text
+        if path.is_relative_to(root):
+            return str(type(path)(token, path.relative_to(root)))
+    return str(path)

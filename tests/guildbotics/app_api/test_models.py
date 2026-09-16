@@ -184,11 +184,14 @@ def test_scheduler_start_request_accepts_minimum_values() -> None:
 
 # --- Path JSON serialization -----------------------------------------------
 
+# The value names a directory on the device the Desktop is running on, so it
+# is compared as that device spells it.
+
 
 def test_command_run_request_serializes_path_to_json_string() -> None:
     request = CommandRunRequest(command="hello", cwd=Path("/tmp/work dir"))
     payload = json.loads(request.model_dump_json())
-    assert payload["cwd"] == "/tmp/work dir"
+    assert payload["cwd"] == str(Path("/tmp/work dir"))
     assert isinstance(payload["cwd"], str)
 
 
@@ -207,7 +210,7 @@ def test_command_option_serializes_path_to_json_string() -> None:
         path=Path("/cfg/commands/hello.md"),
     )
     payload = json.loads(option.model_dump_json())
-    assert payload["path"] == "/cfg/commands/hello.md"
+    assert payload["path"] == str(Path("/cfg/commands/hello.md"))
     assert isinstance(payload["path"], str)
 
 
@@ -257,5 +260,5 @@ def test_project_update_input_keeps_provider_api_keys() -> None:
 def test_project_update_input_serializes_path_to_json_string() -> None:
     request = ProjectUpdateInput(**_project_update_kwargs())
     payload = json.loads(request.model_dump_json())
-    assert payload["config_dir"] == "/cfg"
+    assert payload["config_dir"] == str(Path("/cfg"))
     assert "env_file_path" not in payload

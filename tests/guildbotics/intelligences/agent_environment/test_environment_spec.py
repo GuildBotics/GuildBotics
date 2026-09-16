@@ -56,9 +56,9 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
 
     spec = build_environment_spec(_contract(), cwd, home=tmp_path)
 
-    assert spec.cwd == cwd.as_posix()
-    assert spec.home == tmp_path.resolve().as_posix()
-    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.cwd == guest_path(cwd)
+    assert spec.home == guest_path(tmp_path.resolve())
+    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
     assert spec.env == {}
 
 
@@ -83,18 +83,18 @@ def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
 
     spec = build_environment_spec(_contract(access), cwd, home=home)
 
-    assert spec.home == home.as_posix()
+    assert spec.home == guest_path(home)
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
-        EnvironmentMount(cwd.as_posix(), cwd, readonly=False),
-        EnvironmentMount(exchange.as_posix(), exchange, readonly=False),
-        EnvironmentMount((home / "out").as_posix(), home / "out", readonly=False),
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False),
+        EnvironmentMount(guest_path(exchange), exchange, readonly=False),
+        EnvironmentMount(guest_path(home / "out"), home / "out", readonly=False),
         EnvironmentMount(
-            (home / "Documents" / "notes").as_posix(),
+            guest_path(home / "Documents" / "notes"),
             home / "Documents" / "notes",
             readonly=True,
         ),
-        EnvironmentMount(cache.as_posix(), cache, readonly=True),
+        EnvironmentMount(guest_path(cache), cache, readonly=True),
     }
 
 
@@ -114,8 +114,8 @@ def test_mounts_are_ordered_outermost_first(tmp_path: Path) -> None:
     depths = [len(PurePosixPath(m.guest).parts) for m in spec.mounts]
     assert depths == sorted(depths)
     # The working directory is read-write even where a grant names it read.
-    assert [m for m in spec.mounts if m.guest == cwd.as_posix()] == [
-        EnvironmentMount(cwd.as_posix(), cwd, readonly=False)
+    assert [m for m in spec.mounts if m.guest == guest_path(cwd)] == [
+        EnvironmentMount(guest_path(cwd), cwd, readonly=False)
     ]
 
 
@@ -137,10 +137,10 @@ def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
 
     covers = [m for m in spec.mounts if m.host is None]
     assert covers == [
-        EnvironmentMount(f"{cwd.as_posix()}/private", None, readonly=True)
+        EnvironmentMount(f"{guest_path(cwd)}/private", None, readonly=True)
     ]
     guests = [m.guest for m in spec.mounts]
-    assert guests.index(f"{cwd.as_posix()}/private") > guests.index(cwd.as_posix())
+    assert guests.index(f"{guest_path(cwd)}/private") > guests.index(guest_path(cwd))
 
 
 def test_a_deny_outside_every_mount_or_absent_on_disk_covers_nothing(
@@ -160,7 +160,7 @@ def test_a_deny_outside_every_mount_or_absent_on_disk_covers_nothing(
 
     spec = build_environment_spec(_contract(access), cwd, home=tmp_path)
 
-    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
 
 
 def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None:
@@ -180,7 +180,7 @@ def test_a_grant_that_is_denied_or_absent_is_not_mounted(tmp_path: Path) -> None
 
     spec = build_environment_spec(_contract(access), cwd, home=home)
 
-    assert spec.mounts == (EnvironmentMount(cwd.as_posix(), cwd, readonly=False),)
+    assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
 
 
 # --- guest paths ----------------------------------------------------------------
@@ -300,7 +300,7 @@ def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
         home=home,
     )
 
-    state = (workspace / ".guildbotics").resolve().as_posix()
+    state = guest_path((workspace / ".guildbotics").resolve())
     assert EnvironmentMount(state, None, readonly=True) in spec.mounts
     # A turn in a member's clone below it is not affected: the deny is
     # outside the opened tree.

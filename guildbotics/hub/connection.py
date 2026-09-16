@@ -201,13 +201,24 @@ def _parse_remote_url(
     value = remote_url.strip()
     if not value:
         raise InvalidHubEndpointError("The synchronization remote is empty.")
-    if value.startswith("/") or value.startswith("./") or value.startswith("../"):
-        return HubLocation(), _local_workspace_id(value)
     target, separator, path = value.partition(":")
-    if not separator or not path.startswith(f"{HUB_WORKSPACES_RELATIVE}/"):
+    if separator and path.startswith(f"{HUB_WORKSPACES_RELATIVE}/"):
+        location = HubLocation(endpoint=parse_hub_endpoint(target))
+        remote_workspace_id = _remote_workspace_id(remote_url, path)
+    else:
+        location = HubLocation()
+        remote_workspace_id = _local_workspace_id(value)
+    if workspace_id is not None and remote_workspace_id != host.require_workspace_id(
+        workspace_id
+    ):
         raise InvalidHubEndpointError(
-            f"{remote_url!r} is not a GuildBotics Hub remote."
+            f"{remote_url!r} names a different workspace than {workspace_id}."
         )
+    return location, remote_workspace_id
+
+
+def _remote_workspace_id(remote_url: str, path: str) -> str:
+    """Read the workspace out of a hub repository path on another machine."""
     relative = path.removeprefix(f"{HUB_WORKSPACES_RELATIVE}/")
     parts = relative.split("/")
     if len(parts) != _HUB_REMOTE_PATH_PARTS or parts[1] != "repository.git":
@@ -215,22 +226,20 @@ def _parse_remote_url(
             f"{remote_url!r} is not a GuildBotics Hub remote."
         )
     try:
-        remote_workspace_id = host.require_workspace_id(parts[0])
+        return host.require_workspace_id(parts[0])
     except host.InvalidWorkspaceIdError as exc:
         raise InvalidHubEndpointError(
             f"{remote_url!r} contains an invalid workspace identifier."
         ) from exc
-    if workspace_id is not None and remote_workspace_id != host.require_workspace_id(
-        workspace_id
-    ):
-        raise InvalidHubEndpointError(
-            f"{remote_url!r} names a different workspace than {workspace_id}."
-        )
-    return HubLocation(endpoint=parse_hub_endpoint(target)), remote_workspace_id
 
 
 def _local_workspace_id(path: str) -> str:
-    """Read the workspace out of a hub repository path on this machine."""
+    """Read the workspace out of a hub repository path on this machine.
+
+    Anything that is not addressed as ``host:<hub path>`` is a path on this
+    machine, which is what a Windows remote looks like: ``C:\\...`` carries a
+    colon of its own, so the drive letter must not be read as a host name.
+    """
     parts = PurePosixPath(path.replace("\\", "/")).parts
     if len(parts) < _HUB_REMOTE_PATH_PARTS or parts[-1] != "repository.git":
         raise InvalidHubEndpointError(f"{path!r} is not a GuildBotics Hub remote.")

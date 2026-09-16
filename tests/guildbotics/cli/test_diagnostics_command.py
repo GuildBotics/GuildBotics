@@ -40,6 +40,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     index = [
         _record(),
@@ -167,6 +168,7 @@ def test_workspace_option_selects_another_workspace(
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
     result = CliRunner().invoke(
         main, ["diagnostics", "--workspace", str(other), "traces"]

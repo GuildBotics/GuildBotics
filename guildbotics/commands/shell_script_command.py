@@ -10,7 +10,35 @@ from typing import ClassVar
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.utils import stringify_output
+from guildbotics.commands.utils import find_shell, stringify_output
+
+_WINDOWS = os.name == "nt"
+
+
+def _runs_itself(path: Path) -> bool:
+    """Return whether the operating system can execute the script directly.
+
+    Windows has no execute bit -- ``os.access(..., os.X_OK)`` answers yes for
+    every file that exists -- and ``CreateProcess`` refuses a ``.sh`` whatever
+    its shebang says, so the interpreter runs it there, as it does for a file
+    without the bit elsewhere.
+    """
+    return not _WINDOWS and os.access(str(path), os.X_OK)
+
+
+def _shell_executable() -> str:
+    """Return the shell to run a script with.
+
+    Raises:
+        CommandError: When this machine has no ``bash``.
+    """
+    found = find_shell()
+    if found is None:
+        raise CommandError(
+            "No 'bash' was found to run shell script commands with. "
+            "Install a POSIX shell and put 'bash' on PATH."
+        )
+    return found
 
 
 class ShellScriptCommand(CommandBase):
@@ -26,8 +54,16 @@ class ShellScriptCommand(CommandBase):
         temp_file_name: str | None = None
         script = self.spec.get_config_value("script")
         if script is not None:
+            # The shell reads bytes, and the output is decoded as UTF-8 further
+            # down, so the script is written the same way on every platform.
+            # Line endings are pinned for the same reason: a carriage return
+            # translated in here reaches the shell as part of the command.
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".sh", delete=False
+                mode="w",
+                suffix=".sh",
+                delete=False,
+                encoding="utf-8",
+                newline="\n",
             ) as tmp_file:
                 tmp_file.write(script)
                 tmp_file.flush()
@@ -41,8 +77,8 @@ class ShellScriptCommand(CommandBase):
 
         args = (
             [str(executable_path)]
-            if os.access(str(executable_path), os.X_OK)
-            else ["bash", str(executable_path)]
+            if _runs_itself(executable_path)
+            else [_shell_executable(), str(executable_path)]
         )
         args.extend(str(item) for item in self.options.args)
 

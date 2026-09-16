@@ -17,7 +17,10 @@ from guildbotics.intelligences.agent_environment.provider_state import (
     provider_state_dir,
     state_mounts,
 )
-from guildbotics.intelligences.agent_environment.spec import EnvironmentMount
+from guildbotics.intelligences.agent_environment.spec import (
+    EnvironmentMount,
+    guest_path,
+)
 from guildbotics.intelligences.agent_environment.toolchain import parse_toolchain
 from guildbotics.intelligences.cli_agents import cli_agent_info
 
@@ -62,9 +65,9 @@ def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) 
 
     assert state_mounts(codex, home) == (
         EnvironmentMount(
-            f"{home.as_posix()}/.codex/sessions", store / "sessions", False
+            f"{guest_path(home)}/.codex/sessions", store / "sessions", False
         ),
-        EnvironmentMount(f"{home.as_posix()}/.cache", cache_dir(), False),
+        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
     assert (store / "sessions").is_dir()
 
@@ -73,12 +76,12 @@ def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) 
 
     assert mounts == (
         EnvironmentMount(
-            f"{home.as_posix()}/.codex/auth.json", store / "auth.json", False
+            f"{guest_path(home)}/.codex/auth.json", store / "auth.json", False
         ),
         EnvironmentMount(
-            f"{home.as_posix()}/.codex/sessions", store / "sessions", False
+            f"{guest_path(home)}/.codex/sessions", store / "sessions", False
         ),
-        EnvironmentMount(f"{home.as_posix()}/.cache", cache_dir(), False),
+        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
 
 
@@ -91,7 +94,7 @@ def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
     grok = cli_agent_info("grok")
     home = tmp_path / "home"
     store = provider_state_dir(grok)
-    guest = f"{home.as_posix()}/.grok"
+    guest = f"{guest_path(home)}/.grok"
 
     (store / "auth").mkdir(parents=True)
     (store / "auth/auth.json").write_text("{}")
@@ -107,7 +110,7 @@ def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
         "GROK_HOME": guest,
         "GROK_AUTH_PATH": f"{guest}/auth/auth.json",
     }
-    login_guest = home.resolve().as_posix()
+    login_guest = guest_path(home.resolve())
     assert login_spec(grok, DECLARATION, home).env == {
         "GROK_HOME": f"{login_guest}/.grok",
         "GROK_AUTH_PATH": f"{login_guest}/.grok/auth/auth.json",
@@ -122,7 +125,7 @@ def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
 
     spec = login_spec(claude, DECLARATION, home)
 
-    guest = home.resolve().as_posix()
+    guest = guest_path(home.resolve())
     assert spec.cwd == spec.home == guest
     assert spec.mounts == (
         EnvironmentMount(f"{guest}/.claude", provider_state_dir(claude), False),
