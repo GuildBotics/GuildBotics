@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -31,6 +30,7 @@ import {
 import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent } from "./test/factories";
+import { TestMantineProvider } from "./test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
@@ -198,13 +198,13 @@ async function renderPage() {
   const { CommandsPage } = await import("./commands/CommandsPage");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={["/commands"]}>
           <CommandsPage />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

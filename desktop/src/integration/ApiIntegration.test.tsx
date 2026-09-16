@@ -1,4 +1,4 @@
-import { MantineProvider, createTheme } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -11,6 +11,7 @@ import { configureApi } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { SetupPage } from "../setup/SetupPage";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 const BASE = "http://127.0.0.1:8765";
@@ -302,14 +303,14 @@ function renderApp(server: MockServer, path: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
           <App />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 
@@ -320,14 +321,14 @@ function renderSetup(server: MockServer, path: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

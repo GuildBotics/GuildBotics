@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -12,6 +11,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import { SyncAlerts } from "./SyncAlerts";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
@@ -74,11 +74,11 @@ function renderAlerts() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MantineProvider>
+      <TestMantineProvider>
         <MemoryRouter>
           <SyncAlerts />
         </MemoryRouter>
-      </MantineProvider>
+      </TestMantineProvider>
     </QueryClientProvider>,
   );
 }

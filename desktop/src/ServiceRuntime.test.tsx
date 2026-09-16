@@ -1,4 +1,4 @@
-import { MantineProvider, createTheme } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -21,6 +21,7 @@ import {
   type RuntimeUnitStatus,
 } from "./api/client";
 import i18n from "./i18n";
+import { TestMantineProvider } from "./test/TestMantineProvider";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
@@ -660,13 +661,13 @@ function renderApp(initialPath: string) {
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[initialPath]}>
           <App />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

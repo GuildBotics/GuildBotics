@@ -1,9 +1,9 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import "../i18n";
 import { buildCommandSourceDiff, CommandSourceDiff } from "./CommandSourceDiff";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 describe("buildCommandSourceDiff", () => {
   it("identifies unchanged, removed, and added lines", () => {
@@ -39,9 +39,9 @@ describe("buildCommandSourceDiff", () => {
 describe("CommandSourceDiff", () => {
   it("renders a labelled, scrollable update diff", () => {
     const { container } = render(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <CommandSourceDiff before="old\n" after="new\n" path="/commands/translate.md" />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 
     const diff = screen.getByRole("table", { name: "Changes to /commands/translate.md" });

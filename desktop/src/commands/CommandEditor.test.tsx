@@ -1,20 +1,20 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CommandFileFormat } from "../api/client";
 import { CommandEditor } from "./CommandEditor";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 function renderEditor(format: CommandFileFormat) {
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <CommandEditor
         value={"---\nname: X\n---\nbody"}
         format={format}
         onChange={vi.fn()}
         onSave={vi.fn()}
       />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

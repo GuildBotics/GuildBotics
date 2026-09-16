@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,6 +21,7 @@ import i18n from "../i18n";
 import "../i18n";
 import { QuickRun } from "./QuickRun";
 import { IDLE_RUN_MS, type QuickRunTrigger } from "./quickRunState";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const tauriDrag = vi.hoisted(() => ({
   handler: null as ((event: unknown) => void) | null,
@@ -132,7 +132,7 @@ let publish: ((event: RuntimeEvent) => void) | undefined;
 function renderWindow() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={queryClient}>
         <QuickRun
           subscribe={(handler) => {
@@ -143,7 +143,7 @@ function renderWindow() {
           }}
         />
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

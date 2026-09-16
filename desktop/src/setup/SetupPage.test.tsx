@@ -1,4 +1,4 @@
-import { MantineProvider, createTheme } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -42,6 +42,7 @@ import {
 import { type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 import {
   type ScheduledCommandDraft,
   SetupPage,
@@ -711,10 +712,7 @@ describe("SetupPage", () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <MantineProvider
-        theme={createTheme({ primaryColor: "dark", defaultRadius: "md" })}
-        env="test"
-      >
+      <TestMantineProvider theme={createTheme({ primaryColor: "dark", defaultRadius: "md" })}>
         <Notifications />
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={["/setup?section=device"]}>
@@ -722,7 +720,7 @@ describe("SetupPage", () => {
             <SetupPage />
           </MemoryRouter>
         </QueryClientProvider>
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
     expect(
       await screen.findByRole("heading", { name: t("sync.device.title") }),
@@ -1334,14 +1332,14 @@ function renderSetupPage(path: string) {
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

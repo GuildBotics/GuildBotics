@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -6,15 +5,16 @@ import { describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
 import "../i18n";
 import { HotkeyInput } from "./HotkeyInput";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
 function renderInput(props: Partial<React.ComponentProps<typeof HotkeyInput>> = {}) {
   const onChange = props.onChange ?? vi.fn();
   render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <HotkeyInput value="" isMac {...props} onChange={onChange} />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return { onChange, field: screen.getByLabelText(t("hotkey.label")) };
 }

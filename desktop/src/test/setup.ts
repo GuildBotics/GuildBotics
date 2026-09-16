@@ -6,10 +6,16 @@ afterEach(() => {
   cleanup();
 });
 
+// Reduced motion is reported as the user's preference so that Mantine runs its
+// transitions with a zero duration, which is the synchronous path through
+// `useTransition`. See `src/test/TestMantineProvider.tsx` for why a transition
+// that schedules timers can fail a suite whose tests all passed.
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
+    matches: query === REDUCED_MOTION,
     media: query,
     onchange: null,
     addListener: vi.fn(),

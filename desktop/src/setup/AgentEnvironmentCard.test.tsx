@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -15,6 +14,7 @@ import {
 import i18n from "../i18n";
 import "../i18n";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -106,13 +106,13 @@ function status(
 function renderCard(focusElement?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rendered = render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={client}>
         <MemoryRouter>
           <AgentEnvironmentCard focusElement={focusElement} />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return { ...rendered, client };
 }
