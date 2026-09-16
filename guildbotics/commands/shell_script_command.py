@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -11,7 +10,7 @@ from typing import ClassVar
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.utils import stringify_output
+from guildbotics.commands.utils import find_shell, stringify_output
 
 _WINDOWS = os.name == "nt"
 
@@ -28,20 +27,12 @@ def _runs_itself(path: Path) -> bool:
 
 
 def _shell_executable() -> str:
-    """Return the shell that runs a script the operating system will not.
-
-    Git for Windows is the POSIX shell a Windows machine running GuildBotics
-    already has, and it is not always on PATH: ``git.exe`` is exposed through
-    ``cmd`` while ``bash.exe`` stays in ``bin`` beside it.
+    """Return the shell to run a script with.
 
     Raises:
         CommandError: When this machine has no ``bash``.
     """
-    found = shutil.which("bash")
-    if found is None and _WINDOWS:
-        git = shutil.which("git")
-        if git is not None:
-            found = shutil.which("bash", path=str(Path(git).parent.parent / "bin"))
+    found = find_shell()
     if found is None:
         raise CommandError(
             "No 'bash' was found to run shell script commands with. "

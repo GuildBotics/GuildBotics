@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import shlex
-import shutil
 import subprocess
 from typing import Any
 
@@ -26,6 +25,7 @@ from guildbotics.commands.metadata import (
     parse_python_metadata_from_module,
 )
 from guildbotics.commands.registry import get_command_types
+from guildbotics.commands.utils import find_shell
 
 SHELL_VALIDATION_TIMEOUT_SECONDS = 5
 
@@ -156,17 +156,20 @@ def validate_python_source(content: str) -> None:
 
 def validate_shell_source(content: str) -> None:
     """Validate a shell command with ``bash -n`` without executing it."""
-    if shutil.which("bash") is None:
+    shell = find_shell()
+    if shell is None:
         raise CommandValidationError(
             "command_file_invalid_source",
             "Shell command validation requires 'bash', which is unavailable.",
             {"reason": "shell_validator_unavailable"},
         )
     try:
+        # The source goes in as bytes rather than as text: text mode translates
+        # every newline to the platform's, and a carriage return the shell did
+        # not ask for makes an otherwise valid script fail to parse.
         result = subprocess.run(
-            ["bash", "-n"],
-            input=content,
-            text=True,
+            [shell, "-n"],
+            input=content.encode("utf-8"),
             capture_output=True,
             timeout=SHELL_VALIDATION_TIMEOUT_SECONDS,
         )
@@ -177,10 +180,13 @@ def validate_shell_source(content: str) -> None:
             {"reason": "shell_validator_timeout"},
         ) from exc
     if result.returncode != 0:
+        # In the shell's own words: what it objected to is the useful half of
+        # this, for the user reading it and for whoever reads a failing run.
+        detail = result.stderr.decode("utf-8", "replace").strip()[:500]
         raise CommandValidationError(
             "command_file_invalid_source",
-            "Shell command has a syntax error.",
-            {"detail": result.stderr.strip()[:500]},
+            f"Shell command has a syntax error: {detail}",
+            {"detail": detail},
         )
 
 

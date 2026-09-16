@@ -84,12 +84,11 @@ class GitHubActionsClient:
     async def job_log_tail(
         self, owner: str, repo: str, job_id: int, tail_bytes: int
     ) -> tuple[bytes, bool]:
-        response = await self._get(f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
-        _raise_for_status(response, permission_guidance=True)
-        location = response.headers.get("location", "")
+        location, content = await self._redirect_or_body(
+            f"/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+        )
         if location:
             return await self._download_tail(location, tail_bytes)
-        content = response.content
         return content[-tail_bytes:], len(content) > tail_bytes
 
     async def artifacts(
@@ -121,14 +120,11 @@ class GitHubActionsClient:
     async def _download_endpoint(
         self, endpoint: str, max_bytes: int
     ) -> AsyncIterator[IO[bytes]]:
-        response = await self._get(endpoint)
-        _raise_for_status(response, permission_guidance=True)
-        location = response.headers.get("location", "")
+        location, content = await self._redirect_or_body(endpoint)
         if location:
             async with self._download(location, max_bytes) as archive:
                 yield archive
             return
-        content = response.content
         if len(content) > max_bytes:
             raise GitHubActionsClientError(
                 f"GitHub download exceeds the {max_bytes} byte limit."
@@ -137,6 +133,26 @@ class GitHubActionsClient:
             archive.write(content)
             archive.seek(0)
             yield archive
+
+    async def _redirect_or_body(self, endpoint: str) -> tuple[str, bytes]:
+        """Read an endpoint that answers with either a redirect or the content.
+
+        GitHub serves what it stores elsewhere -- job logs, artifact archives --
+        by redirecting to a short-lived signed URL, so a redirect is this
+        endpoint's ordinary answer rather than a failure. ``raise_for_status``
+        raises for every status that is not a success, redirects included, so
+        the status is checked only once a redirect has been ruled out. Asking
+        both questions here keeps their order out of the callers.
+
+        Returns:
+            tuple[str, bytes]: The URL to fetch without credentials, or an
+                empty string and the content the endpoint answered with.
+        """
+        response = await self._get(endpoint)
+        if response.has_redirect_location:
+            return str(response.headers["location"]), b""
+        _raise_for_status(response, permission_guidance=True)
+        return "", response.content
 
     async def _paginated_items(
         self,

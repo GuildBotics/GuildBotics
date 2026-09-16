@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
 
+from guildbotics.commands.utils import find_shell
 from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
@@ -196,12 +195,15 @@ def test_python_missing_main() -> None:
     assert exc.value.code == "command_file_invalid_source"
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash unavailable")
+@pytest.mark.skipif(find_shell() is None, reason="no shell on this device")
 def test_shell_valid() -> None:
+    # The source reaches the shell with the newlines it was written with: a
+    # carriage return the platform added would end up inside the line it ends,
+    # and a script that is fine everywhere would be reported as broken here.
     validate_command_source(".sh", "#!/usr/bin/env bash\nset -euo pipefail\necho ok\n")
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash unavailable")
+@pytest.mark.skipif(find_shell() is None, reason="no shell on this device")
 def test_shell_syntax_error() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_command_source(".sh", "if true; then\n")
@@ -211,7 +213,7 @@ def test_shell_syntax_error() -> None:
 def test_shell_without_bash_reports_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("guildbotics.commands.validation.shutil.which", lambda _: None)
+    monkeypatch.setattr("guildbotics.commands.validation.find_shell", lambda: None)
     with pytest.raises(CommandValidationError) as exc:
         validate_command_source(".sh", "echo ok\n")
     assert exc.value.context.get("reason") == "shell_validator_unavailable"

@@ -26,12 +26,20 @@ def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary()
     assert DEFAULT_LOG_TAIL_BYTES == STREAM_READ_LIMIT // 32
 
 
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+
 class FakeResponse:
     def __init__(self, payload, status_code=200, *, content=b"", headers=None):
         self._payload = payload
         self.status_code = status_code
         self.content = content
         self.headers = headers or {}
+
+    @property
+    def has_redirect_location(self):
+        """As httpx reports it: a redirect status that carries a location."""
+        return "location" in self.headers and self.status_code in _REDIRECT_STATUSES
 
     def json(self):
         return self._payload
