@@ -1,4 +1,4 @@
-import { MantineProvider, createTheme } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -38,6 +38,7 @@ import type {
   WorkspaceLiveState,
 } from "../api/client";
 import i18n from "../i18n";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -1433,13 +1434,13 @@ function renderActivity() {
     defaultRadius: "md",
   });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
         <MemoryRouter>
           <ActivityHistoryPage />
         </MemoryRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

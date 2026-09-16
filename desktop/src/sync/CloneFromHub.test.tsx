@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,6 +13,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import { CloneFromHubButton } from "./CloneFromHub";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
@@ -62,9 +62,9 @@ function renderButton(onCloned = vi.fn(), destination = "/tmp/second") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MantineProvider>
+      <TestMantineProvider>
         <CloneFromHubButton destination={destination} onCloned={onCloned} />
-      </MantineProvider>
+      </TestMantineProvider>
     </QueryClientProvider>,
   );
   return onCloned;

@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +12,7 @@ import i18n from "../i18n";
 import "../i18n";
 import { openExternal } from "../openExternal";
 import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -63,7 +63,7 @@ const installedRegistration: GitHubAppRegistrationStatus = {
 
 function renderPanel(onApplied = vi.fn(), defaultOrganization = "") {
   render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <GitHubAppRegistrationPanel
         defaultAppName="my-bot"
         defaultOrganization={defaultOrganization}
@@ -71,7 +71,7 @@ function renderPanel(onApplied = vi.fn(), defaultOrganization = "") {
         pollIntervalMs={20}
         memberKey="edit:my-bot"
       />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return onApplied;
 }
@@ -83,19 +83,19 @@ function renderSwitchablePanel() {
     pollIntervalMs: 20,
   };
   const { rerender } = render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <GitHubAppRegistrationPanel {...props} defaultAppName="my-bot" memberKey="edit:my-bot" />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return () =>
     rerender(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <GitHubAppRegistrationPanel
           {...props}
           defaultAppName="other-bot"
           memberKey="edit:other-bot"
         />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 }
 

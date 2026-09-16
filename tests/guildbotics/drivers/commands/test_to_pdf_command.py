@@ -12,6 +12,7 @@ from types import ModuleType
 import pytest
 
 from guildbotics.commands.errors import CommandError
+from guildbotics.commands import to_pdf_command
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.to_pdf_command import (
     ToPdfCommand,
@@ -56,7 +57,9 @@ def _make_spec(
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_generates_pdf_from_markdown_message(tmp_path: Path):
+async def test_to_pdf_generates_pdf_from_markdown_message(
+    tmp_path: Path, weasyprint_libraries
+):
     ctx = _make_context("# PDF Title")
     spec = _make_spec(tmp_path)
     command = ToPdfCommand(ctx, spec, tmp_path)
@@ -70,7 +73,9 @@ async def test_to_pdf_generates_pdf_from_markdown_message(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_writes_output_file_when_requested(tmp_path: Path):
+async def test_to_pdf_writes_output_file_when_requested(
+    tmp_path: Path, weasyprint_libraries
+):
     ctx = _make_context("Hello PDF")
     output_path = Path("out/report.pdf")
     spec = _make_spec(tmp_path, params={"output": str(output_path)})
@@ -86,7 +91,7 @@ async def test_to_pdf_writes_output_file_when_requested(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_accepts_html_input(tmp_path: Path):
+async def test_to_pdf_accepts_html_input(tmp_path: Path, weasyprint_libraries):
     html_path = tmp_path / "snippet.html"
     html_path.write_text("<div><h1>HTML</h1><p>content</p></div>", encoding="utf-8")
 
@@ -100,7 +105,7 @@ async def test_to_pdf_accepts_html_input(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_handles_full_html_document(tmp_path: Path):
+async def test_to_pdf_handles_full_html_document(tmp_path: Path, weasyprint_libraries):
     html_path = tmp_path / "document.html"
     html_path.write_text(
         "<!DOCTYPE html><html><head><title>Doc</title></head>"
@@ -142,7 +147,10 @@ async def test_to_pdf_raises_command_error_when_weasyprint_unavailable(
 
 
 def _use_homebrew_prefix(
-    monkeypatch: pytest.MonkeyPatch, prefix: Path, platform: str = "darwin"
+    monkeypatch: pytest.MonkeyPatch,
+    fake_platform,
+    prefix: Path,
+    platform: str = "darwin",
 ) -> None:
     """Point the Homebrew lookup at a temporary prefix on a chosen platform.
 
@@ -150,19 +158,19 @@ def _use_homebrew_prefix(
     from ``sys.modules`` to exercise the first-import path the override exists
     for.
     """
-    monkeypatch.setattr(sys, "platform", platform)
+    fake_platform(to_pdf_command, platform)
     monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
     monkeypatch.delenv("DYLD_LIBRARY_PATH", raising=False)
     monkeypatch.delitem(sys.modules, "weasyprint", raising=False)
 
 
 def test_homebrew_library_path_prepends_library_dir_on_macos(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_platform
 ):
     """macOS does not search Homebrew's prefix, so to_pdf has to add it."""
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
-    _use_homebrew_prefix(monkeypatch, tmp_path)
+    _use_homebrew_prefix(monkeypatch, fake_platform, tmp_path)
 
     with _homebrew_library_path():
         assert os.environ["DYLD_LIBRARY_PATH"] == str(lib_dir)
@@ -171,12 +179,12 @@ def test_homebrew_library_path_prepends_library_dir_on_macos(
 
 
 def test_homebrew_library_path_keeps_an_explicit_setting_ahead(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_platform
 ):
     """An explicitly configured search path keeps priority and is restored."""
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
-    _use_homebrew_prefix(monkeypatch, tmp_path)
+    _use_homebrew_prefix(monkeypatch, fake_platform, tmp_path)
     monkeypatch.setenv("DYLD_LIBRARY_PATH", "/custom/lib")
 
     with _homebrew_library_path():
@@ -193,13 +201,14 @@ def test_homebrew_library_path_keeps_an_explicit_setting_ahead(
 def test_homebrew_library_path_is_a_no_op_when_not_applicable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    fake_platform,
     platform: str,
     create_lib_dir: bool,
 ):
     """Only macOS with a Homebrew prefix present needs the override."""
     if create_lib_dir:
         (tmp_path / "lib").mkdir()
-    _use_homebrew_prefix(monkeypatch, tmp_path, platform=platform)
+    _use_homebrew_prefix(monkeypatch, fake_platform, tmp_path, platform=platform)
 
     with _homebrew_library_path():
         assert "DYLD_LIBRARY_PATH" not in os.environ
@@ -208,12 +217,12 @@ def test_homebrew_library_path_is_a_no_op_when_not_applicable(
 
 
 def test_homebrew_library_path_is_a_no_op_once_weasyprint_is_loaded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_platform
 ):
     """After the first import the libraries are resolved, so leave the env alone."""
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
-    _use_homebrew_prefix(monkeypatch, tmp_path)
+    _use_homebrew_prefix(monkeypatch, fake_platform, tmp_path)
     monkeypatch.setitem(sys.modules, "weasyprint", ModuleType("weasyprint"))
 
     with _homebrew_library_path():
@@ -223,7 +232,7 @@ def test_homebrew_library_path_is_a_no_op_once_weasyprint_is_loaded(
 
 
 def test_homebrew_library_path_does_not_interleave_across_threads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_platform
 ):
     """The task scheduler runs one worker thread per member.
 
@@ -234,7 +243,7 @@ def test_homebrew_library_path_does_not_interleave_across_threads(
     """
     lib_dir = tmp_path / "lib"
     lib_dir.mkdir()
-    _use_homebrew_prefix(monkeypatch, tmp_path)
+    _use_homebrew_prefix(monkeypatch, fake_platform, tmp_path)
 
     steps: list[str] = []
     first_is_inside = threading.Event()
@@ -272,7 +281,9 @@ def test_homebrew_library_path_does_not_interleave_across_threads(
 
 
 @pytest.mark.asyncio
-async def test_to_pdf_accepts_string_inline_syntax(tmp_path: Path):
+async def test_to_pdf_accepts_string_inline_syntax(
+    tmp_path: Path, weasyprint_libraries
+):
     css_path = tmp_path / "custom.css"
     css_path.write_text(".markdown-body { color: blue; }", encoding="utf-8")
     output_path = Path("inline/output.pdf")

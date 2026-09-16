@@ -1,19 +1,19 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import "../i18n";
 import { CommandSourcePreview } from "./CommandSourcePreview";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 describe("CommandSourcePreview", () => {
   it("renders source in a focusable scroll region", () => {
     render(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <CommandSourcePreview
           path="/commands/functions/prepare-translation-input.py"
           source={'first\nsecond\nprint("a long line")\n'}
         />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 
     const source = screen.getByRole("region", {

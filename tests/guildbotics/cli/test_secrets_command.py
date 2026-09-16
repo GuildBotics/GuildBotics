@@ -37,6 +37,7 @@ class FakeCredentialApi:
 def _workspace(tmp_path: Path, monkeypatch, *, env_lines: str = "") -> Path:
     """Create a workspace dir and keep runtime env vars from leaking out."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     for key in ("GUILDBOTICS_CONFIG_DIR",):
         monkeypatch.setenv(key, "placeholder")
         monkeypatch.delenv(key)

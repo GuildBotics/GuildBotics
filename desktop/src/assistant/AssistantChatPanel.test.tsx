@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
@@ -6,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AssistantChatPanel, type AssistantChatPanelProps } from "./AssistantChatPanel";
 import i18n from "../i18n";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 import "../i18n";
 
 const t = i18n.getFixedT("en");
@@ -22,9 +22,9 @@ function renderPanel(overrides: Partial<AssistantChatPanelProps> = {}) {
   };
   render(
     <MemoryRouter>
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <AssistantChatPanel {...props} />
-      </MantineProvider>
+      </TestMantineProvider>
     </MemoryRouter>,
   );
   return props;
@@ -75,7 +75,7 @@ describe("AssistantChatPanel", () => {
     const onSubmit = vi.fn();
     const panel = (error: string | null) => (
       <MemoryRouter>
-        <MantineProvider env="test">
+        <TestMantineProvider>
           <AssistantChatPanel
             namespace="diagnostics.troubleshooting"
             messages={[]}
@@ -84,7 +84,7 @@ describe("AssistantChatPanel", () => {
             error={error}
             onSubmit={onSubmit}
           />
-        </MantineProvider>
+        </TestMantineProvider>
       </MemoryRouter>
     );
     const { rerender } = render(panel(null));
@@ -133,7 +133,7 @@ describe("AssistantChatPanel", () => {
     const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
     const panel = (messages: AssistantChatPanelProps["messages"]) => (
       <MemoryRouter>
-        <MantineProvider env="test">
+        <TestMantineProvider>
           <AssistantChatPanel
             namespace="commands.authoring"
             messages={messages}
@@ -143,7 +143,7 @@ describe("AssistantChatPanel", () => {
             onSubmit={vi.fn()}
             autoScrollOnAssistantResponse
           />
-        </MantineProvider>
+        </TestMantineProvider>
       </MemoryRouter>
     );
     const userMessage: AssistantChatPanelProps["messages"][number] = {

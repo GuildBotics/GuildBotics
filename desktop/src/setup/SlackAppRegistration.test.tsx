@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import i18n from "../i18n";
 import "../i18n";
 import { openExternal } from "../openExternal";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -32,15 +32,15 @@ const registration: SlackAppRegistrationStatus = {
 
 function renderPanel(defaultAppName = "alice", memberKey = "edit:alice") {
   const { rerender } = render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <SlackAppRegistrationPanel defaultAppName={defaultAppName} memberKey={memberKey} />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return (nextAppName: string, nextMemberKey: string) =>
     rerender(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <SlackAppRegistrationPanel defaultAppName={nextAppName} memberKey={nextMemberKey} />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 }
 

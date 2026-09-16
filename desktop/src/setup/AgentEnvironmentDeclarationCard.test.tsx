@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -9,6 +8,7 @@ import { getAgentEnvironmentImages, type AgentEnvironmentDeclaration } from "../
 import i18n from "../i18n";
 import "../i18n";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -43,7 +43,7 @@ function Harness({
     () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
   );
   return (
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={client}>
         <AgentEnvironmentDeclarationCard
           value={value}
@@ -55,7 +55,7 @@ function Harness({
           onValidityChange={onValidityChange}
         />
       </QueryClientProvider>
-    </MantineProvider>
+    </TestMantineProvider>
   );
 }
 

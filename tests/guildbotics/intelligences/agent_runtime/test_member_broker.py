@@ -13,6 +13,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from guildbotics.capabilities.task_runs import TASK_RUN_ENV
+from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
@@ -92,18 +93,13 @@ def test_frozen_member_cli_uses_the_platform_executable_name(
     tmp_path: Path,
     platform: str,
     executable_name: str,
+    fake_platform,
 ) -> None:
     executable = tmp_path / ".guildbotics" / "bin" / executable_name
     executable.parent.mkdir(parents=True)
     executable.write_text("launcher", encoding="utf-8")
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.sys.frozen",
-        True,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.sys.platform", platform
-    )
+    view = fake_platform(member_broker, platform)
+    monkeypatch.setattr(view, "frozen", True, raising=False)
     monkeypatch.setattr(
         "guildbotics.intelligences.agent_runtime.member_broker.Path.home",
         lambda: tmp_path,

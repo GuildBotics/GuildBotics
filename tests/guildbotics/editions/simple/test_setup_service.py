@@ -65,10 +65,9 @@ def test_write_project_without_github_creates_loadable_core_config(
     assert team.project.description == "Local automation workspace"
     assert team.project.services == {}
     assert KeyringSecretStore(config_dir).get("GOOGLE_API_KEY") == "test-google-key"
-    assert (
-        "OSのUI言語と英語の間で相互翻訳"
-        in (config_dir / "commands/translate.md").read_text()
-    )
+    assert "OSのUI言語と英語の間で相互翻訳" in (
+        config_dir / "commands/translate.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_write_project_does_not_copy_samples_when_commands_exist(
@@ -320,10 +319,9 @@ def test_update_project_is_non_destructive_for_env_and_cli_agents(
 
     assert custom_cli_file.read_text() == "script: echo custom"
     assert (config_dir / "commands/translate.md").exists()
-    assert (
-        "OSのUI言語と英語の間で相互翻訳"
-        in (config_dir / "commands/translate.md").read_text()
-    )
+    assert "OSのUI言語と英語の間で相互翻訳" in (
+        config_dir / "commands/translate.md"
+    ).read_text(encoding="utf-8")
     assert KeyringSecretStore(config_dir).get("OPENAI_API_KEY") == "existing-openai"
     assert not (tmp_path / ".env").exists()
 

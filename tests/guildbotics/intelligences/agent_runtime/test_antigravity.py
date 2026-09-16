@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import antigravity as antigravity_module
 from guildbotics.intelligences.agent_runtime.antigravity import (
     _LOG_TAIL_BYTES,
@@ -166,7 +167,7 @@ async def _run(
 
 @pytest.mark.asyncio
 async def test_conversation_id_from_init_becomes_the_session_and_events_map(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, fake_environment
 ) -> None:
     calls: list[tuple[Any, ...]] = []
     kwargs_log: list[dict[str, Any]] = []
@@ -189,7 +190,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
         index for index, argument in enumerate(run_args) if argument == "--add-dir"
     ]
     assert len(workspace_indexes) == 2
-    assert run_args[workspace_indexes[0] + 1] == str(tmp_path)
+    assert run_args[workspace_indexes[0] + 1] == guest_path(tmp_path)
     assert "--dangerously-skip-permissions" in run_args
     prompt = run_args[run_args.index("--print") + 1]
     assert "never run those commands" in prompt
@@ -207,10 +208,12 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     ):
         assert key not in env
     assert kwargs_log[-1]["cwd"] == str(tmp_path)
-    mcp_workspace = Path(run_args[workspace_indexes[1] + 1])
+    # The adapter's own workspace is bound into the environment, so the host
+    # directory is the mount's, and the argument is how the guest names it.
+    mcp_workspace = fake_environment.started[-1].kwargs["mounts"][0].host
+    assert run_args[workspace_indexes[1] + 1] == guest_path(mcp_workspace)
     assert mcp_workspace != tmp_path
     mcp_path = mcp_workspace / ".agents" / "mcp_config.json"
-    assert mcp_path.stat().st_mode & 0o777 == 0o600
     mcp_config = json.loads(mcp_path.read_text())
     server_name, server = next(iter(mcp_config["mcpServers"].items()))
     assert server_name.startswith("guildbotics-member-")
@@ -249,6 +252,23 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     assert initialized.details["cwd"] == "/workspace"
     await adapter.close()
     assert not mcp_workspace.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_mcp_configuration_is_readable_only_by_its_owner(
+    monkeypatch, tmp_path, fake_environment, posix_permissions
+) -> None:
+    """It carries the broker's bearer token, so nobody else on the device reads it."""
+    _install(monkeypatch, _StreamProcess(_fixture_lines()))
+    adapter = AntigravityStreamJsonAdapter()
+
+    await _run(adapter, _context(tmp_path), [])
+
+    workspace = fake_environment.started[-1].kwargs["mounts"][0].host
+    config = workspace / ".agents" / "mcp_config.json"
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert config.parent.stat().st_mode & 0o777 == 0o700
+    await adapter.close()
 
 
 @pytest.mark.asyncio

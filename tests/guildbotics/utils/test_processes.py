@@ -9,16 +9,19 @@ import pytest
 from guildbotics.utils import processes
 
 
-def test_launching_app_name_walks_parents_and_reads_bundle_name(monkeypatch, tmp_path):
+def test_launching_app_name_walks_parents_and_reads_bundle_name(
+    monkeypatch, tmp_path, fake_platform
+):
     bundle = tmp_path / "Visual Studio Code.app"
     contents = bundle / "Contents"
     contents.mkdir(parents=True)
     (contents / "Info.plist").write_bytes(
         plistlib.dumps({"CFBundleDisplayName": "Visual Studio Code"})
     )
-    monkeypatch.setattr(processes.sys, "platform", "darwin")
+    fake_platform(processes, "darwin")
     monkeypatch.setattr(processes.os, "getpid", lambda: 42)
-    rows = {"42": "41 /usr/bin/python", "41": f"1 {contents}/MacOS/Electron"}
+    # The fake `ps` answers as macOS would, in POSIX spelling.
+    rows = {"42": "41 /usr/bin/python", "41": f"1 {contents.as_posix()}/MacOS/Electron"}
     calls = []
 
     def ps(argv, **kwargs):
@@ -34,8 +37,8 @@ def test_launching_app_name_walks_parents_and_reads_bundle_name(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("output", ["", "42 /usr/bin/python", "1 /usr/bin/python"])
-def test_launching_app_name_omits_unavailable_app(monkeypatch, output):
-    monkeypatch.setattr(processes.sys, "platform", "darwin")
+def test_launching_app_name_omits_unavailable_app(monkeypatch, output, fake_platform):
+    fake_platform(processes, "darwin")
     monkeypatch.setattr(processes.os, "getpid", lambda: 42)
     monkeypatch.setattr(
         processes.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=output)
@@ -43,8 +46,8 @@ def test_launching_app_name_omits_unavailable_app(monkeypatch, output):
     assert processes.launching_app_name() == ""
 
 
-def test_launching_app_name_does_not_probe_other_platforms(monkeypatch):
-    monkeypatch.setattr(processes.sys, "platform", "linux")
+def test_launching_app_name_does_not_probe_other_platforms(monkeypatch, fake_platform):
+    fake_platform(processes, "linux")
     monkeypatch.setattr(
         processes.subprocess, "run", lambda *a, **k: pytest.fail("must not run ps")
     )

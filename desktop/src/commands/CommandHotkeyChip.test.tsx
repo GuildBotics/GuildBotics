@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,6 +7,7 @@ import { ApiRequestError, getHotkeys, updateHotkeys } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { CommandHotkeyChip } from "./CommandHotkeyChip";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -27,11 +27,11 @@ const t = i18n.getFixedT("en");
 function renderChip(command: string | null = "greet") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={queryClient}>
         <CommandHotkeyChip command={command} />
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

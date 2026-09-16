@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -8,6 +7,7 @@ import { type NetworkPolicy } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { NetworkPolicyField } from "./NetworkPolicyField";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 const CLOSED_NETWORK_POLICY: NetworkPolicy = {
@@ -27,7 +27,7 @@ function Harness({
 }) {
   const [value, setValue] = useState<NetworkPolicy>(initial);
   return (
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <NetworkPolicyField
         value={value}
         onChange={(next) => {
@@ -36,7 +36,7 @@ function Harness({
         }}
         onValidityChange={onValidityChange}
       />
-    </MantineProvider>
+    </TestMantineProvider>
   );
 }
 

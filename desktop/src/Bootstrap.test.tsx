@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Bootstrap } from "./Bootstrap";
 import { getBootstrapLog, startBackend } from "./api/backend";
 import i18n from "./i18n";
+import { TestMantineProvider } from "./test/TestMantineProvider";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
@@ -24,9 +24,9 @@ const getBootstrapLogMock = vi.mocked(getBootstrapLog);
 
 function renderBootstrap() {
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <Bootstrap />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

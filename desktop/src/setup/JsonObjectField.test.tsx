@@ -1,10 +1,10 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { JsonObjectField } from "./JsonObjectField";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 function Harness({
   initial = {},
@@ -17,7 +17,7 @@ function Harness({
 }) {
   const [value, setValue] = useState<Record<string, unknown>>(initial);
   return (
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <JsonObjectField
         label="Settings"
         errorText="Enter a JSON object."
@@ -28,7 +28,7 @@ function Harness({
         }}
         onValidityChange={onValidityChange}
       />
-    </MantineProvider>
+    </TestMantineProvider>
   );
 }
 

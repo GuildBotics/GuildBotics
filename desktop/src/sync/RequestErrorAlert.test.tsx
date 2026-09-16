@@ -1,15 +1,15 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ApiRequestError } from "../api/client";
 import { RequestErrorAlert } from "./RequestErrorAlert";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 function renderAlert(cause: unknown) {
   return render(
-    <MantineProvider>
+    <TestMantineProvider>
       <RequestErrorAlert cause={cause} title="It failed" />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

@@ -251,10 +251,10 @@ def test_doctor_reports_a_home_the_runtime_cannot_be_placed_in(
 
 
 def test_the_windows_firewall_rule_is_created_once_for_the_fixed_path(
-    monkeypatch, bundled: Path
+    monkeypatch, bundled: Path, fake_platform
 ) -> None:
     monkeypatch.setattr(microsandbox, "is_installed", lambda: True)
-    monkeypatch.setattr(runtime.sys, "platform", "win32")
+    fake_platform(runtime, "win32")
     calls: list[list[str]] = []
     missing = {"rule": True}
 
@@ -316,9 +316,11 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     assert created["workdir"] == "/work/repo"
     volumes = created["volumes"]
     assert list(volumes) == ["/work/repo", "/home/u/Documents", "/work/repo/private"]
+    # The guest keeps the name the spec gave it; the host side is bound by the
+    # device's own resolved spelling of the same directory.
     assert (volumes["/work/repo"].kind, volumes["/work/repo"].bind) == (
         MountKind.BIND,
-        "/work/repo",
+        str(Path("/work/repo").resolve()),
     )
     assert volumes["/work/repo"].readonly is False
     assert volumes["/home/u/Documents"].readonly is True
@@ -344,7 +346,7 @@ async def test_start_ends_the_sandbox_when_ipv6_cannot_be_switched_off(
 
 @pytest.mark.asyncio
 async def test_start_binds_the_host_side_of_a_mount_by_its_resolved_path(
-    sandbox: type[_Sandbox], tmp_path: Path
+    sandbox: type[_Sandbox], tmp_path: Path, symlinks
 ) -> None:
     # macOS spells temporary directories under /var, a symlink to
     # /private/var, and the runtime cannot bind through the link. The guest

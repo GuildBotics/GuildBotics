@@ -1,4 +1,4 @@
-import { MantineProvider, createTheme } from "@mantine/core";
+import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TFunction } from "i18next";
@@ -47,6 +47,7 @@ import type { CommandOption, RuntimeEvent, RuntimeUnitStatus } from "./api/clien
 import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
+import { TestMantineProvider } from "./test/TestMantineProvider";
 
 const openShell = vi.fn();
 
@@ -949,13 +950,13 @@ function renderApp() {
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <MantineProvider theme={theme} env="test">
+    <TestMantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
         <HashRouter>
           <App />
         </HashRouter>
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

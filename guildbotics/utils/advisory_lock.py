@@ -39,12 +39,20 @@ def open_lock_file(path: Path) -> IO[str]:
 
 
 def lock_file_nonblocking(handle: IO[str]) -> None:
+    """Take the advisory lock on ``handle`` without waiting.
+
+    Acquiring writes nothing. Windows locks the byte range rather than the
+    file, and it accepts a range past the end, so an empty lock file locks the
+    same way a populated one does. Creating that byte here instead would make
+    two holders reaching a new lock file race to write it, and the loser would
+    be refused -- once on the failed flush, and again when the buffer it still
+    held reached the close.
+    """
     if not _WINDOWS:
         _posix_locking.flock(
             handle.fileno(), _posix_locking.LOCK_EX | _posix_locking.LOCK_NB
         )
         return
-    _ensure_lock_byte(handle)
     handle.seek(0)
     try:
         _windows_locking.locking(handle.fileno(), _windows_locking.LK_NBLCK, 1)
@@ -198,10 +206,3 @@ def write_lock_data(handle: IO[str], value: str) -> None:
     handle.truncate()
     handle.flush()
     os.fsync(handle.fileno())
-
-
-def _ensure_lock_byte(handle: IO[str]) -> None:
-    handle.seek(0, os.SEEK_END)
-    if handle.tell() == 0:
-        handle.write(" ")
-        handle.flush()

@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +12,7 @@ import { openMainWindow } from "../hotkeys/hotkeyRuntime";
 import i18n from "../i18n";
 import "../i18n";
 import { appendCommandInputPaths, CommandInput, grantSettingsRoute } from "./CommandInput";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const tauriDrag = vi.hoisted(() => ({
   handler: null as ((event: unknown) => void) | null,
@@ -61,9 +61,9 @@ function ControlledInput({ initial = "", cwd }: { initial?: string; cwd?: string
 
 function renderInput(initial = "", cwd?: string) {
   return render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <ControlledInput initial={initial} cwd={cwd} />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
 }
 

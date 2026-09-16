@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -15,6 +14,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import { SecretsCard } from "./SecretsCard";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
@@ -64,11 +64,11 @@ function renderCard() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <MantineProvider>
+      <TestMantineProvider>
         <MemoryRouter>
           <SecretsCard />
         </MemoryRouter>
-      </MantineProvider>
+      </TestMantineProvider>
     </QueryClientProvider>,
   );
   return client;

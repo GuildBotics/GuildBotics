@@ -26,8 +26,10 @@ def command_module() -> ModuleType:
     return module
 
 
-def test_main_uses_first_macos_ui_language(command_module, monkeypatch) -> None:
-    monkeypatch.setattr(command_module.sys, "platform", "darwin")
+def test_main_uses_first_macos_ui_language(
+    command_module, monkeypatch, fake_platform
+) -> None:
+    fake_platform(command_module, "darwin")
     completed = subprocess.CompletedProcess(
         args=[], returncode=0, stdout='(\n    "fr-FR",\n    "en-US"\n)\n'
     )
@@ -44,7 +46,9 @@ def test_main_uses_first_macos_ui_language(command_module, monkeypatch) -> None:
     }
 
 
-def test_main_uses_windows_ui_language(command_module, monkeypatch) -> None:
+def test_main_uses_windows_ui_language(
+    command_module, monkeypatch, fake_platform
+) -> None:
     class GetUserDefaultUILanguage:
         restype = None
 
@@ -52,7 +56,7 @@ def test_main_uses_windows_ui_language(command_module, monkeypatch) -> None:
             return 0x0409
 
     kernel32 = SimpleNamespace(GetUserDefaultUILanguage=GetUserDefaultUILanguage())
-    monkeypatch.setattr(command_module.sys, "platform", "win32")
+    fake_platform(command_module, "win32")
     monkeypatch.setattr(
         command_module.ctypes,
         "windll",
@@ -69,8 +73,10 @@ def test_main_uses_windows_ui_language(command_module, monkeypatch) -> None:
     }
 
 
-def test_main_uses_posix_ui_language_environment(command_module, monkeypatch) -> None:
-    monkeypatch.setattr(command_module.sys, "platform", "linux")
+def test_main_uses_posix_ui_language_environment(
+    command_module, monkeypatch, fake_platform
+) -> None:
+    fake_platform(command_module, "linux")
     monkeypatch.setenv("LANGUAGE", "ja_JP:en_US")
 
     result = command_module.main(SimpleNamespace(pipe="Hello"))
@@ -83,9 +89,9 @@ def test_main_uses_posix_ui_language_environment(command_module, monkeypatch) ->
 
 
 def test_main_fails_when_ui_language_is_unavailable(
-    command_module, monkeypatch
+    command_module, monkeypatch, fake_platform
 ) -> None:
-    monkeypatch.setattr(command_module.sys, "platform", "linux")
+    fake_platform(command_module, "linux")
     for name in command_module._POSIX_LANGUAGE_ENV:
         monkeypatch.delenv(name, raising=False)
 

@@ -354,7 +354,7 @@ def test_a_path_outside_the_config_directory_is_refused(
 
 
 def test_a_symlink_out_of_the_config_directory_is_refused(
-    repository: ConfigRepository, port: RecordingPort, tmp_path: Path
+    repository: ConfigRepository, port: RecordingPort, tmp_path: Path, symlinks
 ) -> None:
     config_dir = tmp_path / ".guildbotics/config"
     config_dir.mkdir(parents=True, exist_ok=True)

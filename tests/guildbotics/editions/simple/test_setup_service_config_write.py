@@ -118,7 +118,7 @@ def test_write_project_file_set_is_location_independent(
         assert expected.exists()
     # The cli_agent config bundle is copied alongside the mappings.
     cli_agent_files = {
-        path for path in created_paths if "intelligences/cli_agents/" in str(path)
+        path for path in created_paths if "intelligences/cli_agents/" in path.as_posix()
     }
     assert cli_agent_files
     for path in cli_agent_files:

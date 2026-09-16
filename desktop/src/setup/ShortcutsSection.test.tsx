@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,6 +7,7 @@ import { getHotkeys, updateHotkeys } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { ShortcutsSection } from "./ShortcutsSection";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -25,11 +25,11 @@ const t = i18n.getFixedT("en");
 function renderSection() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <QueryClientProvider client={queryClient}>
         <ShortcutsSection />
       </QueryClientProvider>
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return screen.getByRole("textbox", { name: t("hotkey.label") });
 }

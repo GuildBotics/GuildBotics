@@ -123,13 +123,19 @@ def _isolate_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point cwd / HOME at ``tmp_path`` so command discovery is deterministic."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
     return tmp_path / ".guildbotics/config"
 
 
 def _write(path: Path, content: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    # Byte-for-byte: authoring reads the file as bytes, so a newline the
+    # platform translated here would come back as a difference.
+    # ``Path.open`` rather than ``write_text``: the latter only takes
+    # ``newline`` from Python 3.13, and this repository supports 3.12.
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(content)
     return path
 
 

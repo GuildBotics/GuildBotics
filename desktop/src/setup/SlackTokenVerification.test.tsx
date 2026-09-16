@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +6,7 @@ import { verifySlackTokens, type SlackTokenVerifyResponse } from "../api/client"
 import i18n from "../i18n";
 import "../i18n";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -68,19 +68,19 @@ function appTokenLine(overrides: Partial<SlackTokenVerifyResponse> = {}): string
 
 function renderPanel(botToken = "xoxb-1", appToken = "xapp-1", personId = "alice") {
   const { rerender } = render(
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <SlackTokenVerificationPanel botToken={botToken} appToken={appToken} personId={personId} />
-    </MantineProvider>,
+    </TestMantineProvider>,
   );
   return (nextBotToken: string, nextAppToken: string) =>
     rerender(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <SlackTokenVerificationPanel
           botToken={nextBotToken}
           appToken={nextAppToken}
           personId={personId}
         />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 }
 
@@ -303,14 +303,14 @@ describe("SlackTokenVerificationPanel", () => {
   it("sends the channels currently in the form", async () => {
     const user = userEvent.setup();
     render(
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <SlackTokenVerificationPanel
           botToken="xoxb-1"
           appToken="xapp-1"
           personId="alice"
           channels={["general", "random"]}
         />
-      </MantineProvider>,
+      </TestMantineProvider>,
     );
 
     await user.click(verifyButton());

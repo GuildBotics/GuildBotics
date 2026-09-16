@@ -35,7 +35,7 @@ import sys
 import tomllib
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import NamedTuple
 
@@ -45,8 +45,10 @@ MARKER_PREFIX = "<!-- gtk3-migration-digest"
 ISSUE_TITLE = "glib 0.18 系固定を解消するため Tauri の GTK3 脱却を追跡する"
 WORKFLOW_PATH = ".github/workflows/gtk3-migration-digest.yml"
 
-MANIFEST = Path("desktop/src-tauri/Cargo.toml")
-LOCKFILE = Path("desktop/src-tauri/Cargo.lock")
+# Repository paths, which the issue body quotes as the repository writes
+# them rather than as the machine running this happens to.
+MANIFEST = PurePosixPath("desktop/src-tauri/Cargo.toml")
+LOCKFILE = PurePosixPath("desktop/src-tauri/Cargo.lock")
 WATCHED_CRATE = "glib"
 ADVISORY = "GHSA-wrw7-89jp-8q8g"
 ADVISORY_URL = "https://github.com/advisories/GHSA-wrw7-89jp-8q8g"
@@ -164,8 +166,10 @@ def declared_dependencies(manifest: str) -> list[str]:
 def probe(name: str, workdir: Path) -> Probe:
     """Resolve one dependency at its newest published version and read back glib."""
     (workdir / "src").mkdir(parents=True, exist_ok=True)
-    (workdir / "src" / "main.rs").write_text("fn main() {}\n")
-    (workdir / "Cargo.toml").write_text(PROBE_MANIFEST.format(name=name))
+    (workdir / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (workdir / "Cargo.toml").write_text(
+        PROBE_MANIFEST.format(name=name), encoding="utf-8"
+    )
     subprocess.run(
         ["cargo", "generate-lockfile"],
         cwd=workdir,
@@ -173,7 +177,7 @@ def probe(name: str, workdir: Path) -> Probe:
         text=True,
         check=True,
     )
-    lock = (workdir / "Cargo.lock").read_text()
+    lock = (workdir / "Cargo.lock").read_text(encoding="utf-8")
     version = lowest_version(lock, name)
     assert version is not None, f"{name} is missing from its own lockfile"
     return Probe(name, version, lowest_version(lock, WATCHED_CRATE))
@@ -181,8 +185,10 @@ def probe(name: str, workdir: Path) -> Probe:
 
 def collect(repo_root: Path) -> Status:
     """Read the committed glib version and probe every declared dependency."""
-    current = lowest_version((repo_root / LOCKFILE).read_text(), WATCHED_CRATE)
-    names = declared_dependencies((repo_root / MANIFEST).read_text())
+    current = lowest_version(
+        (repo_root / LOCKFILE).read_text(encoding="utf-8"), WATCHED_CRATE
+    )
+    names = declared_dependencies((repo_root / MANIFEST).read_text(encoding="utf-8"))
     with TemporaryDirectory() as workdir:
         probes = tuple(probe(name, Path(workdir)) for name in names)
     return Status(current, probes)

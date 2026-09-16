@@ -37,11 +37,33 @@ def test_save_command_input_file_uses_private_random_path(tmp_path: Path) -> Non
     saved = save_command_input_file(directory, _upload(b"png-data"))
 
     assert saved.parent == directory
-    assert directory.stat().st_mode & 0o777 == 0o700
     assert saved.suffix == ".png"
     assert saved.read_bytes() == b"png-data"
-    assert saved.stat().st_mode & 0o777 == 0o600
     assert not list(saved.parent.glob(".*.upload"))
+
+
+def test_command_input_files_are_readable_only_by_their_owner(
+    tmp_path: Path, posix_permissions
+) -> None:
+    """The session directory and everything put in it stay private."""
+    directory = tmp_path / "session"
+    directory.mkdir(mode=0o755)
+    source = tmp_path / "report.docx"
+    source.write_bytes(b"doc")
+
+    saved = save_command_input_file(directory, _upload(b"png-data"))
+    copied = copy_command_input_file(directory, source)
+
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert saved.stat().st_mode & 0o777 == 0o600
+    assert copied.stat().st_mode & 0o777 == 0o600
+
+    store = CommandInputFileStore(root=tmp_path)
+    store.start()
+    try:
+        assert store.save(_upload(b"png-data")).parent.stat().st_mode & 0o777 == 0o700
+    finally:
+        store.close()
 
 
 def test_save_command_input_file_does_not_recreate_missing_session(
@@ -89,7 +111,6 @@ def test_copy_command_input_file_keeps_the_name_behind_a_random_prefix(
     assert copied.parent == directory
     assert copied.name.endswith("-report.docx")
     assert copied.read_bytes() == b"doc"
-    assert copied.stat().st_mode & 0o777 == 0o600
     assert again != copied
     assert source.read_bytes() == b"doc"
 
@@ -143,7 +164,6 @@ def test_store_uses_a_session_directory_and_removes_it_on_close(tmp_path: Path) 
     session_directory = saved.parent
 
     assert session_directory.parent == tmp_path
-    assert session_directory.stat().st_mode & 0o777 == 0o700
     assert saved.exists()
     assert copied.parent == session_directory
 
@@ -195,7 +215,7 @@ def test_the_working_directory_expands_the_home_and_refuses_relative_paths(
     with pytest.raises(AppApiError) as refused:
         command_cwd(Path("gb-test/clone"))
     assert refused.value.code == "command_cwd_not_absolute"
-    assert "gb-test/clone" in refused.value.message
+    assert str(Path("gb-test/clone")) in refused.value.message
 
 
 def test_describe_command_input_paths_answers_as_the_turn_would(

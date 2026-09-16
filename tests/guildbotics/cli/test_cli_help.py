@@ -62,7 +62,9 @@ def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> N
     assert "[default: 30]" in result.output
 
 
-def test_windows_cli_configures_standard_streams_as_utf8(monkeypatch) -> None:
+def test_windows_cli_configures_standard_streams_as_utf8(
+    monkeypatch, fake_platform
+) -> None:
     class ReconfigurableStream:
         def __init__(self) -> None:
             self.encodings: list[str] = []
@@ -72,9 +74,9 @@ def test_windows_cli_configures_standard_streams_as_utf8(monkeypatch) -> None:
 
     stdout = ReconfigurableStream()
     stderr = ReconfigurableStream()
-    monkeypatch.setattr(cli_module.sys, "platform", "win32")
-    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
-    monkeypatch.setattr(cli_module.sys, "stderr", stderr)
+    view = fake_platform(cli_module, "win32")
+    monkeypatch.setattr(view, "stdout", stdout)
+    monkeypatch.setattr(view, "stderr", stderr)
 
     cli_module._configure_windows_standard_streams()
 
@@ -82,7 +84,9 @@ def test_windows_cli_configures_standard_streams_as_utf8(monkeypatch) -> None:
     assert stderr.encodings == ["utf-8"]
 
 
-def test_non_windows_cli_preserves_standard_stream_encoding(monkeypatch) -> None:
+def test_non_windows_cli_preserves_standard_stream_encoding(
+    monkeypatch, fake_platform
+) -> None:
     class ReconfigurableStream:
         def __init__(self) -> None:
             self.called = False
@@ -92,9 +96,9 @@ def test_non_windows_cli_preserves_standard_stream_encoding(monkeypatch) -> None
 
     stdout = ReconfigurableStream()
     stderr = ReconfigurableStream()
-    monkeypatch.setattr(cli_module.sys, "platform", "linux")
-    monkeypatch.setattr(cli_module.sys, "stdout", stdout)
-    monkeypatch.setattr(cli_module.sys, "stderr", stderr)
+    view = fake_platform(cli_module, "linux")
+    monkeypatch.setattr(view, "stdout", stdout)
+    monkeypatch.setattr(view, "stderr", stderr)
 
     cli_module._configure_windows_standard_streams()
 

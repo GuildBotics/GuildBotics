@@ -131,7 +131,7 @@ def test_windows_lock_backend_uses_one_byte_range(monkeypatch, tmp_path) -> None
         FakeWindowsLocking.LK_UNLCK,
     ]
     assert all(length == 1 for _fd, _mode, length in calls)
-    assert path.stat().st_size == 1
+    assert path.stat().st_size == 0
 
 
 def test_windows_lock_conflict_becomes_blocking_error(monkeypatch, tmp_path) -> None:

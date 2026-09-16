@@ -1,4 +1,3 @@
-import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -8,6 +7,7 @@ import type { EffortFieldSpec, EffortOverlay } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
+import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
 
@@ -47,7 +47,7 @@ function Harness({
 }) {
   const [value, setValue] = useState<EffortOverlay>(initial);
   return (
-    <MantineProvider env="test">
+    <TestMantineProvider>
       <EffortSettingsField
         value={value}
         inherited={inherited}
@@ -58,7 +58,7 @@ function Harness({
           onChange?.(next);
         }}
       />
-    </MantineProvider>
+    </TestMantineProvider>
   );
 }
 
@@ -228,7 +228,7 @@ describe("ToolSettingsField", () => {
   function BaselineHarness({ onChange }: { onChange: (value: Record<string, unknown>) => void }) {
     const [value, setValue] = useState<Record<string, unknown>>({});
     return (
-      <MantineProvider env="test">
+      <TestMantineProvider>
         <ToolSettingsField
           value={value}
           fields={MODEL_FIELD}
@@ -237,7 +237,7 @@ describe("ToolSettingsField", () => {
             onChange(next);
           }}
         />
-      </MantineProvider>
+      </TestMantineProvider>
     );
   }
 

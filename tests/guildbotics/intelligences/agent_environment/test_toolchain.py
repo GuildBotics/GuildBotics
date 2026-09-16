@@ -178,7 +178,7 @@ def test_host_without_an_ipv4_resolver_is_an_error_naming_the_fix(
 
 
 def test_resolv_conf_yields_the_ipv4_resolvers_in_order_without_repeats(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_platform
 ) -> None:
     """The gateway speaks IPv4 only, so an IPv6 upstream -- which is exactly
     what made the gateway's own default fail Codex -- is left out."""
@@ -190,7 +190,7 @@ def test_resolv_conf_yields_the_ipv4_resolvers_in_order_without_repeats(
         "nameserver\noptions ndots:1\n"
     )
     monkeypatch.setattr(toolchain, "_RESOLV_CONF", conf)
-    monkeypatch.setattr(toolchain.sys, "platform", "darwin")
+    fake_platform(toolchain, "darwin")
 
     assert device_nameservers() == ("192.168.3.1", "1.1.1.1")
 
@@ -200,6 +200,7 @@ def test_resolv_conf_yields_the_ipv4_resolvers_in_order_without_repeats(
 
 def test_windows_asks_powershell_for_the_ipv4_servers(
     monkeypatch: pytest.MonkeyPatch,
+    fake_platform,
 ) -> None:
     calls: list[list[str]] = []
 
@@ -209,7 +210,7 @@ def test_windows_asks_powershell_for_the_ipv4_servers(
             "Done", (), {"stdout": "10.0.0.53\r\n10.0.0.54\r\n", "returncode": 0}
         )()
 
-    monkeypatch.setattr(toolchain.sys, "platform", "win32")
+    fake_platform(toolchain, "win32")
     monkeypatch.setattr(toolchain.subprocess, "run", run)
 
     assert device_nameservers() == ("10.0.0.53", "10.0.0.54")

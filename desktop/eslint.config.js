@@ -50,6 +50,29 @@ export default tseslint.config(
     },
   },
   {
+    // Component tests render under `src/test/TestMantineProvider`, which is the
+    // one place that decides what Mantine does under test -- above all, that
+    // transitions carry no timers. A test that reaches for Mantine's own
+    // provider brings those timers back, and the suite then fails in whichever
+    // file happens to be running when one of them fires.
+    files: ["src/**/*.test.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@mantine/core",
+              importNames: ["MantineProvider"],
+              message:
+                "Render component tests under TestMantineProvider from src/test/TestMantineProvider.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The Playwright E2E harness runs in Node (launcher script + specs that touch
     // the filesystem), so give those files Node globals instead of browser ones.
     files: ["e2e/**/*.{ts,mjs}", "playwright.config.ts"],

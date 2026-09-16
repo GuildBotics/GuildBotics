@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 import pytest
 import yaml
@@ -31,6 +32,11 @@ from guildbotics.intelligences.agent_environment.contract import (
 from guildbotics.utils.i18n_tool import t
 
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
+
+
+def _native(masked: str) -> str:
+    """A masked path as the device running this test spells it."""
+    return masked.replace("/", os.sep)
 
 
 def test_an_absent_network_block_is_closed() -> None:
@@ -225,7 +231,7 @@ def test_a_missing_document_directory_is_created_for_a_turn_and_reported_for_a_p
 
 
 def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
-    tmp_path: Path,
+    tmp_path: Path, symlinks
 ) -> None:
     home = _home(tmp_path)
     (home / "notes").write_text("x", encoding="utf-8")
@@ -399,19 +405,23 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
     )
 
     assert policy["filesystem"] == {
-        "working_directory": "<workspace>/.guildbotics/local/clones/aiko",
+        "working_directory": _native("<workspace>/.guildbotics/local/clones/aiko"),
         "documents": [
             {
-                "path": "$HOME/Documents/GuildBotics",
+                "path": _native("$HOME/Documents/GuildBotics"),
                 "access": "read_write",
                 "present": True,
             },
-            {"path": "$HOME/Documents/shared", "access": "read", "present": True},
+            {
+                "path": _native("$HOME/Documents/shared"),
+                "access": "read",
+                "present": True,
+            },
         ],
         "paths": [],
         "denied": [
-            {"path": "$HOME/.ssh", "builtin": True},
-            {"path": "$HOME/.local/share/x", "builtin": False},
+            {"path": _native("$HOME/.ssh"), "builtin": True},
+            {"path": _native("$HOME/.local/share/x"), "builtin": False},
         ],
     }
     assert policy["network"] == _CLOSED
@@ -434,12 +444,42 @@ def test_grant_spelling_is_how_the_grant_file_names_a_path() -> None:
     assert grant_spelling(posix, posix) == "/Users/me"
 
 
-def test_redaction_leaves_unrelated_paths_alone(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    assert redact_path(Path("/opt/homebrew/bin"), home) == "/opt/homebrew/bin"
-    assert redact_path(home, home) == "$HOME"
+@pytest.mark.parametrize(
+    ("pure", "home", "outside", "sibling"),
+    [
+        (
+            PureWindowsPath,
+            "C:/Users/me",
+            "C:/Program Files/Git",
+            "C:/Users/me2/x",
+        ),
+        (PurePosixPath, "/Users/me", "/opt/homebrew/bin", "/Users/me2/x"),
+    ],
+    ids=["windows", "posix"],
+)
+def test_redaction_leaves_unrelated_paths_alone(
+    pure: type[PurePath], home: str, outside: str, sibling: str
+) -> None:
+    # The masked path keeps the separators of the device it names, so both
+    # spellings are checked wherever this runs.
+    assert redact_path(pure(outside), pure(home)) == str(pure(outside))
+    assert redact_path(pure(home), pure(home)) == "$HOME"
     # A sibling whose name merely starts with the home path is not inside it.
-    assert redact_path(Path(str(home) + "2/x"), home) == str(home) + "2/x"
+    assert redact_path(pure(sibling), pure(home)) == str(pure(sibling))
+
+
+def test_redaction_spells_the_masked_path_as_its_own_device_does() -> None:
+    assert (
+        redact_path(
+            PureWindowsPath("C:/Users/me/AppData/Local/x"),
+            PureWindowsPath("C:/Users/me"),
+        )
+        == "$HOME\\AppData\\Local\\x"
+    )
+    assert (
+        redact_path(PurePosixPath("/Users/me/.local/x"), PurePosixPath("/Users/me"))
+        == "$HOME/.local/x"
+    )
 
 
 def test_the_workspace_state_directory_is_a_builtin_deny(tmp_path: Path) -> None:
