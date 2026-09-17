@@ -272,16 +272,16 @@ def _minutes_between(start_iso: str, end_iso: str) -> int | None:
 
 
 #: One usage line of the ``/usage`` panel, e.g.
-#: ``Current session: 24% used · resets Aug 8 at 11:10am (Asia/Tokyo)``.
+#: ``Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)``.
 _CLAUDE_USAGE_LINE = re.compile(
     r"^(?P<name>[^:\n]+):\s+(?P<percent>\d+(?:\.\d+)?)% used"
     r"(?:\s+·\s+resets\s+(?P<reset>[^\n]+?))?\s*$",
     re.MULTILINE,
 )
 _CLAUDE_WEEK_MODEL = re.compile(r"^Current week \((?P<model>[^)]+)\)$")
-#: ``Aug 8 at 11:10am (Asia/Tokyo)`` / ``Aug 8 at 10am (Asia/Tokyo)``.
+#: ``Aug 8, 11:10am (Asia/Tokyo)`` / ``Aug 8, 10am (Asia/Tokyo)``.
 _CLAUDE_RESET = re.compile(
-    r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2})\s+at\s+"
+    r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2}),\s+"
     r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<ampm>am|pm)"
     r"(?:\s+\((?P<tz>[^)]+)\))?$"
 )
@@ -296,9 +296,10 @@ def parse_claude_usage(
 
     The panel is text, so parsing is tolerant: only lines shaped like
     ``<name>: <n>% used[ · resets <time>]`` become windows, and a reset time
-    that cannot be interpreted is dropped rather than guessed.  The session
-    and all-models weekly budgets are the summary meters; per-model weekly
-    budgets (and any unrecognized budget line) become ``detail`` windows.
+    that cannot be interpreted is dropped rather than guessed.  The session,
+    all-models weekly, and per-model weekly budgets are the meters; any
+    unrecognized budget line has no known period and becomes a ``detail``
+    window.
     """
     text = result if isinstance(result, str) else ""
     windows: list[CliAgentUsageWindow] = []
@@ -334,7 +335,7 @@ def parse_claude_usage(
                 resets_at=resets_at,
                 window_minutes=_CLAUDE_WEEK_MINUTES if model else None,
                 label=model.group("model") if model else name,
-                detail=True,
+                detail=model is None,
             )
         )
     return CliAgentUsageSnapshot(

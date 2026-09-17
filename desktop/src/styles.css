@@ -1580,14 +1580,30 @@ pre {
   grid-column: 2;
   height: 4px;
   min-width: 52px;
-  overflow: hidden;
+  position: relative;
   width: 52px;
 }
 
 .activity-member-usage-fill {
   background: var(--color-brand);
+  border-radius: 2px;
   display: block;
   height: 100%;
+}
+
+/* Elapsed share of the reset period. It reads by position against the fill's
+   end, not by color: taller than the track, with a cell-colored halo so it
+   stays visible over both the fill and the empty track. The clamp keeps the
+   2px line inside the track at 0% and 100%. */
+.activity-member-usage-elapsed {
+  background: var(--color-text-main);
+  bottom: -3px;
+  box-shadow: 0 0 0 1px var(--color-bg-panel-subtle);
+  left: clamp(1px, var(--usage-elapsed), calc(100% - 1px));
+  position: absolute;
+  top: -3px;
+  transform: translateX(-50%);
+  width: 2px;
 }
 
 .activity-member-usage-warning .activity-member-usage-fill {

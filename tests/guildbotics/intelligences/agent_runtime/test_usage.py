@@ -314,14 +314,15 @@ def test_parse_grok_billing_tolerates_empty_and_malformed_input() -> None:
         assert not snapshot.limit_reached
 
 
-# Verbatim shape of the `claude -p /usage` result text on 2.1.224; the trailing
+# Verbatim shape of the `claude -p /usage` result text on 2.1.263; the trailing
 # contribution section must not produce windows.
 _CLAUDE_USAGE_TEXT = """\
 You are currently using your subscription to power your Claude Code usage
 
-Current session: 24% used · resets Aug 8 at 11:10am (Asia/Tokyo)
-Current week (all models): 56% used · resets Aug 8 at 10am (Asia/Tokyo)
-Current week (Fable): 59% used · resets Aug 8 at 10am (Asia/Tokyo)
+Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)
+Current week (all models): 56% used · resets Aug 8, 10am (Asia/Tokyo)
+Current week (Fable): 59% used · resets Aug 8, 10am (Asia/Tokyo)
+Extra budget: 5% used
 
 What's contributing to your limits usage?
 Last 24h · 313 requests · 7 sessions
@@ -342,20 +343,24 @@ def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
     ] == [
         ("session", 24.0, "", False),
         ("week", 56.0, "", False),
-        ("current_week_fable", 59.0, "Fable", True),
+        ("current_week_fable", 59.0, "Fable", False),
+        ("extra_budget", 5.0, "Extra budget", True),
     ]
-    session, week, fable = snapshot.windows
+    session, week, fable, extra = snapshot.windows
     assert session.resets_at == "2026-08-08T11:10:00+09:00"
     assert session.window_minutes == 300
     assert week.resets_at == "2026-08-08T10:00:00+09:00"
     assert week.window_minutes == 10_080
+    assert fable.resets_at == "2026-08-08T10:00:00+09:00"
     assert fable.window_minutes == 10_080
+    # A budget line whose period is unknown stays out of the meters.
+    assert (extra.resets_at, extra.window_minutes) == ("", None)
     assert snapshot.checked_at
 
 
 def test_parse_claude_usage_marks_limit_at_full_window() -> None:
     snapshot = parse_claude_usage(
-        "Current session: 100% used · resets Aug 8 at 11:10am (Asia/Tokyo)",
+        "Current session: 100% used · resets Aug 8, 11:10am (Asia/Tokyo)",
         now=_CLAUDE_NOW,
     )
     assert snapshot.limit_reached
@@ -364,7 +369,7 @@ def test_parse_claude_usage_marks_limit_at_full_window() -> None:
 def test_parse_claude_usage_drops_unusable_reset_times() -> None:
     # A missing timezone or an unknown one makes the instant ambiguous, and a
     # malformed phrase must not survive as a bogus timestamp.
-    for reset in ("Aug 8 at 11:10am", "Aug 8 at 11:10am (Mars/Olympus)", "tomorrow"):
+    for reset in ("Aug 8, 11:10am", "Aug 8, 11:10am (Mars/Olympus)", "tomorrow"):
         snapshot = parse_claude_usage(
             f"Current session: 10% used · resets {reset}", now=_CLAUDE_NOW
         )
@@ -374,7 +379,7 @@ def test_parse_claude_usage_drops_unusable_reset_times() -> None:
 
 def test_parse_claude_usage_rolls_reset_into_next_year() -> None:
     snapshot = parse_claude_usage(
-        "Current week (all models): 12% used · resets Jan 2 at 12am (UTC)",
+        "Current week (all models): 12% used · resets Jan 2, 12am (UTC)",
         now=datetime(2026, 12, 30, 12, 0, 0, tzinfo=UTC),
     )
     assert snapshot.windows[0].resets_at == "2027-01-02T00:00:00+00:00"
@@ -637,7 +642,12 @@ async def test_read_claude_usage_probes_print_mode(
 
     assert snapshot.agent == "claude"
     assert snapshot.windows[0].used_percent == 24.0
-    assert [window.detail for window in snapshot.windows] == [False, False, True]
+    assert [window.detail for window in snapshot.windows] == [
+        False,
+        False,
+        False,
+        True,
+    ]
     assert fake_environment.started[-1].closed
 
 

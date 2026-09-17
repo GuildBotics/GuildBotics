@@ -18,6 +18,7 @@ import {
   orderedActivityLinks,
   stackedEventTops,
   weekRowMinHeight,
+  usageWindowElapsedPercent,
 } from "./ActivityHistory";
 import {
   getActivityHistory,
@@ -692,6 +693,7 @@ describe("ActivityHistoryPage", () => {
       windows: (Pick<CliAgentUsageWindow, "window" | "used_percent"> &
         Partial<Omit<CliAgentUsageWindow, "window" | "used_percent">>)[];
       limit_reached: boolean;
+      checked_at?: string;
     },
   ) {
     vi.mocked(getIntelligenceConfig).mockResolvedValue({
@@ -709,7 +711,7 @@ describe("ActivityHistoryPage", () => {
       usages: [
         {
           agent,
-          checked_at: "2026-07-01T11:59:00Z",
+          checked_at: usage.checked_at ?? "2026-07-01T11:59:00Z",
           limit_reached: usage.limit_reached,
           windows: usage.windows.map((window) => ({
             resets_at: "",
@@ -876,8 +878,9 @@ describe("ActivityHistoryPage", () => {
   });
 
   it("keeps detail windows out of the meters and shows them on hover", async () => {
-    // Claude reports per-model weekly budgets as detail windows: the member
-    // cell shows only the summary meters, and hovering reveals every window.
+    // Claude's per-model weekly budget is a meter of its own; only a window
+    // the provider flags as detail stays out of the member cell, and hovering
+    // reveals every window.
     mockMemberUsage("claude", {
       windows: [
         {
@@ -898,6 +901,13 @@ describe("ActivityHistoryPage", () => {
           resets_at: "2026-07-04T09:00:00Z",
           window_minutes: 10080,
           label: "Fable",
+        },
+        {
+          window: "extra_budget",
+          used_percent: 70,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+          label: "Extra budget",
           detail: true,
         },
       ],
@@ -907,15 +917,157 @@ describe("ActivityHistoryPage", () => {
 
     expect(await screen.findByRole("meter", { name: "5h 24%" })).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "1w 56%" })).toBeInTheDocument();
-    expect(screen.queryByRole("meter", { name: "1w Fable 59%" })).toBe(null);
-    expect(screen.queryByText("1w Fable")).toBe(null);
+    expect(elapsedMarker(screen.getByRole("meter", { name: "1w Fable 59%" }))).toBe("59%");
+    expect(screen.queryByRole("meter", { name: "1w Extra budget 70%" })).toBe(null);
+    expect(screen.queryByText("1w Extra budget")).toBe(null);
 
     const user = userEvent.setup();
     await user.hover(screen.getByRole("meter", { name: "5h 24%" }));
-    expect(await screen.findByText("1w Fable")).toBeInTheDocument();
+    expect(await screen.findByText("1w Extra budget")).toBeInTheDocument();
+    // The detail window has no meter, so its pace lives in the hover detail.
     expect(
-      screen.getByText("1w Fable").closest(".activity-member-usage-detail-row"),
-    ).toHaveTextContent("59%");
+      screen.getByText("1w Extra budget").closest(".activity-member-usage-detail-row"),
+    ).toHaveTextContent(usageDetail(70, 59, "2026-07-04T09:00:00Z"));
+  });
+
+  const usageDetail = (used: number, elapsed: number, resetsAt: string) => {
+    const headroom = elapsed - used;
+    return [
+      i18n.t("activity.usage.used", { percent: used }),
+      i18n.t("activity.usage.elapsed", { percent: elapsed }),
+      headroom === 0
+        ? i18n.t("activity.usage.onPace")
+        : i18n.t(headroom > 0 ? "activity.usage.headroom" : "activity.usage.over", {
+            points: Math.abs(headroom),
+          }),
+      i18n.t("activity.usage.resets", { reset: localeShortDateTime(resetsAt) }),
+    ].join(" · ");
+  };
+
+  // The marker's position on the track, or null when the bar has no marker.
+  const elapsedMarker = (meter: HTMLElement) =>
+    meter
+      .querySelector<HTMLElement>(".activity-member-usage-elapsed")
+      ?.style.getPropertyValue("--usage-elapsed") ?? null;
+
+  it("marks the elapsed share of each reset period on its usage bar", async () => {
+    // checked_at 11:59Z: 179 of the 5h window's 300 minutes (60%) and 5939 of
+    // the week's 10080 minutes (59%) have elapsed.
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 42,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+        {
+          window: "secondary",
+          used_percent: 78,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    const ahead = await screen.findByRole("meter", { name: "5h 42%" });
+    expect(elapsedMarker(ahead)).toBe("60%");
+    expect(ahead).toHaveAccessibleDescription(
+      `5h · ${usageDetail(42, 60, "2026-07-01T14:00:00Z")}`,
+    );
+    expect(ahead).toHaveAccessibleDescription(
+      expect.stringContaining(i18n.t("activity.usage.headroom", { points: 18 })),
+    );
+
+    const behind = screen.getByRole("meter", { name: "1w 78%" });
+    expect(elapsedMarker(behind)).toBe("59%");
+    expect(behind).toHaveAccessibleDescription(
+      expect.stringContaining(i18n.t("activity.usage.over", { points: 19 })),
+    );
+    expect(screen.getByText(/78%/)).toHaveAttribute(
+      "title",
+      `1w · ${usageDetail(78, 59, "2026-07-04T09:00:00Z")}`,
+    );
+  });
+
+  it("shows the pace detail when the meter receives keyboard focus", async () => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: 42,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+      ],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    const meter = await screen.findByRole("meter", { name: "5h 42%" });
+    const user = userEvent.setup();
+    while (document.activeElement !== meter) {
+      await user.tab();
+    }
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      `5h · ${usageDetail(42, 60, "2026-07-01T14:00:00Z")}`,
+    );
+  });
+
+  it.each([
+    ["an untouched budget", 0, "2026-07-01T11:59:00Z", 60],
+    ["an exhausted budget", 100, "2026-07-01T11:59:00Z", 60],
+    ["usage exactly on pace", 60, "2026-07-01T11:59:00Z", 60],
+    ["an observation before the period starts", 10, "2026-07-01T08:00:00Z", 0],
+    ["an observation after the period ends", 10, "2026-07-01T15:00:00Z", 100],
+  ])("keeps the marker and wording within 0-100%% for %s", async (_, used, checkedAt, elapsed) => {
+    mockCodexMember({
+      windows: [
+        {
+          window: "primary",
+          used_percent: used,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+        },
+      ],
+      limit_reached: used >= 100,
+      checked_at: checkedAt,
+    });
+    renderActivity();
+
+    const meter = await screen.findByRole("meter", { name: `5h ${used}%` });
+    expect(elapsedMarker(meter)).toBe(`${elapsed}%`);
+    expect(meter).toHaveAccessibleDescription(
+      `5h · ${usageDetail(used, elapsed, "2026-07-01T14:00:00Z")}`,
+    );
+    // Reaching the limit stays the loudest state; pace never recolors the bar.
+    const row = meter.closest(".activity-member-usage-row");
+    expect(row?.classList.contains("activity-member-usage-danger")).toBe(used >= 100);
+  });
+
+  it.each([
+    ["no reset time", { window_minutes: 300 }, "2026-07-01T11:59:00Z"],
+    ["an invalid reset time", { resets_at: "soon", window_minutes: 300 }, "2026-07-01T11:59:00Z"],
+    ["no period length", { resets_at: "2026-07-01T14:00:00Z" }, "2026-07-01T11:59:00Z"],
+    ["an invalid observation time", { resets_at: "2026-07-01T14:00:00Z", window_minutes: 300 }, ""],
+  ])("falls back to the plain usage bar for %s", async (_, period, checkedAt) => {
+    mockCodexMember({
+      windows: [{ window: "primary", used_percent: 42, ...period }],
+      limit_reached: false,
+      checked_at: checkedAt,
+    });
+    renderActivity();
+
+    const meter = await screen.findByRole("meter", { name: /42%$/ });
+    expect(elapsedMarker(meter)).toBe(null);
+    expect(meter.querySelector<HTMLElement>(".activity-member-usage-fill")?.style.width).toBe(
+      "42%",
+    );
+    const description = meter.getAttribute("title") ?? "";
+    expect(description).toContain(i18n.t("activity.usage.used", { percent: 42 }));
+    expect(description).not.toContain(i18n.t("activity.usage.elapsed", { percent: 0 }).slice(0, 4));
   });
 
   it("shows Grok's weekly usage meter and reset time", async () => {
@@ -1076,6 +1228,38 @@ describe("formatCompactReset", () => {
     expect(formatCompactReset("2026-07-04T09:00:00Z", now)).toBe(
       localeShortDate("2026-07-04T09:00:00Z"),
     );
+  });
+});
+
+describe("usageWindowElapsedPercent", () => {
+  const window = {
+    window: "primary",
+    used_percent: 0,
+    resets_at: "2026-07-01T14:00:00Z",
+    window_minutes: 300,
+    label: "",
+    detail: false,
+  };
+
+  it.each([
+    ["at the period start", "2026-07-01T09:00:00Z", 0],
+    ["partway through", "2026-07-01T12:36:00Z", 72],
+    ["at the reset", "2026-07-01T14:00:00Z", 100],
+    ["before the period starts", "2026-07-01T08:00:00Z", 0],
+    ["after the period ends", "2026-07-01T20:00:00Z", 100],
+  ])("places an observation %s", (_, checkedAt, expected) => {
+    expect(usageWindowElapsedPercent(window, checkedAt)).toBe(expected);
+  });
+
+  it.each([
+    ["the reset time is missing", { resets_at: "" }, "2026-07-01T12:00:00Z"],
+    ["the reset time is invalid", { resets_at: "soon" }, "2026-07-01T12:00:00Z"],
+    ["the period length is missing", { window_minutes: null }, "2026-07-01T12:00:00Z"],
+    ["the period length is not positive", { window_minutes: 0 }, "2026-07-01T12:00:00Z"],
+    ["the observation time is missing", {}, ""],
+    ["the observation time is invalid", {}, "yesterday"],
+  ])("reports no position when %s", (_, override, checkedAt) => {
+    expect(usageWindowElapsedPercent({ ...window, ...override }, checkedAt)).toBe(null);
   });
 });
 
