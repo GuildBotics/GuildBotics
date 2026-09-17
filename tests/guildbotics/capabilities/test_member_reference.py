@@ -11,7 +11,8 @@ def test_command_summary_comes_from_the_catalog():
     # catalog stays the single source of the one-line command purposes.
     assert (
         command_summary("git push")
-        == "Push the current branch with the member credential."
+        == "Push the current branch with the member credential and report readiness "
+        "for matching open PRs."
     )
 
 
@@ -70,7 +71,9 @@ def test_reference_includes_standard_work_procedure():
     assert "After opening or updating a PR" in text
     assert "member github pr checks --failed-logs" in text
     assert "check CI again" in text
-    assert "pending or failing" in text
+    assert "unless `readiness` is `ready`" in text
+    assert "head must not be behind the current base" in text
+    assert "checked head SHA must still be current" in text
     # Observable-outcome principle: leave externally visible traces at the
     # work's entry point, and avoid duplicate / unwanted posts.
     assert "externally visible trace" in text

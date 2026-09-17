@@ -356,6 +356,40 @@ async def test_push_without_local_commits_reports_up_to_date(monkeypatch, tmp_pa
     assert result.pushed is False
     assert result.status == "up_to_date"
     assert result.commits == []
+    assert result.pull_requests == []
+
+
+@pytest.mark.asyncio
+async def test_push_includes_readiness_for_open_prs_on_the_branch(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    _, repo_path = _workspace_repo(tmp_path, workspace)
+    calls = {}
+
+    async def fake_open_pr_checks(remote_url, branch):
+        calls.update({"remote_url": remote_url, "branch": branch})
+        return [
+            {
+                "pr_url": "https://github.com/owner/repo/pull/7",
+                "readiness": "blocked",
+                "completion_blockers": [{"code": "base_out_of_date"}],
+            }
+        ]
+
+    monkeypatch.setattr(service.github, "open_pr_checks", fake_open_pr_checks)
+
+    result = await service.push(repo_path)
+
+    assert calls["branch"] == "main"
+    assert calls["remote_url"].endswith("remote.git")
+    assert result.pull_requests[0]["readiness"] == "blocked"
+    assert result.to_dict()["pull_requests"][0]["completion_blockers"] == [
+        {"code": "base_out_of_date"}
+    ]
 
 
 @pytest.mark.asyncio

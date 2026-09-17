@@ -73,13 +73,15 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member git push --person <person> --repo-path <path> "
                 "[--workspace-mode member|current]",
-                "Push the current branch with the member credential.",
+                "Push the current branch with the member credential and report "
+                "readiness for matching open PRs.",
             ),
             (
                 "guildbotics member git publish --person <person> --repo-path <path> "
                 "--content-file <file> "
                 "[--workspace-mode member|current]",
-                "Commit already-staged changes with the member identity, then push.",
+                "Commit already-staged changes with the member identity, then push "
+                "and report readiness for matching open PRs.",
             ),
         ],
     ),
@@ -116,7 +118,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member github pr checks --person <person> --url <pr_url> "
                 "[--failed-logs] [--log-tail-bytes <n>]",
-                "Read a PR head's check rollup and optional failed Actions log tails.",
+                "Read a PR head's CI rollup, base freshness, completion readiness, "
+                "and optional failed Actions log tails.",
             ),
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
@@ -256,7 +259,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member task complete --person <person> --run-id <id> --ticket-url <url> "
                 "--status done|asking|blocked --content-file <file>",
-                "Finish a ticket workflow run with evidence.",
+                "Finish a ticket workflow run with evidence, revalidating affected "
+                "PR readiness before accepting done.",
             ),
             (
                 "guildbotics member task status --person <person> --run-id <id>",
@@ -298,12 +302,15 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
     "addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
-    "After opening or updating a PR, inspect its CI with `member github pr checks`. "
+    "After opening or updating a PR, inspect its CI and completion readiness with "
+    "`member github pr checks`. "
     "If a check fails, use `member github pr checks --failed-logs` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
-    "check CI again. Do not report the work complete while checks are "
-    "pending or failing; if an unrelated failure or an unavailable check blocks "
-    "completion, follow the failure-handling rule above and report that blocker.",
+    "check CI again. Do not report the work complete unless `readiness` is `ready`: "
+    "the checks must succeed, the head must not be behind the current base, and the "
+    "checked head SHA must still be current. If an unrelated failure or an unavailable "
+    "check blocks completion, follow the failure-handling rule above and report that "
+    "blocker.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating issue or PR for issue-driven work, the review thread or PR "

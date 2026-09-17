@@ -2184,11 +2184,23 @@ def task_complete(
 async def _task_complete(
     person: str, run_id: str, ticket_url: str, status: str, summary: str
 ) -> dict[str, Any]:
-    _resolve(person)
+    context, member_person = _resolve(person)
     store = TaskRunStore()
     try:
-        return store.complete(run_id, status, summary, ticket_url, person).to_dict()
-    except TaskRunError as exc:
+        readiness: list[dict[str, Any]] = []
+        if status == "done":
+            service = MemberGitHubCapabilityService(member_person, context.team)
+            try:
+                readiness = await service.task_completion_readiness(
+                    ticket_url, store.evidence(run_id)
+                )
+            finally:
+                await service.aclose()
+        payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
+        if readiness:
+            payload["pr_readiness"] = readiness
+        return payload
+    except (MemberCapabilityError, TaskRunError) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
 
 

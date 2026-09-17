@@ -34,6 +34,7 @@ class PublishResult:
     has_changes: bool
     status: str
     commits: list[dict[str, str]]
+    pull_requests: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +45,7 @@ class PublishResult:
             "has_changes": self.has_changes,
             "status": self.status,
             "commits": self.commits,
+            "pull_requests": self.pull_requests,
         }
 
 
@@ -72,6 +74,7 @@ class PushResult:
     pushed: bool
     status: str
     commits: list[dict[str, str]]
+    pull_requests: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +83,7 @@ class PushResult:
             "pushed": self.pushed,
             "status": self.status,
             "commits": self.commits,
+            "pull_requests": self.pull_requests,
         }
 
 
@@ -211,12 +215,15 @@ class MemberGitWorkspaceService:
         with git.Repo(repo_path) as repo:
             branch = repo.active_branch.name
             pushed, commits = self._push_if_needed(repo, branch, token)
+            remote_url = repo.remotes.origin.url
+        pull_requests = await self.github.open_pr_checks(remote_url, branch)
         return PushResult(
             repo_path=str(repo_path),
             branch=branch,
             pushed=pushed,
             status="pushed" if pushed else "up_to_date",
             commits=commits,
+            pull_requests=pull_requests,
         )
 
     async def _publish(
@@ -241,6 +248,7 @@ class MemberGitWorkspaceService:
                 "published" if (commit.commit_sha or push.pushed) else "up_to_date"
             ),
             commits=push.commits,
+            pull_requests=push.pull_requests,
         )
 
     def _validate_repo_path(

@@ -1,4 +1,6 @@
+from copy import deepcopy
 from io import BytesIO
+import re
 from zipfile import ZipFile
 
 import pytest
@@ -54,6 +56,7 @@ class FakeClient:
         self.posts = []
         self.gets = []
         self.get_payloads = {}
+        self.get_sequences = {}
         self.get_status_codes = {}
         self.post_payloads = {}
         self.patches = []
@@ -70,8 +73,18 @@ class FakeClient:
         self.history.append(("get", endpoint))
         if endpoint in self.contents:
             return FakeResponse([], content=self.contents[endpoint])
+        if endpoint in self.get_sequences:
+            return FakeResponse(self.get_sequences[endpoint].pop(0))
+        payload = deepcopy(self.get_payloads.get(endpoint, []))
+        if endpoint.startswith("/repos/owner/repo/pulls/") and isinstance(
+            payload, dict
+        ):
+            payload.setdefault("base", {}).setdefault("sha", "base123")
+            payload.setdefault("head", {}).setdefault("sha", "abc123")
+        if "/compare/" in endpoint and endpoint not in self.get_payloads:
+            payload = {"behind_by": 0}
         return FakeResponse(
-            self.get_payloads.get(endpoint, []),
+            payload,
             status_code=self.get_status_codes.get(endpoint, 200),
         )
 
@@ -476,6 +489,8 @@ async def test_pr_checks_reports_rollup_and_tails_failed_job_logs(
     )
 
     assert result["rollup"] == "failure"
+    assert result["readiness"] == "blocked"
+    assert result["completion_blockers"][0]["code"] == "checks_failed"
     assert result["checks"] == [
         {
             "name": "test",
@@ -528,6 +543,256 @@ async def test_pr_checks_reports_no_checks():
 
     assert result["rollup"] == "no_checks"
     assert result["checks"] == []
+    assert result["readiness"] == "blocked"
+    assert result["completion_blockers"][0]["code"] == "checks_missing"
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_uses_commit_ancestry_for_out_of_date_status():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "title": "Same tree, different ancestry",
+                "head": {
+                    "sha": "head123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "base456", "ref": "main"},
+            },
+            "/repos/owner/repo/compare/base456...head123": {
+                "status": "diverged",
+                "ahead_by": 1,
+                "behind_by": 2,
+                "files": [],
+            },
+        }
+    )
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7", include_comments=False
+    )
+
+    assert result["base_sha"] == "base456"
+    assert result["head_sha"] == "head123"
+    assert result["behind_by"] == 2
+    assert result["out_of_date"] is True
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_is_ready_after_true_base_integration_and_successful_ci():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "base123", "ref": "main"},
+            },
+            "/repos/owner/repo/compare/base123...abc123": {"behind_by": 0},
+            "/repos/owner/repo/commits/abc123/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+    assert result["rollup"] == "success"
+    assert result["behind_by"] == 0
+    assert result["out_of_date"] is False
+    assert result["readiness"] == "ready"
+    assert result["completion_blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_blocks_a_head_that_changes_during_readiness_check():
+    service = _service()
+    fake = FakeClient()
+    endpoint = "/repos/owner/repo/pulls/7"
+    fake.get_sequences[endpoint] = [
+        {
+            "html_url": "https://github.com/owner/repo/pull/7",
+            "head": {
+                "sha": "old-head",
+                "ref": "feature",
+                "repo": {"full_name": "owner/repo"},
+            },
+            "base": {"sha": "base123", "ref": "main"},
+        },
+        {
+            "html_url": "https://github.com/owner/repo/pull/7",
+            "head": {
+                "sha": "new-head",
+                "ref": "feature",
+                "repo": {"full_name": "owner/repo"},
+            },
+            "base": {"sha": "base123", "ref": "main"},
+        },
+    ]
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/compare/base123...old-head": {"behind_by": 0},
+            "/repos/owner/repo/commits/old-head/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/old-head/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+    assert result["head_sha"] == "old-head"
+    assert result["current_head_sha"] == "new-head"
+    assert result["readiness"] == "blocked"
+    assert [item["code"] for item in result["completion_blockers"]] == ["head_changed"]
+
+
+@pytest.mark.asyncio
+async def test_open_pr_checks_resolves_the_pushed_branch_and_returns_readiness():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls": [
+                {
+                    "number": 7,
+                    "html_url": "https://github.com/owner/repo/pull/7",
+                }
+            ],
+            "/repos/owner/repo/pulls/7": {
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "base123", "ref": "main"},
+            },
+            "/repos/owner/repo/compare/base123...abc123": {"behind_by": 1},
+            "/repos/owner/repo/commits/abc123/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    result = await service.open_pr_checks("git@github.com:owner/repo.git", "feature")
+
+    assert fake.gets[0] == (
+        "/repos/owner/repo/pulls",
+        {"state": "open", "head": "owner:feature"},
+        None,
+    )
+    assert result[0]["readiness"] == "blocked"
+    assert result[0]["completion_blockers"][0]["code"] == "base_out_of_date"
+
+
+@pytest.mark.asyncio
+async def test_task_completion_revalidates_prs_from_ticket_and_run_evidence(
+    monkeypatch,
+):
+    service = _service()
+    calls = []
+
+    async def fake_pr_checks(url, **_kwargs):
+        calls.append(url)
+        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
+
+    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    evidence = [
+        {
+            "payload": {
+                "pr_url": "https://github.com/owner/repo/pull/8",
+            }
+        },
+        {
+            "payload": {
+                "pull_requests": [
+                    {"pr_url": "https://github.com/owner/repo/pull/9"},
+                    {"pr_url": "https://github.com/owner/repo/pull/8"},
+                ]
+            }
+        },
+    ]
+
+    results = await service.task_completion_readiness(
+        "https://github.com/owner/repo/pull/7", evidence
+    )
+
+    assert calls == [
+        "https://github.com/owner/repo/pull/7",
+        "https://github.com/owner/repo/pull/8",
+        "https://github.com/owner/repo/pull/9",
+    ]
+    assert len(results) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("base_out_of_date", "The PR head is 1 commit(s) behind its base."),
+        ("checks_pending", "CI checks are still pending."),
+        ("checks_failed", "CI checks are failing."),
+        ("head_changed", "The PR head changed while readiness was being checked."),
+    ],
+)
+async def test_task_completion_rejects_every_readiness_blocker(
+    monkeypatch, code, message
+):
+    service = _service()
+
+    async def fake_pr_checks(url, **_kwargs):
+        return {
+            "pr_url": url,
+            "readiness": "blocked",
+            "completion_blockers": [{"code": code, "message": message}],
+        }
+
+    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+
+    with pytest.raises(MemberCapabilityError, match=re.escape(message)):
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/issues/1",
+            [
+                {
+                    "payload": {
+                        "pr_url": "https://github.com/owner/repo/pull/7",
+                    }
+                }
+            ],
+        )
 
 
 @pytest.mark.asyncio
