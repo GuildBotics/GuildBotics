@@ -459,7 +459,7 @@ Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データ�
 として分類します。標準エラー出力や応答本文の解析は行いません。xAIのretry-state通知は
 そのturn全体の構造化データとして扱います。Grok Buildが`is_rate_limited`を通知した後に
 コードだけのRPCエラーでturnを終えた場合、その失敗は`rate_limited`として分類され、
-エージェントの再試行ではなくworkflowのrate-limit退避へ進みます。Codexの
+エージェントの再試行ではなくworkflowのrate-limit退避へ進みます。
 利用量の取得では、Grok Build 1.0.34の`_x.ai/billing`拡張が返す
 `config.creditUsagePercent`を週間の購読枠として正規化し、`config.currentPeriod`の開始・終了時刻から
 期間とリセット時刻を取得します。`_x.ai/auth/check_subscription`のgate、または使用率100%以上は、

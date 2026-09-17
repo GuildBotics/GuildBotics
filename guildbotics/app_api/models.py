@@ -1043,8 +1043,7 @@ class SystemAlertDismissRequest(BaseModel):
 
 class CliAgentUsageWindow(BaseModel):
     window: str
-    # None for providers that report only the window's reset time.
-    used_percent: float | None = None
+    used_percent: float
     resets_at: str = ""
     window_minutes: int | None = None
     # Human-readable qualifier beyond the duration (e.g. a per-model budget's

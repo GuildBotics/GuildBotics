@@ -51,16 +51,14 @@ class CliAgentUsageError(RuntimeError):
 class CliAgentUsageWindow:
     """One rate-limit window (e.g. the 5-hour or weekly budget).
 
-    ``used_percent`` is ``None`` for providers that report only the window's
-    reset time.  ``label`` is a
-    human-readable qualifier beyond the window duration (e.g. a per-model
-    budget's model name).  A ``detail`` window is supplementary: it still
-    counts toward the limit state, but the frontend shows it only in the
+    ``label`` is a human-readable qualifier beyond the window duration (e.g. a
+    per-model budget's model name). A ``detail`` window is supplementary: it
+    still counts toward the limit state, but the frontend shows it only in the
     expanded usage detail, not as its own meter.
     """
 
     window: str
-    used_percent: float | None = None
+    used_percent: float
     resets_at: str = ""
     window_minutes: int | None = None
     label: str = ""
@@ -110,7 +108,7 @@ def parse_codex_rate_limits(result: Any) -> CliAgentUsageSnapshot:
                 continue
             bucket_windows.append(window)
             limit_reached = limit_reached or (
-                (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT
+                window.used_percent >= LIMIT_REACHED_PERCENT
             )
     return CliAgentUsageSnapshot(
         agent="codex",
@@ -236,9 +234,7 @@ def parse_grok_billing(billing: Any, subscription: Any) -> CliAgentUsageSnapshot
             )
     limit_reached = bool(
         _as_dict(_as_dict(subscription).get("meta")).get("gate")
-    ) or any(
-        (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT for window in windows
-    )
+    ) or any(window.used_percent >= LIMIT_REACHED_PERCENT for window in windows)
     return CliAgentUsageSnapshot(
         agent="grok",
         windows=windows,
@@ -345,7 +341,7 @@ def parse_claude_usage(
         agent="claude",
         windows=windows,
         limit_reached=any(
-            (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT for window in windows
+            window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
         ),
         checked_at=datetime.now(UTC).isoformat(),
     )
@@ -569,9 +565,9 @@ CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]
 
 
 async def read_cli_agent_usage(name: str) -> CliAgentUsageSnapshot:
-    """Read usage and clear a known authentication failure only on usable data."""
+    """Read usage and clear auth failure only on windows or an explicit gate."""
     snapshot = await CLI_AGENT_USAGE_READERS[name]()
-    if not snapshot.windows:
+    if not snapshot.windows and not snapshot.limit_reached:
         raise CliAgentUsageError(
             f"{cli_agent_info(name).label} reported no usage windows."
         )

@@ -657,7 +657,8 @@ describe("ActivityHistoryPage", () => {
   function mockMemberUsage(
     agent: string,
     usage: {
-      windows: (Partial<CliAgentUsageWindow> & Pick<CliAgentUsageWindow, "window">)[];
+      windows: (Pick<CliAgentUsageWindow, "window" | "used_percent"> &
+        Partial<Omit<CliAgentUsageWindow, "window" | "used_percent">>)[];
       limit_reached: boolean;
     },
   ) {
@@ -679,7 +680,6 @@ describe("ActivityHistoryPage", () => {
           checked_at: "2026-07-01T11:59:00Z",
           limit_reached: usage.limit_reached,
           windows: usage.windows.map((window) => ({
-            used_percent: null,
             resets_at: "",
             window_minutes: null,
             label: "",
@@ -929,6 +929,14 @@ describe("ActivityHistoryPage", () => {
     );
     expect(memberRateLimit).not.toBe(null);
     expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-04T09:00:00Z"));
+  });
+
+  it("shows a Grok gate without synthesizing a usage meter", async () => {
+    mockMemberUsage("grok", { windows: [], limit_reached: true });
+    renderActivity();
+
+    expect(await screen.findByText("Rate limited")).toBeInTheDocument();
+    expect(screen.queryByRole("meter")).toBe(null);
   });
 
   it.each([

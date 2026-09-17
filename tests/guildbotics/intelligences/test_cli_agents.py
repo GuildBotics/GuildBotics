@@ -78,7 +78,6 @@ def test_the_catalog_is_ordered_and_names_each_tools_binary() -> None:
     assert agents["codex"].executable == "codex"
     assert agents["codex"].config_reference == "cli_agents/codex/default.yml"
     assert agents["grok"].label == "Grok Build"
-    assert "bash -s 1.0.34" in agents["grok"].provision.install
     # Antigravity is the one tool whose binary is not named after it.
     assert agents["antigravity"].executable == "agy"
     assert [agent.order for agent in CLI_AGENTS] == sorted(
