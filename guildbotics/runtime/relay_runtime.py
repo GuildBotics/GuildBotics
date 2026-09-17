@@ -10,9 +10,9 @@ from collections.abc import Callable
 from guildbotics.hub.relay import HEAD_UPDATED_EVENT, LIVE_EXPIRED_EVENT_KIND
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
 from guildbotics.runtime.live_state import LiveState, LiveStatePublisher
+from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 
-LIVE_HEARTBEAT_INTERVAL_SECONDS = 10.0
 OWNER_CACHE_SECONDS = 5.0
 
 

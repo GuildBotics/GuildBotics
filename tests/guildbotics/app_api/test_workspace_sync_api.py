@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.hub.host import hub_root
 from guildbotics.runtime.live_state import LiveState
+from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils import sync_lock as sync_lock_module
@@ -91,6 +93,32 @@ def test_expired_live_publisher_is_removed_from_the_service_cache() -> None:
     )
 
     assert service.get_live_states() == []
+
+
+def test_listed_live_state_stays_online_when_the_publisher_clock_lags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    viewer = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+
+    class FrozenDateTime:
+        @staticmethod
+        def now(tz=None):
+            return viewer
+
+    monkeypatch.setattr("guildbotics.utils.live_freshness.datetime", FrozenDateTime)
+    service = workspace_sync.WorkspaceSyncService()
+    state = LiveState(
+        workspace_id="0198ab00-0000-7000-8000-000000000001",
+        device_id="0198ab00-0000-7000-8000-000000000002",
+        publisher_id="0198ab00-0000-7000-8000-000000000003",
+        observed_at=(
+            viewer - timedelta(seconds=LIVE_HEARTBEAT_INTERVAL_SECONDS + 6)
+        ).isoformat(),
+    )
+
+    service._receive_live_state(state)
+
+    assert service.get_live_states()[0].status == "online"
 
 
 def test_desktop_owner_transfer_accepts_only_this_device(

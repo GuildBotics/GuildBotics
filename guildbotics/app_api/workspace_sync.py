@@ -17,7 +17,6 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 from uuid import uuid4
 
 from guildbotics.app_api.errors import AppApiError
@@ -48,7 +47,7 @@ from guildbotics.hub import (
     connection,
     host,
 )
-from guildbotics.hub.relay import LIVE_EXPIRE_AFTER_SECONDS, ServiceOwner
+from guildbotics.hub.relay import ServiceOwner
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
@@ -79,6 +78,7 @@ from guildbotics.sync import (
     synchronize_once,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
+from guildbotics.utils.live_freshness import live_status
 from guildbotics.utils.openssh import OpenSshNotFoundError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 from guildbotics.workspace.identity import (
@@ -855,13 +855,10 @@ def _ssh_key_model(key: connection.HubSshKey | None) -> DeviceSshKey:
     )
 
 
-LIVE_DELAY_SECONDS = 15.0
-
-
 def _device_model(
     record: DeviceRecord, self_device_id: str, live: LiveState | None
 ) -> WorkspaceDevice:
-    status = _live_status(live.observed_at) if live is not None else "unknown"
+    status = live_status(live.observed_at) if live is not None else "unknown"
     return WorkspaceDevice(
         device_id=record.device_id,
         display_name=record.display_name,
@@ -876,7 +873,7 @@ def _device_model(
 
 
 def _live_model(state: LiveState) -> WorkspaceLiveState:
-    status = _live_status(state.observed_at)
+    status = live_status(state.observed_at)
     return WorkspaceLiveState(
         schema_version=state.schema_version,
         workspace_id=state.workspace_id,
@@ -902,21 +899,6 @@ def _live_model(state: LiveState) -> WorkspaceLiveState:
         if status != "expired"
         else [],
     )
-
-
-def _live_status(observed_at: str) -> Literal["online", "delayed", "expired"]:
-    try:
-        timestamp = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
-    except ValueError:
-        return "expired"
-    age = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
-    if age > LIVE_EXPIRE_AFTER_SECONDS:
-        return "expired"
-    if age > LIVE_DELAY_SECONDS:
-        return "delayed"
-    return "online"
 
 
 def _owner_model(
