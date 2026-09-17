@@ -1,6 +1,6 @@
 """Grok Build Agent Client Protocol (ACP) adapter.
 
-Verified against Grok Build 0.2.118 (``grok agent stdio``): ACP protocol
+Verified against Grok Build 1.0.34 (``grok agent stdio``): ACP protocol
 version 1, ``loadSession: true`` with no ``sessionCapabilities.resume``, and
 the ``cached_token`` / ``grok.com`` authentication methods. The adapter gates on
 those advertised capabilities rather than on the version string, so a newer

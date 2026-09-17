@@ -1348,9 +1348,8 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
   const meters = (
     <div className="activity-member-usage">
       {meterWindows.map((window, index) => {
-        // A provider may report only the window's reset time (e.g. Grok's
-        // weekly subscription period): the row then drops the meter bar and
-        // shows the reset alone.
+        // A provider may report only a window's reset time: the row then
+        // drops the meter bar and shows the reset alone.
         const hasPercent = window.used_percent != null;
         const percent = Math.max(0, Math.min(100, Math.round(window.used_percent ?? 0)));
         const label = usageWindowName(window);

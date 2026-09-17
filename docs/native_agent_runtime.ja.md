@@ -451,7 +451,7 @@ ACPを使うadapterではさらに、trusted member capability transportに必�
 バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 0.2.118、GitHub Copilot CLI 1.0.77です。
+確認します。動作確認済みの基準バージョンは、Grok Build 1.0.34、GitHub Copilot CLI 1.0.77です。
 Antigravity 1.1.11が必要なflagを公開することは確認済みですが、追加した補助workspaceからMCP設定を
 読み込めることは、trusted member transportの対応版と宣言する前の実機確認項目として残します。
 
@@ -460,10 +460,12 @@ Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データ�
 そのturn全体の構造化データとして扱います。Grok Buildが`is_rate_limited`を通知した後に
 コードだけのRPCエラーでturnを終えた場合、その失敗は`rate_limited`として分類され、
 エージェントの再試行ではなくworkflowのrate-limit退避へ進みます。Codexの
-`account/rateLimits/read`に相当する利用量取得手段はACP経由では公開されていない
-（`x.ai/session/usage`は`Method not found`、0.2.114で確認）ため、Grok Buildでは
-週間・5時間枠の利用量メーターを提供しません。Activity Historyでは「使用量情報なし」を通常の
-状態として扱い、利用率0%のような値は生成しません。
+利用量の取得では、Grok Build 1.0.34の`_x.ai/billing`拡張が返す
+`config.creditUsagePercent`を週間の購読枠として正規化し、`config.currentPeriod`の開始・終了時刻から
+期間とリセット時刻を取得します。`_x.ai/auth/check_subscription`のgate、または使用率100%以上は、
+既存の利用制限表示へ反映します。Grok.comの購読ログインで使用率が提供されないアカウント種別や
+API-key利用では、利用率0%を生成せず「使用量情報なし」として扱います。認証にはGrok Build自身の
+`cached_token`方式だけを使い、GuildBoticsが認証ファイルを読み取ったり独自にHTTP通信したりしません。
 
 GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく報告しません。標準の
 `usage_update`も、独自拡張の通知も届きません。そのためGitHub Copilotでは使用量が空のままとなり、

@@ -514,7 +514,7 @@ any newer CLI that still exposes those capabilities keeps working. Antigravity
 capability detection reads `agy --help` (which prints to stderr and exits 0) and
 requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 0.2.118 and GitHub Copilot CLI 1.0.77. Antigravity
+verified baselines are Grok Build 1.0.34 and GitHub Copilot CLI 1.0.77. Antigravity
 1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
 workspace remains an explicit machine-verification item before the adapter is declared
 supported for the trusted member transport.
@@ -524,11 +524,14 @@ returns structured data; stderr text and assistant prose are never parsed. The x
 retry-state notice counts as that structured data for the whole turn: when Grok Build
 reports `is_rate_limited` and then ends the turn with a code-only RPC error, the
 failure is classified `rate_limited`, which routes the workflow into its rate-limit
-deferral instead of retrying the agent. No equivalent of Codex
-`account/rateLimits/read` is exposed over ACP (`x.ai/session/usage` answers `Method
-not found` on 0.2.114), so GuildBotics does not present a weekly or 5-hour usage meter
-for Grok. Activity History treats "no usage
-data" as a normal state and never synthesizes an empty window or a 0% figure.
+deferral instead of retrying the agent. For account usage, the `_x.ai/billing`
+extension in Grok Build 1.0.34 supplies `config.creditUsagePercent`, which GuildBotics
+normalizes as the weekly subscription window. `config.currentPeriod` supplies the
+window duration and reset time. A gate from `_x.ai/auth/check_subscription`, or usage
+at or above 100%, drives the existing rate-limit state. Account types that do not
+provide the percentage, including API-key usage, remain unavailable rather than
+synthesizing 0%. Authentication stays inside Grok Build's `cached_token` flow;
+GuildBotics neither reads the authentication file nor adds a direct HTTP fallback.
 
 GitHub Copilot CLI 1.0.77 reports no token usage over ACP at all: neither the standard
 `usage_update` nor a private extension channel carries one. Usage counters therefore

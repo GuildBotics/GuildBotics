@@ -886,14 +886,12 @@ describe("ActivityHistoryPage", () => {
     ).toHaveTextContent("59%");
   });
 
-  it("shows a percentless window as its reset time without a meter", async () => {
-    // Grok reports no used percent for the subscription quota, only the
-    // weekly period's reset time.
+  it("shows Grok's weekly usage meter and reset time", async () => {
     mockMemberUsage("grok", {
       windows: [
         {
           window: "subscription",
-          used_percent: null,
+          used_percent: 33,
           resets_at: "2026-07-04T09:00:00Z",
           window_minutes: 10080,
         },
@@ -902,24 +900,22 @@ describe("ActivityHistoryPage", () => {
     });
     renderActivity();
 
-    const row = await screen.findByText("1w");
-    expect(row.closest(".activity-member-usage-row")).toHaveTextContent(
-      localeShortDate("2026-07-04T09:00:00Z"),
-    );
-    expect(screen.queryByRole("meter")).toBe(null);
-    expect(row).toHaveAttribute(
+    const meter = await screen.findByRole("meter", { name: "1w 33%" });
+    const row = meter.closest(".activity-member-usage-row");
+    expect(row).toHaveTextContent(localeShortDate("2026-07-04T09:00:00Z"));
+    expect(row?.querySelector(".activity-member-usage-window")).toHaveAttribute(
       "title",
       expect.stringContaining(localeShortDateTime("2026-07-04T09:00:00Z")),
     );
     expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
   });
 
-  it("shows the member badge from a percentless window when the limit is reached", async () => {
+  it("shows the member badge when Grok's weekly limit is reached", async () => {
     mockMemberUsage("grok", {
       windows: [
         {
           window: "subscription",
-          used_percent: null,
+          used_percent: 100,
           resets_at: "2026-07-04T09:00:00Z",
           window_minutes: 10080,
         },
