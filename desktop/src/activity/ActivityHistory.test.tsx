@@ -1,6 +1,6 @@
 import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
@@ -411,6 +411,37 @@ describe("ActivityHistoryPage", () => {
 
     expect(await screen.findByText("remote step")).toBeInTheDocument();
     expect(screen.queryByText("Live: remote step")).toBe(null);
+  });
+
+  it("does not flicker the delayed-device warning while a healthy publisher stays online", async () => {
+    vi.mocked(getWorkspaceLive).mockResolvedValue([{ ...REMOTE_LIVE, status: "online" }]);
+    renderActivity();
+
+    expect(await screen.findByText("remote step")).toBeInTheDocument();
+    expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
+
+    for (let poll = 0; poll < 12; poll += 1) {
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
+    }
+  });
+
+  it("keeps the delayed-device warning up until the publisher expires", async () => {
+    vi.mocked(getWorkspaceLive).mockResolvedValue([REMOTE_LIVE]);
+    renderActivity();
+
+    expect(
+      await screen.findByText("Updates from device device-2 are delayed."),
+    ).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(screen.getByText("Updates from device device-2 are delayed.")).toBeInTheDocument();
+
+    vi.mocked(getWorkspaceLive).mockResolvedValue([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitFor(() => {
+      expect(screen.queryByText("Updates from device device-2 are delayed.")).toBe(null);
+    });
   });
 
   it("shows the works of every publisher on the same device at once", async () => {
