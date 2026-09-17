@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import git
-from git import Actor, GitCommandError
+from git import GitCommandError
 
 from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
@@ -188,10 +189,7 @@ class MemberGitWorkspaceService:
             has_staged = self._has_staged_changes(repo)
             commit_sha = None
             if has_staged:
-                actor = self._member_actor()
-                commit_sha = repo.index.commit(
-                    message.strip(), author=actor, committer=actor
-                ).hexsha
+                commit_sha = self._commit_index(repo, message.strip())
         return CommitResult(
             repo_path=str(repo_path),
             branch=branch,
@@ -296,9 +294,51 @@ class MemberGitWorkspaceService:
         )
         return git_user, git_email
 
-    def _member_actor(self) -> Actor:
+    def _commit_index(self, repo: git.Repo, message: str) -> str:
+        """Commit the index through git so in-progress sequencer state is consumed.
+
+        GitPython's ``IndexFile.commit`` parents only HEAD and leaves files such
+        as ``MERGE_HEAD`` in place. ``git commit`` is the source of merge,
+        cherry-pick, and revert commit graph and cleanup behavior.
+
+        Args:
+            repo: Open repository whose index is already staged.
+            message: Non-empty commit message.
+
+        Returns:
+            Hex sha of the new commit.
+
+        Raises:
+            MemberCapabilityError: If git refuses the commit.
+        """
         git_user, git_email = self._git_identity()
-        return Actor(git_user, git_email)
+        message_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="guildbotics-member-commit-",
+                suffix=".txt",
+                delete=False,
+            ) as handle:
+                handle.write(message)
+                if not message.endswith("\n"):
+                    handle.write("\n")
+                message_path = Path(handle.name)
+            with repo.git.custom_environment(
+                GIT_AUTHOR_NAME=git_user,
+                GIT_AUTHOR_EMAIL=git_email,
+                GIT_COMMITTER_NAME=git_user,
+                GIT_COMMITTER_EMAIL=git_email,
+            ):
+                try:
+                    repo.git.commit("-F", str(message_path))
+                except GitCommandError as exc:
+                    raise MemberCapabilityError(f"Failed to commit: {exc}") from exc
+            return repo.head.commit.hexsha
+        finally:
+            if message_path is not None:
+                message_path.unlink(missing_ok=True)
 
     @staticmethod
     def _has_staged_changes(repo: git.Repo) -> bool:
