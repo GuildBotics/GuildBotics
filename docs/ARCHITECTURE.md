@@ -118,9 +118,10 @@ Trust rules that follow from this shape:
   evidence store are authoritative.
 - Ticket completion with `status=done` resolves affected pull requests from the issue
   timeline and run evidence, then revalidates each open PR against GitHub's current state;
-  closed and merged PRs are not readiness targets. Completion is rejected when observed
-  CI fails or remains pending, the head does not contain the current base, or the head/base
-  changes during the check. `rollup=no_checks` stays non-blocking when the current base also
+  closed and merged PRs are not readiness targets, while their CI rollup, checks, and failed
+  logs remain available for inspection. Completion is rejected when observed CI fails or
+  remains pending, the head does not contain the current base, or the head/base changes
+  during the check. `rollup=no_checks` stays non-blocking when the current base also
   has no checks, while checks on the base make an empty head a registration-pending blocker.
   Interactive push/publish results expose compact readiness and blockers for matching open
   PRs; readiness lookup failure, including an HTTP transport failure, does not turn a

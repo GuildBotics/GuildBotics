@@ -78,7 +78,7 @@ Run `member git commit` without `member git push` when the user asks for a local
 ## Definition of Done
 
 Before sending your final interactive reply, complete the standard work procedure from the member capabilities in the user's current repository: verification of code changes, the requested publishing steps (commit, push, PR, comments, replies, or reactions), and memory maintenance.
-When the work created, reused, or updated an open PR, run `guildbotics member github pr checks` after the final push and do not report completion unless its `readiness` is `ready`. Successful observed checks alone are insufficient: the PR head must include the current base and the checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
+When the work created, reused, or updated an open PR, run `guildbotics member github pr checks` after the final push and do not report completion unless its `readiness` is `ready`. Successful observed checks alone are insufficient: the PR head must include the current base and the checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
 Then write the final reply in the active member's voice.
 
 ## Interactive Memory Obligations

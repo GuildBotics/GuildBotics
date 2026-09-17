@@ -309,7 +309,8 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "check CI again. Do not report the work complete unless `readiness` is `ready`: "
     "for every open PR, every observed check must succeed, the head must not be behind "
     "the current base, and the checked head SHA must still be current. Closed and merged "
-    "PRs are not completion targets. `rollup=no_checks` is visible and does not block a "
+    "PRs are not completion targets, but their CI rollup, checks, and failed logs remain "
+    "available for inspection. `rollup=no_checks` is visible and does not block a "
     "repository whose base also has no checks; if the base has checks, an empty head is "
     "treated as registration pending. If an unrelated failure or an unavailable "
     "check blocks completion, follow the failure-handling rule above and report that blocker.",

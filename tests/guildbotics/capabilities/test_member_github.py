@@ -165,6 +165,10 @@ def _service(person_type="machine_user"):
     return MemberGitHubCapabilityService(person, team)
 
 
+async def _open_pull_request(_resource):
+    return {"state": "open"}
+
+
 def test_parse_github_issue_and_pull_request_urls():
     service = _service()
 
@@ -687,27 +691,53 @@ async def test_pr_inspect_skips_freshness_for_closed_pull_requests():
 
 
 @pytest.mark.asyncio
-async def test_pr_checks_skips_readiness_for_closed_pull_requests():
+async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "state": "closed",
-        "merged_at": "2026-09-17T00:00:00Z",
-        "head": {
-            "sha": "merged-head",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        },
-        "base": {"sha": "old-base", "ref": "deleted-base"},
-    }
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "state": "closed",
+                "merged_at": "2026-09-17T00:00:00Z",
+                "head": {
+                    "sha": "merged-head",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "old-base", "ref": "deleted-base"},
+            },
+            "/repos/owner/repo/commits/merged-head/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/merged-head/status": {"statuses": []},
+        }
+    )
     service._client = fake
 
-    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+    async def fake_failed_action_logs(*_args):
+        return [{"run_id": 9, "log": "failure"}]
+
+    monkeypatch.setattr(service, "_failed_action_logs", fake_failed_action_logs)
+
+    result = await service.pr_checks(
+        "https://github.com/owner/repo/pull/7", failed_logs=True
+    )
 
     assert result["readiness"] == "not_applicable"
-    assert result["rollup"] == "not_applicable"
+    assert result["rollup"] == "failure"
+    assert result["checks"][0]["conclusion"] == "failure"
+    assert result["failed_logs"] == [{"run_id": 9, "log": "failure"}]
     assert result["completion_blockers"] == []
-    assert len(fake.gets) == 1
+    assert not any(
+        "/branches/" in endpoint or "/compare/" in endpoint
+        for endpoint, _params, _headers in fake.gets
+    )
 
 
 @pytest.mark.asyncio
@@ -906,6 +936,7 @@ async def test_task_completion_revalidates_prs_from_ticket_and_run_evidence(
         return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
 
     monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
     evidence = [
         {
             "payload": {
@@ -957,6 +988,7 @@ async def test_task_completion_rejects_every_readiness_blocker(
         }
 
     monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
 
     async def fake_linked_pull_request_urls(_resource):
         return []
@@ -995,6 +1027,7 @@ async def test_task_completion_adds_pull_requests_linked_from_an_issue(monkeypat
         service, "_linked_pull_request_urls", fake_linked_pull_request_urls
     )
     monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
 
     results = await service.task_completion_readiness(
         "https://github.com/owner/repo/issues/1", []
@@ -1069,9 +1102,10 @@ async def test_task_completion_checks_only_open_pull_requests_from_issue_timelin
     )
 
     assert [result["pr_number"] for result in results] == [8]
+    endpoints = [endpoint for endpoint, _params, _headers in fake.gets]
     assert not any(
         "merged-head" in endpoint or "deleted-base" in endpoint
-        for endpoint, _params, _headers in fake.gets
+        for endpoint in endpoints
     )
 
 
@@ -1083,6 +1117,7 @@ async def test_task_completion_accepts_non_url_ticket_identifiers(monkeypatch):
         return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
 
     monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _open_pull_request)
 
     results = await service.task_completion_readiness(
         "task:123",

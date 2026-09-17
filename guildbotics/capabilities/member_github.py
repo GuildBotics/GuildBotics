@@ -415,10 +415,13 @@ class MemberGitHubCapabilityService:
             )
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
-        if not _pull_request_readiness_applies(pr):
-            return self._pull_request_checks_not_applicable(resource, pr, url)
-        freshness = await self._pull_request_freshness(resource, pr)
-        head_sha = freshness["head_sha"]
+        readiness_applies = _pull_request_readiness_applies(pr)
+        freshness = (
+            await self._pull_request_freshness(resource, pr)
+            if readiness_applies
+            else None
+        )
+        head_sha = self._pull_request_head_sha(resource, pr)
         actions = GitHubActionsClient(await self._get_client())
         try:
             check_runs = await actions.check_runs(
@@ -429,15 +432,6 @@ class MemberGitHubCapabilityService:
             )
             checks = _check_summaries(check_runs, statuses)
             rollup = _check_rollup(checks)
-            checks_expected = False
-            if not checks and freshness["base_sha"] != head_sha:
-                base_check_runs = await actions.check_runs(
-                    resource.owner, resource.repo, freshness["base_sha"]
-                )
-                base_statuses = await actions.commit_statuses(
-                    resource.owner, resource.repo, freshness["base_sha"]
-                )
-                checks_expected = bool(_check_summaries(base_check_runs, base_statuses))
             failed_action_logs = None
             if failed_logs:
                 failed_action_logs = await self._failed_action_logs(
@@ -447,9 +441,37 @@ class MemberGitHubCapabilityService:
                     log_tail_bytes,
                     check_runs,
                 )
+            if not readiness_applies:
+                return self._pull_request_checks_not_applicable(
+                    resource,
+                    pr,
+                    url,
+                    checked_head_sha=head_sha,
+                    rollup=rollup,
+                    checks=checks,
+                    failed_action_logs=failed_action_logs,
+                )
+            assert freshness is not None
+            checks_expected = False
+            if not checks and freshness["base_sha"] != head_sha:
+                base_check_runs = await actions.check_runs(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                base_statuses = await actions.commit_statuses(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                checks_expected = bool(_check_summaries(base_check_runs, base_statuses))
             current = await self._pull_request(resource)
             if not _pull_request_readiness_applies(current):
-                return self._pull_request_checks_not_applicable(resource, current, url)
+                return self._pull_request_checks_not_applicable(
+                    resource,
+                    current,
+                    url,
+                    checked_head_sha=head_sha,
+                    rollup=rollup,
+                    checks=checks,
+                    failed_action_logs=failed_action_logs,
+                )
             current_base_sha = await self._pull_request_current_base_sha(
                 resource, current
             )
@@ -483,25 +505,35 @@ class MemberGitHubCapabilityService:
             raise MemberCapabilityError(str(exc)) from exc
 
     def _pull_request_checks_not_applicable(
-        self, resource: GitHubResource, pr: dict[str, Any], url: str
+        self,
+        resource: GitHubResource,
+        pr: dict[str, Any],
+        url: str,
+        *,
+        checked_head_sha: str,
+        rollup: str,
+        checks: list[dict[str, Any]],
+        failed_action_logs: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
-        head_sha = self._pull_request_head_sha(resource, pr)
-        return {
+        result: dict[str, Any] = {
             "repo": resource.full_repo,
             "pr_number": resource.number,
             "pr_url": pr.get("html_url", url),
             "base_sha": None,
-            "head_sha": head_sha,
+            "head_sha": checked_head_sha,
             "behind_by": None,
             "out_of_date": None,
             "current_base_sha": None,
-            "current_head_sha": head_sha,
-            "rollup": "not_applicable",
-            "checks": [],
+            "current_head_sha": self._pull_request_head_sha(resource, pr),
+            "rollup": rollup,
+            "checks": checks,
             "checks_expected": False,
             "readiness": "not_applicable",
             "completion_blockers": [],
         }
+        if failed_action_logs is not None:
+            result["failed_logs"] = failed_action_logs
+        return result
 
     async def open_pr_checks(
         self, remote_url: str, branch: str
@@ -553,11 +585,14 @@ class MemberGitHubCapabilityService:
             for url in await self._linked_pull_request_urls(ticket):
                 if url not in urls:
                     urls.append(url)
-        results = [
-            result
-            for url in urls
-            if (result := await self.pr_checks(url))["readiness"] != "not_applicable"
-        ]
+        results = []
+        for url in urls:
+            resource = self.parse_url(url, expected_kind="pull")
+            if not _pull_request_readiness_applies(await self._pull_request(resource)):
+                continue
+            result = await self.pr_checks(url)
+            if result["readiness"] != "not_applicable":
+                results.append(result)
         blocked = [result for result in results if result["readiness"] != "ready"]
         if blocked:
             details = "; ".join(
