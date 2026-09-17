@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import git
+import httpx
 from git import GitCommandError
 
 from guildbotics.capabilities.member_github import (
@@ -228,7 +229,7 @@ class MemberGitWorkspaceService:
         pull_requests_error = None
         try:
             pull_requests = await self.github.open_pr_checks(remote_url, branch)
-        except MemberCapabilityError as exc:
+        except (MemberCapabilityError, httpx.HTTPError) as exc:
             pull_requests_error = str(exc)
         return PushResult(
             repo_path=str(repo_path),

@@ -415,6 +415,8 @@ class MemberGitHubCapabilityService:
             )
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
+        if not _pull_request_readiness_applies(pr):
+            return self._pull_request_checks_not_applicable(resource, pr, url)
         freshness = await self._pull_request_freshness(resource, pr)
         head_sha = freshness["head_sha"]
         actions = GitHubActionsClient(await self._get_client())
@@ -427,6 +429,15 @@ class MemberGitHubCapabilityService:
             )
             checks = _check_summaries(check_runs, statuses)
             rollup = _check_rollup(checks)
+            checks_expected = False
+            if not checks and freshness["base_sha"] != head_sha:
+                base_check_runs = await actions.check_runs(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                base_statuses = await actions.commit_statuses(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                checks_expected = bool(_check_summaries(base_check_runs, base_statuses))
             failed_action_logs = None
             if failed_logs:
                 failed_action_logs = await self._failed_action_logs(
@@ -437,12 +448,15 @@ class MemberGitHubCapabilityService:
                     check_runs,
                 )
             current = await self._pull_request(resource)
+            if not _pull_request_readiness_applies(current):
+                return self._pull_request_checks_not_applicable(resource, current, url)
             current_base_sha = await self._pull_request_current_base_sha(
                 resource, current
             )
             current_head_sha = self._pull_request_head_sha(resource, current)
             blockers = _completion_blockers(
                 rollup=rollup,
+                checks_expected=checks_expected,
                 behind_by=freshness["behind_by"],
                 base_sha=freshness["base_sha"],
                 head_sha=head_sha,
@@ -458,6 +472,7 @@ class MemberGitHubCapabilityService:
                 "current_head_sha": current_head_sha,
                 "rollup": rollup,
                 "checks": checks,
+                "checks_expected": checks_expected,
                 "readiness": "blocked" if blockers else "ready",
                 "completion_blockers": blockers,
             }
@@ -466,6 +481,27 @@ class MemberGitHubCapabilityService:
             return result
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
+
+    def _pull_request_checks_not_applicable(
+        self, resource: GitHubResource, pr: dict[str, Any], url: str
+    ) -> dict[str, Any]:
+        head_sha = self._pull_request_head_sha(resource, pr)
+        return {
+            "repo": resource.full_repo,
+            "pr_number": resource.number,
+            "pr_url": pr.get("html_url", url),
+            "base_sha": None,
+            "head_sha": head_sha,
+            "behind_by": None,
+            "out_of_date": None,
+            "current_base_sha": None,
+            "current_head_sha": head_sha,
+            "rollup": "not_applicable",
+            "checks": [],
+            "checks_expected": False,
+            "readiness": "not_applicable",
+            "completion_blockers": [],
+        }
 
     async def open_pr_checks(
         self, remote_url: str, branch: str
@@ -493,6 +529,8 @@ class MemberGitHubCapabilityService:
                 or f"{self.web_base_url()}/{owner}/{repo}/pull/{number}"
             )
             checks = await self.pr_checks(url)
+            if checks["readiness"] == "not_applicable":
+                continue
             results.append(
                 {
                     "pr_url": checks["pr_url"],
@@ -507,12 +545,19 @@ class MemberGitHubCapabilityService:
     ) -> list[dict[str, Any]]:
         """Revalidate every PR identified by a ticket run before completion."""
         urls = self._task_pull_request_urls(ticket_url, evidence)
-        ticket = self.parse_url(ticket_url)
-        if ticket.kind == "issue":
+        try:
+            ticket = self.parse_url(ticket_url)
+        except (MemberCapabilityError, ValueError):
+            ticket = None
+        if ticket is not None and ticket.kind == "issue":
             for url in await self._linked_pull_request_urls(ticket):
                 if url not in urls:
                     urls.append(url)
-        results = [await self.pr_checks(url) for url in urls]
+        results = [
+            result
+            for url in urls
+            if (result := await self.pr_checks(url))["readiness"] != "not_applicable"
+        ]
         blocked = [result for result in results if result["readiness"] != "ready"]
         if blocked:
             details = "; ".join(
@@ -1010,7 +1055,7 @@ class MemberGitHubCapabilityService:
             "behind_by": None,
             "out_of_date": None,
         }
-        if pr.get("state") != "open":
+        if not _pull_request_readiness_applies(pr):
             return unavailable
         try:
             return await self._pull_request_freshness(resource, pr)
@@ -1563,9 +1608,14 @@ def _check_rollup(checks: list[dict[str, Any]]) -> str:
     return "pending"
 
 
+def _pull_request_readiness_applies(pr: dict[str, Any]) -> bool:
+    return pr.get("state") == "open"
+
+
 def _completion_blockers(
     *,
     rollup: str,
+    checks_expected: bool,
     behind_by: int,
     base_sha: str,
     head_sha: str,
@@ -1611,6 +1661,14 @@ def _completion_blockers(
                 "code": "checks_pending",
                 "message": "CI checks are still pending.",
                 "next_action": "Wait for every check to finish, then check again.",
+            }
+        )
+    elif rollup == "no_checks" and checks_expected:
+        blockers.append(
+            {
+                "code": "checks_pending",
+                "message": "CI checks have not been registered for the PR head yet.",
+                "next_action": "Wait for CI to start, then check again.",
             }
         )
     return blockers

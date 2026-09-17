@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import git
+import httpx
 import pytest
 
 from guildbotics.capabilities import member_git
@@ -395,8 +396,15 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        MemberCapabilityError("GitHub API request failed with status 502."),
+        httpx.ConnectError("GitHub API connection failed."),
+    ],
+)
 async def test_push_stays_successful_when_pr_readiness_lookup_fails(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, failure
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
@@ -408,7 +416,7 @@ async def test_push_stays_successful_when_pr_readiness_lookup_fails(
     commit_sha = repo.index.commit("local commit").hexsha
 
     async def failed_open_pr_checks(_remote_url, _branch):
-        raise MemberCapabilityError("GitHub API request failed with status 502.")
+        raise failure
 
     monkeypatch.setattr(service.github, "open_pr_checks", failed_open_pr_checks)
 
@@ -417,7 +425,7 @@ async def test_push_stays_successful_when_pr_readiness_lookup_fails(
     assert result.pushed is True
     assert result.commits[0]["id"] == commit_sha
     assert result.pull_requests == []
-    assert result.pull_requests_error == "GitHub API request failed with status 502."
+    assert result.pull_requests_error == str(failure)
     assert result.to_dict()["pull_requests_error"] == result.pull_requests_error
     assert git.Repo(tmp_path / "remote.git").commit("main").hexsha == commit_sha
 

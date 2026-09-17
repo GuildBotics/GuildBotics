@@ -539,6 +539,8 @@ async def test_pr_checks_reports_no_checks():
             },
             "/repos/owner/repo/commits/abc123/check-runs": {"check_runs": []},
             "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+            "/repos/owner/repo/commits/base123/check-runs": {"check_runs": []},
+            "/repos/owner/repo/commits/base123/status": {"statuses": []},
         }
     )
     service._client = fake
@@ -547,8 +549,52 @@ async def test_pr_checks_reports_no_checks():
 
     assert result["rollup"] == "no_checks"
     assert result["checks"] == []
+    assert result["checks_expected"] is False
     assert result["readiness"] == "ready"
     assert result["completion_blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_pr_checks_waits_when_checks_have_not_registered_for_the_head():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/pulls/7": {
+                "head": {
+                    "sha": "abc123",
+                    "ref": "feature",
+                    "repo": {"full_name": "owner/repo"},
+                }
+            },
+            "/repos/owner/repo/commits/abc123/check-runs": {"check_runs": []},
+            "/repos/owner/repo/commits/abc123/status": {"statuses": []},
+            "/repos/owner/repo/commits/base123/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/base123/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+    assert result["rollup"] == "no_checks"
+    assert result["checks_expected"] is True
+    assert result["readiness"] == "blocked"
+    assert result["completion_blockers"] == [
+        {
+            "code": "checks_pending",
+            "message": "CI checks have not been registered for the PR head yet.",
+            "next_action": "Wait for CI to start, then check again.",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -641,6 +687,30 @@ async def test_pr_inspect_skips_freshness_for_closed_pull_requests():
 
 
 @pytest.mark.asyncio
+async def test_pr_checks_skips_readiness_for_closed_pull_requests():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "state": "closed",
+        "merged_at": "2026-09-17T00:00:00Z",
+        "head": {
+            "sha": "merged-head",
+            "ref": "feature",
+            "repo": {"full_name": "owner/repo"},
+        },
+        "base": {"sha": "old-base", "ref": "deleted-base"},
+    }
+    service._client = fake
+
+    result = await service.pr_checks("https://github.com/owner/repo/pull/7")
+
+    assert result["readiness"] == "not_applicable"
+    assert result["rollup"] == "not_applicable"
+    assert result["completion_blockers"] == []
+    assert len(fake.gets) == 1
+
+
+@pytest.mark.asyncio
 async def test_pr_checks_is_ready_after_true_base_integration_and_successful_ci():
     service = _service()
     fake = FakeClient()
@@ -686,6 +756,7 @@ async def test_pr_checks_blocks_a_head_that_changes_during_readiness_check():
     endpoint = "/repos/owner/repo/pulls/7"
     fake.get_sequences[endpoint] = [
         {
+            "state": "open",
             "html_url": "https://github.com/owner/repo/pull/7",
             "head": {
                 "sha": "old-head",
@@ -695,6 +766,7 @@ async def test_pr_checks_blocks_a_head_that_changes_during_readiness_check():
             "base": {"sha": "base123", "ref": "main"},
         },
         {
+            "state": "open",
             "html_url": "https://github.com/owner/repo/pull/7",
             "head": {
                 "sha": "new-head",
@@ -930,6 +1002,102 @@ async def test_task_completion_adds_pull_requests_linked_from_an_issue(monkeypat
 
     assert calls == ["https://github.com/owner/repo/pull/7"]
     assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_completion_checks_only_open_pull_requests_from_issue_timeline():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads.update(
+        {
+            "/repos/owner/repo/issues/1/timeline": [
+                {
+                    "source": {
+                        "issue": {
+                            "html_url": "https://github.com/owner/repo/pull/7",
+                            "pull_request": {},
+                        }
+                    }
+                },
+                {
+                    "source": {
+                        "issue": {
+                            "html_url": "https://github.com/owner/repo/pull/8",
+                            "pull_request": {},
+                        }
+                    }
+                },
+            ],
+            "/repos/owner/repo/pulls/7": {
+                "state": "closed",
+                "merged_at": "2026-09-17T00:00:00Z",
+                "html_url": "https://github.com/owner/repo/pull/7",
+                "head": {
+                    "sha": "merged-head",
+                    "ref": "merged",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "old-base", "ref": "deleted-base"},
+            },
+            "/repos/owner/repo/pulls/8": {
+                "state": "open",
+                "html_url": "https://github.com/owner/repo/pull/8",
+                "head": {
+                    "sha": "open-head",
+                    "ref": "open",
+                    "repo": {"full_name": "owner/repo"},
+                },
+                "base": {"sha": "base123", "ref": "main"},
+            },
+            "/repos/owner/repo/compare/base123...open-head": {"behind_by": 0},
+            "/repos/owner/repo/commits/open-head/check-runs": {
+                "check_runs": [
+                    {
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+            "/repos/owner/repo/commits/open-head/status": {"statuses": []},
+        }
+    )
+    service._client = fake
+
+    results = await service.task_completion_readiness(
+        "https://github.com/owner/repo/issues/1", []
+    )
+
+    assert [result["pr_number"] for result in results] == [8]
+    assert not any(
+        "merged-head" in endpoint or "deleted-base" in endpoint
+        for endpoint, _params, _headers in fake.gets
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_completion_accepts_non_url_ticket_identifiers(monkeypatch):
+    service = _service()
+
+    async def fake_pr_checks(url, **_kwargs):
+        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
+
+    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+
+    results = await service.task_completion_readiness(
+        "task:123",
+        [
+            {
+                "payload": {
+                    "pr_url": "https://github.com/owner/repo/pull/7",
+                }
+            }
+        ],
+    )
+
+    assert [result["pr_url"] for result in results] == [
+        "https://github.com/owner/repo/pull/7"
+    ]
 
 
 @pytest.mark.asyncio

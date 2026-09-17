@@ -117,12 +117,14 @@ Trust rules that follow from this shape:
   the completion record (`member task complete` / `member chat complete`) and the run
   evidence store are authoritative.
 - Ticket completion with `status=done` resolves affected pull requests from the issue
-  timeline and run evidence, then revalidates each PR against GitHub's current state.
-  Completion is rejected when observed CI fails or remains pending, the head does not
-  contain the current base, or the head/base changes during the check. A repository with
-  no checks remains distinguishable as `rollup=no_checks` but is not blocked. Interactive
-  push/publish results expose compact readiness and blockers for matching open PRs;
-  readiness lookup failure does not turn a successful push into a failed command.
+  timeline and run evidence, then revalidates each open PR against GitHub's current state;
+  closed and merged PRs are not readiness targets. Completion is rejected when observed
+  CI fails or remains pending, the head does not contain the current base, or the head/base
+  changes during the check. `rollup=no_checks` stays non-blocking when the current base also
+  has no checks, while checks on the base make an empty head a registration-pending blocker.
+  Interactive push/publish results expose compact readiness and blockers for matching open
+  PRs; readiness lookup failure, including an HTTP transport failure, does not turn a
+  successful push into a failed command.
 - Credentials are resolved by the member CLI itself from the active workspace (config +
   secret store), never inherited from the agent's environment — AI CLI tools strip or
   isolate `*TOKEN*`-like variables from subprocess environments, so inheritance cannot
