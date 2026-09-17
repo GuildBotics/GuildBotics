@@ -8,6 +8,7 @@ policy-violation close on a bad token, replayed history content, delivery to an
 already-connected client, and subscription cleanup after disconnect.
 """
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from guildbotics.app_api.api import create_app
+from guildbotics.app_api.api import _stream, create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.observability import trace_scope
 
@@ -205,3 +206,33 @@ def _wait_for_no_subscribers(subscribers: set, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while subscribers and time.monotonic() < deadline:
         time.sleep(0.01)
+
+
+def test_stream_ends_on_disconnect_while_no_event_is_pending() -> None:
+    """A closed socket must end the handler without waiting for an event.
+
+    The server closes every websocket when it shuts down and then waits for the
+    handlers; one that only noticed the close on its next send would hold that
+    shutdown open for as long as the bus stays quiet.
+    """
+    event_bus = EventBus()
+
+    class ClosedSocket:
+        async def accept(self) -> None:
+            return None
+
+        async def receive(self) -> dict[str, object]:
+            return {"type": "websocket.disconnect", "code": 1012}
+
+        async def send_json(self, item: object) -> None:
+            raise AssertionError("no event was published")
+
+    async def run() -> None:
+        await asyncio.wait_for(
+            _stream(ClosedSocket(), "secret", "secret", event_bus.subscribe_events),
+            timeout=5,
+        )
+
+    asyncio.run(run())
+
+    assert event_bus._event_subscribers == set()

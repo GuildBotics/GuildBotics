@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from guildbotics.app_api.activity_events import ActivityEventType
 from guildbotics.commands.formats import CommandFormat
@@ -51,6 +58,12 @@ class HealthResponse(BaseModel):
     status: str
     service_instance_id: str
     workspace: Path | None
+
+
+class ShutdownResponse(BaseModel):
+    """Accepted shutdown: how long the host must leave the teardown alone."""
+
+    teardown_budget_seconds: float
 
 
 class ConfigStatus(BaseModel):
@@ -933,6 +946,22 @@ class RuntimeStatus(BaseModel):
     scheduler: RuntimeUnitStatus
     events: RuntimeUnitStatus
     active_works: list[RuntimeActiveWork] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def has_active_work(self) -> bool:
+        """Whether stopping the backend now would cut running work off.
+
+        The one answer every caller shares: the workspace switch, the desktop
+        quit guard, and the host deciding whether a system quit may proceed.
+        """
+        return (
+            self.scheduler.running
+            or self.events.running
+            or bool(self.active_works)
+            or self.scheduler.state == "stopping"
+            or self.events.state == "stopping"
+        )
 
 
 class ChatReceiveResetResponse(BaseModel):

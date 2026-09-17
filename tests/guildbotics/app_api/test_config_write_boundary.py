@@ -84,6 +84,7 @@ ELSEWHERE = {
     ("POST", "/hub/trust"): "~/.ssh/known_hosts",
     ("POST", "/scheduler/start"): "runtime lifecycle",
     ("POST", "/scheduler/stop"): "runtime lifecycle",
+    ("POST", "/shutdown"): "runtime lifecycle",
     ("POST", "/system-alerts/dismiss"): "local/run state",
     ("POST", "/verify"): "runs checks",
     ("POST", "/workspace"): "selects a workspace",

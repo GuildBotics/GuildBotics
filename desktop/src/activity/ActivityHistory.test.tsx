@@ -155,6 +155,7 @@ function runtimeStatus(activeWorks: RuntimeActiveWork[]): RuntimeStatus {
     scheduler: runtimeUnitStatus(),
     events: { ...runtimeUnitStatus(), target: "events" },
     active_works: activeWorks,
+    has_active_work: activeWorks.length > 0,
   };
 }
 

@@ -246,6 +246,7 @@ function runtimeStatus(overrides: Record<string, unknown> = {}) {
   return {
     scheduler: runtimeUnit("scheduler"),
     events: runtimeUnit("events"),
+    has_active_work: false,
     ...overrides,
   };
 }
@@ -429,7 +430,10 @@ describe("Service Runtime integration (real client + mock server)", () => {
     server.json(
       "GET",
       "/scheduler/status",
-      runtimeStatus({ scheduler: runtimeUnit("scheduler", { state: "running", running: true }) }),
+      runtimeStatus({
+        scheduler: runtimeUnit("scheduler", { state: "running", running: true }),
+        has_active_work: true,
+      }),
     );
     const user = userEvent.setup();
     renderApp(server, "/service");

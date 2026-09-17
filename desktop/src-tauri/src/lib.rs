@@ -1,8 +1,10 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -22,8 +24,20 @@ struct BackendState {
     token: String,
     port: u16,
     boot_log_path: PathBuf,
-    child: Mutex<Option<CommandChild>>,
+    sidecar: Mutex<Option<Sidecar>>,
 }
+
+struct Sidecar {
+    child: CommandChild,
+    /// Disconnects once the process has terminated.
+    exited: Receiver<()>,
+}
+
+const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// What the process still needs after its teardown has finished: the server
+/// closing down and, in a packaged build, the bootloader cleaning up after it.
+/// How long the teardown itself may take is the backend's to say.
+const BACKEND_EXIT_MARGIN: Duration = Duration::from_secs(5);
 
 const BOOT_LOG_MAX_BYTES: usize = 1024 * 1024;
 const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
@@ -112,6 +126,14 @@ fn append_boot_log(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::write(path, &content[start..])
 }
 
+/// Record a host-side event next to the backend's own output, so one log tells
+/// how a session ended: who asked for the quit, and whether it was confirmed.
+pub(crate) fn log_host_event(app: &tauri::AppHandle, message: &str) {
+    if let Some(state) = app.try_state::<BackendState>() {
+        let _ = append_boot_log(&state.boot_log_path, message.as_bytes());
+    }
+}
+
 fn read_boot_log_tail(path: &Path) -> io::Result<String> {
     let mut content = Vec::new();
     fs::File::open(path)?.read_to_end(&mut content)?;
@@ -151,6 +173,108 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
     force_install_skill_file(&skill_dir(&home, agent, &agent_home), GUILDBOTICS_SKILL)
         .map_err(|error| error.to_string())?;
     Ok(cli_agent_skill_status(&home, agent))
+}
+
+/// One request to the Local API over loopback: the status code and the body.
+fn backend_request(port: u16, token: &str, method: &str, path: &str) -> io::Result<(u16, String)> {
+    let mut stream = TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], port)),
+        BACKEND_REQUEST_TIMEOUT,
+    )?;
+    stream.set_read_timeout(Some(BACKEND_REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(BACKEND_REQUEST_TIMEOUT))?;
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         X-GuildBotics-Session-Token: {token}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| io::Error::other("malformed response from the backend"))?;
+    Ok((status, body.to_owned()))
+}
+
+/// Ask the Local API to exit through its own shutdown path, so its teardown
+/// (scheduler stop, sync deactivation, session finish) runs before it goes.
+///
+/// Returns how long the backend says that teardown may take. The host waits
+/// that long rather than keeping a number of its own, which would go stale the
+/// moment the teardown gained a step and cut an orderly teardown short.
+fn request_backend_shutdown(port: u16, token: &str) -> io::Result<Duration> {
+    let (status, body) = backend_request(port, token, "POST", "/shutdown")?;
+    if status != 202 {
+        return Err(io::Error::other(format!(
+            "unexpected shutdown response: {status}"
+        )));
+    }
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|accepted| accepted.get("teardown_budget_seconds")?.as_f64())
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .ok_or_else(|| io::Error::other("the backend did not state its teardown budget"))
+}
+
+/// Whether the backend has work that a quit would cut off. Anything short of
+/// a clear "no" counts as yes: an unreadable state says nothing about the work.
+fn backend_has_active_work(port: u16, token: &str) -> bool {
+    let Ok((200, body)) = backend_request(port, token, "GET", "/scheduler/status") else {
+        return true;
+    };
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|status| status.get("has_active_work")?.as_bool())
+        .unwrap_or(true)
+}
+
+/// Whether a quit the app did not start itself (the Dock's Quit, logout) has
+/// to go through the frontend's guard first. An idle app lets it proceed, so
+/// it never holds up a logout it has no reason to.
+pub(crate) fn quit_needs_confirmation(app: &tauri::AppHandle) -> bool {
+    app.try_state::<BackendState>()
+        .is_none_or(|state| backend_has_active_work(state.port, &state.token))
+}
+
+fn wait_for_exit(exited: &Receiver<()>, timeout: Duration) -> io::Result<()> {
+    match exited.recv_timeout(timeout) {
+        Err(RecvTimeoutError::Disconnected) => Ok(()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "backend did not exit in time",
+        )),
+    }
+}
+
+/// Stop the sidecar gracefully, killing it only when that fails.
+///
+/// This runs on `RunEvent::Exit`, the one point every way of quitting passes
+/// through. macOS can terminate the app without asking it first (the Dock's
+/// Quit, logout), so the quit confirmation cannot be what keeps the backend
+/// from being cut off mid-write.
+fn stop_backend(state: &BackendState) {
+    // Tolerate a poisoned mutex so the app can still exit cleanly.
+    let mut guard = match state.sidecar.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(sidecar) = guard.take() else {
+        return;
+    };
+    let stopped = request_backend_shutdown(state.port, &state.token)
+        .and_then(|budget| wait_for_exit(&sidecar.exited, budget + BACKEND_EXIT_MARGIN));
+    let outcome = match stopped {
+        Ok(()) => "backend shut down gracefully".to_owned(),
+        Err(error) => {
+            let _ = sidecar.child.kill();
+            format!("backend killed after a failed graceful shutdown: {error}")
+        }
+    };
+    let _ = append_boot_log(&state.boot_log_path, outcome.as_bytes());
 }
 
 /// Reserve a free loopback TCP port by binding to port 0 and reading back the
@@ -482,6 +606,7 @@ fn install_cli_agent_assets() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
 
     struct TestDir {
         path: PathBuf,
@@ -511,6 +636,112 @@ mod tests {
             .iter()
             .find(|candidate| candidate.name == name)
             .expect("known AI CLI tool")
+    }
+
+    /// Serve one canned HTTP response and hand back the request that came in.
+    fn serve_once(response: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = String::new();
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            while !request.ends_with("\r\n\r\n") {
+                reader.read_line(&mut request).expect("read");
+            }
+            stream.write_all(response.as_bytes()).expect("write");
+            request
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn shutdown_request_posts_the_session_token() {
+        let (port, server) =
+            serve_once("HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":60.5}");
+
+        let budget = request_backend_shutdown(port, "session-token").expect("accepted");
+
+        assert_eq!(budget, Duration::from_millis(60_500));
+
+        let request = server.join().expect("server");
+        assert!(request.starts_with("POST /shutdown HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+    }
+
+    #[test]
+    fn shutdown_request_fails_unless_the_backend_accepts_it() {
+        let (port, server) = serve_once("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
+
+        let error = request_backend_shutdown(port, "stale").unwrap_err();
+
+        server.join().expect("server");
+        assert!(error.to_string().contains("401"));
+    }
+
+    #[test]
+    fn active_work_is_read_from_the_backend_status() {
+        let (port, server) = serve_once(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"has_active_work\":false}",
+        );
+
+        assert!(!backend_has_active_work(port, "session-token"));
+
+        let request = server.join().expect("server");
+        assert!(request.starts_with("GET /scheduler/status HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+    }
+
+    #[test]
+    fn anything_but_a_clear_no_counts_as_active_work() {
+        for response in [
+            "HTTP/1.1 200 OK\r\n\r\n{\"has_active_work\":true}",
+            "HTTP/1.1 200 OK\r\n\r\n{\"scheduler\":{}}",
+            "HTTP/1.1 200 OK\r\n\r\nnot json",
+            "HTTP/1.1 401 Unauthorized\r\n\r\n{\"has_active_work\":false}",
+        ] {
+            let (port, server) = serve_once(response);
+            assert!(backend_has_active_work(port, "token"), "{response}");
+            server.join().expect("server");
+        }
+        assert!(backend_has_active_work(pick_free_port(), "token"));
+    }
+
+    #[test]
+    fn shutdown_request_fails_without_a_usable_teardown_budget() {
+        for response in [
+            "HTTP/1.1 202 Accepted\r\n\r\n",
+            "HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":-1}",
+            "HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":\"soon\"}",
+        ] {
+            let (port, server) = serve_once(response);
+            assert!(
+                request_backend_shutdown(port, "token").is_err(),
+                "{response}"
+            );
+            server.join().expect("server");
+        }
+    }
+
+    #[test]
+    fn shutdown_request_fails_when_nothing_listens() {
+        let port = pick_free_port();
+
+        assert!(request_backend_shutdown(port, "token").is_err());
+    }
+
+    #[test]
+    fn wait_for_exit_tells_an_exited_backend_from_a_running_one() {
+        let (running, exited) = mpsc::channel::<()>();
+        assert_eq!(
+            wait_for_exit(&exited, Duration::from_millis(10))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+
+        drop(running);
+        assert!(wait_for_exit(&exited, Duration::from_millis(10)).is_ok());
     }
 
     #[test]
@@ -810,6 +1041,9 @@ pub fn run() {
     let port = pick_free_port();
 
     tauri::Builder::default()
+        // `tray::build` installs the app menu: the default one quits through
+        // `terminate:`, which no quit guard gets to see.
+        .enable_macos_default_menu(false)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -874,11 +1108,15 @@ pub fn run() {
                         .args(["--host", "127.0.0.1", "--port", &port_arg])
                         .spawn()
                 });
-            let child = match spawn_result {
+            let sidecar = match spawn_result {
                 Ok((mut rx, child)) => {
                     // Keep the child's stdout/stderr pipe drained so it never blocks.
                     let event_log_path = boot_log_path.clone();
+                    let (running, exited) = mpsc::channel::<()>();
                     tauri::async_runtime::spawn(async move {
+                        // Dropped when this task ends, which is how
+                        // `stop_backend` sees the process exit.
+                        let _running = running;
                         while let Some(event) = rx.recv().await {
                             match event {
                                 CommandEvent::Stderr(bytes) => {
@@ -901,7 +1139,7 @@ pub fn run() {
                             }
                         }
                     });
-                    Some(child)
+                    Some(Sidecar { child, exited })
                 }
                 Err(error) => {
                     let _ = append_boot_log(
@@ -916,7 +1154,7 @@ pub fn run() {
                 token,
                 port,
                 boot_log_path,
-                child: Mutex::new(child),
+                sidecar: Mutex::new(sidecar),
             });
             Ok(())
         })
@@ -932,15 +1170,7 @@ pub fn run() {
             }
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<BackendState>() {
-                    // Tolerate a poisoned mutex so the app can still exit cleanly;
-                    // recover the guard and kill the child if one is present.
-                    let mut guard = match state.child.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    if let Some(child) = guard.take() {
-                        let _ = child.kill();
-                    }
+                    stop_backend(&state);
                 }
             }
         });

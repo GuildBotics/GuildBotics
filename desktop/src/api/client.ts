@@ -112,6 +112,8 @@ export type RuntimeStatus = {
   scheduler: RuntimeUnitStatus;
   events: RuntimeUnitStatus;
   active_works?: RuntimeActiveWork[];
+  /** Whether stopping the backend now would cut running work off. */
+  has_active_work: boolean;
 };
 
 export type ChatReceiveResetResponse = {

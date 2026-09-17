@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import secrets
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -112,6 +113,7 @@ from guildbotics.app_api.models import (
     SchedulerStopRequest,
     SecretTransferRequest,
     SecretTransferResponse,
+    ShutdownResponse,
     SlackAppRegistrationStartRequest,
     SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
@@ -193,6 +195,15 @@ def _request_language(request: Request) -> str:
 # through ``create_app(allowed_origins=...)`` instead of matching a pattern.
 TAURI_ORIGINS = ["tauri://localhost", "http://tauri.localhost"]
 
+# How long the lifespan teardown may take before the host gives up on it. The
+# backend owns this number and hands it to the host with every accepted
+# shutdown, so the two cannot disagree about when a teardown is still orderly.
+# It has to cover every wait the teardown can run into, each at its limit: a
+# forced runtime stop (event listener join, scheduler shutdown, scheduler join,
+# work drain), the sync queue stop, the relay stop, and the diagnostics
+# maintenance join.
+TEARDOWN_BUDGET_SECONDS = 60.0
+
 logger = logging.getLogger("guildbotics.app_api")
 
 
@@ -253,7 +264,7 @@ def create_app(
     # one answer to "where is the hub" instead of resolving it twice.
     secret_service = WorkspaceSecretService(sync_service)
 
-    @asynccontextmanager
+    @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger = logging.getLogger("guildbotics")
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
@@ -292,6 +303,9 @@ def create_app(
     app.state.session_token = token
     app.state.runtime = app_runtime
     app.state.event_bus = bus
+    # The server hosting this app installs the real hook; without one (tests,
+    # embedding) there is nothing to stop.
+    app.state.request_shutdown = lambda: None
 
     # Added before CORS so that CORS wraps it: the JSON error it builds travels
     # back out through the CORS layer and carries its headers.
@@ -396,6 +410,24 @@ def create_app(
             service_instance_id=system_service_run_id,
             workspace=app_runtime.get_config_status().workspace,
         )
+
+    @app.post(
+        "/shutdown",
+        status_code=202,
+        response_model=ShutdownResponse,
+        responses=error_responses,
+    )
+    def shutdown(_: None = Depends(require_token)) -> ShutdownResponse:
+        """Ask the hosting server to exit through its normal shutdown path.
+
+        The desktop host calls this before it would kill the sidecar, so the
+        lifespan teardown (scheduler stop, sync deactivation, session finish)
+        runs no matter which route the app took to quit. The answer tells the
+        host how long that teardown may take, so it does not kill one that is
+        still within its own limits.
+        """
+        app.state.request_shutdown()
+        return ShutdownResponse(teardown_budget_seconds=TEARDOWN_BUDGET_SECONDS)
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:
@@ -1901,10 +1933,20 @@ async def _stream(
 
     await websocket.accept()
     queue = subscribe()
-    try:
+
+    async def send() -> None:
         while True:
             await websocket.send_json(await queue.get())
-    except WebSocketDisconnect:
-        pass
+
+    sender = asyncio.create_task(send())
+    try:
+        # Clients never send. Receiving is how a closed socket becomes visible
+        # while no event is pending; a handler that only sends would hold the
+        # server's shutdown open until the next event.
+        while (await websocket.receive())["type"] != "websocket.disconnect":
+            pass
     finally:
+        sender.cancel()
+        with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect):
+            await sender
         queue.close()
