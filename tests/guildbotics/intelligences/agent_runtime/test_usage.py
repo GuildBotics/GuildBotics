@@ -183,6 +183,7 @@ _GROK_BILLING = {
             "start": "2026-08-07T07:37:18.756767+00:00",
             "end": "2026-08-14T07:37:18.756767+00:00",
         },
+        "creditUsagePercent": 37.5,
         "onDemandCap": {"val": 0},
         "onDemandUsed": {"val": 0},
         "prepaidBalance": {"val": 0},
@@ -194,7 +195,7 @@ _GROK_BILLING = {
 }
 
 
-def test_parse_grok_billing_reads_percentless_subscription_window() -> None:
+def test_parse_grok_billing_reads_subscription_window() -> None:
     snapshot = parse_grok_billing(
         _GROK_BILLING, {"authenticated": True, "meta": {"gate": None}}
     )
@@ -204,10 +205,70 @@ def test_parse_grok_billing_reads_percentless_subscription_window() -> None:
     assert len(snapshot.windows) == 1
     window = snapshot.windows[0]
     assert window.window == "subscription"
-    assert window.used_percent is None
+    assert window.used_percent == 37.5
     assert window.resets_at == "2026-08-14T07:37:18.756767+00:00"
     assert window.window_minutes == 10_080
     assert snapshot.checked_at
+
+
+@pytest.mark.parametrize(
+    ("used_percent", "limit_reached"),
+    [(0, False), (100, True), (125.5, True)],
+)
+def test_parse_grok_billing_accepts_subscription_percent_boundaries(
+    used_percent: float, limit_reached: bool
+) -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "creditUsagePercent": used_percent,
+        }
+    }
+
+    snapshot = parse_grok_billing(billing, {})
+
+    assert snapshot.windows[0].used_percent == used_percent
+    assert snapshot.limit_reached is limit_reached
+
+
+@pytest.mark.parametrize(
+    "used_percent", [None, "bad", -1, True, float("nan"), float("inf")]
+)
+def test_parse_grok_billing_drops_missing_or_invalid_subscription_percent(
+    used_percent: Any,
+) -> None:
+    billing = {
+        "config": {
+            **_GROK_BILLING["config"],
+            "creditUsagePercent": used_percent,
+            "onDemandCap": {"val": 100},
+            "onDemandUsed": {"val": 50},
+        }
+    }
+
+    snapshot = parse_grok_billing(billing, {})
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+def test_parse_grok_billing_preserves_gate_without_subscription_percent() -> None:
+    snapshot = parse_grok_billing(
+        {"config": {"currentPeriod": _GROK_BILLING["config"]["currentPeriod"]}},
+        {"authenticated": True, "meta": {"gate": {"reason": "usage_limit"}}},
+    )
+
+    assert snapshot.windows == []
+    assert snapshot.limit_reached
+
+
+def test_parse_grok_billing_keeps_percent_without_period() -> None:
+    snapshot = parse_grok_billing({"config": {"creditUsagePercent": 12.5}}, {})
+
+    assert len(snapshot.windows) == 1
+    assert snapshot.windows[0].used_percent == 12.5
+    assert snapshot.windows[0].resets_at == ""
+    assert snapshot.windows[0].window_minutes is None
 
 
 def test_parse_grok_billing_reports_on_demand_credit_percent() -> None:
@@ -512,7 +573,7 @@ async def test_read_grok_usage_probes_agent_stdio(
     ]
     assert process.messages[1]["params"] == {"methodId": "cached_token"}
     assert snapshot.agent == "grok"
-    assert snapshot.windows[0].used_percent is None
+    assert snapshot.windows[0].used_percent == 37.5
     assert snapshot.windows[0].resets_at == "2026-08-14T07:37:18.756767+00:00"
     assert not snapshot.limit_reached
     assert fake_environment.started[-1].closed
@@ -613,8 +674,8 @@ def test_usage_reader_registry_covers_supported_tools() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
-@pytest.mark.parametrize("outcome", ["windows", "empty", "error"])
-async def test_usage_recovery_only_clears_authentication_on_usable_data(
+@pytest.mark.parametrize("outcome", ["windows", "limit", "empty", "error"])
+async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     monkeypatch, name, outcome
 ):
     from guildbotics.intelligences.agent_environment import provider_state
@@ -631,12 +692,14 @@ async def test_usage_recovery_only_clears_authentication_on_usable_data(
             windows=[usage_module.CliAgentUsageWindow("primary", 12)]
             if outcome == "windows"
             else [],
+            limit_reached=outcome == "limit",
         )
 
     monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
-    if outcome != "windows":
+    succeeded = outcome in {"windows", "limit"}
+    if not succeeded:
         with pytest.raises(CliAgentUsageError):
             await usage_module.read_cli_agent_usage(name)
     else:
         await usage_module.read_cli_agent_usage(name)
-    assert provider_state.authentication_failed(tool) is (outcome != "windows")
+    assert provider_state.authentication_failed(tool) is not succeeded

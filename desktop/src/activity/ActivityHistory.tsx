@@ -1304,7 +1304,7 @@ export function rateLimitFromUsage(
     return null;
   }
   const exhausted = usage.windows.filter(
-    (window) => (window.used_percent ?? 0) >= 100 && window.resets_at,
+    (window) => window.used_percent >= 100 && window.resets_at,
   );
   const candidates = exhausted.length
     ? exhausted
@@ -1348,19 +1348,12 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
   const meters = (
     <div className="activity-member-usage">
       {meterWindows.map((window, index) => {
-        // A provider may report only the window's reset time (e.g. Grok's
-        // weekly subscription period): the row then drops the meter bar and
-        // shows the reset alone.
-        const hasPercent = window.used_percent != null;
-        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent ?? 0)));
+        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
         const label = usageWindowName(window);
         const labelPrefix = label ? `${label} ` : "";
         const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
-        if (!hasPercent && !reset) {
-          return null;
-        }
-        const level = !hasPercent ? "" : percent >= 100 ? "danger" : percent >= 80 ? "warning" : "";
-        const summary = hasPercent ? `${labelPrefix}${percent}%` : labelPrefix.trim();
+        const level = percent >= 100 ? "danger" : percent >= 80 ? "warning" : "";
+        const summary = `${labelPrefix}${percent}%`;
         // The row uses display:contents, so the native tooltip has to live on
         // the visible cells rather than the row wrapper.
         const title = window.resets_at
@@ -1376,21 +1369,19 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
                 {label}
               </span>
             ) : null}
-            {hasPercent ? (
-              <span
-                className="activity-member-usage-bar"
-                role="meter"
-                title={title}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
-                aria-label={`${labelPrefix}${percent}%`}
-              >
-                <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
-              </span>
-            ) : null}
+            <span
+              className="activity-member-usage-bar"
+              role="meter"
+              title={title}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-label={`${labelPrefix}${percent}%`}
+            >
+              <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
+            </span>
             <span className="activity-member-usage-value" title={title}>
-              {hasPercent ? `${percent}%${reset ? ` · ${reset}` : ""}` : reset}
+              {`${percent}%${reset ? ` · ${reset}` : ""}`}
             </span>
           </span>
         );
@@ -1416,7 +1407,7 @@ function MemberUsageDetail({ usage }: { usage: CliAgentUsage }) {
   return (
     <div className="activity-member-usage-detail">
       {usage.windows.map((window, index) => {
-        const percent = window.used_percent != null ? `${Math.round(window.used_percent)}%` : "";
+        const percent = `${Math.round(window.used_percent)}%`;
         const reset = window.resets_at ? formatShortTimestamp(window.resets_at) : "";
         return (
           <div key={`${window.window}-${index}`} className="activity-member-usage-detail-row">
