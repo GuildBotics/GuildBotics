@@ -11,11 +11,18 @@ So the population is enumerated here rather than sampled. Every
 ``trace_scope(...)`` call site in the package is discovered and must be
 declared with the completion event that route records. A new trace root fails
 this test until its author answers the same question.
+
+The same holds for *how* a run ends: a boundary that records the start of a
+run has to record its end however the run ends. Cancellation is the case that
+hides, because ``CancelledError`` and ``KeyboardInterrupt`` are not
+``Exception``, so the functions that record both ends of a run are enumerated
+here too and must catch ``BaseException``.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import guildbotics
@@ -100,3 +107,86 @@ def test_declared_completion_events_can_end_a_trace() -> None:
     # A route may only claim an event the status resolver actually accepts as
     # the end of the whole trace.
     assert set(TRACE_ROOTS.values()) <= TRACE_COMPLETED_EVENT_TYPES
+
+
+#: ``module path -> functions that record both ends of the boundary``. A trace
+#: root delegates its boundary to one of these, so this is the population that
+#: has to survive a cancelled run.
+COMMAND_BOUNDARIES: set[tuple[str, str]] = {
+    # Chat dispatch and the scheduler's commands, through ``run_with_logging``.
+    ("guildbotics/drivers/utils.py", "command_boundary"),
+    # The Desktop assistant turn and manual command run.
+    ("guildbotics/app_api/runtime.py", "_assistant_turn"),
+    ("guildbotics/app_api/runtime.py", "_run_command_traced"),
+    # An interactive member CLI command.
+    ("guildbotics/cli/member.py", "_run_interactive"),
+}
+
+_EVENT_TYPE = re.compile(r"^[a-z_]+(?:\.[a-z_]+)+$")
+
+
+def _records_event(node: ast.AST, suffix: str) -> bool:
+    return any(
+        isinstance(child, ast.Constant)
+        and isinstance(child.value, str)
+        and _EVENT_TYPE.fullmatch(child.value)
+        and child.value.endswith(suffix)
+        for child in ast.walk(node)
+    )
+
+
+def _discover_command_boundaries() -> set[tuple[str, str]]:
+    boundaries: set[tuple[str, str]] = set()
+    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if _records_event(node, ".started") and _records_event(node, ".failed"):
+                module = path.relative_to(REPOSITORY_ROOT).as_posix()
+                boundaries.add((module, node.name))
+    return boundaries
+
+
+def _catches_base_exception(handler: ast.ExceptHandler) -> bool:
+    caught = handler.type
+    names = caught.elts if isinstance(caught, ast.Tuple) else [caught]
+    return any(
+        isinstance(name, ast.Name) and name.id == "BaseException" for name in names
+    )
+
+
+def test_every_command_boundary_is_declared() -> None:
+    discovered = _discover_command_boundaries()
+    assert discovered == COMMAND_BOUNDARIES, (
+        "these functions record a start and a failure of the same run but are "
+        f"not declared as command boundaries: {sorted(discovered ^ COMMAND_BOUNDARIES)}"
+    )
+
+
+def test_every_command_boundary_ends_a_cancelled_run() -> None:
+    # A boundary that only catches ``Exception`` misses ``CancelledError`` and
+    # ``KeyboardInterrupt``, which are how a stop ends the work it is draining.
+    # Its ``*.started`` would then be the last record of the trace, so the
+    # execution reads as running forever -- the very state this suite exists
+    # to keep out.
+    offenders = []
+    for module, function_name in sorted(COMMAND_BOUNDARIES):
+        tree = ast.parse((REPOSITORY_ROOT / module).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if node.name != function_name:
+                continue
+            handlers = [
+                handler
+                for handler in ast.walk(node)
+                if isinstance(handler, ast.ExceptHandler)
+                and _records_event(handler, ".failed")
+            ]
+            if not any(_catches_base_exception(handler) for handler in handlers):
+                offenders.append(f"{module}:{function_name}")
+    assert not offenders, (
+        "these boundaries leave a cancelled run without an end event: "
+        f"{sorted(offenders)}"
+    )

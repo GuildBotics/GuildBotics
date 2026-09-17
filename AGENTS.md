@@ -108,7 +108,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 
 - diagnostics record の統一スキーマでの記録・永続化（`diagnostics_store.py`、`run/diagnostics.jsonl`）
 - trace / span の相関（`correlation_fields`）と correlated event の記録（`diagnostics_events.py`）
-- 1 つの実行（trace）の状態判定（`trace_status.py`）。アクティビティ画面と診断画面は同じ record に同じ問いを立てるので、判定は 1 つだけ置く。trace が成功になるのは **trace を開いた層が記録した完了イベント**（`event_types.py` の `TRACE_COMPLETED_EVENT_TYPES`）によるときだけで、`span.finished` は provider の 1 回の呼び出しが返ったことしか言わない（chat workflow は agent turn の前に LLM 判定を 1 回行うため、これを成功と読むと実行中が「成功」になる）。したがって `trace_scope` を開く経路はすべて自分の完了イベントを記録する。母集団は `tests/guildbotics/test_trace_boundaries.py` が列挙し、新しい trace root はどのイベントで終わるかを宣言しないと落ちる
+- 1 つの実行（trace）の状態判定（`trace_status.py`）。アクティビティ画面と診断画面は同じ record に同じ問いを立てるので、判定は 1 つだけ置く。trace が成功になるのは **trace を開いた層が記録した完了イベント**（`event_types.py` の `TRACE_COMPLETED_EVENT_TYPES`）によるときだけで、`span.finished` は provider の 1 回の呼び出しが返ったことしか言わない（chat workflow は agent turn の前に LLM 判定を 1 回行うため、これを成功と読むと実行中が「成功」になる）。したがって `trace_scope` を開く経路はすべて自分の完了イベントを記録する。母集団は `tests/guildbotics/test_trace_boundaries.py` が列挙し、新しい trace root はどのイベントで終わるかを宣言しないと落ちる。境界は run の終わり方を問わず終端する（cancellation も含む）。`asyncio.CancelledError` と `KeyboardInterrupt` は `Exception` ではないので、`except Exception` だけの境界は service stop / Ctrl-C のあとに `command.started` だけを残し、実行が永久に「進行中」になる。同じテストが境界の母集団も列挙して `BaseException` の捕捉を課す。失敗の分類は `capabilities/completion_retry.command_failure_payload()` の 1 か所（`code` が Desktop の alert 規則と対になっている）
 - interactive session の管理（`interactive_sessions.py`）
 
 禁止:

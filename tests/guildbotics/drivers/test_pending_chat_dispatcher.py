@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import types
 
 import pytest
@@ -269,6 +270,42 @@ async def test_dispatch_records_a_failed_boundary_and_still_retries(
     assert store.load_pending_events("slack", "alice", "C1")[0].last_error_category == (
         "failed"
     )
+
+
+@pytest.mark.asyncio
+async def test_cancelled_dispatch_records_a_failed_boundary(monkeypatch, tmp_path):
+    # Stopping the service cancels the cycle this dispatch runs in.
+    # ``CancelledError`` is not an ``Exception``, so a boundary that only
+    # caught ``Exception`` left ``command.started`` as the trace's last record
+    # and the run read as still going after the service had stopped.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+
+    class _Runner:
+        def __init__(self, context, command, args):
+            pass
+
+        async def run(self):
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _Runner
+    )
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher.process_person(
+            Person(person_id="alice", name="A", is_active=True)
+        )
+
+    assert [item["type"] for item in recorded] == ["command.started", "command.failed"]
+    # Classified as a cancellation, so stopping the service raises no Desktop
+    # execution alert for the work it drained.
+    assert recorded[-1]["payload"]["code"] == "cancelled"
+    assert resolve_trace_status(recorded) == "failed"
+    # The event is still queued: cancellation is not a consumed attempt.
+    assert store.load_pending_events("slack", "alice", "C1")
 
 
 @pytest.mark.asyncio

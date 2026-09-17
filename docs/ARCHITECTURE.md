@@ -205,6 +205,17 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   finished. Every route that opens a `trace_scope` therefore records its own
   completion event; `tests/guildbotics/test_trace_boundaries.py` enumerates that
   population and fails on a new trace root until it declares which event ends it.
+- A boundary that records the start of a run records its end however the run
+  ends, cancellation included. Stopping the service cancels the work it drains
+  and Ctrl-C ends an interactive member command, and neither
+  `asyncio.CancelledError` nor `KeyboardInterrupt` is an `Exception`, so a
+  boundary catching only `Exception` leaves `command.started` as the trace's
+  last record and the execution reads as running forever. The same test
+  enumerates the boundary functions and requires them to catch `BaseException`.
+  How the failure is classified belongs to
+  `capabilities/completion_retry.command_failure_payload()` alone, because the
+  `code` decides what the Desktop does with it: `cancelled` and
+  `cli_agent_authentication` open no generic execution alert.
 
 ### Native agent runtime
 

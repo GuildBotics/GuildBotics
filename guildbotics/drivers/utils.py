@@ -25,6 +25,11 @@ def command_boundary(
     for them; a chat workflow decides with an LLM call before its agent turn
     even starts.
 
+    Every way the run can end is recorded, cancellation included: stopping the
+    service cancels the work it is draining, and a ``CancelledError`` that
+    escaped this boundary would leave ``command.started`` as the last thing the
+    trace ever recorded, so the execution would read as still running forever.
+
     The failure is recorded and re-raised, so callers that drive their own
     retry or cleanup on the exception keep seeing it.
 
@@ -43,7 +48,7 @@ def command_boundary(
     )
     try:
         yield
-    except Exception as exc:
+    except BaseException as exc:
         record_correlated_event(
             event_type="command.failed",
             default_source=task_type,

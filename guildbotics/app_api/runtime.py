@@ -563,13 +563,15 @@ class AppRuntime:
                 # This block opens the turn's trace, so it is the only layer
                 # that can say the whole turn started and ended. Without these
                 # the trace shows the LLM spans it is made of and never says
-                # the turn itself is over.
+                # the turn itself is over. Cancellation ends the turn too: a
+                # force stop cancels this task, and a ``CancelledError`` that
+                # escaped here would leave the turn reading as still running.
                 self._event_bus.publish_event(
                     "command.started", {"command": label, "person": acting.person_id}
                 )
                 try:
                     yield context, trace_id
-                except Exception as exc:
+                except BaseException as exc:
                     self._event_bus.publish_event(
                         "command.failed",
                         {
@@ -1015,17 +1017,6 @@ class AppRuntime:
                 person_identifier=person_id,
                 cwd=command_cwd(request.cwd) or _default_command_cwd(),
             )
-        except asyncio.CancelledError:
-            self._event_bus.publish_event(
-                "command.failed",
-                {
-                    "command": request.command,
-                    "person": person_id,
-                    "code": "cancelled",
-                    "message": "Command was cancelled.",
-                },
-            )
-            raise
         except CommandError as exc:
             self._event_bus.publish_event(
                 "command.failed",
@@ -1038,7 +1029,9 @@ class AppRuntime:
                 },
             )
             raise AppApiError("command_error", reason=str(exc)) from exc
-        except Exception as exc:
+        except BaseException as exc:
+            # Cancellation lands here as well: a force stop cancels this task,
+            # and the run it started has to be reported as ended either way.
             self._event_bus.publish_event(
                 "command.failed",
                 {"command": request.command, **command_failure_payload(exc)},

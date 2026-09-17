@@ -1132,6 +1132,47 @@ async def test_assistant_turn_publishes_a_failed_boundary(
 
 
 @pytest.mark.asyncio
+async def test_assistant_turn_publishes_a_failed_boundary_when_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A force stop cancels the turn's task. ``CancelledError`` is not an
+    # ``Exception``, so a boundary that only caught ``Exception`` published
+    # ``command.started`` and nothing else, and the turn read as still running
+    # after the stop finished.
+    _isolate_workspace(tmp_path, monkeypatch)
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+
+    async def cancelled_turn(_context: object, **_kwargs: Any) -> Any:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", cancelled_turn)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.author_command(
+            CommandAuthoringRequest(
+                mode="create",
+                conversation_id="authoring-1",
+                message="How?",
+                person="bot",
+            )
+        )
+
+    events = event_bus.snapshot_events()
+    assert [event["type"] for event in events] == ["command.started", "command.failed"]
+    # A cancelled turn is the expected end of a stop, so it opens no Desktop
+    # execution alert.
+    assert events[-1]["payload"]["code"] == "cancelled"
+    assert (
+        resolve_trace_status([{"kind": "event", **event} for event in events])
+        == "failed"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_command_publishes_started_and_finished_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
