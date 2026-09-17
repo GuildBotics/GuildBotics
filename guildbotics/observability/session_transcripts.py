@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -305,7 +305,7 @@ class SessionTranscriptStore:
                 return current, False
             timestamp = datetime.now(UTC)
             session_id = (
-                f"system-{timestamp.strftime('%Y%m%dT%H%M%S.%fZ')}-{os.getpid()}"
+                f"system-{timestamp.strftime('%Y%m%dT%H%M%S.%fZ')}-{uuid.uuid4().hex}"
             )
             session = SystemSession(
                 session_id=session_id,
