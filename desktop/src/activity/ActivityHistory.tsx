@@ -15,6 +15,7 @@ import {
 } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import {
@@ -1355,47 +1356,43 @@ export function usageWindowElapsedPercent(
   return Math.max(0, Math.min(100, Math.round(elapsed)));
 }
 
-// One reading of a window shared by the meter and the hover detail, so the
-// bar, the marker, and the wording never disagree. The pace is the elapsed
-// share minus the used share, in points of the displayed (rounded) values.
-function useUsageWindowReading(checkedAt: string) {
-  const { t } = useTranslation();
-  return (window: CliAgentUsage["windows"][number]) => {
-    const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
-    const elapsed = usageWindowElapsedPercent(window, checkedAt);
-    const parts = [t("activity.usage.used", { percent })];
-    if (elapsed !== null) {
-      const headroom = elapsed - percent;
-      parts.push(
-        t("activity.usage.elapsed", { percent: elapsed }),
-        headroom === 0
-          ? t("activity.usage.onPace")
-          : t(headroom > 0 ? "activity.usage.headroom" : "activity.usage.over", {
-              points: Math.abs(headroom),
-            }),
-      );
-    }
-    if (window.resets_at) {
-      parts.push(t("activity.usage.resets", { reset: formatShortTimestamp(window.resets_at) }));
-    }
-    return { percent, elapsed, detail: parts.join(" · ") };
-  };
+// The pace wording: the elapsed share minus the used share, in points of the
+// displayed (rounded) values, followed by the full reset timestamp.
+function usageWindowDetail(
+  window: CliAgentUsage["windows"][number],
+  percent: number,
+  elapsed: number | null,
+  t: TFunction,
+): string {
+  const parts = [t("activity.usage.used", { percent })];
+  if (elapsed !== null) {
+    const headroom = elapsed - percent;
+    parts.push(
+      t("activity.usage.elapsed", { percent: elapsed }),
+      headroom === 0
+        ? t("activity.usage.onPace")
+        : t(headroom > 0 ? "activity.usage.headroom" : "activity.usage.over", {
+            points: Math.abs(headroom),
+          }),
+    );
+  }
+  if (window.resets_at) {
+    parts.push(t("activity.usage.resets", { reset: formatShortTimestamp(window.resets_at) }));
+  }
+  return parts.join(" · ");
 }
 
 function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
-  const readWindow = useUsageWindowReading(usage.checked_at);
+  const { t } = useTranslation();
   if (usage.windows.length === 0) {
     return null;
   }
-  // Detail windows stay out of the meters to keep the member cell compact;
-  // they appear in the hover detail instead. A provider that marks every
-  // window as detail still gets meters, so the usage never vanishes.
-  const summaryWindows = usage.windows.filter((window) => !window.detail);
-  const meterWindows = summaryWindows.length > 0 ? summaryWindows : usage.windows;
-  const meters = (
+  return (
     <div className="activity-member-usage">
-      {meterWindows.map((window, index) => {
-        const { percent, elapsed, detail } = readWindow(window);
+      {usage.windows.map((window, index) => {
+        const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
+        const elapsed = usageWindowElapsedPercent(window, usage.checked_at);
+        const detail = usageWindowDetail(window, percent, elapsed, t);
         const label = usageWindowName(window);
         const labelPrefix = label ? `${label} ` : "";
         const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
@@ -1443,33 +1440,6 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
           </span>
         );
       })}
-    </div>
-  );
-  if (meterWindows.length === usage.windows.length) {
-    return meters;
-  }
-  return (
-    <HoverCard openDelay={150} closeDelay={80} withinPortal>
-      <HoverCard.Target>{meters}</HoverCard.Target>
-      <HoverCard.Dropdown className="activity-hover-card">
-        <MemberUsageDetail usage={usage} />
-      </HoverCard.Dropdown>
-    </HoverCard>
-  );
-}
-
-// The hover detail lists every window — including the detail-flagged ones the
-// meters omit — with the same reading the meters' tooltips carry.
-function MemberUsageDetail({ usage }: { usage: CliAgentUsage }) {
-  const readWindow = useUsageWindowReading(usage.checked_at);
-  return (
-    <div className="activity-member-usage-detail">
-      {usage.windows.map((window, index) => (
-        <div key={`${window.window}-${index}`} className="activity-member-usage-detail-row">
-          <span className="activity-member-usage-detail-name">{usageWindowName(window)}</span>
-          <span>{readWindow(window).detail}</span>
-        </div>
-      ))}
     </div>
   );
 }

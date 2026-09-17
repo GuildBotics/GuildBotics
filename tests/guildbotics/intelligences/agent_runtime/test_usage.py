@@ -338,13 +338,13 @@ def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
     assert snapshot.agent == "claude"
     assert not snapshot.limit_reached
     assert [
-        (window.window, window.used_percent, window.label, window.detail)
+        (window.window, window.used_percent, window.label)
         for window in snapshot.windows
     ] == [
-        ("session", 24.0, "", False),
-        ("week", 56.0, "", False),
-        ("current_week_fable", 59.0, "Fable", False),
-        ("extra_budget", 5.0, "Extra budget", True),
+        ("session", 24.0, ""),
+        ("week", 56.0, ""),
+        ("current_week_fable", 59.0, "Fable"),
+        ("extra_budget", 5.0, "Extra budget"),
     ]
     session, week, fable, extra = snapshot.windows
     assert session.resets_at == "2026-08-08T11:10:00+09:00"
@@ -353,7 +353,7 @@ def test_parse_claude_usage_reads_session_and_weekly_windows() -> None:
     assert week.window_minutes == 10_080
     assert fable.resets_at == "2026-08-08T10:00:00+09:00"
     assert fable.window_minutes == 10_080
-    # A budget line whose period is unknown stays out of the meters.
+    # A budget line whose period is unknown reports none rather than a guess.
     assert (extra.resets_at, extra.window_minutes) == ("", None)
     assert snapshot.checked_at
 
@@ -642,11 +642,11 @@ async def test_read_claude_usage_probes_print_mode(
 
     assert snapshot.agent == "claude"
     assert snapshot.windows[0].used_percent == 24.0
-    assert [window.detail for window in snapshot.windows] == [
-        False,
-        False,
-        False,
-        True,
+    assert [window.window for window in snapshot.windows] == [
+        "session",
+        "week",
+        "current_week_fable",
+        "extra_budget",
     ]
     assert fake_environment.started[-1].closed
 

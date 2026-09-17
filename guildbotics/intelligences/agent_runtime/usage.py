@@ -52,9 +52,7 @@ class CliAgentUsageWindow:
     """One rate-limit window (e.g. the 5-hour or weekly budget).
 
     ``label`` is a human-readable qualifier beyond the window duration (e.g. a
-    per-model budget's model name). A ``detail`` window is supplementary: it
-    still counts toward the limit state, but the frontend shows it only in the
-    expanded usage detail, not as its own meter.
+    per-model budget's model name).
     """
 
     window: str
@@ -62,7 +60,6 @@ class CliAgentUsageWindow:
     resets_at: str = ""
     window_minutes: int | None = None
     label: str = ""
-    detail: bool = False
 
 
 @dataclass(frozen=True)
@@ -296,10 +293,9 @@ def parse_claude_usage(
 
     The panel is text, so parsing is tolerant: only lines shaped like
     ``<name>: <n>% used[ · resets <time>]`` become windows, and a reset time
-    that cannot be interpreted is dropped rather than guessed.  The session,
-    all-models weekly, and per-model weekly budgets are the meters; any
-    unrecognized budget line has no known period and becomes a ``detail``
-    window.
+    that cannot be interpreted is dropped rather than guessed.  An
+    unrecognized budget line keeps its name as the label and has no known
+    period.
     """
     text = result if isinstance(result, str) else ""
     windows: list[CliAgentUsageWindow] = []
@@ -335,7 +331,6 @@ def parse_claude_usage(
                 resets_at=resets_at,
                 window_minutes=_CLAUDE_WEEK_MINUTES if model else None,
                 label=model.group("model") if model else name,
-                detail=model is None,
             )
         )
     return CliAgentUsageSnapshot(

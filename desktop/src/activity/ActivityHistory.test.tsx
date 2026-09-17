@@ -717,7 +717,6 @@ describe("ActivityHistoryPage", () => {
             resets_at: "",
             window_minutes: null,
             label: "",
-            detail: false,
             ...window,
           })),
         },
@@ -877,10 +876,7 @@ describe("ActivityHistoryPage", () => {
     expect(memberRateLimit).toHaveTextContent(localeShortDateTime("2026-07-01T13:17:00Z"));
   });
 
-  it("keeps detail windows out of the meters and shows them on hover", async () => {
-    // Claude's per-model weekly budget is a meter of its own; only a window
-    // the provider flags as detail stays out of the member cell, and hovering
-    // reveals every window.
+  it("gives Claude's per-model weekly budget a meter of its own", async () => {
     mockMemberUsage("claude", {
       windows: [
         {
@@ -902,14 +898,6 @@ describe("ActivityHistoryPage", () => {
           window_minutes: 10080,
           label: "Fable",
         },
-        {
-          window: "extra_budget",
-          used_percent: 70,
-          resets_at: "2026-07-04T09:00:00Z",
-          window_minutes: 10080,
-          label: "Extra budget",
-          detail: true,
-        },
       ],
       limit_reached: false,
     });
@@ -917,17 +905,11 @@ describe("ActivityHistoryPage", () => {
 
     expect(await screen.findByRole("meter", { name: "5h 24%" })).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "1w 56%" })).toBeInTheDocument();
-    expect(elapsedMarker(screen.getByRole("meter", { name: "1w Fable 59%" }))).toBe("59%");
-    expect(screen.queryByRole("meter", { name: "1w Extra budget 70%" })).toBe(null);
-    expect(screen.queryByText("1w Extra budget")).toBe(null);
-
-    const user = userEvent.setup();
-    await user.hover(screen.getByRole("meter", { name: "5h 24%" }));
-    expect(await screen.findByText("1w Extra budget")).toBeInTheDocument();
-    // The detail window has no meter, so its pace lives in the hover detail.
-    expect(
-      screen.getByText("1w Extra budget").closest(".activity-member-usage-detail-row"),
-    ).toHaveTextContent(usageDetail(70, 59, "2026-07-04T09:00:00Z"));
+    const fable = screen.getByRole("meter", { name: "1w Fable 59%" });
+    expect(elapsedMarker(fable)).toBe("59%");
+    expect(fable).toHaveAccessibleDescription(
+      `1w Fable · ${usageDetail(59, 59, "2026-07-04T09:00:00Z")}`,
+    );
   });
 
   const usageDetail = (used: number, elapsed: number, resetsAt: string) => {
