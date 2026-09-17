@@ -18,3 +18,5 @@ en:
     invalid_delegation: "Nested member command rejected: execution lease delegation is invalid."
     unavailable: Person execution lease is already held.
     unavailable_with_holder: "Person execution lease is already held by pid %{pid} (%{source}: %{command})."
+  sync:
+    invalid_identity: "Workspace synchronization did not start because %{path} is invalid. No command changes were made; repair the file and run the command again."

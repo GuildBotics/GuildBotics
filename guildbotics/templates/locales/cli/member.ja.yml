@@ -18,3 +18,5 @@ ja:
     invalid_delegation: member command を実行できません。execution lease の委譲が無効です。
     unavailable: person execution lease は既に使用されています。
     unavailable_with_holder: "person execution lease は PID %{pid}（%{source}: %{command}）が使用しています。"
+  sync:
+    invalid_identity: "Workspace 同期を開始できませんでした。%{path} が不正です。コマンドによる変更はまだ行われていません。ファイルを修復してから再実行してください。"

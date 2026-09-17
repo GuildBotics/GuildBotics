@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import click
+from pydantic import ValidationError
 
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
@@ -65,11 +66,18 @@ from guildbotics.observability.interactive_sessions import (
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
-    commit_and_push_once,
+    PreparedOneShotSync,
+    prepare_commit_and_push_once,
 )
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
+from guildbotics.workspace.identity import (
+    DeviceIdentity,
+    WorkspaceIdentity,
+    device_identity_path,
+    workspace_identity_path,
+)
 
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
@@ -2358,9 +2366,13 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 def _run(coro, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
+    needs_sync = _member_command_needs_lease()
+    prepared_sync = None
     started = False
     try:
         with _member_execution_guard(command, interactive_session):
+            if needs_sync:
+                prepared_sync = _prepare_member_sync()
             started = True
             if interactive_session is None:
                 result = asyncio.run(coro)
@@ -2374,19 +2386,42 @@ def _run(coro, *, output_format: str) -> Any:
         if not started and asyncio.iscoroutine(coro):
             coro.close()
         raise
-    if _member_command_needs_lease():
-        result = _sync_member_result(result)
+    if needs_sync:
+        result = _sync_member_result(result, prepared_sync)
     _emit(result, output_format)
     return result
 
 
-def _sync_member_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Make one best-effort sync and expose a local lock timeout in output."""
+def _prepare_member_sync() -> PreparedOneShotSync | None:
+    """Prepare one-shot sync and turn identity damage into an actionable error."""
     try:
-        status = commit_and_push_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
+        return prepare_commit_and_push_once()
+    except ValidationError as exc:
+        identity_paths = {
+            WorkspaceIdentity.__name__: workspace_identity_path(),
+            DeviceIdentity.__name__: device_identity_path(),
+        }
+        path = identity_paths.get(exc.title)
+        if path is None:
+            raise
+        raise click.ClickException(
+            t("cli.member.sync.invalid_identity", path=path)
+        ) from exc
+
+
+def _sync_member_result(
+    result: dict[str, Any], prepared_sync: PreparedOneShotSync | None
+) -> dict[str, Any]:
+    """Make one best-effort sync and expose a local lock timeout in output."""
+    if prepared_sync is None:
+        return result
+    try:
+        status = prepared_sync.commit_and_push_once(
+            timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS
+        )
     except SyncRepositoryBusyError:
         return {**result, "sync": "pending"}
-    if status is not None and status.failure is not None:
+    if status.failure is not None:
         return {**result, "sync": "pending"}
     return result
 

@@ -14,6 +14,7 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
     GUILDBOTICS_CONFIG_DIR,
@@ -25,18 +26,76 @@ member_module = importlib.import_module("guildbotics.cli.member")
 
 def test_member_command_reports_pending_when_one_shot_lock_is_busy(monkeypatch, capsys):
     monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: True)
+    calls = []
 
-    def busy(*, timeout):
-        raise member_module.SyncRepositoryBusyError("sync.lock is busy")
+    class PreparedSync:
+        def commit_and_push_once(self, *, timeout):
+            calls.append("sync")
+            raise member_module.SyncRepositoryBusyError("sync.lock is busy")
 
-    monkeypatch.setattr(member_module, "commit_and_push_once", busy)
+    def prepare():
+        calls.append("prepare")
+        return PreparedSync()
+
+    monkeypatch.setattr(member_module, "prepare_commit_and_push_once", prepare)
 
     async def command_result():
+        calls.append("command")
         return {"doc_id": "doc-1"}
 
     result = member_module._run(command_result(), output_format="json")
 
     assert result == {"doc_id": "doc-1", "sync": "pending"}
+    assert calls == ["prepare", "command", "sync"]
+    assert json.loads(capsys.readouterr().out) == result
+
+
+@pytest.mark.parametrize("invalid_identity", ["device", "workspace"])
+def test_member_write_validates_sync_identity_before_running_command(
+    tmp_path, invalid_identity
+):
+    repository = LocalSyncRepository(tmp_path)
+    repository.initialize()
+    repository.set_remote(str(tmp_path / "hub.git"))
+    ignore = tmp_path / ".guildbotics" / ".gitignore"
+    ignore.write_text("stale rules\n", encoding="utf-8")
+    if invalid_identity == "device":
+        identity = tmp_path / "home" / ".guildbotics" / "data" / "device.json"
+    else:
+        identity = tmp_path / ".guildbotics" / "state" / "workspace.json"
+    identity.parent.mkdir(parents=True, exist_ok=True)
+    identity.write_text('{"device_id": "not a uuid"}', encoding="utf-8")
+    marker = tmp_path / "command-ran"
+
+    @click.command()
+    def write_command():
+        async def write():
+            marker.write_text("changed", encoding="utf-8")
+            return {"written": True}
+
+        member_module._run(write(), output_format="json")
+
+    result = CliRunner().invoke(write_command)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert (
+        result.output
+        == "Error: "
+        + member_module.t("cli.member.sync.invalid_identity", path=identity)
+        + "\n"
+    )
+    assert not marker.exists()
+    assert ignore.read_text(encoding="utf-8") == "stale rules\n"
+
+
+def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
+    async def command_result():
+        return {"written": True}
+
+    result = member_module._run(command_result(), output_format="json")
+
+    assert result == {"written": True}
     assert json.loads(capsys.readouterr().out) == result
 
 
