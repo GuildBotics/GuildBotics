@@ -609,6 +609,54 @@ describe("App quit guard", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("quit_app"));
   });
 
+  it("labels the app menu's Quit along with the tray, so it reads in the app language", async () => {
+    renderApp("/service");
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("set_tray_labels", {
+        show: t("tray.show"),
+        quit: t("tray.quit"),
+        appQuit: t("tray.appQuit"),
+      }),
+    );
+  });
+
+  it("asks instead of quitting when the running state cannot be read", async () => {
+    const user = userEvent.setup();
+    getSchedulerStatusMock.mockResolvedValue(runtimeStatus());
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+    // Only the guard's own read fails: the service may well be running.
+    getSchedulerStatusMock.mockRejectedValue(new Error("backend unreachable"));
+
+    await requestQuit();
+
+    expect(invoke).not.toHaveBeenCalledWith("quit_app");
+    expect(await screen.findByText(t("app.closeBlocked.unknownTitle"))).toBeInTheDocument();
+    expect(screen.getByText(t("app.closeBlocked.unknownBody"))).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: t("app.closeBlocked.cancel") }));
+
+    await waitFor(() =>
+      expect(screen.queryByText(t("app.closeBlocked.unknownBody"))).not.toBeInTheDocument(),
+    );
+    expect(invoke).not.toHaveBeenCalledWith("quit_app");
+  });
+
+  it("quits from the unknown-state prompt even though the force stop fails", async () => {
+    const user = userEvent.setup();
+    getSchedulerStatusMock.mockResolvedValue(runtimeStatus());
+    renderApp("/service");
+    await screen.findByRole("heading", { name: t("service.title") });
+    getSchedulerStatusMock.mockRejectedValue(new Error("backend unreachable"));
+    stopSchedulerMock.mockRejectedValue(new Error("backend unreachable"));
+
+    await requestQuit();
+    await user.click(await screen.findByRole("button", { name: t("app.closeBlocked.force") }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("quit_app"));
+  });
+
   it("shows the quit error instead of spinning forever when quitting fails", async () => {
     const user = userEvent.setup();
     vi.mocked(invoke).mockImplementation(async (command) => {

@@ -35,7 +35,11 @@ export function useHotkeyRegistration(): void {
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("set_tray_labels", { show: t("tray.show"), quit: t("tray.quit") });
+        await invoke("set_tray_labels", {
+          show: t("tray.show"),
+          quit: t("tray.quit"),
+          appQuit: t("tray.appQuit"),
+        });
       } catch {
         // The tray is unavailable in test harnesses and browser previews.
       }

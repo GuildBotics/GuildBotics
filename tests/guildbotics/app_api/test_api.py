@@ -58,6 +58,7 @@ from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 HTTP_OK = 200
+HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
@@ -399,6 +400,23 @@ class RuntimeStub:
 
     def is_github_integration_enabled(self) -> bool:
         return False
+
+
+def test_shutdown_asks_the_hosting_server_to_exit(tmp_path: Path) -> None:
+    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+    requested: list[bool] = []
+    app.state.request_shutdown = lambda: requested.append(True)
+
+    with TestClient(app) as client:
+        unauthorized = client.post("/shutdown")
+        assert requested == []
+        response = client.post(
+            "/shutdown", headers={"X-GuildBotics-Session-Token": "secret"}
+        )
+
+    assert unauthorized.status_code == HTTP_UNAUTHORIZED
+    assert response.status_code == HTTP_ACCEPTED
+    assert requested == [True]
 
 
 def test_health_requires_session_token(tmp_path: Path) -> None:

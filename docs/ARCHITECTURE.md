@@ -856,8 +856,13 @@ a monorepo on purpose.
   offers a command picker, while a per-command hotkey runs straight away unless a
   required input is missing, in which case the window waits. Because hotkeys only fire
   while the process lives, closing a window hides it and the app stays resident in the
-  menu bar; quitting goes through the tray, which is where the "work still running"
-  guard now lives.
+  menu bar. Every Quit the app owns (the tray item, and on macOS the app menu with its
+  Cmd+Q, which replaces Tauri's default menu because that one sends `terminate:`) asks
+  the frontend's "work still running" guard first; a failed status read asks too
+  rather than quitting. macOS can still terminate the app without asking (the Dock's
+  Quit, logout), so the guard is not what protects the backend: on `RunEvent::Exit`,
+  which every route passes through, the host requests `POST /shutdown`, waits for the
+  sidecar to finish its lifespan teardown, and kills it only if that fails.
 - **AI assistants**: the command editor and the diagnostics screen each host a
   conversational assistant. Both share one substrate:
   `guildbotics/intelligences/assistants.py` opens a resumable, structured turn (one JSON

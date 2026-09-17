@@ -12,4 +12,8 @@ if [[ ! -d node_modules ]]; then
   npm ci
 fi
 
-exec npm run tauri dev
+# The Rust watcher restarts the whole app on a src-tauri change, and the Local
+# API sidecar dies with it: a running service and its members' work are cut off
+# mid-run. The frontend still hot-reloads (that is Vite's doing); restart this
+# script to pick up a Rust or Tauri config change.
+exec npm run tauri dev -- --no-watch

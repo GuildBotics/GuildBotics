@@ -150,7 +150,7 @@ export function App() {
       <AppCloseBlockedModal
         error={closeGuard.forceQuitError}
         forceQuitting={closeGuard.forceQuitting}
-        opened={closeGuard.blocked}
+        blocked={closeGuard.blocked}
         onCancel={closeGuard.cancel}
         onForceQuit={() => void closeGuard.forceStopAndQuit()}
       />
@@ -560,7 +560,8 @@ function useHostNavigation() {
 }
 
 function useAppCloseGuard() {
-  const [blocked, setBlocked] = useState(false);
+  // Why the quit is held: work is running, or whether it is could not be read.
+  const [blocked, setBlocked] = useState<"busy" | "unknown" | null>(null);
   const [forceQuitting, setForceQuitting] = useState(false);
   const [forceQuitError, setForceQuitError] = useState<string | null>(null);
 
@@ -575,14 +576,17 @@ function useAppCloseGuard() {
         const { listen } = await import("@tauri-apps/api/event");
         const { invoke } = await import("@tauri-apps/api/core");
         const stop = await listen("app://quit-requested", async () => {
-          let busy = false;
+          let busy: boolean;
           try {
             busy = runtimeHasActiveWork(await getSchedulerStatus());
           } catch {
-            // The backend is unreachable, so there is no work to protect.
+            // A failed read says nothing about the work. Quitting silently
+            // under running agents is the worse mistake, so ask.
+            setBlocked("unknown");
+            return;
           }
           if (busy) {
-            setBlocked(true);
+            setBlocked("busy");
           } else {
             await invoke("quit_app");
           }
@@ -605,7 +609,7 @@ function useAppCloseGuard() {
   }, []);
 
   const cancel = () => {
-    setBlocked(false);
+    setBlocked(null);
     setForceQuitError(null);
   };
   const forceStopAndQuit = async () => {
@@ -631,13 +635,13 @@ function useAppCloseGuard() {
 }
 
 function AppCloseBlockedModal({
-  opened,
+  blocked,
   forceQuitting,
   error,
   onCancel,
   onForceQuit,
 }: {
-  opened: boolean;
+  blocked: "busy" | "unknown" | null;
   forceQuitting: boolean;
   error: string | null;
   onCancel: () => void;
@@ -645,9 +649,16 @@ function AppCloseBlockedModal({
 }) {
   const { t } = useTranslation();
   return (
-    <Modal centered opened={opened} onClose={onCancel} title={t("app.closeBlocked.title")}>
+    <Modal
+      centered
+      opened={blocked !== null}
+      onClose={onCancel}
+      title={t(blocked === "unknown" ? "app.closeBlocked.unknownTitle" : "app.closeBlocked.title")}
+    >
       <Stack gap="md">
-        <Text size="sm">{t("app.closeBlocked.body")}</Text>
+        <Text size="sm">
+          {t(blocked === "unknown" ? "app.closeBlocked.unknownBody" : "app.closeBlocked.body")}
+        </Text>
         {error ? (
           <Alert color="danger" title={t("app.closeBlocked.error")}>
             {error}

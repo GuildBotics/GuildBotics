@@ -248,6 +248,11 @@ macOS / Linux で毎回 PyInstaller を build せずに開発したい場合は�
 scripts/desktop-dev-tauri.sh
 ```
 
+このスクリプトは `tauri dev` を `--no-watch` で起動します。Tauri の watcher は `desktop/src-tauri/` の変更でアプリのプロセスごと再起動し、その子である Local API sidecar も一緒に終了するため、実行中の service とメンバーの作業が途中で打ち切られるからです。
+
+- frontend（`desktop/src/`）の変更は、これまでどおり Vite の HMR で即時反映されます。
+- Rust / `tauri.conf.json` / `Cargo.toml` の変更は、service を止めてよいタイミングでスクリプトを起動し直して反映します。
+
 > `desktop/src-tauri/binaries/` は `.gitignore` 対象です。配布物を作る前には、必ず 2.1 の手順で本物の PyInstaller バイナリへ置き換えてください。
 
 ---

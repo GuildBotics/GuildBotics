@@ -36,6 +36,9 @@ const resources = {
           cancel: "Cancel",
           force: "Force stop and quit",
           error: "Failed to close the window",
+          unknownTitle: "Could not check for running work",
+          unknownBody:
+            "GuildBotics could not check whether service or command work is running. Quitting interrupts any work that is. Force stop to quit now, or cancel to keep GuildBotics open.",
         },
         language: {
           label: "Display language",
@@ -2029,6 +2032,7 @@ const resources = {
       tray: {
         show: "Open GuildBotics",
         quit: "Quit",
+        appQuit: "Quit GuildBotics",
       },
     },
   },
@@ -2060,6 +2064,9 @@ const resources = {
           cancel: "キャンセル",
           force: "強制停止して終了",
           error: "ウインドウを閉じられませんでした",
+          unknownTitle: "実行状態を確認できませんでした",
+          unknownBody:
+            "サービスまたはコマンドが実行中かどうかを確認できませんでした。実行中の作業がある場合、終了すると中断されます。今すぐ終了する場合は強制停止してください。GuildBotics を開いたままにする場合はキャンセルしてください。",
         },
         language: {
           label: "表示言語",
@@ -4063,6 +4070,7 @@ const resources = {
       tray: {
         show: "GuildBotics を開く",
         quit: "終了",
+        appQuit: "GuildBotics を終了",
       },
     },
   },

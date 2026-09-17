@@ -1,8 +1,10 @@
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
-use std::net::TcpListener;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -22,8 +24,19 @@ struct BackendState {
     token: String,
     port: u16,
     boot_log_path: PathBuf,
-    child: Mutex<Option<CommandChild>>,
+    sidecar: Mutex<Option<Sidecar>>,
 }
+
+struct Sidecar {
+    child: CommandChild,
+    /// Disconnects once the process has terminated.
+    exited: Receiver<()>,
+}
+
+const SHUTDOWN_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// The backend's own teardown force-stops the scheduler, which may take two of
+/// its 10 second timeouts before giving up.
+const BACKEND_EXIT_TIMEOUT: Duration = Duration::from_secs(25);
 
 const BOOT_LOG_MAX_BYTES: usize = 1024 * 1024;
 const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
@@ -151,6 +164,70 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
     force_install_skill_file(&skill_dir(&home, agent, &agent_home), GUILDBOTICS_SKILL)
         .map_err(|error| error.to_string())?;
     Ok(cli_agent_skill_status(&home, agent))
+}
+
+/// Ask the Local API to exit through its own shutdown path, so its teardown
+/// (scheduler stop, sync deactivation, session finish) runs before it goes.
+fn request_backend_shutdown(port: u16, token: &str) -> io::Result<()> {
+    let mut stream = TcpStream::connect_timeout(
+        &SocketAddr::from(([127, 0, 0, 1], port)),
+        SHUTDOWN_REQUEST_TIMEOUT,
+    )?;
+    stream.set_read_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
+    write!(
+        stream,
+        "POST /shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         X-GuildBotics-Session-Token: {token}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut status_line = String::new();
+    BufReader::new(stream).read_line(&mut status_line)?;
+    if status_line.split(' ').nth(1) == Some("202") {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "unexpected shutdown response: {}",
+            status_line.trim_end()
+        )))
+    }
+}
+
+fn wait_for_exit(exited: &Receiver<()>, timeout: Duration) -> io::Result<()> {
+    match exited.recv_timeout(timeout) {
+        Err(RecvTimeoutError::Disconnected) => Ok(()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "backend did not exit in time",
+        )),
+    }
+}
+
+/// Stop the sidecar gracefully, killing it only when that fails.
+///
+/// This runs on `RunEvent::Exit`, the one point every way of quitting passes
+/// through. macOS can terminate the app without asking it first (the Dock's
+/// Quit, logout), so the quit confirmation cannot be what keeps the backend
+/// from being cut off mid-write.
+fn stop_backend(state: &BackendState) {
+    // Tolerate a poisoned mutex so the app can still exit cleanly.
+    let mut guard = match state.sidecar.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(sidecar) = guard.take() else {
+        return;
+    };
+    let stopped = request_backend_shutdown(state.port, &state.token)
+        .and_then(|()| wait_for_exit(&sidecar.exited, BACKEND_EXIT_TIMEOUT));
+    let outcome = match stopped {
+        Ok(()) => "backend shut down gracefully".to_owned(),
+        Err(error) => {
+            let _ = sidecar.child.kill();
+            format!("backend killed after a failed graceful shutdown: {error}")
+        }
+    };
+    let _ = append_boot_log(&state.boot_log_path, outcome.as_bytes());
 }
 
 /// Reserve a free loopback TCP port by binding to port 0 and reading back the
@@ -513,6 +590,65 @@ mod tests {
             .expect("known AI CLI tool")
     }
 
+    /// Serve one canned HTTP response and hand back the request that came in.
+    fn serve_once(response: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = String::new();
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            while !request.ends_with("\r\n\r\n") {
+                reader.read_line(&mut request).expect("read");
+            }
+            stream.write_all(response.as_bytes()).expect("write");
+            request
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn shutdown_request_posts_the_session_token() {
+        let (port, server) = serve_once("HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n");
+
+        request_backend_shutdown(port, "session-token").expect("accepted");
+
+        let request = server.join().expect("server");
+        assert!(request.starts_with("POST /shutdown HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+    }
+
+    #[test]
+    fn shutdown_request_fails_unless_the_backend_accepts_it() {
+        let (port, server) = serve_once("HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n");
+
+        let error = request_backend_shutdown(port, "stale").unwrap_err();
+
+        server.join().expect("server");
+        assert!(error.to_string().contains("401"));
+    }
+
+    #[test]
+    fn shutdown_request_fails_when_nothing_listens() {
+        let port = pick_free_port();
+
+        assert!(request_backend_shutdown(port, "token").is_err());
+    }
+
+    #[test]
+    fn wait_for_exit_tells_an_exited_backend_from_a_running_one() {
+        let (running, exited) = mpsc::channel::<()>();
+        assert_eq!(
+            wait_for_exit(&exited, Duration::from_millis(10))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+
+        drop(running);
+        assert!(wait_for_exit(&exited, Duration::from_millis(10)).is_ok());
+    }
+
     #[test]
     fn boot_log_is_bounded_to_one_mebibyte() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
@@ -810,6 +946,9 @@ pub fn run() {
     let port = pick_free_port();
 
     tauri::Builder::default()
+        // `tray::build` installs the app menu: the default one quits through
+        // `terminate:`, which no quit guard gets to see.
+        .enable_macos_default_menu(false)
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -874,11 +1013,15 @@ pub fn run() {
                         .args(["--host", "127.0.0.1", "--port", &port_arg])
                         .spawn()
                 });
-            let child = match spawn_result {
+            let sidecar = match spawn_result {
                 Ok((mut rx, child)) => {
                     // Keep the child's stdout/stderr pipe drained so it never blocks.
                     let event_log_path = boot_log_path.clone();
+                    let (running, exited) = mpsc::channel::<()>();
                     tauri::async_runtime::spawn(async move {
+                        // Dropped when this task ends, which is how
+                        // `stop_backend` sees the process exit.
+                        let _running = running;
                         while let Some(event) = rx.recv().await {
                             match event {
                                 CommandEvent::Stderr(bytes) => {
@@ -901,7 +1044,7 @@ pub fn run() {
                             }
                         }
                     });
-                    Some(child)
+                    Some(Sidecar { child, exited })
                 }
                 Err(error) => {
                     let _ = append_boot_log(
@@ -916,7 +1059,7 @@ pub fn run() {
                 token,
                 port,
                 boot_log_path,
-                child: Mutex::new(child),
+                sidecar: Mutex::new(sidecar),
             });
             Ok(())
         })
@@ -932,15 +1075,7 @@ pub fn run() {
             }
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<BackendState>() {
-                    // Tolerate a poisoned mutex so the app can still exit cleanly;
-                    // recover the guard and kill the child if one is present.
-                    let mut guard = match state.child.lock() {
-                        Ok(guard) => guard,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    if let Some(child) = guard.take() {
-                        let _ = child.kill();
-                    }
+                    stop_backend(&state);
                 }
             }
         });

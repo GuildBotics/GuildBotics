@@ -117,6 +117,8 @@ def captured_launch(monkeypatch, tmp_path: Path) -> dict[str, Any]:
         captured["mode"] = endpoint_path().stat().st_mode & 0o777
         app.state.runtime.on_workspace_changed(tmp_path / "other")
         captured["changed_endpoint"] = read_endpoint()
+        app.state.request_shutdown()
+        captured["should_exit"] = runner.should_exit
 
     monkeypatch.setattr(server, "create_app", fake_create_app)
     monkeypatch.setattr(server.uvicorn.Server, "run", fake_run)
@@ -157,6 +159,16 @@ def test_main_passes_env_session_token_and_origins_to_create_app(
     assert captured_launch["create_app"]["session_token"] == "env-token"
     assert captured_launch["create_app"]["allowed_origins"] == ["http://127.0.0.1:1421"]
     assert captured_launch["uvicorn"]["port"] == 8765
+
+
+def test_main_lets_the_app_ask_the_server_to_exit(
+    monkeypatch, captured_launch: dict[str, Any]
+) -> None:
+    monkeypatch.setenv(TOKEN_ENV, "env-token")
+
+    server.main()
+
+    assert captured_launch["should_exit"] is True
 
 
 def test_main_pins_the_standard_event_loop(

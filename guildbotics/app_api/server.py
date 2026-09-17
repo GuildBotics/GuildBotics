@@ -162,6 +162,10 @@ def main() -> None:
         endpoint.publish()
         try:
             _start_parent_watchdog(endpoint.discard)
-            uvicorn.Server(config).run(sockets=[sock])
+            uvicorn_server = uvicorn.Server(config)
+            app.state.request_shutdown = lambda: setattr(
+                uvicorn_server, "should_exit", True
+            )
+            uvicorn_server.run(sockets=[sock])
         finally:
             endpoint.discard()
