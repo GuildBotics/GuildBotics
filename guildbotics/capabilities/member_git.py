@@ -35,9 +35,10 @@ class PublishResult:
     status: str
     commits: list[dict[str, str]]
     pull_requests: list[dict[str, Any]]
+    pull_requests_error: str | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "repo_path": self.repo_path,
             "branch": self.branch,
             "commit_sha": self.commit_sha,
@@ -47,6 +48,9 @@ class PublishResult:
             "commits": self.commits,
             "pull_requests": self.pull_requests,
         }
+        if self.pull_requests_error:
+            result["pull_requests_error"] = self.pull_requests_error
+        return result
 
 
 @dataclass(frozen=True)
@@ -75,9 +79,10 @@ class PushResult:
     status: str
     commits: list[dict[str, str]]
     pull_requests: list[dict[str, Any]]
+    pull_requests_error: str | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "repo_path": self.repo_path,
             "branch": self.branch,
             "pushed": self.pushed,
@@ -85,6 +90,9 @@ class PushResult:
             "commits": self.commits,
             "pull_requests": self.pull_requests,
         }
+        if self.pull_requests_error:
+            result["pull_requests_error"] = self.pull_requests_error
+        return result
 
 
 class MemberGitWorkspaceService:
@@ -216,7 +224,12 @@ class MemberGitWorkspaceService:
             branch = repo.active_branch.name
             pushed, commits = self._push_if_needed(repo, branch, token)
             remote_url = repo.remotes.origin.url
-        pull_requests = await self.github.open_pr_checks(remote_url, branch)
+        pull_requests: list[dict[str, Any]] = []
+        pull_requests_error = None
+        try:
+            pull_requests = await self.github.open_pr_checks(remote_url, branch)
+        except MemberCapabilityError as exc:
+            pull_requests_error = str(exc)
         return PushResult(
             repo_path=str(repo_path),
             branch=branch,
@@ -224,6 +237,7 @@ class MemberGitWorkspaceService:
             status="pushed" if pushed else "up_to_date",
             commits=commits,
             pull_requests=pull_requests,
+            pull_requests_error=pull_requests_error,
         )
 
     async def _publish(
@@ -249,6 +263,7 @@ class MemberGitWorkspaceService:
             ),
             commits=push.commits,
             pull_requests=push.pull_requests,
+            pull_requests_error=push.pull_requests_error,
         )
 
     def _validate_repo_path(

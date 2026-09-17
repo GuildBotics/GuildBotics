@@ -357,6 +357,7 @@ async def test_push_without_local_commits_reports_up_to_date(monkeypatch, tmp_pa
     assert result.status == "up_to_date"
     assert result.commits == []
     assert result.pull_requests == []
+    assert result.pull_requests_error is None
 
 
 @pytest.mark.asyncio
@@ -390,6 +391,35 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(
     assert result.to_dict()["pull_requests"][0]["completion_blockers"] == [
         {"code": "base_out_of_date"}
     ]
+    assert "pull_requests_error" not in result.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_push_stays_successful_when_pr_readiness_lookup_fails(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
+    repo.git.add(A=True)
+    commit_sha = repo.index.commit("local commit").hexsha
+
+    async def failed_open_pr_checks(_remote_url, _branch):
+        raise MemberCapabilityError("GitHub API request failed with status 502.")
+
+    monkeypatch.setattr(service.github, "open_pr_checks", failed_open_pr_checks)
+
+    result = await service.push(repo_path)
+
+    assert result.pushed is True
+    assert result.commits[0]["id"] == commit_sha
+    assert result.pull_requests == []
+    assert result.pull_requests_error == "GitHub API request failed with status 502."
+    assert result.to_dict()["pull_requests_error"] == result.pull_requests_error
+    assert git.Repo(tmp_path / "remote.git").commit("main").hexsha == commit_sha
 
 
 @pytest.mark.asyncio

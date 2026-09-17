@@ -2198,7 +2198,7 @@ async def _task_complete(
             finally:
                 await service.aclose()
         payload = store.complete(run_id, status, summary, ticket_url, person).to_dict()
-        if readiness:
+        if status == "done":
             payload["pr_readiness"] = readiness
         return payload
     except (MemberCapabilityError, TaskRunError) as exc:

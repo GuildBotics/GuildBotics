@@ -307,10 +307,10 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "If a check fails, use `member github pr checks --failed-logs` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
     "check CI again. Do not report the work complete unless `readiness` is `ready`: "
-    "the checks must succeed, the head must not be behind the current base, and the "
-    "checked head SHA must still be current. If an unrelated failure or an unavailable "
-    "check blocks completion, follow the failure-handling rule above and report that "
-    "blocker.",
+    "every observed check must succeed, the head must not be behind the current base, "
+    "and the checked head SHA must still be current. `rollup=no_checks` is visible but "
+    "does not block repositories without CI. If an unrelated failure or an unavailable "
+    "check blocks completion, follow the failure-handling rule above and report that blocker.",
     "On completion, leave an externally visible trace at the place that "
     "corresponds to the work's entry point: a comment or status update on the "
     "originating issue or PR for issue-driven work, the review thread or PR "
