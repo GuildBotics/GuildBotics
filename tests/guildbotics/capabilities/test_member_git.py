@@ -244,6 +244,51 @@ async def test_commit_during_merge_creates_merge_commit_and_clears_merge_state(
 
 
 @pytest.mark.asyncio
+async def test_commit_during_merge_with_ours_tree_creates_merge_commit(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    ours, theirs = _diverged_readme_branches(repo, repo_path)
+    with pytest.raises(git.GitCommandError):
+        repo.git.merge("theirs")
+    (repo_path / "README.md").write_text("ours\n", encoding="utf-8")
+    repo.git.add("README.md")
+    assert not repo.index.diff(repo.head.commit)
+
+    result = await service.commit(repo_path, "keep ours")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert [parent.hexsha for parent in created.parents] == [ours, theirs]
+    assert created.tree.hexsha == repo.commit(ours).tree.hexsha
+    _assert_no_in_progress_git_state(repo)
+
+
+@pytest.mark.asyncio
+async def test_commit_succeeds_when_repository_requires_gpg_sign(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    with repo.config_writer() as writer:
+        writer.set_value("commit", "gpgsign", "true")
+    (repo_path / "README.md").write_text("initial\nsigned-config\n", encoding="utf-8")
+    repo.git.add(A=True)
+
+    result = await service.commit(repo_path, "unsigned member commit")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert created.author.email == "aiko@example.com"
+    assert not created.gpgsig
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cherry-pick", "revert"])
 async def test_commit_consumes_sequencer_head_after_conflict_resolution(
     monkeypatch, tmp_path, operation

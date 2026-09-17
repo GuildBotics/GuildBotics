@@ -300,6 +300,8 @@ class MemberGitWorkspaceService:
         GitPython's ``IndexFile.commit`` parents only HEAD and leaves files such
         as ``MERGE_HEAD`` in place. ``git commit`` is the source of merge,
         cherry-pick, and revert commit graph and cleanup behavior.
+        ``--no-gpg-sign`` keeps member commits unsigned: the member identity
+        has no signing key, and ``commit.gpgsign`` must not start pinentry.
 
         Args:
             repo: Open repository whose index is already staged.
@@ -312,19 +314,9 @@ class MemberGitWorkspaceService:
             MemberCapabilityError: If git refuses the commit.
         """
         git_user, git_email = self._git_identity()
-        message_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                prefix="guildbotics-member-commit-",
-                suffix=".txt",
-                delete=False,
-            ) as handle:
-                handle.write(message)
-                if not message.endswith("\n"):
-                    handle.write("\n")
-                message_path = Path(handle.name)
+        with tempfile.TemporaryDirectory(prefix="guildbotics-member-commit-") as tmp:
+            message_path = Path(tmp, "message.txt")
+            message_path.write_text(f"{message}\n", encoding="utf-8")
             with repo.git.custom_environment(
                 GIT_AUTHOR_NAME=git_user,
                 GIT_AUTHOR_EMAIL=git_email,
@@ -332,19 +324,18 @@ class MemberGitWorkspaceService:
                 GIT_COMMITTER_EMAIL=git_email,
             ):
                 try:
-                    repo.git.commit("-F", str(message_path))
+                    repo.git.commit("--no-gpg-sign", "-F", str(message_path))
                 except GitCommandError as exc:
                     raise MemberCapabilityError(f"Failed to commit: {exc}") from exc
-            return repo.head.commit.hexsha
-        finally:
-            if message_path is not None:
-                message_path.unlink(missing_ok=True)
+        return repo.head.commit.hexsha
 
     @staticmethod
     def _has_staged_changes(repo: git.Repo) -> bool:
-        # Commit only what the caller already staged with plain git. The member
-        # capability never stages on the caller's behalf, so that staging stays a
-        # normal git operation and partial commits remain possible.
+        # Commit only what the caller already staged with plain git. MERGE_HEAD
+        # is the one case git itself treats as committable with an empty index
+        # diff (a merge resolved to the current tree still needs a merge commit).
+        if (Path(repo.git_dir) / "MERGE_HEAD").exists():
+            return True
         if not repo.head.is_valid():
             return bool(repo.index.entries)
         return bool(repo.index.diff(repo.head.commit))
