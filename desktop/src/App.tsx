@@ -505,24 +505,6 @@ function runtimeUnitsStopping(status: RuntimeStatus) {
   );
 }
 
-function runtimeHasActiveWork(status: RuntimeStatus | undefined): boolean {
-  if (!status) {
-    return false;
-  }
-  return (
-    status.scheduler.running || status.events.running || (status.active_works ?? []).length > 0
-  );
-}
-
-/**
- * Block quitting while service or command work is running, so it never orphans
- * a running agent (the Rust host SIGKILLs the backend sidecar on exit, skipping
- * its graceful shutdown).
- *
- * Closing the window no longer quits — the host hides it so global hotkeys keep
- * working — so the guard hangs off the tray's Quit item instead. The user can
- * force stop the runtime and quit from the modal.
- */
 /**
  * Follow a route the host asks for (`app://navigate`): a control in the
  * quick-run window, a separate webview, sends the user to a settings screen
@@ -559,8 +541,18 @@ function useHostNavigation() {
   }, [navigate]);
 }
 
+/**
+ * Block quitting while service or command work is running, so a quit never cuts
+ * a running agent off.
+ *
+ * Every quit the host can see asks here first (`app://quit-requested`): the
+ * tray's and the app menu's Quit, and on macOS the quits that arrive from
+ * outside the app (the Dock, logout) when the backend reports work. Whether
+ * there is work is the backend's answer (`has_active_work`), not derived here.
+ * The user can force stop the runtime and quit from the modal.
+ */
 function useAppCloseGuard() {
-  // Why the quit is held: work is running, or whether it is could not be read.
+  // Why the quit is held: work is running, or whether it is running could not be read.
   const [blocked, setBlocked] = useState<"busy" | "unknown" | null>(null);
   const [forceQuitting, setForceQuitting] = useState(false);
   const [forceQuitError, setForceQuitError] = useState<string | null>(null);
@@ -578,7 +570,7 @@ function useAppCloseGuard() {
         const stop = await listen("app://quit-requested", async () => {
           let busy: boolean;
           try {
-            busy = runtimeHasActiveWork(await getSchedulerStatus());
+            busy = (await getSchedulerStatus()).has_active_work;
           } catch {
             // A failed read says nothing about the work. Quitting silently
             // under running agents is the worse mistake, so ask.
@@ -800,7 +792,7 @@ function ServicePage() {
   });
   const activeWorks = scheduler.data?.active_works ?? [];
   const activeMembers = team.data?.members.filter((member) => member.is_active) ?? [];
-  const runtimeRunning = runtimeHasActiveWork(scheduler.data);
+  const runtimeRunning = scheduler.data?.has_active_work ?? false;
   const runtimeStarting = Boolean(
     startMutation.isPending ||
     scheduler.data?.scheduler.state === "starting" ||

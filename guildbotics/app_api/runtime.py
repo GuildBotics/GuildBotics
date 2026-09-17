@@ -378,13 +378,13 @@ class AppRuntime:
         # Reject up front so a running service is not force-stopped just
         # because a switch was requested.
         status = self.get_scheduler_status()
-        if _runtime_has_active_work(status):
+        if status.has_active_work:
             raise _workspace_switch_blocked_error(status)
         # Force-stop anything that slipped in between the check above and here.
         # A forced stop can still time out (uncancellable work, drain timeout),
         # so re-check and abort rather than switching cwd/env under live work.
         stopped = self.stop_scheduler(force=True)
-        if _runtime_has_active_work(stopped):
+        if stopped.has_active_work:
             raise _workspace_switch_blocked_error(stopped)
         if self._diagnostics_store is not None:
             self._diagnostics_store.finish_system_session()
@@ -2400,16 +2400,6 @@ def _memory_body_preview(path: str, *, limit: int = 800) -> str:
     except OSError:
         return ""
     return body[:limit]
-
-
-def _runtime_has_active_work(status: RuntimeStatus) -> bool:
-    return (
-        status.scheduler.running
-        or status.events.running
-        or bool(status.active_works)
-        or status.scheduler.state == "stopping"
-        or status.events.state == "stopping"
-    )
 
 
 def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:

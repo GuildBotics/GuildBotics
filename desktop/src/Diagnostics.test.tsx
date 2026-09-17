@@ -1127,7 +1127,11 @@ function diagnosticCheck(overrides: Partial<DiagnosticCheck> = {}): DiagnosticCh
 }
 
 function runtimeStatus(): RuntimeStatus {
-  return { scheduler: runtimeUnit("scheduler"), events: runtimeUnit("events") };
+  return {
+    scheduler: runtimeUnit("scheduler"),
+    events: runtimeUnit("events"),
+    has_active_work: false,
+  };
 }
 
 function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {

@@ -24,6 +24,9 @@ from guildbotics.app_api.models import (
     CommandOption,
     CommandRunRequest,
     ProjectConfigUpdateRequest,
+    RuntimeActiveWork,
+    RuntimeStatus,
+    RuntimeUnitStatus,
     SchedulerStartRequest,
 )
 from guildbotics.editions.simple.setup_service import (
@@ -262,3 +265,40 @@ def test_project_update_input_serializes_path_to_json_string() -> None:
     payload = json.loads(request.model_dump_json())
     assert payload["config_dir"] == str(Path("/cfg"))
     assert "env_file_path" not in payload
+
+
+def _unit(target, state="stopped", running=False) -> RuntimeUnitStatus:
+    return RuntimeUnitStatus(target=target, state=state, running=running)
+
+
+_MANUAL_WORK = RuntimeActiveWork(
+    id="w1",
+    source="manual",
+    person_id="yuki",
+    command="ask",
+    started_at="2026-09-17T00:00:00Z",
+)
+
+
+@pytest.mark.parametrize(
+    ("scheduler", "events", "active_works", "expected"),
+    [
+        (_unit("scheduler"), _unit("events"), [], False),
+        (_unit("scheduler", "failed"), _unit("events", "failed"), [], False),
+        (_unit("scheduler", "running", True), _unit("events"), [], True),
+        (_unit("scheduler"), _unit("events", "running", True), [], True),
+        (_unit("scheduler"), _unit("events"), [_MANUAL_WORK], True),
+        (_unit("scheduler", "stopping"), _unit("events"), [], True),
+        (_unit("scheduler"), _unit("events", "stopping"), [], True),
+    ],
+)
+def test_runtime_status_reports_active_work(
+    scheduler, events, active_works, expected
+) -> None:
+    status = RuntimeStatus(
+        scheduler=scheduler, events=events, active_works=active_works
+    )
+
+    assert status.has_active_work is expected
+    # Serialized too: the desktop and its host read it from the response.
+    assert status.model_dump()["has_active_work"] is expected

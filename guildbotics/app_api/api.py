@@ -113,6 +113,7 @@ from guildbotics.app_api.models import (
     SchedulerStopRequest,
     SecretTransferRequest,
     SecretTransferResponse,
+    ShutdownResponse,
     SlackAppRegistrationStartRequest,
     SlackTokenVerifyRequest,
     SystemAlertDismissRequest,
@@ -193,6 +194,15 @@ def _request_language(request: Request) -> str:
 # scheme. Browser-preview origins are not fixed, so the launcher injects them
 # through ``create_app(allowed_origins=...)`` instead of matching a pattern.
 TAURI_ORIGINS = ["tauri://localhost", "http://tauri.localhost"]
+
+# How long the lifespan teardown may take before the host gives up on it. The
+# backend owns this number and hands it to the host with every accepted
+# shutdown, so the two cannot disagree about when a teardown is still orderly.
+# It has to cover every wait the teardown can run into, each at its limit: a
+# forced runtime stop (event listener join, scheduler shutdown, scheduler join,
+# work drain), the sync queue stop, the relay stop, and the diagnostics
+# maintenance join.
+TEARDOWN_BUDGET_SECONDS = 60.0
 
 logger = logging.getLogger("guildbotics.app_api")
 
@@ -401,15 +411,23 @@ def create_app(
             workspace=app_runtime.get_config_status().workspace,
         )
 
-    @app.post("/shutdown", status_code=202, responses=error_responses)
-    def shutdown(_: None = Depends(require_token)) -> None:
+    @app.post(
+        "/shutdown",
+        status_code=202,
+        response_model=ShutdownResponse,
+        responses=error_responses,
+    )
+    def shutdown(_: None = Depends(require_token)) -> ShutdownResponse:
         """Ask the hosting server to exit through its normal shutdown path.
 
         The desktop host calls this before it would kill the sidecar, so the
         lifespan teardown (scheduler stop, sync deactivation, session finish)
-        runs no matter which route the app took to quit.
+        runs no matter which route the app took to quit. The answer tells the
+        host how long that teardown may take, so it does not kill one that is
+        still within its own limits.
         """
         app.state.request_shutdown()
+        return ShutdownResponse(teardown_budget_seconds=TEARDOWN_BUDGET_SECONDS)
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:

@@ -6,15 +6,20 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from yaml import safe_load
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.app_api.api import TAURI_ORIGINS, TOKEN_HEADER, create_app
+from guildbotics.app_api.api import (
+    TAURI_ORIGINS,
+    TEARDOWN_BUDGET_SECONDS,
+    TOKEN_HEADER,
+    create_app,
+)
 from guildbotics.app_api.command_input_files import CommandInputFileStore
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.lifecycle import RuntimeLifecycleService
 from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
@@ -54,8 +59,11 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.runtime.relay_runtime import RelayRuntime
+from guildbotics.sync.manager import GitSyncManager
 
 HTTP_OK = 200
 HTTP_ACCEPTED = 202
@@ -417,6 +425,31 @@ def test_shutdown_asks_the_hosting_server_to_exit(tmp_path: Path) -> None:
     assert unauthorized.status_code == HTTP_UNAUTHORIZED
     assert response.status_code == HTTP_ACCEPTED
     assert requested == [True]
+    # The host waits exactly as long as the backend says its teardown may take.
+    assert response.json() == {"teardown_budget_seconds": TEARDOWN_BUDGET_SECONDS}
+
+
+def test_teardown_budget_covers_every_wait_at_its_limit() -> None:
+    """The host must not kill a teardown that is still within its own limits.
+
+    Each wait below is one the lifespan teardown can run into; all of them
+    timing out at once is the longest an orderly teardown takes. A new wait in
+    the teardown belongs in this sum.
+    """
+
+    def default(function: Any, name: str) -> float:
+        return inspect.signature(function).parameters[name].default
+
+    stop_timeout = default(RuntimeLifecycleService.__init__, "stop_timeout_seconds")
+    forced_runtime_stop = 4 * stop_timeout  # listener join, shutdown, join, drain
+    sync_queue_stop = default(GitSyncManager.stop, "timeout")
+    relay_stop = default(RelayRuntime.stop, "timeout")
+    maintenance_join = 1.0
+
+    assert (
+        forced_runtime_stop + sync_queue_stop + relay_stop + maintenance_join
+        <= TEARDOWN_BUDGET_SECONDS
+    )
 
 
 def test_health_requires_session_token(tmp_path: Path) -> None:
@@ -1173,6 +1206,8 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     from guildbotics.intelligences.agent_runtime import usage as usage_module
     from guildbotics.intelligences.agent_runtime.usage import (
         CliAgentUsageSnapshot,
+    )
+    from guildbotics.intelligences.agent_runtime.usage import (
         CliAgentUsageWindow as UsageWindow,
     )
 

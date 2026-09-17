@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -33,10 +33,11 @@ struct Sidecar {
     exited: Receiver<()>,
 }
 
-const SHUTDOWN_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-/// The backend's own teardown force-stops the scheduler, which may take two of
-/// its 10 second timeouts before giving up.
-const BACKEND_EXIT_TIMEOUT: Duration = Duration::from_secs(25);
+const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// What the process still needs after its teardown has finished: the server
+/// closing down and, in a packaged build, the bootloader cleaning up after it.
+/// How long the teardown itself may take is the backend's to say.
+const BACKEND_EXIT_MARGIN: Duration = Duration::from_secs(5);
 
 const BOOT_LOG_MAX_BYTES: usize = 1024 * 1024;
 const BOOT_LOG_COMPACT_BYTES: usize = BOOT_LOG_MAX_BYTES / 2;
@@ -125,6 +126,14 @@ fn append_boot_log(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::write(path, &content[start..])
 }
 
+/// Record a host-side event next to the backend's own output, so one log tells
+/// how a session ended: who asked for the quit, and whether it was confirmed.
+pub(crate) fn log_host_event(app: &tauri::AppHandle, message: &str) {
+    if let Some(state) = app.try_state::<BackendState>() {
+        let _ = append_boot_log(&state.boot_log_path, message.as_bytes());
+    }
+}
+
 fn read_boot_log_tail(path: &Path) -> io::Result<String> {
     let mut content = Vec::new();
     fs::File::open(path)?.read_to_end(&mut content)?;
@@ -166,31 +175,69 @@ fn force_update_cli_agent_skill(agent: String) -> Result<serde_json::Value, Stri
     Ok(cli_agent_skill_status(&home, agent))
 }
 
-/// Ask the Local API to exit through its own shutdown path, so its teardown
-/// (scheduler stop, sync deactivation, session finish) runs before it goes.
-fn request_backend_shutdown(port: u16, token: &str) -> io::Result<()> {
+/// One request to the Local API over loopback: the status code and the body.
+fn backend_request(port: u16, token: &str, method: &str, path: &str) -> io::Result<(u16, String)> {
     let mut stream = TcpStream::connect_timeout(
         &SocketAddr::from(([127, 0, 0, 1], port)),
-        SHUTDOWN_REQUEST_TIMEOUT,
+        BACKEND_REQUEST_TIMEOUT,
     )?;
-    stream.set_read_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
-    stream.set_write_timeout(Some(SHUTDOWN_REQUEST_TIMEOUT))?;
+    stream.set_read_timeout(Some(BACKEND_REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(BACKEND_REQUEST_TIMEOUT))?;
     write!(
         stream,
-        "POST /shutdown HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
          X-GuildBotics-Session-Token: {token}\r\n\
          Content-Length: 0\r\nConnection: close\r\n\r\n"
     )?;
-    let mut status_line = String::new();
-    BufReader::new(stream).read_line(&mut status_line)?;
-    if status_line.split(' ').nth(1) == Some("202") {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "unexpected shutdown response: {}",
-            status_line.trim_end()
-        )))
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    let status = head
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| io::Error::other("malformed response from the backend"))?;
+    Ok((status, body.to_owned()))
+}
+
+/// Ask the Local API to exit through its own shutdown path, so its teardown
+/// (scheduler stop, sync deactivation, session finish) runs before it goes.
+///
+/// Returns how long the backend says that teardown may take. The host waits
+/// that long rather than keeping a number of its own, which would go stale the
+/// moment the teardown gained a step and cut an orderly teardown short.
+fn request_backend_shutdown(port: u16, token: &str) -> io::Result<Duration> {
+    let (status, body) = backend_request(port, token, "POST", "/shutdown")?;
+    if status != 202 {
+        return Err(io::Error::other(format!(
+            "unexpected shutdown response: {status}"
+        )));
     }
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|accepted| accepted.get("teardown_budget_seconds")?.as_f64())
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .ok_or_else(|| io::Error::other("the backend did not state its teardown budget"))
+}
+
+/// Whether the backend has work that a quit would cut off. Anything short of
+/// a clear "no" counts as yes: an unreadable state says nothing about the work.
+fn backend_has_active_work(port: u16, token: &str) -> bool {
+    let Ok((200, body)) = backend_request(port, token, "GET", "/scheduler/status") else {
+        return true;
+    };
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|status| status.get("has_active_work")?.as_bool())
+        .unwrap_or(true)
+}
+
+/// Whether a quit the app did not start itself (the Dock's Quit, logout) has
+/// to go through the frontend's guard first. An idle app lets it proceed, so
+/// it never holds up a logout it has no reason to.
+pub(crate) fn quit_needs_confirmation(app: &tauri::AppHandle) -> bool {
+    app.try_state::<BackendState>()
+        .is_none_or(|state| backend_has_active_work(state.port, &state.token))
 }
 
 fn wait_for_exit(exited: &Receiver<()>, timeout: Duration) -> io::Result<()> {
@@ -219,7 +266,7 @@ fn stop_backend(state: &BackendState) {
         return;
     };
     let stopped = request_backend_shutdown(state.port, &state.token)
-        .and_then(|()| wait_for_exit(&sidecar.exited, BACKEND_EXIT_TIMEOUT));
+        .and_then(|budget| wait_for_exit(&sidecar.exited, budget + BACKEND_EXIT_MARGIN));
     let outcome = match stopped {
         Ok(()) => "backend shut down gracefully".to_owned(),
         Err(error) => {
@@ -559,6 +606,7 @@ fn install_cli_agent_assets() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
 
     struct TestDir {
         path: PathBuf,
@@ -609,9 +657,12 @@ mod tests {
 
     #[test]
     fn shutdown_request_posts_the_session_token() {
-        let (port, server) = serve_once("HTTP/1.1 202 Accepted\r\ncontent-length: 0\r\n\r\n");
+        let (port, server) =
+            serve_once("HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":60.5}");
 
-        request_backend_shutdown(port, "session-token").expect("accepted");
+        let budget = request_backend_shutdown(port, "session-token").expect("accepted");
+
+        assert_eq!(budget, Duration::from_millis(60_500));
 
         let request = server.join().expect("server");
         assert!(request.starts_with("POST /shutdown HTTP/1.1\r\n"));
@@ -626,6 +677,50 @@ mod tests {
 
         server.join().expect("server");
         assert!(error.to_string().contains("401"));
+    }
+
+    #[test]
+    fn active_work_is_read_from_the_backend_status() {
+        let (port, server) = serve_once(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"has_active_work\":false}",
+        );
+
+        assert!(!backend_has_active_work(port, "session-token"));
+
+        let request = server.join().expect("server");
+        assert!(request.starts_with("GET /scheduler/status HTTP/1.1\r\n"));
+        assert!(request.contains("\r\nX-GuildBotics-Session-Token: session-token\r\n"));
+    }
+
+    #[test]
+    fn anything_but_a_clear_no_counts_as_active_work() {
+        for response in [
+            "HTTP/1.1 200 OK\r\n\r\n{\"has_active_work\":true}",
+            "HTTP/1.1 200 OK\r\n\r\n{\"scheduler\":{}}",
+            "HTTP/1.1 200 OK\r\n\r\nnot json",
+            "HTTP/1.1 401 Unauthorized\r\n\r\n{\"has_active_work\":false}",
+        ] {
+            let (port, server) = serve_once(response);
+            assert!(backend_has_active_work(port, "token"), "{response}");
+            server.join().expect("server");
+        }
+        assert!(backend_has_active_work(pick_free_port(), "token"));
+    }
+
+    #[test]
+    fn shutdown_request_fails_without_a_usable_teardown_budget() {
+        for response in [
+            "HTTP/1.1 202 Accepted\r\n\r\n",
+            "HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":-1}",
+            "HTTP/1.1 202 Accepted\r\n\r\n{\"teardown_budget_seconds\":\"soon\"}",
+        ] {
+            let (port, server) = serve_once(response);
+            assert!(
+                request_backend_shutdown(port, "token").is_err(),
+                "{response}"
+            );
+            server.join().expect("server");
+        }
     }
 
     #[test]

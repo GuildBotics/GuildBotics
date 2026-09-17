@@ -859,10 +859,18 @@ a monorepo on purpose.
   menu bar. Every Quit the app owns (the tray item, and on macOS the app menu with its
   Cmd+Q, which replaces Tauri's default menu because that one sends `terminate:`) asks
   the frontend's "work still running" guard first; a failed status read asks too
-  rather than quitting. macOS can still terminate the app without asking (the Dock's
-  Quit, logout), so the guard is not what protects the backend: on `RunEvent::Exit`,
-  which every route passes through, the host requests `POST /shutdown`, waits for the
-  sidecar to finish its lifespan teardown, and kills it only if that fails.
+  rather than quitting. Quits that arrive from outside the app on macOS (the Dock's
+  Quit, logout) come as a quit Apple Event, which tao's delegate does not get to
+  refuse, so the host adds `applicationShouldTerminate:` to it: the quit is cancelled
+  and handed to the same guard while the backend reports work (or cannot be read), and
+  let through when it is idle, so an idle app never holds up a logout. "Is there work"
+  has one answer, `RuntimeStatus.has_active_work`, which the workspace switch, the
+  frontend guard, and the host all read. A force quit or a crash still bypasses all of
+  this, so the guard is not what protects the backend: on `RunEvent::Exit`, which every
+  orderly route passes through, the host requests `POST /shutdown`, waits for the
+  sidecar to finish its lifespan teardown, and kills it only if that fails. How long
+  that wait is comes from the backend (`TEARDOWN_BUDGET_SECONDS`, returned with the
+  accepted shutdown), so the host never cuts short a teardown still within its limits.
 - **AI assistants**: the command editor and the diagnostics screen each host a
   conversational assistant. Both share one substrate:
   `guildbotics/intelligences/assistants.py` opens a resumable, structured turn (one JSON

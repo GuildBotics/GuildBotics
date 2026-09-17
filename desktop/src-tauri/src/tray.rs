@@ -2,9 +2,9 @@
 //!
 //! Global hotkeys only fire while the process is alive, so closing the main
 //! window hides it instead of quitting. The tray icon is what makes that
-//! recoverable: it is the way back to the window, and every Quit item the app
-//! owns (the tray's, and the macOS app menu's with its Cmd+Q) asks the frontend
-//! first instead of quitting.
+//! recoverable: it is the way back to the window. Every quit the host can see
+//! (the tray's Quit, the macOS app menu's with its Cmd+Q, and the quits macOS
+//! sends from outside the app) asks the frontend first instead of quitting.
 
 use std::sync::Mutex;
 
@@ -52,14 +52,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let app_quit = None;
 
+    #[cfg(target_os = "macos")]
+    guard_system_quit(app);
+
     app.on_menu_event(|app, event| match event.id.as_ref() {
         "show" => crate::hotkeys::show_main_window(app.clone()),
-        "quit" | APP_QUIT => {
-            // The window may be hidden, and the guard answers with a modal
-            // inside it; without this the quit would look unresponsive.
-            crate::hotkeys::show_main_window(app.clone());
-            let _ = app.emit_to(MAIN_WINDOW, QUIT_REQUESTED, ());
-        }
+        id @ ("quit" | APP_QUIT) => request_quit(app, id),
         _ => {}
     });
 
@@ -74,6 +72,66 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 }
 
 const APP_QUIT: &str = "app-quit";
+
+/// Hand a quit over to the frontend's guard, which quits or asks.
+fn request_quit(app: &AppHandle, source: &str) {
+    crate::log_host_event(app, &format!("quit requested: {source}"));
+    // The window may be hidden, and the guard answers with a modal inside it;
+    // without this the quit would look unresponsive.
+    crate::hotkeys::show_main_window(app.clone());
+    let _ = app.emit_to(MAIN_WINDOW, QUIT_REQUESTED, ());
+}
+
+/// Put quits that arrive from outside the app (the Dock's Quit, Cmd+Tab's Q,
+/// logout) through the guard as well.
+///
+/// They reach NSApp as a quit Apple Event, which asks the delegate's
+/// `applicationShouldTerminate:` and terminates unless that says no. tao's
+/// delegate does not implement it, so the method is added to its class here.
+/// Work running means cancel and ask; an idle app lets the quit through, so it
+/// never holds up a logout it has no reason to. `quit_app` leaves through the
+/// event loop rather than `terminate:`, so a confirmed quit is not asked again.
+#[cfg(target_os = "macos")]
+fn guard_system_quit(app: &AppHandle) {
+    use objc2::ffi::{class_addMethod, object_getClass};
+    use objc2::runtime::{AnyObject, Imp, Sel};
+    use objc2::{class, msg_send, sel};
+
+    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+    const TERMINATE_CANCEL: usize = 0;
+    const TERMINATE_NOW: usize = 1;
+
+    extern "C-unwind" fn should_terminate(_: &AnyObject, _: Sel, _: *mut AnyObject) -> usize {
+        match APP.get() {
+            Some(app) if crate::quit_needs_confirmation(app) => {
+                request_quit(app, "system");
+                TERMINATE_CANCEL
+            }
+            _ => TERMINATE_NOW,
+        }
+    }
+
+    let _ = APP.set(app.clone());
+    // Safety: runs on the main thread during setup, where NSApp and the
+    // delegate tao installed are alive. The signature matches
+    // `- (NSApplicationTerminateReply)applicationShouldTerminate:(id)sender`.
+    unsafe {
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let delegate: *mut AnyObject = msg_send![ns_app, delegate];
+        if delegate.is_null() {
+            return;
+        }
+        let imp: Imp = std::mem::transmute(
+            should_terminate as extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
+        );
+        class_addMethod(
+            object_getClass(delegate).cast_mut(),
+            sel!(applicationShouldTerminate:),
+            imp,
+            c"Q@:@".as_ptr(),
+        );
+    }
+}
 
 /// Install the macOS app menu and return its Quit item.
 ///
@@ -160,6 +218,7 @@ pub fn set_tray_labels(app: AppHandle, show: String, quit: String, app_quit: Str
 /// command work would be orphaned.
 #[tauri::command]
 pub fn quit_app(app: AppHandle) {
+    crate::log_host_event(&app, "quit confirmed by the frontend");
     app.exit(0);
 }
 
