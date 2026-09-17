@@ -205,6 +205,15 @@ def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
         assert "not a substitute" in body or "代替ではありません" in body, language
 
 
+def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
+    for language in ("en", "ja"):
+        body = _prompt_body("handle_github_ticket", language)
+        assert "member github pr checks" in body, language
+        assert "`readiness`" in body, language
+        assert "head SHA" in body, language
+        assert "--status done" in body, language
+
+
 def test_issue_comment_contract_not_in_chat_prompt():
     """The Issue comment contract is specific to handle_github_ticket and
     must NOT leak into handle_chat_event."""

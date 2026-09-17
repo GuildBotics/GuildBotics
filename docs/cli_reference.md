@@ -69,7 +69,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch (--issue-url), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
-| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential. |
+| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
 | [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
@@ -77,7 +77,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
 | [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
-| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's check rollup and optional failed Actions log tails. |
+| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
@@ -99,7 +99,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member memory touch`](#guildbotics-member-memory-touch) | Mark a useful memory as actually used by moving it to the digest front. |
 | [`guildbotics member memory update`](#guildbotics-member-memory-update) | Replace selected body or metadata fields and move the document to the digest front. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
 | [`guildbotics run`](#guildbotics-run) | Run a command through the matching Desktop when open, otherwise locally. |
 | [`guildbotics secrets`](#guildbotics-secrets) | Manage workspace secrets (API keys and tokens). |
@@ -949,7 +949,7 @@ guildbotics member git [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
 | [`guildbotics member git prepare`](#guildbotics-member-git-prepare) | Clone/checkout an isolated member workspace: a ticket branch (--issue-url), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo... |
 | [`guildbotics member git publish`](#guildbotics-member-git-publish) | Commit already-staged changes with the member identity, then push. |
-| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential. |
+| [`guildbotics member git push`](#guildbotics-member-git-push) | Push the current branch with the member credential and report readiness for matching open PRs. |
 
 ## `guildbotics member git commit`
 
@@ -1015,7 +1015,7 @@ guildbotics member git publish [OPTIONS]
 
 ## `guildbotics member git push`
 
-Push the current branch with the member credential.
+Push the current branch with the member credential and report readiness for matching open PRs.
 
 ```text
 guildbotics member git push [OPTIONS]
@@ -1157,7 +1157,7 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's check rollup and optional failed Actions log tails. |
+| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
 | [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
@@ -1167,7 +1167,7 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 
 ## `guildbotics member github pr checks`
 
-Read a PR head's check rollup and optional failed Actions log tails.
+Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails.
 
 ```text
 guildbotics member github pr checks [OPTIONS]
@@ -1572,12 +1572,12 @@ guildbotics member task [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence. |
+| [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
 
 ## `guildbotics member task complete`
 
-Finish a ticket workflow run with evidence.
+Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done.
 
 ```text
 guildbotics member task complete [OPTIONS]

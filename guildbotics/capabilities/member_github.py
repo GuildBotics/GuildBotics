@@ -377,6 +377,7 @@ class MemberGitHubCapabilityService:
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
         head = self._pull_request_head(resource, pr)
+        freshness = await self._pull_request_inspection_freshness(resource, pr)
         result: dict[str, Any] = {
             "repo": resource.full_repo,
             "number": resource.number,
@@ -391,6 +392,7 @@ class MemberGitHubCapabilityService:
             "head_owner": head.owner,
             "head_repo_name": head.repo,
             "base": (pr.get("base") or {}).get("ref", ""),
+            **freshness,
         }
         if include_comments:
             result["conversation_comments"] = await self._issue_comments(resource)
@@ -413,6 +415,12 @@ class MemberGitHubCapabilityService:
             )
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
+        readiness_applies = _pull_request_readiness_applies(pr)
+        freshness = (
+            await self._pull_request_freshness(resource, pr)
+            if readiness_applies
+            else None
+        )
         head_sha = self._pull_request_head_sha(resource, pr)
         actions = GitHubActionsClient(await self._get_client())
         try:
@@ -423,25 +431,181 @@ class MemberGitHubCapabilityService:
                 resource.owner, resource.repo, head_sha
             )
             checks = _check_summaries(check_runs, statuses)
-            result: dict[str, Any] = {
-                "repo": resource.full_repo,
-                "pr_number": resource.number,
-                "pr_url": pr.get("html_url", url),
-                "head_sha": head_sha,
-                "rollup": _check_rollup(checks),
-                "checks": checks,
-            }
+            rollup = _check_rollup(checks)
+            failed_action_logs = None
             if failed_logs:
-                result["failed_logs"] = await self._failed_action_logs(
+                failed_action_logs = await self._failed_action_logs(
                     actions,
                     resource,
                     head_sha,
                     log_tail_bytes,
                     check_runs,
                 )
+            if not readiness_applies:
+                return self._pull_request_checks_not_applicable(
+                    resource,
+                    pr,
+                    url,
+                    checked_head_sha=head_sha,
+                    rollup=rollup,
+                    checks=checks,
+                    failed_action_logs=failed_action_logs,
+                )
+            assert freshness is not None
+            checks_expected = False
+            if not checks and freshness["base_sha"] != head_sha:
+                base_check_runs = await actions.check_runs(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                base_statuses = await actions.commit_statuses(
+                    resource.owner, resource.repo, freshness["base_sha"]
+                )
+                checks_expected = bool(_check_summaries(base_check_runs, base_statuses))
+            current = await self._pull_request(resource)
+            if not _pull_request_readiness_applies(current):
+                return self._pull_request_checks_not_applicable(
+                    resource,
+                    current,
+                    url,
+                    checked_head_sha=head_sha,
+                    rollup=rollup,
+                    checks=checks,
+                    failed_action_logs=failed_action_logs,
+                )
+            current_base_sha = await self._pull_request_current_base_sha(
+                resource, current
+            )
+            current_head_sha = self._pull_request_head_sha(resource, current)
+            blockers = _completion_blockers(
+                rollup=rollup,
+                checks_expected=checks_expected,
+                behind_by=freshness["behind_by"],
+                base_sha=freshness["base_sha"],
+                head_sha=head_sha,
+                current_base_sha=current_base_sha,
+                current_head_sha=current_head_sha,
+            )
+            result: dict[str, Any] = {
+                "repo": resource.full_repo,
+                "pr_number": resource.number,
+                "pr_url": pr.get("html_url", url),
+                **freshness,
+                "current_base_sha": current_base_sha,
+                "current_head_sha": current_head_sha,
+                "rollup": rollup,
+                "checks": checks,
+                "checks_expected": checks_expected,
+                "readiness": "blocked" if blockers else "ready",
+                "completion_blockers": blockers,
+            }
+            if failed_action_logs is not None:
+                result["failed_logs"] = failed_action_logs
             return result
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
+
+    def _pull_request_checks_not_applicable(
+        self,
+        resource: GitHubResource,
+        pr: dict[str, Any],
+        url: str,
+        *,
+        checked_head_sha: str,
+        rollup: str,
+        checks: list[dict[str, Any]],
+        failed_action_logs: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "repo": resource.full_repo,
+            "pr_number": resource.number,
+            "pr_url": pr.get("html_url", url),
+            "base_sha": None,
+            "head_sha": checked_head_sha,
+            "behind_by": None,
+            "out_of_date": None,
+            "current_base_sha": None,
+            "current_head_sha": self._pull_request_head_sha(resource, pr),
+            "rollup": rollup,
+            "checks": checks,
+            "checks_expected": False,
+            "readiness": "not_applicable",
+            "completion_blockers": [],
+        }
+        if failed_action_logs is not None:
+            result["failed_logs"] = failed_action_logs
+        return result
+
+    async def open_pr_checks(
+        self, remote_url: str, branch: str
+    ) -> list[dict[str, Any]]:
+        """Return readiness for open PRs whose head is the pushed branch."""
+        repository = self._repository_from_remote(remote_url)
+        if repository is None:
+            return []
+        owner, repo = repository
+        client = await self._get_client()
+        # Member publishing targets branches in the configured origin repository;
+        # fork-owned heads are outside this interactive push lookup.
+        response = await client.get(
+            f"/repos/{owner}/{repo}/pulls",
+            params={"state": "open", "head": f"{owner}:{branch}"},
+        )
+        _raise_for_status(response)
+        results: list[dict[str, Any]] = []
+        for pull_request in _as_list(response.json()):
+            number = pull_request.get("number")
+            if not isinstance(number, int) or number < 1:
+                continue
+            url = str(
+                pull_request.get("html_url")
+                or f"{self.web_base_url()}/{owner}/{repo}/pull/{number}"
+            )
+            checks = await self.pr_checks(url)
+            if checks["readiness"] == "not_applicable":
+                continue
+            results.append(
+                {
+                    "pr_url": checks["pr_url"],
+                    "readiness": checks["readiness"],
+                    "completion_blockers": checks["completion_blockers"],
+                }
+            )
+        return results
+
+    async def task_completion_readiness(
+        self, ticket_url: str, evidence: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Revalidate every PR identified by a ticket run before completion."""
+        urls = self._task_pull_request_urls(ticket_url, evidence)
+        try:
+            ticket = self.parse_url(ticket_url)
+        except (MemberCapabilityError, ValueError):
+            ticket = None
+        if ticket is not None and ticket.kind == "issue":
+            for url in await self._linked_pull_request_urls(ticket):
+                if url not in urls:
+                    urls.append(url)
+        results = []
+        for url in urls:
+            resource = self.parse_url(url, expected_kind="pull")
+            if not _pull_request_readiness_applies(await self._pull_request(resource)):
+                continue
+            result = await self.pr_checks(url)
+            if result["readiness"] != "not_applicable":
+                results.append(result)
+        blocked = [result for result in results if result["readiness"] != "ready"]
+        if blocked:
+            details = "; ".join(
+                f"{result['pr_url']}: "
+                + ", ".join(
+                    str(blocker["message"]) for blocker in result["completion_blockers"]
+                )
+                for result in blocked
+            )
+            raise MemberCapabilityError(
+                "Task cannot be completed because PR readiness is blocked. " + details
+            )
+        return results
 
     async def artifact_download(
         self, url: str, name: str, destination: Path
@@ -818,6 +982,51 @@ class MemberGitHubCapabilityService:
             return ""
         return f"{web_url}/commit/{sha}"
 
+    def _repository_from_remote(self, remote_url: str) -> tuple[str, str] | None:
+        web_url = _remote_web_url(remote_url)
+        if not web_url:
+            return None
+        parsed = urlparse(web_url)
+        if parsed.hostname != urlparse(self.web_base_url()).hostname:
+            return None
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) != REPO_WITH_OWNER_PART_COUNT:
+            return None
+        return parts[0], parts[1]
+
+    def _task_pull_request_urls(
+        self, ticket_url: str, evidence: list[dict[str, Any]]
+    ) -> list[str]:
+        candidates = [ticket_url]
+        for record in evidence:
+            payload = record.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            for key in ("pr_url", "html_url"):
+                value = payload.get(key)
+                if isinstance(value, str):
+                    candidates.append(value)
+            pull_requests = payload.get("pull_requests")
+            if isinstance(pull_requests, list):
+                candidates.extend(
+                    str(item.get("pr_url") or "")
+                    for item in pull_requests
+                    if isinstance(item, dict)
+                )
+
+        urls: list[str] = []
+        for candidate in candidates:
+            try:
+                resource = self.parse_url(candidate, expected_kind="pull")
+            except (MemberCapabilityError, ValueError):
+                continue
+            canonical = (
+                f"{self.web_base_url()}/{resource.full_repo}/pull/{resource.number}"
+            )
+            if canonical not in urls:
+                urls.append(canonical)
+        return urls
+
     async def get_pr_head_branch(self, url: str) -> str:
         return (await self.get_pr_head(url)).branch
 
@@ -838,6 +1047,75 @@ class MemberGitHubCapabilityService:
                 f"{resource.full_repo}#{resource.number}."
             )
         return payload
+
+    async def _pull_request_freshness(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> dict[str, Any]:
+        base_sha = await self._pull_request_current_base_sha(resource, pr)
+        head_sha = self._pull_request_head_sha(resource, pr)
+        client = await self._get_client()
+        response = await client.get(
+            f"/repos/{resource.owner}/{resource.repo}/compare/"
+            f"{quote(base_sha, safe='')}...{quote(head_sha, safe='')}"
+        )
+        _raise_for_status(response)
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("behind_by"), int
+        ):
+            raise MemberCapabilityError(
+                "Unexpected GitHub compare response for "
+                f"{resource.full_repo}#{resource.number}."
+            )
+        behind_by = payload["behind_by"]
+        if behind_by < 0:
+            raise MemberCapabilityError(
+                "Unexpected GitHub compare response for "
+                f"{resource.full_repo}#{resource.number}."
+            )
+        return {
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+            "behind_by": behind_by,
+            "out_of_date": behind_by > 0,
+        }
+
+    async def _pull_request_inspection_freshness(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> dict[str, Any]:
+        head_sha = self._pull_request_head_sha(resource, pr)
+        unavailable: dict[str, Any] = {
+            "base_sha": None,
+            "head_sha": head_sha,
+            "behind_by": None,
+            "out_of_date": None,
+        }
+        if not _pull_request_readiness_applies(pr):
+            return unavailable
+        try:
+            return await self._pull_request_freshness(resource, pr)
+        except MemberCapabilityError as exc:
+            unavailable["freshness_error"] = str(exc)
+            return unavailable
+
+    async def _pull_request_current_base_sha(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> str:
+        branch = self._pull_request_base_ref(resource, pr)
+        client = await self._get_client()
+        response = await client.get(
+            f"/repos/{resource.owner}/{resource.repo}/branches/{quote(branch, safe='')}"
+        )
+        _raise_for_status(response)
+        payload = response.json()
+        commit = payload.get("commit") if isinstance(payload, dict) else None
+        sha = str(commit.get("sha") or "") if isinstance(commit, dict) else ""
+        if not sha:
+            raise MemberCapabilityError(
+                "Unexpected GitHub branch response for "
+                f"{resource.full_repo}#{resource.number}."
+            )
+        return sha
 
     def _validate_review_comment_location(
         self,
@@ -1088,6 +1366,26 @@ class MemberGitHubCapabilityService:
     async def _linked_pull_request_candidates(
         self, resource: GitHubResource
     ) -> list[dict[str, Any]]:
+        urls = await self._linked_pull_request_urls(resource)
+        candidates = []
+        for url in urls:
+            try:
+                pr_resource = self.parse_url(url, expected_kind="pull")
+            except Exception:
+                continue
+            pr = await self.pr_inspect(url, include_comments=False)
+            candidates.append(
+                {
+                    "number": pr_resource.number,
+                    "url": pr.get("html_url", url),
+                    "title": pr.get("title", ""),
+                    "state": pr.get("state", ""),
+                    "merged": pr.get("merged", False),
+                }
+            )
+        return candidates
+
+    async def _linked_pull_request_urls(self, resource: GitHubResource) -> list[str]:
         client = await self._get_client()
         resp = await client.get(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline",
@@ -1104,24 +1402,7 @@ class MemberGitHubCapabilityService:
             issue = source.get("issue", {}) if isinstance(source, dict) else {}
             if "pull_request" in issue and issue.get("html_url"):
                 urls.append(str(issue["html_url"]))
-
-        candidates = []
-        for url in dict.fromkeys(urls):
-            try:
-                pr_resource = self.parse_url(url, expected_kind="pull")
-            except Exception:
-                continue
-            pr = await self.pr_inspect(url, include_comments=False)
-            candidates.append(
-                {
-                    "number": pr_resource.number,
-                    "url": pr.get("html_url", url),
-                    "title": pr.get("title", ""),
-                    "state": pr.get("state", ""),
-                    "merged": pr.get("merged", False),
-                }
-            )
-        return candidates
+        return list(dict.fromkeys(urls))
 
     async def _issue_project_metadata(self, resource: GitHubResource) -> dict[str, Any]:
         query = """
@@ -1261,6 +1542,18 @@ class MemberGitHubCapabilityService:
             )
         return sha
 
+    def _pull_request_base_ref(
+        self, resource: GitHubResource, pr: dict[str, Any]
+    ) -> str:
+        raw_base = pr.get("base")
+        base = raw_base if isinstance(raw_base, dict) else {}
+        branch = str(base.get("ref") or "")
+        if not branch:
+            raise MemberCapabilityError(
+                f"Pull request base branch not found for {resource.full_repo}#{resource.number}."
+            )
+        return branch
+
 
 def _as_list(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
@@ -1348,6 +1641,72 @@ def _check_rollup(checks: list[dict[str, Any]]) -> str:
     if all(item.get("conclusion") in _SUCCESS_CONCLUSIONS for item in checks):
         return "success"
     return "pending"
+
+
+def _pull_request_readiness_applies(pr: dict[str, Any]) -> bool:
+    return pr.get("state") == "open"
+
+
+def _completion_blockers(
+    *,
+    rollup: str,
+    checks_expected: bool,
+    behind_by: int,
+    base_sha: str,
+    head_sha: str,
+    current_base_sha: str,
+    current_head_sha: str,
+) -> list[dict[str, str]]:
+    blockers: list[dict[str, str]] = []
+    if behind_by > 0:
+        blockers.append(
+            {
+                "code": "base_out_of_date",
+                "message": f"The PR head is {behind_by} commit(s) behind its base.",
+                "next_action": "Merge or rebase the base branch, push, and check again.",
+            }
+        )
+    if current_head_sha != head_sha:
+        blockers.append(
+            {
+                "code": "head_changed",
+                "message": "The PR head changed while readiness was being checked.",
+                "next_action": "Check the new head SHA and its CI results again.",
+            }
+        )
+    if current_base_sha != base_sha:
+        blockers.append(
+            {
+                "code": "base_changed",
+                "message": "The PR base changed while readiness was being checked.",
+                "next_action": "Check freshness against the new base SHA again.",
+            }
+        )
+    if rollup == "failure":
+        blockers.append(
+            {
+                "code": "checks_failed",
+                "message": "CI checks are failing.",
+                "next_action": "Inspect failed logs, fix the failures, and check again.",
+            }
+        )
+    elif rollup == "pending":
+        blockers.append(
+            {
+                "code": "checks_pending",
+                "message": "CI checks are still pending.",
+                "next_action": "Wait for every check to finish, then check again.",
+            }
+        )
+    elif rollup == "no_checks" and checks_expected:
+        blockers.append(
+            {
+                "code": "checks_pending",
+                "message": "CI checks have not been registered for the PR head yet.",
+                "next_action": "Wait for CI to start, then check again.",
+            }
+        )
+    return blockers
 
 
 def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:

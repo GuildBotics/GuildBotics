@@ -3350,9 +3350,20 @@ def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
         assert identifier == "aiko"
         return FakeContext(person), person
 
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def task_completion_readiness(self, _ticket_url, _evidence):
+            return []
+
+        async def aclose(self):
+            pass
+
     monkeypatch.setattr(
         member_module, "resolve_member_context", fake_resolve_member_context
     )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
     TaskRunStore().append_evidence("run-1", "issue_comment", {"comment_id": 1})
     result = CliRunner().invoke(
         member_module.member,
@@ -3375,6 +3386,127 @@ def test_member_task_complete_reads_summary_from_stdin(monkeypatch, tmp_path):
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["summary"] == "Completed with verification.\n"
+    assert payload["pr_readiness"] == []
+
+
+def test_member_task_complete_rejects_blocked_pr_readiness(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def task_completion_readiness(self, ticket_url, evidence):
+            calls.update({"ticket_url": ticket_url, "evidence": evidence})
+            raise member_module.MemberCapabilityError(
+                "Task cannot be completed because PR readiness is blocked. "
+                "https://github.com/owner/repo/pull/7: CI checks are still pending."
+            )
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    store = TaskRunStore()
+    store.append_evidence(
+        "run-1",
+        "pr_create",
+        {"pr_url": "https://github.com/owner/repo/pull/7"},
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--ticket-url",
+            "https://github.com/owner/repo/issues/1",
+            "--status",
+            "done",
+            "--content-stdin",
+        ],
+        input="Completed.\n",
+    )
+
+    assert result.exit_code != 0
+    assert "PR readiness is blocked" in result.output
+    assert "CI checks are still pending" in result.output
+    assert calls["ticket_url"] == "https://github.com/owner/repo/issues/1"
+    assert calls["evidence"][0]["evidence_type"] == "pr_create"
+    assert calls["closed"] is True
+    with pytest.raises(member_module.TaskRunError, match="not completed"):
+        store.status("run-1")
+
+
+def test_member_task_complete_returns_revalidated_pr_readiness(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    person = Person(person_id="aiko", name="Aiko")
+    readiness = {
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "head_sha": "abc123",
+        "readiness": "ready",
+        "completion_blockers": [],
+    }
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def task_completion_readiness(self, _ticket_url, _evidence):
+            return [readiness]
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    TaskRunStore().append_evidence(
+        "run-1",
+        "pr_create",
+        {"pr_url": "https://github.com/owner/repo/pull/7"},
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--run-id",
+            "run-1",
+            "--ticket-url",
+            "https://github.com/owner/repo/issues/1",
+            "--status",
+            "done",
+            "--content-stdin",
+        ],
+        input="Completed.\n",
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["pr_readiness"] == [readiness]
 
 
 def test_member_cli_help_stays_in_sync_with_capability_catalog():
