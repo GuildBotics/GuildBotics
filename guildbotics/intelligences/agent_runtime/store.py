@@ -136,7 +136,7 @@ class ConversationStore:
             payload = {"version": _STORE_VERSION, **asdict(record)}
             path = self._path(record.key)
             path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            fd, temporary = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     json.dump(payload, handle, ensure_ascii=False, sort_keys=True)

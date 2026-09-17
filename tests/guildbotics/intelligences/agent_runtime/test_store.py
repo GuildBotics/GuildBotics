@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -31,6 +32,39 @@ def test_conversation_store_resumes_exact_session_and_separates_keys(tmp_path) -
     assert resumed.provider_session_id == "thread-1"
     assert resumed.context_cursor == "cursor-1"
     assert store.resolve(_key("issue-301"), ResumePolicy.AUTO).provider_session_id == ""
+
+
+def test_conversation_store_round_trips_in_a_long_windows_path(
+    monkeypatch, tmp_path
+) -> None:
+    key = _key()
+    base_parent = ConversationStore(tmp_path)._path(key).parent
+    padding_length = 188 - len(str(base_parent)) - 1
+    assert 0 < padding_length <= 255
+    store = ConversationStore(tmp_path / ("w" * padding_length))
+    record_path = store._path(key)
+    assert len(str(record_path.parent)) == 188
+
+    original_mkstemp = tempfile.mkstemp
+    temporary_directories = []
+
+    def windows_limited_mkstemp(*, prefix, dir):
+        candidate = Path(dir) / f"{prefix}xxxxxxxx"
+        if len(str(candidate)) >= 260:
+            raise FileNotFoundError(2, "No such file or directory", str(candidate))
+        temporary_directories.append(Path(dir))
+        return original_mkstemp(prefix=prefix, dir=dir)
+
+    monkeypatch.setattr(tempfile, "mkstemp", windows_limited_mkstemp)
+    record = store.resolve(key, ResumePolicy.AUTO)
+    record.provider_session_id = "thread-1"
+
+    store.save(record)
+
+    loaded = store.load(key)
+    assert loaded is not None
+    assert loaded.provider_session_id == "thread-1"
+    assert temporary_directories == [record_path.parent]
 
 
 def test_resume_rejects_missing_or_unhealthy_exact_session(tmp_path) -> None:
