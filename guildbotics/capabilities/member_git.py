@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import git
-from git import Actor, GitCommandError
+from git import GitCommandError
 
 from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
@@ -188,10 +189,7 @@ class MemberGitWorkspaceService:
             has_staged = self._has_staged_changes(repo)
             commit_sha = None
             if has_staged:
-                actor = self._member_actor()
-                commit_sha = repo.index.commit(
-                    message.strip(), author=actor, committer=actor
-                ).hexsha
+                commit_sha = self._commit_index(repo, message.strip())
         return CommitResult(
             repo_path=str(repo_path),
             branch=branch,
@@ -296,15 +294,48 @@ class MemberGitWorkspaceService:
         )
         return git_user, git_email
 
-    def _member_actor(self) -> Actor:
+    def _commit_index(self, repo: git.Repo, message: str) -> str:
+        """Commit the index through git so in-progress sequencer state is consumed.
+
+        GitPython's ``IndexFile.commit`` parents only HEAD and leaves files such
+        as ``MERGE_HEAD`` in place. ``git commit`` is the source of merge,
+        cherry-pick, and revert commit graph and cleanup behavior.
+        ``--no-gpg-sign`` keeps member commits unsigned: the member identity
+        has no signing key, and ``commit.gpgsign`` must not start pinentry.
+
+        Args:
+            repo: Open repository whose index is already staged.
+            message: Non-empty commit message.
+
+        Returns:
+            Hex sha of the new commit.
+
+        Raises:
+            MemberCapabilityError: If git refuses the commit.
+        """
         git_user, git_email = self._git_identity()
-        return Actor(git_user, git_email)
+        with tempfile.TemporaryDirectory(prefix="guildbotics-member-commit-") as tmp:
+            message_path = Path(tmp, "message.txt")
+            message_path.write_text(f"{message}\n", encoding="utf-8")
+            with repo.git.custom_environment(
+                GIT_AUTHOR_NAME=git_user,
+                GIT_AUTHOR_EMAIL=git_email,
+                GIT_COMMITTER_NAME=git_user,
+                GIT_COMMITTER_EMAIL=git_email,
+            ):
+                try:
+                    repo.git.commit("--no-gpg-sign", "-F", str(message_path))
+                except GitCommandError as exc:
+                    raise MemberCapabilityError(f"Failed to commit: {exc}") from exc
+        return repo.head.commit.hexsha
 
     @staticmethod
     def _has_staged_changes(repo: git.Repo) -> bool:
-        # Commit only what the caller already staged with plain git. The member
-        # capability never stages on the caller's behalf, so that staging stays a
-        # normal git operation and partial commits remain possible.
+        # Commit only what the caller already staged with plain git. MERGE_HEAD
+        # is the one case git itself treats as committable with an empty index
+        # diff (a merge resolved to the current tree still needs a merge commit).
+        if (Path(repo.git_dir) / "MERGE_HEAD").exists():
+            return True
         if not repo.head.is_valid():
             return bool(repo.index.entries)
         return bool(repo.index.diff(repo.head.commit))

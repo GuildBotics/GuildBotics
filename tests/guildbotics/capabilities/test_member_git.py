@@ -76,6 +76,44 @@ def _workspace_repo(tmp_path: Path, workspace: Path) -> tuple[git.Repo, Path]:
     return repo, repo_path
 
 
+_IN_PROGRESS_GIT_FILES = (
+    "MERGE_HEAD",
+    "MERGE_MSG",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+)
+
+
+def _git_dir_file(repo: git.Repo, name: str) -> Path:
+    return Path(repo.git_dir) / name
+
+
+def _assert_no_in_progress_git_state(repo: git.Repo) -> None:
+    leftover = [
+        name for name in _IN_PROGRESS_GIT_FILES if _git_dir_file(repo, name).exists()
+    ]
+    assert leftover == []
+
+
+def _commit_readme(repo: git.Repo, repo_path: Path, content: str, message: str) -> str:
+    (repo_path / "README.md").write_text(content, encoding="utf-8")
+    repo.git.add(A=True)
+    return repo.index.commit(message).hexsha
+
+
+def _diverged_readme_branches(repo: git.Repo, repo_path: Path) -> tuple[str, str]:
+    repo.git.checkout("-b", "theirs")
+    theirs = _commit_readme(repo, repo_path, "theirs\n", "theirs")
+    repo.git.checkout("main")
+    ours = _commit_readme(repo, repo_path, "ours\n", "ours")
+    return ours, theirs
+
+
+def _resolve_readme_conflict(repo: git.Repo, repo_path: Path) -> None:
+    (repo_path / "README.md").write_text("resolved\n", encoding="utf-8")
+    repo.git.add("README.md")
+
+
 def test_member_git_auth_environment_disables_external_helpers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -175,6 +213,114 @@ async def test_commit_without_staged_changes_is_a_no_op(monkeypatch, tmp_path):
     assert result.commit_sha is None
     assert result.status == "nothing_staged"
     assert repo.head.commit.hexsha == head_before
+
+
+@pytest.mark.asyncio
+async def test_commit_during_merge_creates_merge_commit_and_clears_merge_state(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    ours, theirs = _diverged_readme_branches(repo, repo_path)
+    with pytest.raises(git.GitCommandError):
+        repo.git.merge("theirs")
+    assert (
+        _git_dir_file(repo, "MERGE_HEAD").read_text(encoding="utf-8").strip() == theirs
+    )
+    _resolve_readme_conflict(repo, repo_path)
+
+    result = await service.commit(repo_path, "merge theirs")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert [parent.hexsha for parent in created.parents] == [ours, theirs]
+    assert created.author.email == "aiko@example.com"
+    assert created.committer.email == "aiko@example.com"
+    assert repo.config_reader().get_value("user", "email") == "existing@example.com"
+    _assert_no_in_progress_git_state(repo)
+
+
+@pytest.mark.asyncio
+async def test_commit_during_merge_with_ours_tree_creates_merge_commit(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    ours, theirs = _diverged_readme_branches(repo, repo_path)
+    with pytest.raises(git.GitCommandError):
+        repo.git.merge("theirs")
+    (repo_path / "README.md").write_text("ours\n", encoding="utf-8")
+    repo.git.add("README.md")
+    assert not repo.index.diff(repo.head.commit)
+
+    result = await service.commit(repo_path, "keep ours")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert [parent.hexsha for parent in created.parents] == [ours, theirs]
+    assert created.tree.hexsha == repo.commit(ours).tree.hexsha
+    _assert_no_in_progress_git_state(repo)
+
+
+@pytest.mark.asyncio
+async def test_commit_succeeds_when_repository_requires_gpg_sign(monkeypatch, tmp_path):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    with repo.config_writer() as writer:
+        writer.set_value("commit", "gpgsign", "true")
+    (repo_path / "README.md").write_text("initial\nsigned-config\n", encoding="utf-8")
+    repo.git.add(A=True)
+
+    result = await service.commit(repo_path, "unsigned member commit")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert created.author.email == "aiko@example.com"
+    assert not created.gpgsig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cherry-pick", "revert"])
+async def test_commit_consumes_sequencer_head_after_conflict_resolution(
+    monkeypatch, tmp_path, operation
+):
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    workspace = tmp_path / "workspace" / "aiko"
+    service.workspace_root = workspace
+    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    ours, theirs = _diverged_readme_branches(repo, repo_path)
+    sequencer_file = "CHERRY_PICK_HEAD" if operation == "cherry-pick" else "REVERT_HEAD"
+    with pytest.raises(git.GitCommandError):
+        if operation == "cherry-pick":
+            repo.git.cherry_pick(theirs)
+        else:
+            repo.git.revert(theirs)
+    assert _git_dir_file(repo, sequencer_file).exists()
+    _resolve_readme_conflict(repo, repo_path)
+
+    result = await service.commit(repo_path, f"finish {operation}")
+
+    assert result.status == "committed"
+    created = repo.commit(result.commit_sha)
+    assert [parent.hexsha for parent in created.parents] == [ours]
+    # Cherry-pick keeps the original author; revert authors the new commit.
+    # The committer is the member in both cases.
+    if operation == "cherry-pick":
+        assert created.author.email == "existing@example.com"
+    else:
+        assert created.author.email == "aiko@example.com"
+    assert created.committer.email == "aiko@example.com"
+    _assert_no_in_progress_git_state(repo)
 
 
 @pytest.mark.asyncio
