@@ -4,7 +4,7 @@ import shlex
 
 from guildbotics.drivers.command_runner import CommandRunner
 from guildbotics.entities.team import Person
-from guildbotics.observability import current_trace, set_attributes, trace_scope
+from guildbotics.observability import set_attributes
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -20,15 +20,12 @@ class WorkflowDispatcher:
         self._service_run_id = service_run_id
 
     async def dispatch(self, invocation: WorkflowInvocation, person: Person) -> None:
-        """Run the workflow corresponding to the invocation for the given person."""
-        # 1. Map invocation source to trace scope name
-        scope_name = (
-            "event_listener"
-            if invocation.source == "event_queue"
-            else invocation.source
-        )
+        """Run the workflow corresponding to the invocation for the given person.
 
-        # 2. Gather trace attributes
+        The caller owns the trace: it opened the scope and records the boundary
+        events that say the execution started and ended. This dispatcher only
+        adds the invocation's attributes to it.
+        """
         attributes = {"service_run_id": self._service_run_id}
         if invocation.trigger_type == "chat":
             payload = invocation.payload
@@ -43,27 +40,14 @@ class WorkflowDispatcher:
                 }
             )
 
-        # 3. Execute under trace_scope if trace does not exist, else reuse active trace
-        async def _execute() -> None:
-            context = self._context.clone_for(person)
-            context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
+        set_attributes(**attributes)
+        context = self._context.clone_for(person)
+        context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
 
-            try:
-                words = shlex.split(invocation.command)
-                if not words:
-                    raise ValueError("Empty command string in workflow invocation")
-                await CommandRunner(context, words[0], words[1:]).run()
-            finally:
-                await context.aclose()
-
-        if current_trace() is None:
-            with trace_scope(
-                scope_name,
-                person_id=person.person_id,
-                command=invocation.command,
-                attributes=attributes,
-            ):
-                await _execute()
-        else:
-            set_attributes(**attributes)
-            await _execute()
+        try:
+            words = shlex.split(invocation.command)
+            if not words:
+                raise ValueError("Empty command string in workflow invocation")
+            await CommandRunner(context, words[0], words[1:]).run()
+        finally:
+            await context.aclose()

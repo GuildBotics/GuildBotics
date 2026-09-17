@@ -86,7 +86,10 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
-from guildbotics.capabilities.completion_retry import find_cli_agent_execution_error
+from guildbotics.capabilities.completion_retry import (
+    command_failure_payload,
+    find_cli_agent_execution_error,
+)
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
 )
@@ -557,7 +560,30 @@ class AppRuntime:
                     attributes={f"{work_kind}.conversation_id": conversation_id},
                 ),
             ):
-                yield context, trace_id
+                # This block opens the turn's trace, so it is the only layer
+                # that can say the whole turn started and ended. Without these
+                # the trace shows the LLM spans it is made of and never says
+                # the turn itself is over. Cancellation ends the turn too: a
+                # force stop cancels this task, and a ``CancelledError`` that
+                # escaped here would leave the turn reading as still running.
+                self._event_bus.publish_event(
+                    "command.started", {"command": label, "person": acting.person_id}
+                )
+                try:
+                    yield context, trace_id
+                except BaseException as exc:
+                    self._event_bus.publish_event(
+                        "command.failed",
+                        {
+                            "command": label,
+                            "person": acting.person_id,
+                            **command_failure_payload(exc),
+                        },
+                    )
+                    raise
+                self._event_bus.publish_event(
+                    "command.finished", {"command": label, "person": acting.person_id}
+                )
         except AppApiError:
             raise
         except WorkRejectedError as exc:
@@ -991,17 +1017,6 @@ class AppRuntime:
                 person_identifier=person_id,
                 cwd=command_cwd(request.cwd) or _default_command_cwd(),
             )
-        except asyncio.CancelledError:
-            self._event_bus.publish_event(
-                "command.failed",
-                {
-                    "command": request.command,
-                    "person": person_id,
-                    "code": "cancelled",
-                    "message": "Command was cancelled.",
-                },
-            )
-            raise
         except CommandError as exc:
             self._event_bus.publish_event(
                 "command.failed",
@@ -1014,16 +1029,12 @@ class AppRuntime:
                 },
             )
             raise AppApiError("command_error", reason=str(exc)) from exc
-        except Exception as exc:
+        except BaseException as exc:
+            # Cancellation lands here as well: a force stop cancels this task,
+            # and the run it started has to be reported as ended either way.
             self._event_bus.publish_event(
                 "command.failed",
-                {
-                    "command": request.command,
-                    "error_type": type(exc).__name__,
-                    "code": "cli_agent_authentication"
-                    if find_cli_agent_execution_error(exc, category="authentication")
-                    else "",
-                },
+                {"command": request.command, **command_failure_payload(exc)},
             )
             raise
         self._event_bus.publish_event(

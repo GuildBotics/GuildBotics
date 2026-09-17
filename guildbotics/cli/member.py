@@ -15,6 +15,7 @@ from uuid import uuid4
 import click
 from pydantic import ValidationError
 
+from guildbotics.capabilities.completion_retry import command_failure_payload
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
     record_member_issue_comment_event,
@@ -2503,11 +2504,14 @@ def _run_interactive(
             _record_member_command_event("member.command.started", command)
             try:
                 result = asyncio.run(coro)
-            except Exception as exc:
+            except BaseException as exc:
+                # Ctrl-C ends the session's command too, and it is classified
+                # like any other command failure so the session that recorded
+                # the start also records its end instead of reading as running.
                 _record_member_command_event(
                     "member.command.failed",
                     command,
-                    {"error_type": type(exc).__name__},
+                    command_failure_payload(exc),
                 )
                 raise
             _record_member_command_event("member.command.finished", command)
