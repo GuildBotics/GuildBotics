@@ -77,7 +77,14 @@ def test_member_write_validates_sync_identity_before_running_command(
 
     result = CliRunner().invoke(write_command)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert (
+        result.output
+        == "Error: "
+        + member_module.t("cli.member.sync.invalid_identity", path=identity)
+        + "\n"
+    )
     assert not marker.exists()
     assert ignore.read_text(encoding="utf-8") == "stale rules\n"
 

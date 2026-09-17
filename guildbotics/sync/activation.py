@@ -54,7 +54,13 @@ ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
 
 @dataclass(frozen=True)
 class PreparedOneShotSync:
-    """A one-shot whose local prerequisites were resolved before a write."""
+    """A one-shot prepared for a process without a running sync queue.
+
+    Preparation and execution are separate so a member CLI command can resolve
+    every local prerequisite before it writes. Processes that own a sync queue
+    must use :func:`commit_and_push_once`, which keeps the lifecycle lock while
+    selecting and using that queue.
+    """
 
     manager: GitSyncManager
 
@@ -130,14 +136,10 @@ def synchronize_once(
     best-effort, and a hub that cannot be reached simply leaves the decision
     where it was.
     """
-    root = LocalSyncRepository(workspace_root).workspace_root
     with _lock:
-        manager = _manager if _workspace == root else None
+        manager = _one_shot_manager(workspace_root)
         if manager is None:
-            repository = LocalSyncRepository(root)
-            if not repository.initialized or not repository.has_remote():
-                return None
-            manager = build_git_sync_manager(root)
+            return None
         return manager.synchronize_once(timeout=timeout)
 
 

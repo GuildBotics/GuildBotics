@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 import click
+from pydantic import ValidationError
 
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
@@ -71,6 +72,12 @@ from guildbotics.sync.activation import (
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
+from guildbotics.workspace.identity import (
+    DeviceIdentity,
+    WorkspaceIdentity,
+    device_identity_path,
+    workspace_identity_path,
+)
 
 WorkspaceMode = Literal["member", "current"]
 SLACK_TS_FRACTION_DIGITS = 6
@@ -2365,7 +2372,7 @@ def _run(coro, *, output_format: str) -> Any:
     try:
         with _member_execution_guard(command, interactive_session):
             if needs_sync:
-                prepared_sync = prepare_commit_and_push_once()
+                prepared_sync = _prepare_member_sync()
             started = True
             if interactive_session is None:
                 result = asyncio.run(coro)
@@ -2383,6 +2390,23 @@ def _run(coro, *, output_format: str) -> Any:
         result = _sync_member_result(result, prepared_sync)
     _emit(result, output_format)
     return result
+
+
+def _prepare_member_sync() -> PreparedOneShotSync | None:
+    """Prepare one-shot sync and turn identity damage into an actionable error."""
+    try:
+        return prepare_commit_and_push_once()
+    except ValidationError as exc:
+        identity_paths = {
+            WorkspaceIdentity.__name__: workspace_identity_path(),
+            DeviceIdentity.__name__: device_identity_path(),
+        }
+        path = identity_paths.get(exc.title)
+        if path is None:
+            raise
+        raise click.ClickException(
+            t("cli.member.sync.invalid_identity", path=path)
+        ) from exc
 
 
 def _sync_member_result(
