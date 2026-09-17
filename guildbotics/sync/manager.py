@@ -54,6 +54,8 @@ from guildbotics.workspace.identity import (
     ensure_device_identity,
     ensure_workspace_identity,
     new_uuid7,
+    read_device_identity,
+    read_workspace_identity,
 )
 from guildbotics.workspace.validation import (
     SharedFileInvalidError,
@@ -734,14 +736,22 @@ class GitSyncManager:
 def build_git_sync_manager(workspace_root: Path | None = None) -> GitSyncManager:
     """Create the manager for a workspace, minting its identities on first use."""
     repository = LocalSyncRepository(workspace_root)
+    # Validate records that already exist before initialize() refreshes local
+    # repository files or either ensure function creates a missing identity.
+    workspace_identity = read_workspace_identity(workspace_root)
+    device_identity = read_device_identity()
     # Existing repositories need the current generated ignore rules too. A
     # product update must not leave their shared boundary frozen at the rules
     # from the day synchronization was first enabled.
     repository.initialize()
+    if workspace_identity is None:
+        workspace_identity = ensure_workspace_identity(workspace_root)
+    if device_identity is None:
+        device_identity = ensure_device_identity()
     return GitSyncManager(
         repository,
-        workspace_id=ensure_workspace_identity(workspace_root).workspace_id,
-        device_id=ensure_device_identity().device_id,
+        workspace_id=workspace_identity.workspace_id,
+        device_id=device_identity.device_id,
     )
 
 

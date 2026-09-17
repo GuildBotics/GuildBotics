@@ -24,6 +24,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
@@ -51,6 +52,34 @@ def current_sync_manager() -> GitSyncManager | None:
 ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
 
 
+@dataclass(frozen=True)
+class PreparedOneShotSync:
+    """A one-shot whose local prerequisites were resolved before a write."""
+
+    manager: GitSyncManager
+
+    def commit_and_push_once(self, *, timeout: float | None = None) -> GitSyncStatus:
+        """Commit and push while excluding sync lifecycle changes."""
+        with _lock:
+            return self.manager.commit_and_push_once(timeout=timeout)
+
+
+def prepare_commit_and_push_once(
+    workspace_root: Path | None = None,
+) -> PreparedOneShotSync | None:
+    """Resolve one-shot prerequisites before its caller changes anything.
+
+    A workspace without synchronization keeps the no-op behavior. For a
+    connected workspace, repository setup and both identities are resolved
+    here so the later boundary has only commit and push work left to do.
+    """
+    with _lock:
+        manager = _one_shot_manager(workspace_root)
+        if manager is None:
+            return None
+        return PreparedOneShotSync(manager)
+
+
 def commit_and_push_once(
     workspace_root: Path | None = None,
     *,
@@ -63,19 +92,29 @@ def commit_and_push_once(
     process has no queue (the normal member-CLI case), a short-lived manager
     performs exactly one locked commit/push and is then discarded.
     """
-    root = LocalSyncRepository(workspace_root).workspace_root
     with _lock:
-        manager = _manager if _workspace == root else None
+        manager = _one_shot_manager(workspace_root)
         if manager is None:
-            repository = LocalSyncRepository(root)
-            if not repository.initialized or not repository.has_remote():
-                return None
-            manager = build_git_sync_manager(root)
+            return None
         # Keep the lifecycle lock through the manager call. Otherwise a
         # concurrent workspace switch can stop or replace the manager after
         # it was selected, leaving this one-shot operation with a stale queue
         # object and an uncoordinated repository access.
         return manager.commit_and_push_once(timeout=timeout)
+
+
+def _one_shot_manager(
+    workspace_root: Path | None,
+) -> GitSyncManager | None:
+    """Return a ready manager while the caller holds the lifecycle lock."""
+    root = LocalSyncRepository(workspace_root).workspace_root
+    manager = _manager if _workspace == root else None
+    if manager is not None:
+        return manager
+    repository = LocalSyncRepository(root)
+    if not repository.initialized or not repository.has_remote():
+        return None
+    return build_git_sync_manager(root)
 
 
 def synchronize_once(

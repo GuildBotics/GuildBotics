@@ -65,7 +65,8 @@ from guildbotics.observability.interactive_sessions import (
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
-    commit_and_push_once,
+    PreparedOneShotSync,
+    prepare_commit_and_push_once,
 )
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
@@ -2358,9 +2359,13 @@ def _slack_permalink_ts(raw_message_id: str) -> str:
 def _run(coro, *, output_format: str) -> Any:
     interactive_session = _interactive_session_for_current_command()
     command = _current_command_path()
+    needs_sync = _member_command_needs_lease()
+    prepared_sync = None
     started = False
     try:
         with _member_execution_guard(command, interactive_session):
+            if needs_sync:
+                prepared_sync = prepare_commit_and_push_once()
             started = True
             if interactive_session is None:
                 result = asyncio.run(coro)
@@ -2374,19 +2379,25 @@ def _run(coro, *, output_format: str) -> Any:
         if not started and asyncio.iscoroutine(coro):
             coro.close()
         raise
-    if _member_command_needs_lease():
-        result = _sync_member_result(result)
+    if needs_sync:
+        result = _sync_member_result(result, prepared_sync)
     _emit(result, output_format)
     return result
 
 
-def _sync_member_result(result: dict[str, Any]) -> dict[str, Any]:
+def _sync_member_result(
+    result: dict[str, Any], prepared_sync: PreparedOneShotSync | None
+) -> dict[str, Any]:
     """Make one best-effort sync and expose a local lock timeout in output."""
+    if prepared_sync is None:
+        return result
     try:
-        status = commit_and_push_once(timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS)
+        status = prepared_sync.commit_and_push_once(
+            timeout=ONE_SHOT_LOCK_TIMEOUT_SECONDS
+        )
     except SyncRepositoryBusyError:
         return {**result, "sync": "pending"}
-    if status is not None and status.failure is not None:
+    if status.failure is not None:
         return {**result, "sync": "pending"}
     return result
 
