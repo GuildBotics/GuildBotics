@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from guildbotics.hub import host
 from guildbotics.utils.fileio import atomic_write_text
+from guildbotics.utils.live_freshness import LIVE_EXPIRE_AFTER_SECONDS
 from guildbotics.utils.timestamps import utc_now_iso
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
@@ -28,7 +29,6 @@ from guildbotics.utils.workspace_sync_port import (
 )
 
 SERVICE_OWNER_SCHEMA_VERSION = 1
-LIVE_EXPIRE_AFTER_SECONDS = 60.0
 POLL_INTERVAL_SECONDS = 1.0
 _RELAY_PATH_PARTS = 2
 HEAD_UPDATED_EVENT = '{"kind":"head-updated"}'
