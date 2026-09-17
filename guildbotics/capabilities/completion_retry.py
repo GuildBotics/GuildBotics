@@ -120,3 +120,26 @@ def find_cli_agent_execution_error(
         if current.__context__ is not None:
             stack.append(current.__context__)
     return None
+
+
+def command_failure_payload(exc: BaseException) -> dict[str, str]:
+    """Return the error fields a failed command run records.
+
+    Every layer that records ``command.failed`` classifies the failure the
+    same way, because ``cli_agent_authentication`` is the one failure the
+    Desktop resolves with a credential alert instead of a generic execution
+    alert. Keeping the classification here means a recording site cannot
+    silently disagree with the alert rules.
+
+    Args:
+        exc: The exception that ended the command run.
+
+    Returns:
+        The ``error_type`` and ``code`` fields for the event payload.
+    """
+    return {
+        "error_type": type(exc).__name__,
+        "code": "cli_agent_authentication"
+        if find_cli_agent_execution_error(exc, category="authentication")
+        else "",
+    }

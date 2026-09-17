@@ -5,7 +5,11 @@ import types
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.drivers.execution import ExecutionCoordinator, TaskRunCoordinator
+from guildbotics.drivers.execution import (
+    ExecutionCoordinator,
+    TaskRunCoordinator,
+    WorkRejectedError,
+)
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
@@ -15,6 +19,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
 )
 from guildbotics.observability import current_trace
+from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 
@@ -186,6 +191,106 @@ async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
     trace_id, work_ids = seen[0]
     assert trace_id is not None
     assert work_ids == [trace_id]
+
+
+def _capture_boundary_events(monkeypatch) -> list[dict]:
+    """Collect the trace boundary events ``command_boundary`` records."""
+    recorded: list[dict] = []
+
+    def _record(*, event_type, payload, **_kwargs):
+        recorded.append({"kind": "event", "type": event_type, "payload": payload})
+
+    monkeypatch.setattr("guildbotics.drivers.utils.record_correlated_event", _record)
+    return recorded
+
+
+@pytest.mark.asyncio
+async def test_dispatch_records_the_trace_boundary_around_the_turn(
+    monkeypatch, tmp_path
+):
+    # The dispatcher opens this trace, so it is the only layer that can say
+    # the run started and ended. Without the boundary, the first
+    # ``span.finished`` of the run -- an LLM decision made before the agent
+    # turn even starts -- was read as the whole run succeeding.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+    mid_turn: list[str] = []
+
+    class _Runner:
+        def __init__(self, context, command, args):
+            pass
+
+        async def run(self):
+            llm_decision = {"kind": "event", "type": "span.finished"}
+            mid_turn.append(resolve_trace_status([*recorded, llm_decision]))
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _Runner
+    )
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    assert (
+        await dispatcher.process_person(
+            Person(person_id="alice", name="A", is_active=True)
+        )
+        == 1
+    )
+
+    assert [item["type"] for item in recorded] == [
+        "command.started",
+        "command.finished",
+    ]
+    assert mid_turn == ["running"]
+    assert resolve_trace_status(recorded) == "success"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_records_a_failed_boundary_and_still_retries(
+    monkeypatch, tmp_path
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+    _install_runner(monkeypatch, [], fail_events=("E1",))
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    assert (
+        await dispatcher.process_person(
+            Person(person_id="alice", name="A", is_active=True)
+        )
+        == 0
+    )
+
+    assert [item["type"] for item in recorded] == ["command.started", "command.failed"]
+    assert resolve_trace_status(recorded) == "failed"
+    # The failure still reaches the dispatcher's own retry handling.
+    assert store.load_pending_events("slack", "alice", "C1")[0].last_error_category == (
+        "failed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rejected_dispatch_records_no_boundary(monkeypatch, tmp_path):
+    # Work rejected before it starts never ran, so it must not leave a
+    # half-open execution that reads as still running.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+
+    class _RejectingCoordinator(ExecutionCoordinator):
+        def track_work(self, **kwargs):
+            raise WorkRejectedError("rejected", reason="duplicate")
+
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=_RejectingCoordinator(),
+    )
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert recorded == []
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from guildbotics.observability.session_transcripts import (
     SYSTEM_TRACE_PREFIX,
     SessionTranscriptStore,
 )
+from guildbotics.observability.trace_status import TraceStatus
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
@@ -565,8 +566,7 @@ def _new_summary(trace_id: str) -> dict[str, Any]:
         "_text": [],
         "_started_at_key": None,
         "_updated_at_key": None,
-        "_completion": "",
-        "_dispatch": "",
+        "_status": TraceStatus(),
     }
 
 
@@ -597,27 +597,13 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     if span_id:
         summary["_spans"].add(span_id)
 
+    summary["_status"].add(item)
     kind = item.get("kind")
     if kind == "event":
         summary["event_count"] += 1
         event_type = str(item.get("type", ""))
         if event_type.endswith(".failed"):
-            summary["status"] = "failed"
             summary["error_count"] += 1
-        elif event_type.endswith(".finished") and summary["status"] != "failed":
-            summary["status"] = "success"
-        elif event_type.endswith(".started") and summary["status"] == "info":
-            summary["status"] = "running"
-        # Workflow completion and dispatch lifecycle are separate layers from
-        # provider span success; the final status is resolved on finalize.
-        if event_type == "workflow.completed":
-            summary["_completion"] = "recorded"
-        elif event_type == "workflow.completion_missing":
-            summary["_completion"] = "missing"
-        elif event_type == "chat_dispatch.retry_scheduled":
-            summary["_dispatch"] = "retry_scheduled"
-        elif event_type == "chat_dispatch.abandoned":
-            summary["_dispatch"] = "abandoned"
         summary["_text"].append(event_type)
         payload = item.get("payload")
         if event_type.endswith((".finished", ".failed")) and isinstance(payload, dict):
@@ -648,23 +634,7 @@ def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary.pop("_text", None)
     summary.pop("_started_at_key", None)
     summary.pop("_updated_at_key", None)
-    completion = summary.pop("_completion", "")
-    dispatch = summary.pop("_dispatch", "")
-    # A finished provider span alone must not read as workflow success: the
-    # recorded completion evidence and the dispatch decision take precedence.
-    # ``retry_scheduled`` requires an actual dispatch retry event — completion
-    # evidence alone says nothing about whether anything will retry (the
-    # ticket workflow shares this completion layer but exhausts attempts by
-    # posting an error comment instead of scheduling a dispatch retry), so a
-    # bare ``missing`` resolves to ``incomplete`` instead.
-    if dispatch == "abandoned":
-        summary["status"] = "abandoned"
-    elif dispatch == "retry_scheduled":
-        summary["status"] = "retry_scheduled"
-    elif completion == "missing":
-        summary["status"] = "incomplete"
-    elif completion == "recorded":
-        summary["status"] = "success"
+    summary["status"] = summary.pop("_status").resolve()
     if not summary["started_at"]:
         summary["started_at"] = summary["updated_at"]
     return summary
@@ -747,11 +717,13 @@ def _system_summaries(
     for session_id, summary in summaries.items():
         if session_id == latest and not include_latest:
             continue
-        if session_id not in finished and session_id != latest:
-            summary["status"] = "interrupted"
         if query and not _summary_matches(summary, None, None, query, None, None):
             continue
-        result.append(_finalize_summary(summary))
+        finalized = _finalize_summary(summary)
+        if session_id not in finished and session_id != latest:
+            # The process died before it could record ``system.finished``.
+            finalized["status"] = "interrupted"
+        result.append(finalized)
     return result
 
 

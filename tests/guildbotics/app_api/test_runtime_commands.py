@@ -51,6 +51,7 @@ from guildbotics.commands.errors import (
 from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
 from guildbotics.observability import correlation_fields
+from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
@@ -1060,6 +1061,74 @@ async def test_author_command_maps_command_error_to_bad_gateway(
 
     assert caught.value.status_code == 502
     assert caught.value.code == "command_authoring_failed"
+
+
+@pytest.mark.asyncio
+async def test_assistant_turn_publishes_its_trace_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The turn opens its own trace, so it is the only layer that can say the
+    # turn ended. Without this, the trace shows only the LLM spans it is made
+    # of and never resolves past "running".
+    _isolate_workspace(tmp_path, monkeypatch)
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+
+    async def fake_author_command_turn(_context: object, **_kwargs: Any) -> Any:
+        return CommandAuthoringResult(action="answer", message="Done.")
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author_command_turn)
+
+    response = await runtime.author_command(
+        CommandAuthoringRequest(
+            mode="create", conversation_id="authoring-1", message="How?", person="bot"
+        )
+    )
+
+    events = event_bus.snapshot_events()
+    assert [event["type"] for event in events] == [
+        "command.started",
+        "command.finished",
+    ]
+    assert {event["trace_id"] for event in events} == {response.trace_id}
+    assert (
+        resolve_trace_status([{"kind": "event", **event} for event in events])
+        == "success"
+    )
+
+
+@pytest.mark.asyncio
+async def test_assistant_turn_publishes_a_failed_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_workspace(tmp_path, monkeypatch)
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+
+    async def failing_turn(_context: object, **_kwargs: Any) -> Any:
+        raise CommandError("agent refused")
+
+    monkeypatch.setattr(runtime_module, "author_command_turn", failing_turn)
+
+    with pytest.raises(AppApiError):
+        await runtime.author_command(
+            CommandAuthoringRequest(
+                mode="create",
+                conversation_id="authoring-1",
+                message="How?",
+                person="bot",
+            )
+        )
+
+    events = event_bus.snapshot_events()
+    assert [event["type"] for event in events] == ["command.started", "command.failed"]
+    assert events[-1]["payload"]["error_type"] == "CommandError"
 
 
 @pytest.mark.asyncio
