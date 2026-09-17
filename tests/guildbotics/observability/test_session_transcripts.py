@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 
 from guildbotics.observability.session_transcripts import (
@@ -69,7 +69,22 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
     }
 
 
-def test_system_sessions_are_split_and_keep_service_run_id(tmp_path: Path) -> None:
+def test_system_sessions_are_split_and_keep_service_run_id(
+    tmp_path: Path, monkeypatch
+) -> None:
+    frozen = datetime(2026, 9, 17, 4, 51, 7, 409529, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            if tz is None:
+                return frozen
+            return frozen.astimezone(tz)
+
+    monkeypatch.setattr(
+        "guildbotics.observability.session_transcripts.datetime",
+        FrozenDateTime,
+    )
     store = SessionTranscriptStore(tmp_path / "run/diagnostics.jsonl")
 
     first = store.start_system_session("service-1")
@@ -79,6 +94,9 @@ def test_system_sessions_are_split_and_keep_service_run_id(tmp_path: Path) -> No
 
     first_id = first.index_records[0]["attributes"]["system_session_id"]
     second_id = second.index_records[0]["attributes"]["system_session_id"]
+    prefix = "system-20260917T045107.409529Z-"
+    assert first_id.startswith(prefix)
+    assert second_id.startswith(prefix)
     assert first_id != second_id
     assert finished.index_records[0]["type"] == "system.finished"
     assert first.index_records[0]["attributes"]["service_run_id"] == "service-1"
