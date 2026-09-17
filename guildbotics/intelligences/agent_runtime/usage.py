@@ -3,8 +3,8 @@
 Reads the current rate-limit windows (used percent and reset time) from the
 tool's own structured interface.  Codex exposes them through the
 ``account/rateLimits/read`` method of ``codex app-server``; Grok exposes the
-billing period and account gate through the ``_x.ai/billing`` and
-``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``;
+billing period, usage percent, and account gate through the ``_x.ai/billing``
+and ``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``;
 Claude Code prints its usage panel headlessly (and without an LLM turn)
 through ``claude -p /usage``.  Tools without a structured usage interface
 simply have no snapshot.
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -50,16 +51,14 @@ class CliAgentUsageError(RuntimeError):
 class CliAgentUsageWindow:
     """One rate-limit window (e.g. the 5-hour or weekly budget).
 
-    ``used_percent`` is ``None`` for providers that report only the window's
-    reset time (e.g. Grok's weekly subscription period).  ``label`` is a
-    human-readable qualifier beyond the window duration (e.g. a per-model
-    budget's model name).  A ``detail`` window is supplementary: it still
-    counts toward the limit state, but the frontend shows it only in the
+    ``label`` is a human-readable qualifier beyond the window duration (e.g. a
+    per-model budget's model name). A ``detail`` window is supplementary: it
+    still counts toward the limit state, but the frontend shows it only in the
     expanded usage detail, not as its own meter.
     """
 
     window: str
-    used_percent: float | None = None
+    used_percent: float
     resets_at: str = ""
     window_minutes: int | None = None
     label: str = ""
@@ -109,7 +108,7 @@ def parse_codex_rate_limits(result: Any) -> CliAgentUsageSnapshot:
                 continue
             bucket_windows.append(window)
             limit_reached = limit_reached or (
-                (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT
+                window.used_percent >= LIMIT_REACHED_PERCENT
             )
     return CliAgentUsageSnapshot(
         agent="codex",
@@ -203,38 +202,39 @@ def _parse_minutes(raw: Any) -> int | None:
 def parse_grok_billing(billing: Any, subscription: Any) -> CliAgentUsageSnapshot:
     """Build a usage snapshot from Grok's billing and subscription results.
 
-    Grok reports no used percent for the subscription quota, so its weekly
-    usage period becomes a percentless window carrying only the reset time.
-    The on-demand credit budget, when one is configured, does yield a percent.
-    An active account gate marks the limit as reached.
+    Grok reports the subscription quota as ``creditUsagePercent``. Accounts
+    that do not expose that field produce no subscription window rather than a
+    synthetic 0%. When subscription usage is available, a configured on-demand
+    credit budget yields a separate percent. An active account gate marks the
+    limit as reached.
     """
     config = _as_dict(_as_dict(billing).get("config"))
     period = _as_dict(config.get("currentPeriod"))
     windows: list[CliAgentUsageWindow] = []
-    resets_at = _parse_reset(period.get("end"))
-    if resets_at:
+    subscription_percent = _optional_decimal_val(config.get("creditUsagePercent"))
+    if subscription_percent is not None:
+        resets_at = _parse_reset(period.get("end"))
         windows.append(
             CliAgentUsageWindow(
                 window="subscription",
+                used_percent=subscription_percent,
                 resets_at=resets_at,
                 window_minutes=_minutes_between(
                     _parse_reset(period.get("start")), resets_at
                 ),
             )
         )
-    cap = _decimal_val(config.get("onDemandCap"))
-    if cap > 0:
-        used = _decimal_val(config.get("onDemandUsed"))
-        windows.append(
-            CliAgentUsageWindow(
-                window="on_demand", used_percent=round(used / cap * 100.0, 1)
+        cap = _decimal_val(config.get("onDemandCap"))
+        if cap > 0:
+            used = _decimal_val(config.get("onDemandUsed"))
+            windows.append(
+                CliAgentUsageWindow(
+                    window="on_demand", used_percent=round(used / cap * 100.0, 1)
+                )
             )
-        )
     limit_reached = bool(
         _as_dict(_as_dict(subscription).get("meta")).get("gate")
-    ) or any(
-        (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT for window in windows
-    )
+    ) or any(window.used_percent >= LIMIT_REACHED_PERCENT for window in windows)
     return CliAgentUsageSnapshot(
         agent="grok",
         windows=windows,
@@ -247,17 +247,24 @@ def _as_dict(raw: Any) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _decimal_val(raw: Any) -> float:
+def _optional_decimal_val(raw: Any) -> float | None:
     if isinstance(raw, dict):
         raw = raw.get("val")
+    if isinstance(raw, bool):
+        return None
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
-        return 0.0
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _decimal_val(raw: Any) -> float:
+    return _optional_decimal_val(raw) or 0.0
 
 
 def _minutes_between(start_iso: str, end_iso: str) -> int | None:
-    if not start_iso:
+    if not start_iso or not end_iso:
         return None
     delta = datetime.fromisoformat(end_iso) - datetime.fromisoformat(start_iso)
     minutes = int(delta.total_seconds() // 60)
@@ -334,7 +341,7 @@ def parse_claude_usage(
         agent="claude",
         windows=windows,
         limit_reached=any(
-            (window.used_percent or 0.0) >= LIMIT_REACHED_PERCENT for window in windows
+            window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
         ),
         checked_at=datetime.now(UTC).isoformat(),
     )
@@ -558,9 +565,9 @@ CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]
 
 
 async def read_cli_agent_usage(name: str) -> CliAgentUsageSnapshot:
-    """Read usage and clear a known authentication failure only on usable data."""
+    """Read usage and clear auth failure only on windows or an explicit gate."""
     snapshot = await CLI_AGENT_USAGE_READERS[name]()
-    if not snapshot.windows:
+    if not snapshot.windows and not snapshot.limit_reached:
         raise CliAgentUsageError(
             f"{cli_agent_info(name).label} reported no usage windows."
         )

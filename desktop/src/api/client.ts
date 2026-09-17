@@ -230,8 +230,7 @@ export type SystemAlertsResponse = {
 
 export type CliAgentUsageWindow = {
   window: string;
-  // null for providers that report only the window's reset time.
-  used_percent: number | null;
+  used_percent: number;
   resets_at: string;
   window_minutes: number | null;
   // Human-readable qualifier beyond the duration (e.g. a per-model budget's
