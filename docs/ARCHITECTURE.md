@@ -188,16 +188,34 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
 - Diagnostics keep provider turn success, workflow completion evidence, and dispatch
   lifecycle as separate layers (`capabilities/workflow_completion_events.py`): a
   clean provider turn without a recorded completion raises
-  `workflow.completion_missing`, the dispatcher records
-  `chat_dispatch.retry_scheduled` / `chat_dispatch.abandoned`, and status
-  derivation (execution index summaries and activity history sessions) never
-  reports workflow success from `span.finished` alone when completion-layer events
-  exist. `retry_scheduled` requires an actual `chat_dispatch.retry_scheduled` event;
+  `workflow.completion_missing`, and the dispatcher records
+  `chat_dispatch.retry_scheduled` / `chat_dispatch.abandoned`.
+  `retry_scheduled` requires an actual `chat_dispatch.retry_scheduled` event;
   completion evidence alone does not imply a retry is scheduled, since the ticket
   workflow shares the same completion layer but exhausts its attempt budget by
   posting an error comment instead of dispatching a retry, so missing completion
-  evidence without a dispatch event resolves to `incomplete`. Traces without
-  completion gating (manual/interactive) keep the span-derived status.
+  evidence without a dispatch event resolves to `incomplete`.
+- Status derivation for one execution lives in `observability/trace_status.py` and
+  nowhere else: the execution index summaries and the activity history sessions ask
+  the same question about the same records, so they read one implementation. A
+  trace becomes success only through an event the layer that opened it records
+  (`TRACE_COMPLETED_EVENT_TYPES`). `span.finished` says a single provider call
+  returned, and a chat workflow makes an LLM decision before its agent turn starts,
+  so treating that span as the trace's success showed still-running executions as
+  finished. Every route that opens a `trace_scope` therefore records its own
+  completion event; `tests/guildbotics/test_trace_boundaries.py` enumerates that
+  population and fails on a new trace root until it declares which event ends it.
+- A boundary that records the start of a run records its end however the run
+  ends, cancellation included. Stopping the service cancels the work it drains
+  and Ctrl-C ends an interactive member command, and neither
+  `asyncio.CancelledError` nor `KeyboardInterrupt` is an `Exception`, so a
+  boundary catching only `Exception` leaves `command.started` as the trace's
+  last record and the execution reads as running forever. The same test
+  enumerates the boundary functions and requires them to catch `BaseException`.
+  How the failure is classified belongs to
+  `capabilities/completion_retry.command_failure_payload()` alone, because the
+  `code` decides what the Desktop does with it: `cancelled` and
+  `cli_agent_authentication` open no generic execution alert.
 
 ### Native agent runtime
 

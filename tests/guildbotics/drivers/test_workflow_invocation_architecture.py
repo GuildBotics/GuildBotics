@@ -502,7 +502,10 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_creates_new_trace_when_none_active(monkeypatch):
+async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
+    # The caller owns the trace and records the boundary events that say the
+    # execution started and ended. A trace opened here would have no layer
+    # able to close it, and would read as still running forever.
     from guildbotics.observability import current_trace
 
     seen = {}
@@ -512,10 +515,7 @@ async def test_dispatcher_creates_new_trace_when_none_active(monkeypatch):
             pass
 
         async def run(self):
-            t = current_trace()
-            seen["trace_id"] = t.trace_id if t else None
-            seen["source"] = t.source if t else None
-            seen["attributes"] = dict(t.attributes) if t else {}
+            seen["trace"] = current_trace()
 
     monkeypatch.setattr(
         "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
@@ -531,9 +531,7 @@ async def test_dispatcher_creates_new_trace_when_none_active(monkeypatch):
     )
     await dispatcher.dispatch(inv, context.person)
 
-    assert seen["trace_id"] is not None
-    assert seen["source"] == "routine"
-    assert seen["attributes"].get("service_run_id") == "run-123"
+    assert seen["trace"] is None
 
 
 @pytest.mark.asyncio

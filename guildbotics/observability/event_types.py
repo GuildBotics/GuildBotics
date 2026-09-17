@@ -19,3 +19,19 @@ COMMAND_LIFECYCLE_EVENT_TYPES = frozenset(
 #: device that made the change, and the ``rejection_id`` that locates the
 #: stashed commit on that device. The stashed content itself is never recorded.
 SYNC_UPDATE_REJECTED = "sync.update_rejected"
+
+#: Events that mean "the execution this trace covers is over, and it ended
+#: well". Only the layer that opened the trace records one of these, so they
+#: are the sole evidence that can make a trace read as success. A child
+#: ``span.finished`` reports that a single provider call returned and never
+#: stands in for them. Failure needs no catalog: any ``*.failed`` event fails
+#: the trace whichever layer records it.
+TRACE_COMPLETED_EVENT_TYPES = frozenset(
+    {
+        "command.finished",
+        "member.command.finished",
+        "system.finished",
+        "diagnostics.completed",
+        "verify.completed",
+    }
+)

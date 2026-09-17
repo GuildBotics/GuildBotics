@@ -28,6 +28,7 @@ from guildbotics.app_api.models import (
     ActivityHistorySession,
 )
 from guildbotics.entities.team import Person
+from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.timestamps import parse_iso_datetime
 
@@ -125,7 +126,7 @@ def _summarize_trace(
     attributes = _merged_attributes(records)
     command = _first_text(records, "command")
     workflow = _first_text(records, "workflow")
-    status = _trace_status(records)
+    status = resolve_trace_status(records)
     started_at = min(timestamps)
     ended_at = max(timestamps)
     links = links_from_records(records, attributes)
@@ -312,63 +313,6 @@ def _event_id(
     trace_id = str(item.get("trace_id") or "global")
     timestamp = str(item.get("timestamp") or "")
     return f"{trace_id}:{timestamp}:{classification}:{url or index}"
-
-
-def _trace_status(records: list[dict[str, Any]]) -> str:
-    """Resolve a session status from three separate layers.
-
-    Provider span success (``.finished``) is only provisional: the workflow's
-    recorded completion evidence and the dispatch decision (retry/abandon)
-    take precedence, so a clean provider turn without completion evidence is
-    never shown as success. Traces without completion-layer events (interactive
-    sessions, diagnostics runs) keep the provider-derived status.
-
-    ``retry_scheduled`` requires an actual ``chat_dispatch.retry_scheduled``
-    event: completion evidence alone does not say whether anything will
-    retry, since the ticket workflow shares the same completion layer but
-    exhausts its attempt budget by posting an error comment instead of
-    scheduling a dispatch retry. A trace with missing completion evidence and
-    no dispatch event is ``incomplete``.
-    """
-    provider = "info"
-    completion = ""
-    dispatch = ""
-    rate_limited = False
-    for item in records:
-        kind = item.get("kind")
-        event_type = str(item.get("type") or "")
-        level = str(item.get("level") or "").upper()
-        if kind == "log" and level in {"ERROR", "CRITICAL"}:
-            provider = "failed"
-        if kind != "event":
-            continue
-        if event_type == "workflow.rate_limited":
-            rate_limited = True
-        elif event_type == "workflow.completed":
-            completion = "recorded"
-        elif event_type == "workflow.completion_missing":
-            completion = "missing"
-        elif event_type == "chat_dispatch.retry_scheduled":
-            dispatch = "retry_scheduled"
-        elif event_type == "chat_dispatch.abandoned":
-            dispatch = "abandoned"
-        elif event_type.endswith(".failed"):
-            provider = "failed"
-        elif event_type.endswith(".started") and provider == "info":
-            provider = "running"
-        elif event_type.endswith(".finished") and provider != "failed":
-            provider = "success"
-    if dispatch == "abandoned":
-        return "abandoned"
-    if rate_limited:
-        return "rate_limited"
-    if dispatch == "retry_scheduled":
-        return "retry_scheduled"
-    if completion == "missing":
-        return "incomplete"
-    if completion == "recorded":
-        return "success"
-    return provider
 
 
 def _rate_limit_from_records(

@@ -14,6 +14,7 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.interactive_sessions import InteractiveTraceSession
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
@@ -561,6 +562,46 @@ def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):
     payload = json.loads(fetched.output)
     assert payload["title"] == "Updated title"
     assert payload["body"] == "Updated body\n"
+
+
+def test_interrupted_interactive_command_records_its_end(monkeypatch):
+    # Ctrl-C ends the command. ``KeyboardInterrupt`` is not an ``Exception``,
+    # so a boundary that only caught ``Exception`` left
+    # ``member.command.started`` as the session's last record and the run read
+    # as still going.
+    recorded: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(
+        member_module,
+        "_record_member_command_event",
+        lambda event_type, command, payload=None: recorded.append(
+            (event_type, command, payload or {})
+        ),
+    )
+    monkeypatch.setattr(
+        member_module.InteractiveTraceStore, "touch", lambda self, session: None
+    )
+    session = InteractiveTraceSession(
+        trace_id="trace-1",
+        person_id="aiko",
+        workspace="workspace-1",
+        host="codex",
+        thread_key="thread-1",
+        started_at="",
+        last_seen_at="",
+        expires_at="",
+    )
+
+    async def interrupted():
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        member_module._run_interactive(interrupted(), session, "member memory recall")
+
+    assert [event_type for event_type, _command, _payload in recorded] == [
+        "member.command.started",
+        "member.command.failed",
+    ]
+    assert recorded[-1][2] == {"error_type": "KeyboardInterrupt", "code": "cancelled"}
 
 
 def test_member_cli_reuses_trace_for_interactive_session(monkeypatch, tmp_path):

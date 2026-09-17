@@ -17,6 +17,7 @@ from guildbotics.drivers.execution import (
     TaskRunCoordinator,
     WorkRejectedError,
 )
+from guildbotics.drivers.utils import command_boundary
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.entities.team import Person
@@ -197,7 +198,16 @@ class PendingChatDispatcher:
                     self._state_store.save_pending_event(
                         service, person.person_id, channel_id, pending
                     )
-                    await self._run_workflow(person, service, channel_id, pending)
+                    # The dispatcher opens this trace, so it is the only layer
+                    # that can say the whole run started and ended. Recording
+                    # starts once the work is accepted: a rejected dispatch
+                    # never ran, so it leaves no half-open execution behind.
+                    with command_boundary(
+                        command_name=self._workflow_command,
+                        task_type="event_listener",
+                        person_id=person.person_id,
+                    ):
+                        await self._run_workflow(person, service, channel_id, pending)
             except WorkRejectedError as exc:
                 # A finished run is reported as a duplicate only when it is
                 # not known to have left its work undone, so the event really

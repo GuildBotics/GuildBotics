@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
+
+#: What ends a command run without the run being defective: stopping the
+#: service cancels the work it is draining, and Ctrl-C ends an interactive
+#: member command. Both are ``BaseException``, so a boundary that only catches
+#: ``Exception`` never records the end of the run it started.
+CANCELLATION_ERRORS = (asyncio.CancelledError, KeyboardInterrupt)
 
 
 class CompletionRetryExhausted(Exception):
@@ -120,3 +127,29 @@ def find_cli_agent_execution_error(
         if current.__context__ is not None:
             stack.append(current.__context__)
     return None
+
+
+def command_failure_payload(exc: BaseException) -> dict[str, str]:
+    """Return the error fields a failed command run records.
+
+    Every layer that records ``command.failed`` classifies the failure the
+    same way, because the ``code`` decides what the Desktop does with it:
+    ``cancelled`` is the expected end of a stop and ``cli_agent_authentication``
+    is resolved with a credential alert, so neither opens a generic execution
+    alert (``system_alerts._IGNORED_COMMAND_FAILURES``). Keeping the
+    classification here means a recording site cannot silently disagree with
+    the alert rules.
+
+    Args:
+        exc: The exception that ended the command run.
+
+    Returns:
+        The ``error_type`` and ``code`` fields for the event payload.
+    """
+    if isinstance(exc, CANCELLATION_ERRORS):
+        code = "cancelled"
+    elif find_cli_agent_execution_error(exc, category="authentication"):
+        code = "cli_agent_authentication"
+    else:
+        code = ""
+    return {"error_type": type(exc).__name__, "code": code}
