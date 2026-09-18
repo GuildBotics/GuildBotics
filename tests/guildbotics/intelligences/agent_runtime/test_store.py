@@ -34,16 +34,16 @@ def test_conversation_store_resumes_exact_session_and_separates_keys(tmp_path) -
     assert store.resolve(_key("issue-301"), ResumePolicy.AUTO).provider_session_id == ""
 
 
-def test_conversation_store_round_trips_in_a_long_windows_path(
+def test_conversation_store_writes_temp_files_short_enough_for_windows_max_path(
     monkeypatch, tmp_path
 ) -> None:
     key = _key()
     store = ConversationStore(tmp_path)
     record_path = store._path(key)
     parent = record_path.parent
-    random_suffix = "x" * 8
-    short_candidate = parent / f".tmp-{random_suffix}"
-    legacy_candidate = parent / f".{record_path.name}.{random_suffix}"
+    suffix_sample = "x" * 8
+    short_candidate = parent / f".tmp-{suffix_sample}"
+    legacy_candidate = parent / f".{record_path.name}.{suffix_sample}"
     assert len(str(short_candidate)) < len(str(legacy_candidate))
     # Sit the simulated MAX_PATH between the short `.tmp-` prefix and the
     # previous `.{filename}.` prefix, using this machine's parent length.
@@ -53,7 +53,7 @@ def test_conversation_store_round_trips_in_a_long_windows_path(
     temporary_directories = []
 
     def windows_limited_mkstemp(*, prefix, dir):
-        candidate = Path(dir) / f"{prefix}{random_suffix}"
+        candidate = Path(dir) / f"{prefix}{suffix_sample}"
         if len(str(candidate)) >= limit:
             raise FileNotFoundError(2, "No such file or directory", str(candidate))
         temporary_directories.append(Path(dir))
