@@ -7,10 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.observability.activity_event_store import (
-    ActivityEventStore,
-    is_domain_activity_event,
-)
+from guildbotics.observability.activity_event_store import is_domain_activity_event
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import workspace_sync_port

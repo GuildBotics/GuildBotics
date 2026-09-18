@@ -291,3 +291,52 @@ def test_reactivating_revives_a_worker_that_died_after_a_timed_out_stop(
 
     revived = manager._worker  # noqa: SLF001
     assert revived is not None and revived.is_alive()
+
+
+def test_a_current_operation_returns_nothing_when_no_queue_is_running() -> None:
+    assert activation.run_current_sync(lambda _manager, root: root) is None
+
+
+def test_a_current_operation_keeps_a_workspace_switch_out_until_it_finishes(
+    tmp_path: Path, hub: Path
+) -> None:
+    """Manager and workspace stay one selection for the whole operation."""
+    first_root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), first_root)
+    other_hub = tmp_path / "other-hub.git"
+    Repo.init(other_hub, bare=True, initial_branch="main")
+    second_root = _workspace(tmp_path / "windows")
+    enrollment.enroll(str(other_hub), second_root)
+    first = activation.activate_workspace_sync(first_root)
+    assert first is not None
+    inside = threading.Event()
+    release = threading.Event()
+
+    def operation(manager: GitSyncManager, root: Path) -> tuple[GitSyncManager, Path]:
+        inside.set()
+        assert release.wait(5)
+        return manager, root
+
+    result: list[tuple[GitSyncManager, Path] | None] = []
+
+    def run() -> None:
+        result.append(activation.run_current_sync(operation))
+
+    runner = threading.Thread(target=run)
+    runner.start()
+    assert inside.wait(5)
+
+    def switch() -> None:
+        activation.activate_workspace_sync(second_root)
+
+    switcher = threading.Thread(target=switch)
+    switcher.start()
+    switcher.join(0.2)
+
+    assert switcher.is_alive(), "a workspace switch entered during the operation"
+    release.set()
+    runner.join(5)
+    switcher.join(5)
+
+    assert result == [(first, first_root)]
+    assert activation.current_sync_manager() is not first
