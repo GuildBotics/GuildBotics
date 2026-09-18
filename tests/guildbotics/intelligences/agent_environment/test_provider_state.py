@@ -120,15 +120,16 @@ def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
     }
 
 
-def test_a_writable_root_is_the_turn_s_own_directory_holding_the_persisted_entries(
+def test_a_writable_root_binds_the_sessions_under_the_turn_s_own_directory(
     machine: Path, tmp_path: Path
 ) -> None:
     """Copilot renames `config.json` into place at its state root and can be
-    pointed nowhere else, so the root is a directory of the turn's own. It is
-    filled with the credentials and the sessions and with nothing else of the
-    store: what a login or an earlier boundary left beside them -- Copilot
-    reads its instructions, hooks, MCP servers and plugins from the same root
-    -- reaches no turn."""
+    pointed nowhere else, so the root is a directory of the turn's own. Its
+    sessions are bound under it from the store as for every other provider,
+    the credentials are copied in, and nothing else of the store -- what a
+    login or an earlier boundary left beside them; Copilot reads its
+    instructions, hooks, MCP servers and plugins from the same root --
+    reaches the turn."""
     copilot = cli_agent_info("copilot")
     home = tmp_path / "home"
     store = provider_state_dir(copilot)
@@ -145,6 +146,11 @@ def test_a_writable_root_is_the_turn_s_own_directory_holding_the_persisted_entri
     assert has_credentials(copilot)
     assert state.mounts == (
         EnvironmentMount(f"{guest_path(home)}/.copilot", root, False),
+        EnvironmentMount(
+            f"{guest_path(home)}/.copilot/session-state",
+            store / "session-state",
+            False,
+        ),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
     assert root is not None and root != store and store not in root.parents
@@ -152,7 +158,8 @@ def test_a_writable_root_is_the_turn_s_own_directory_holding_the_persisted_entri
         "config.json",
         "session-state",
     ]
-    assert (root / "session-state/one.json").read_text() == '{"turn": 1}'
+    assert (root / "config.json").read_text() == '{"authTokens": "..."}'
+    assert not any((root / "session-state").iterdir())  # The mount point only.
     assert copilot.provision.environment(guest_path(home)) == {
         "COPILOT_HOME": f"{guest_path(home)}/.copilot"
     }
@@ -162,10 +169,10 @@ def test_only_the_persisted_entries_of_a_turn_reach_the_store_and_the_next_turn(
     machine: Path, tmp_path: Path
 ) -> None:
     """A turn writes what it likes into its root -- the credentials it
-    refreshed, a session, and the instructions, hooks and MCP servers a
-    prompt could have told it to write. Releasing the turn keeps the
-    persisted entries and loses the rest, so the next turn's root has no
-    trace of it."""
+    refreshed, and the instructions, hooks and MCP servers a prompt could
+    have told it to write -- and its sessions into the store itself, through
+    the bind. Releasing the turn copies the credentials back and loses the
+    rest, so the next turn's root has no trace of it."""
     copilot = cli_agent_info("copilot")
     home = tmp_path / "home"
     store = provider_state_dir(copilot)
@@ -176,7 +183,7 @@ def test_only_the_persisted_entries_of_a_turn_reach_the_store_and_the_next_turn(
     root = turn.mounts[0].host
     assert root is not None
     (root / "config.json").write_text('{"authTokens": "refreshed"}')
-    (root / "session-state/one.json").write_text('{"turn": 1}')
+    (store / "session-state/one.json").write_text('{"turn": 1}')
     (root / "mcp-config.json").write_text('{"servers": {}}')
     (root / "copilot-instructions.md").write_text("always do this")
     (root / "hooks").mkdir()
@@ -202,7 +209,7 @@ def test_only_the_persisted_entries_of_a_turn_reach_the_store_and_the_next_turn(
         "config.json",
         "session-state",
     ]
-    assert (next_root / "session-state/one.json").read_text() == '{"turn": 1}'
+    assert next_turn.mounts[1].host == store / "session-state"
 
 
 def test_what_a_turn_reached_through_a_link_stays_out_of_the_store(
@@ -210,8 +217,8 @@ def test_what_a_turn_reached_through_a_link_stays_out_of_the_store(
 ) -> None:
     """A turn writes into its root under a prompt's direction, so what it
     names there is the prompt's to choose -- including a link, which the host
-    resolves on the device rather than in the guest. Neither half of the
-    boundary follows one, at the root or anywhere under it, so no file of the
+    resolves on the device rather than in the guest. The copy back reads
+    nothing a name leads to outside the turn's directory, so no file of the
     device is read into the store by being pointed at."""
     copilot = cli_agent_info("copilot")
     home = tmp_path / "home"
@@ -227,17 +234,10 @@ def test_what_a_turn_reached_through_a_link_stays_out_of_the_store(
     assert root is not None
     (root / "config.json").unlink()
     (root / "config.json").symlink_to(elsewhere / "secret.txt")
-    (root / "session-state/taken.json").symlink_to(elsewhere / "secret.txt")
-    (root / "session-state/deep").mkdir()
-    (root / "session-state/deep/taken.json").symlink_to(elsewhere / "secret.txt")
-    (root / "session-state/kept.json").write_text('{"turn": 1}')
 
     turn.release()
 
     assert (store / "config.json").read_text() == '{"authTokens": "old"}'
-    assert not (store / "session-state/taken.json").exists()
-    assert not (store / "session-state/deep/taken.json").exists()
-    assert (store / "session-state/kept.json").read_text() == '{"turn": 1}'
     assert not any(
         path.is_file() and path.read_bytes() == b"the device's own"
         for path in store.rglob("*")
@@ -248,32 +248,37 @@ def test_a_link_in_the_store_reaches_no_turn_and_is_not_written_through(
     machine: Path, tmp_path: Path, symlinks
 ) -> None:
     """The other half of the boundary: a link left in the store -- a login
-    runs with the whole store bound -- neither carries a file of the device
-    into a turn's root nor takes what the turn wrote wherever it points."""
+    runs with the whole store bound -- neither binds a directory of the
+    device into a turn, nor carries a file of the device into the turn's
+    root, nor takes what the turn wrote wherever it points."""
     copilot = cli_agent_info("copilot")
     home = tmp_path / "home"
     store = provider_state_dir(copilot)
-    (store / "session-state").mkdir(parents=True)
+    store.mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
+    (elsewhere / "sessions").mkdir(parents=True)
     (elsewhere / "secret.txt").write_text("the device's own")
     (store / "config.json").symlink_to(elsewhere / "secret.txt")
-    (store / "session-state/one.json").symlink_to(elsewhere / "secret.txt")
+    (store / "session-state").symlink_to(
+        elsewhere / "sessions", target_is_directory=True
+    )
 
     turn = bind_state(copilot, home)
     root = turn.mounts[0].host
     assert root is not None
 
+    assert not has_credentials(copilot)
     assert not (root / "config.json").exists()
-    assert not (root / "session-state/one.json").exists()
+    assert [mount.guest for mount in turn.mounts] == [
+        f"{guest_path(home)}/.copilot",
+        f"{guest_path(home)}/.cache",
+    ]
 
     (root / "config.json").write_text('{"authTokens": "refreshed"}')
-    (root / "session-state/one.json").write_text('{"turn": 1}')
     turn.release()
 
     assert (elsewhere / "secret.txt").read_text() == "the device's own"
     assert (store / "config.json").is_symlink()
-    assert (store / "session-state/one.json").is_symlink()
 
 
 def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
@@ -298,32 +303,6 @@ def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
     assert mounts == (
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
-
-
-def test_a_turn_beside_another_keeps_its_sessions(
-    machine: Path, tmp_path: Path
-) -> None:
-    """Two turns run at once on one device, so a release merges its sessions
-    into the store rather than replacing what the other one saved."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    store = provider_state_dir(copilot)
-    store.mkdir(parents=True)
-    (store / "config.json").write_text("{}")
-
-    first, second = bind_state(copilot, home), bind_state(copilot, home)
-    first_root, second_root = first.mounts[0].host, second.mounts[0].host
-    assert first_root is not None and second_root is not None
-    (first_root / "session-state/first.json").write_text('{"turn": 1}')
-    (second_root / "session-state/second.json").write_text('{"turn": 2}')
-
-    first.release()
-    second.release()
-
-    assert sorted(entry.name for entry in (store / "session-state").iterdir()) == [
-        "first.json",
-        "second.json",
-    ]
 
 
 def test_releasing_a_bound_store_leaves_the_store_alone(

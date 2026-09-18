@@ -68,11 +68,11 @@ class CliAgentProvision(BaseModel):
     renames a file into the state root itself (Copilot's ``config.json``): a
     file bound there makes it fail, and binding the root would make the whole
     root -- the tool's instructions, hooks, MCP servers, plugins, permissions
-    -- outlive the turn. Such a tool gets a directory of its own for the turn,
-    filled with the ``persisted`` entries and nothing else; when the turn ends
-    only those entries go back into the store. ``persisted`` stays the
-    allowlist either way, so what a turn leaves anywhere else under the root
-    is gone with the turn.
+    -- outlive the turn. Such a tool gets a directory of its own for the turn
+    as its root. The persisted directories are bound under it from the store
+    as for every other tool; the persisted files are copied into it and, when
+    the turn ends, copied back. ``persisted`` stays the allowlist either way,
+    so what a turn leaves anywhere else under the root is gone with the turn.
     """
 
     model_config = ConfigDict(frozen=True)

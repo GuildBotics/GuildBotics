@@ -299,16 +299,19 @@ live in a directory of their own (`~/.grok/auth/auth.json`, set through
 
 GitHub Copilot renames `config.json` into place at its state root at every start and
 can be pointed nowhere but `COPILOT_HOME`, so a file bound there makes the CLI exit
-at once without a word. Its root is therefore a directory of the turn's own, filled
-from the store with the credentials and the sessions and with nothing else; when the
-turn ends only those two go back, and everything else the turn left there -- the
-instructions, hooks, MCP servers, extensions, plugins, permissions and logs Copilot
-reads from the same root -- is discarded with the directory. Neither half of that
-copy follows a symbolic link, at the root or anywhere under it: a turn writes under a
-prompt's direction, and a link it leaves names a place on the device rather than in
-the guest, so following one would carry a file of the device into the store or a file
-of the turn out of it. A turn that is killed leaves its directory behind, and the next
-turn of that provider removes what is too old to belong to a live one.
+at once without a word. Its root is therefore a directory of the turn's own. The
+sessions (`session-state/`) are bound under it from the store as for every other
+provider, and the turn writes into them directly; `config.json` alone is copied into
+the directory from the store and copied back when the turn ends. Everything else the
+turn left there -- the instructions, hooks, MCP servers, extensions, plugins,
+permissions and logs Copilot reads from the same root -- is discarded with the
+directory. A name in the store or in the turn's directory is used only when what it
+resolves to on the device lies inside that directory: a turn writes under a prompt's
+direction and a login runs with the whole store bound, so a link either leaves names a
+place on the device rather than in the guest, and following it would bind a directory
+of the device into a turn or carry a file of the device into the store. A turn that is
+killed leaves its directory behind, and the next turn of that provider removes what is
+too old to belong to a live one.
 
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the

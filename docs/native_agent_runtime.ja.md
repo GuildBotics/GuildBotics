@@ -238,12 +238,14 @@ GuildBoticsによる認証probeやトークン更新は行いません。
 
 GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き換え、置き場所は
 `COPILOT_HOME`以外に指定できないため、そこへファイルをbindするとCLIが無言で終了します。
-そのためCopilotのstate rootはturn専用のディレクトリとし、storeからは認証情報とセッションだけを
-複製して渡します。turnの終わりに書き戻すのもこの2つだけで、同じrootにあるinstructions・hooks・
-MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残したものはディレクトリごと
-破棄します。この複製はどちらの向きでも、rootでもその配下でもシンボリックリンクを辿りません。
-turnはpromptの指示で書くので、そこに残されたリンクはguestではなく端末上の場所を指し、辿れば
-端末のファイルがstoreへ入り、turnのファイルがstoreの外へ出てしまうためです。
+そのためCopilotのstate rootはturn専用のディレクトリとします。セッション（`session-state/`）は
+他のプロバイダと同じくstoreからその下へbindし、turnはそこへ直接書きます。`config.json`だけを
+storeからそのディレクトリへ複製し、turnの終わりにstoreへ書き戻します。同じrootにある
+instructions・hooks・MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残した
+ものはディレクトリごと破棄します。storeとturnディレクトリの名前は、端末上で解決した先が
+そのディレクトリの中にあるときだけ使います。turnはpromptの指示で書き、loginはstore全体を
+bindして動くので、そこに残されたリンクはguestではなく端末上の場所を指し、辿れば端末の
+ディレクトリがturnにbindされたり、端末のファイルがstoreへ入ったりするためです。
 turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
 実行中のturnのものではありえない古いディレクトリを削除します。
 
