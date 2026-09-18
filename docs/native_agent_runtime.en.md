@@ -570,7 +570,10 @@ keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
 carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
 `resetDate`. The keys are runtime strings, so they are not filtered against a list:
 every finite budget becomes a row labelled with its key, normalized as
-`used_percent = 100 - remainingPercentage` with `resetDate` as the reset time. An
+`used_percent = 100 - remainingPercentage` with `resetDate` as the reset time when it
+lies ahead of the probe (the API has been measured answering every snapshot with the
+request's own instant as `resetDate`; a reset already passed names no coming reset
+and is dropped). An
 unlimited budget (`isUnlimitedEntitlement`, or a negative `entitlementRequests`; the
 measured unlimited `chat` / `completions` report `entitlementRequests: 0` with
 `remainingPercentage: 100`) gets no meter, and a snapshot whose

@@ -493,26 +493,32 @@ def _bounded(raw: Any, upper: float) -> float | None:
     return value
 
 
-def parse_copilot_quota(result: Any) -> CliAgentUsageSnapshot:
+def parse_copilot_quota(
+    result: Any, now: datetime | None = None
+) -> CliAgentUsageSnapshot:
     """Build a usage snapshot from an ``account.getQuota`` result.
 
     ``quotaSnapshots`` is keyed by quota type (``premium_interactions``,
     ``chat``, ``completions``, ...). The keys are runtime strings, so every
     finite entitlement becomes a window labelled with its key instead of
     being matched against a list: ``used_percent`` is
-    ``100 - remainingPercentage`` and ``resetDate`` is the reset time. An
-    unlimited entitlement (``isUnlimitedEntitlement``, or a negative
-    ``entitlementRequests``) has nothing to meter and is skipped, as is a
-    snapshot whose ``remainingPercentage`` is missing, non-numeric,
-    non-finite, or outside 0-100. The period length is not reported, so no
-    window duration is guessed from the reset date. An exhausted quota
-    marks the limit as reached.
+    ``100 - remainingPercentage`` and ``resetDate`` is the reset time when
+    it lies ahead of ``now``. The account API has answered with the
+    request's own instant as the reset date of every snapshot, and a reset
+    that has already passed names no coming reset, so it is dropped rather
+    than shown as one. An unlimited entitlement (``isUnlimitedEntitlement``,
+    or a negative ``entitlementRequests``) has nothing to meter and is
+    skipped, as is a snapshot whose ``remainingPercentage`` is missing,
+    non-numeric, non-finite, or outside 0-100. The period length is not
+    reported, so no window duration is guessed from the reset date. An
+    exhausted quota marks the limit as reached.
     """
+    checked = now or datetime.now(UTC)
     snapshots = _as_dict(_as_dict(result).get("quotaSnapshots"))
     windows = [
         window
         for key, raw in snapshots.items()
-        if (window := _parse_copilot_snapshot(key, raw)) is not None
+        if (window := _parse_copilot_snapshot(key, raw, checked)) is not None
     ]
     return CliAgentUsageSnapshot(
         agent="copilot",
@@ -520,11 +526,24 @@ def parse_copilot_quota(result: Any) -> CliAgentUsageSnapshot:
         limit_reached=any(
             window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
         ),
-        checked_at=datetime.now(UTC).isoformat(),
+        checked_at=checked.isoformat(),
     )
 
 
-def _parse_copilot_snapshot(key: Any, raw: Any) -> CliAgentUsageWindow | None:
+def _coming_reset(raw: Any, checked: datetime) -> str:
+    """The reset time as ISO, or "" unless it lies ahead of ``checked``."""
+    reset = _parse_reset(raw)
+    if not reset:
+        return ""
+    at = datetime.fromisoformat(reset)
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    return reset if at > checked else ""
+
+
+def _parse_copilot_snapshot(
+    key: Any, raw: Any, checked: datetime
+) -> CliAgentUsageWindow | None:
     if not isinstance(key, str) or not key or not isinstance(raw, dict):
         return None
     entitlement = raw.get("entitlementRequests")
@@ -539,7 +558,7 @@ def _parse_copilot_snapshot(key: Any, raw: Any) -> CliAgentUsageWindow | None:
     return CliAgentUsageWindow(
         window=key,
         used_percent=LIMIT_REACHED_PERCENT - remaining,
-        resets_at=_parse_reset(raw.get("resetDate")),
+        resets_at=_coming_reset(raw.get("resetDate"), checked),
         label=key,
     )
 

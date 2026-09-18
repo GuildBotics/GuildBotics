@@ -1016,6 +1016,27 @@ def test_parse_copilot_quota_skips_unlimited_entitlements(entitlement) -> None:
     assert parse_copilot_quota(_copilot_payload(**entitlement)).windows == []
 
 
+def test_parse_copilot_quota_drops_a_reset_that_has_already_passed() -> None:
+    """The account API has answered every snapshot with the request's own
+    instant as `resetDate` (measured 2026-09-19, in the API's -07:00). A
+    reset that is not ahead names no coming reset: the row keeps its usage
+    and loses the date, while a reset still ahead is kept as it is."""
+    now = datetime(2026, 9, 18, 23, 42, 5, tzinfo=UTC)
+
+    passed = parse_copilot_quota(
+        _copilot_payload(resetDate="2026-09-18T16:42:00.213-07:00"), now=now
+    )
+    coming = parse_copilot_quota(
+        _copilot_payload(resetDate="2026-10-01T00:00:00.000-07:00"), now=now
+    )
+
+    assert [(w.window, w.resets_at) for w in passed.windows] == [
+        ("premium_interactions", "")
+    ]
+    assert passed.checked_at == now.isoformat()
+    assert [w.resets_at for w in coming.windows] == ["2026-10-01T00:00:00-07:00"]
+
+
 def test_parse_copilot_quota_keeps_unknown_quota_keys_and_missing_reset() -> None:
     payload = _copilot_payload(key="new_budget", resetDate=None)
     del payload["quotaSnapshots"]["new_budget"]["resetDate"]

@@ -497,6 +497,8 @@ GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.86を固定しており（1.
 `entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
 種別は実行時の文字列なので一覧で選別せず、有限の枠をすべて種別名をラベルにした行として
 `used_percent = 100 - remainingPercentage`で正規化し、`resetDate`をリセット時刻にします。
+ただし`resetDate`が取得時刻以前のときは次のリセットを示していないので捨てます（実測では、
+APIが3種別すべてに要求時刻そのものを`resetDate`として返すことがありました）。
 無制限の枠（`isUnlimitedEntitlement`、または負の`entitlementRequests`。実測では無制限の
 `chat` / `completions`が`entitlementRequests: 0`と`remainingPercentage: 100`を返します）は
 メーターに載せず、`remainingPercentage`が欠落・非数値・非有限・0〜100の範囲外の枠は捨てます。
