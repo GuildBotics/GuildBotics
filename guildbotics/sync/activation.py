@@ -48,7 +48,12 @@ _workspace: Path | None = None
 
 
 def current_sync_manager() -> GitSyncManager | None:
-    """Return the queue running in this process, or None when none is."""
+    """Return the queue running in this process, or None when none is.
+
+    This is a pointer, not a snapshot. Combining it with the selected
+    workspace's repository is how a status read pairs one workspace's queue
+    with another's hub. Callers that need both use :func:`run_current_sync`.
+    """
     return _manager
 
 
