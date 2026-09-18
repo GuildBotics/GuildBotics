@@ -25,6 +25,7 @@ from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
     get_github_username,
+    normalize_login,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -1043,7 +1044,9 @@ class MemberGitHubCapabilityService:
 
     def _authored(self, pr: dict[str, Any]) -> bool:
         login = str((pr.get("user") or {}).get("login") or "")
-        return login.lower() == get_github_username(self.person).lower()
+        return normalize_login(login) == normalize_login(
+            get_github_username(self.person)
+        )
 
     def _task_pull_request_urls(self, evidence: list[dict[str, Any]]) -> list[str]:
         candidates: list[str] = []

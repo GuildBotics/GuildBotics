@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     suppresses_ticket_selection,
@@ -116,7 +117,7 @@ class ReviewThread:
 
 @dataclass(frozen=True)
 class PullRequest:
-    """One pull request as the patrol sees it; logins are lower-cased."""
+    """One pull request as the patrol sees it; logins are normalized."""
 
     node_id: str
     number: int
@@ -136,7 +137,7 @@ class PullRequest:
 def _login(node: object) -> str:
     if not isinstance(node, dict):
         return ""
-    return str(node.get("login") or "").lower()
+    return normalize_login(str(node.get("login") or ""))
 
 
 def _nodes(node: object, key: str) -> list[dict]:
@@ -327,7 +328,7 @@ def pull_request_work(pr: PullRequest, me: str) -> str | None:
 
     Args:
         pr: The pull request snapshot.
-        me: The member's GitHub login, lower-cased.
+        me: The member's GitHub login, passed through ``normalize_login``.
 
     Returns:
         ``FEEDBACK`` or ``REVIEW`` for work to dispatch, ``REVIEW_LIMIT`` when

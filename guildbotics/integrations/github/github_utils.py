@@ -247,7 +247,7 @@ def get_person_name(members: list[Person], username: str) -> str:
         str: The person name.
     """
     for member in members:
-        if get_github_username(member) == username:
+        if normalize_login(get_github_username(member)) == normalize_login(username):
             return member.name
     return ""
 
@@ -269,6 +269,16 @@ def get_agent_token(person: Person) -> str:
     return f"⚙{person.person_id}"
 
 
+def normalize_login(login: str) -> str:
+    """Return a GitHub login in the form both APIs can be compared in.
+
+    REST names a GitHub App as ``<app>[bot]`` and that is what the member's
+    ``github_username`` holds, while GraphQL ``Actor.login`` drops the suffix.
+    Logins are case-insensitive on GitHub, so lower-case them too.
+    """
+    return login.lower().removesuffix("[bot]")
+
+
 def get_author_type(person: Person, username: str) -> str:
     """
     Get the author type (user or assistant) for a given username.
@@ -280,6 +290,8 @@ def get_author_type(person: Person, username: str) -> str:
     Returns:
         str: The author type.
     """
-    if username == get_github_username(person, strict=True):
+    if normalize_login(username) == normalize_login(
+        get_github_username(person, strict=True)
+    ):
         return Message.ASSISTANT
     return Message.USER

@@ -15,6 +15,7 @@ from guildbotics.integrations.github.github_utils import (
     get_author_type,
     get_github_username,
     get_person_name,
+    normalize_login,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
     MAX_REVIEW_ROUNDS,
@@ -67,7 +68,7 @@ class GitHubTicketManager(TicketManager):
         self.url = str(config["url"])
         self.client: AsyncClient | None = None
         self.username = get_github_username(person, strict=True)
-        self._username_lower = self.username.lower() if self.username else ""
+        self._login = normalize_login(self.username) if self.username else ""
         self._mention_token = get_agent_token(person)
 
         self.lane_map = self._load_lane_map(cast(dict | None, config.get("lane_map")))
@@ -622,8 +623,9 @@ class GitHubTicketManager(TicketManager):
             cursor = payload["pageInfo"]["endCursor"]
         return all_items
 
-    def _is_my_response(self, username: str) -> bool:
-        return get_author_type(self.person, username) == Message.ASSISTANT
+    def _is_me(self, login: str) -> bool:
+        """Whether a login from either GitHub API names this member."""
+        return bool(self._login) and normalize_login(login) == self._login
 
     def _text_mentions_me(self, text: str | None) -> bool:
         """
@@ -639,11 +641,9 @@ class GitHubTicketManager(TicketManager):
         if self._mention_token and self._mention_token in text:
             return True
 
-        if self._username_lower:
+        if self._login:
             mention_re = (
-                r"(^|[^A-Za-z0-9_])@"
-                + re.escape(self._username_lower)
-                + r"(?=$|[^A-Za-z0-9-])"
+                r"(^|[^A-Za-z0-9_])@" + re.escape(self._login) + r"(?=$|[^A-Za-z0-9-])"
             )
             if re.search(mention_re, text, flags=re.IGNORECASE):
                 return True
@@ -767,8 +767,7 @@ class GitHubTicketManager(TicketManager):
         times = [
             str(event.get("createdAt") or "")
             for event in events
-            if str((event.get("assignee") or {}).get("login") or "").lower()
-            == self._username_lower
+            if self._is_me(str((event.get("assignee") or {}).get("login") or ""))
         ]
         return max(times, default="")
 
@@ -846,7 +845,7 @@ class GitHubTicketManager(TicketManager):
             # Assignees and the Agent field are independent ways to assign this
             # member, and both can be set at once. Each active one carries its
             # own request time, so the most recent of them is the live request.
-            by_assignee = any(a.get("login") == self._username_lower for a in assignees)
+            by_assignee = any(self._is_me(str(a.get("login") or "")) for a in assignees)
             agent_field = GitHubTicketManager.FIELD_AGENT
             by_agent_field = field_values.get(agent_field) == self._mention_token
             is_assigned = by_assignee or by_agent_field
@@ -1019,7 +1018,7 @@ class GitHubTicketManager(TicketManager):
         """The oldest-updated open PR that asks something of this member."""
         for item in await self._search_pull_requests():
             pull_request = await self._load_pull_request(item)
-            work = pull_request_work(pull_request, self._username_lower)
+            work = pull_request_work(pull_request, self._login)
             if work is None:
                 continue
             task = self._pull_request_task(pull_request, work)
@@ -1154,7 +1153,7 @@ class GitHubTicketManager(TicketManager):
         # Prepend mention to the issue author unless we are the author.
         # Avoid adding only when the body already mentions the issue author
         # (case-insensitive) to prevent duplicates.
-        if author_login and author_login != self._username_lower:
+        if author_login and not self._is_me(author_login):
             # Explicitly check if the issue author is already mentioned.
             # GitHub usernames are case-insensitive, so we use re.IGNORECASE.
             author_mention_re = (

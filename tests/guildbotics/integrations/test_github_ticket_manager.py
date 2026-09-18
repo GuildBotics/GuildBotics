@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
@@ -37,11 +38,12 @@ class _Manager(GitHubTicketManager):
         responses: dict[str, Any] | None = None,
         lane_map: dict[str, str] | None = None,
         statuses: list[str] | None = None,
+        github_username: str = "aiko-gh",
     ):
         person = Person(
             person_id="aiko",
             name="Aiko",
-            account_info={"github_username": "aiko-gh"},
+            account_info={"github_username": github_username},
         )
         services: dict[str, dict[str, Any]] = {
             "ticket_manager": {
@@ -1276,3 +1278,42 @@ async def test_pull_request_load_reads_repository_from_the_search_hit():
 
     with pytest.raises(RuntimeError, match="unavailable"):
         await manager._load_pull_request(_search_item(6))
+
+
+@pytest.mark.asyncio
+async def test_app_member_is_recognized_under_the_graphql_login():
+    """The board reads GraphQL, which names an App ``<app>``; the member's
+    username is the REST form ``<app>[bot]``. Both assignment paths and the
+    assignment time must still find the member."""
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee="aiko-app",
+                assigned_events=[
+                    {"login": "aiko-app", "created_at": "2026-01-05T00:00:00Z"}
+                ],
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-app[bot]",
+                    "body": "Done earlier",
+                    "created_at": "2026-01-04T00:00:00Z",
+                }
+            ],
+        ),
+        github_username="aiko-app[bot]",
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.assignee == "aiko"
+    # The comment predates the assignment, so it is not this member's answer.
+    assert task.trigger_reason == "ready_lane"
+    assert task.comments[0].author_type == Message.ASSISTANT
+    assert manager._text_mentions_me("@aiko-app please")

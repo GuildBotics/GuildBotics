@@ -21,6 +21,7 @@ from guildbotics.integrations.github.pull_request_patrol import (
     pull_request_work,
     review_rounds,
 )
+from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
     workflow_status_comment_payload,
@@ -145,6 +146,24 @@ def test_parse_lower_cases_logins_and_orders_by_time():
     assert thread.last_author == ME
     assert thread.last_created_at == "2026-01-02T00:00:00Z"
     assert thread.last_reactors == {"bob"}
+
+
+def test_graphql_bot_logins_match_the_members_bot_username():
+    """GraphQL names a GitHub App ``<app>``; the member is ``<app>[bot]``."""
+    app = normalize_login("aiko-guildbotics-com[bot]")
+    node = _node(
+        author={"login": "other"},
+        headRefOid="head-2",
+        reviewThreads={"nodes": [_thread("aiko-guildbotics-com", "other")]},
+    )
+
+    assert pull_request_work(parse_pull_request(node, "repo"), app) == REVIEW
+
+    own = _node(
+        author={"login": "aiko-guildbotics-com"},
+        reviewThreads={"nodes": [_thread("reviewer", "aiko-guildbotics-com")]},
+    )
+    assert pull_request_work(parse_pull_request(own, "repo"), app) is None
 
 
 def test_query_asks_for_everything_the_decision_reads():
