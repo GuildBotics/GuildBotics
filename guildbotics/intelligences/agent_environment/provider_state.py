@@ -19,6 +19,7 @@ user's in that environment to carry anywhere.
 from __future__ import annotations
 
 import asyncio
+import posixpath
 from collections.abc import Callable
 from pathlib import Path
 
@@ -90,7 +91,8 @@ def state_mounts(
 
     Directories are created in the store so a first turn can fill them; a
     file is bound only once it exists, because a provider that finds an
-    empty credentials file does not read it as being logged out.
+    empty credentials file does not read it as being logged out. The entry
+    ``./`` is the state root itself, bound whole.
     """
     provision = tool.provision
     store = provider_state_dir(tool)
@@ -102,7 +104,8 @@ def state_mounts(
             host.mkdir(parents=True, exist_ok=True, mode=0o700)
         elif not host.is_file():
             continue
-        mounts.append(EnvironmentMount(f"{root}/{entry.rstrip('/')}", host, False))
+        guest = posixpath.normpath(f"{root}/{entry.rstrip('/')}")
+        mounts.append(EnvironmentMount(guest, host, False))
     cache = cache_dir()
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))

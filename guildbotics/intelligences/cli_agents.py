@@ -43,7 +43,9 @@ class CliAgentProvision(BaseModel):
     file: the tool may rewrite it in place, but replacing it by renaming
     another file over it fails (``EBUSY``) and the refresh is lost. A tool that
     renames its credentials into place keeps them in a persisted directory of
-    their own instead, where ``auth_env`` points it.
+    their own instead, where ``auth_env`` points it -- or, when it renames
+    them into the state root itself and can be pointed nowhere else, the
+    root is that directory (``./``) and everything under it persists.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -188,14 +190,17 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         executable="copilot",
         config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
         # Without a system credential store -- there is none in the
-        # environment -- the login keeps its token in a file under the state
-        # root; which file is confirmed against a real login.
+        # environment -- the login keeps its token in `config.json` at the
+        # state root, which Copilot rewrites by renaming a new file over it at
+        # every start (a file bound there makes the CLI exit at once, without
+        # a word). COPILOT_HOME is the only place it can be pointed at, so
+        # the whole root is the persisted directory.
         provision=CliAgentProvision(
-            package="@github/copilot@1.0.83",
+            package="@github/copilot@1.0.86",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
             auth="config.json",  # holds `authTokens` beside the login names
-            persisted=("config.json", "session-state/"),
+            persisted=("./",),
             login=("copilot", "login", "--device-code"),
             api_domains=(
                 "github.com",

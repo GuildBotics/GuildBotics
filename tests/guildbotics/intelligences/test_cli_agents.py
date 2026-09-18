@@ -237,8 +237,9 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
+        # Persisted itself, or inside a persisted directory (`./` is the root).
         assert provision.auth in provision.persisted or any(
-            entry.endswith("/") and provision.auth.startswith(entry)
+            entry.endswith("/") and provision.auth.startswith(entry.removeprefix("./"))
             for entry in provision.persisted
         ), agent.name
         expected = (

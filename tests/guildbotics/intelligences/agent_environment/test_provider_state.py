@@ -117,6 +117,31 @@ def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
     }
 
 
+def test_credentials_renamed_into_the_state_root_bind_the_root_whole(
+    machine: Path, tmp_path: Path
+) -> None:
+    """Copilot renames `config.json` into place at its state root and can be
+    pointed nowhere else, so the root itself is the persisted directory: bound
+    whole, before any login, at the root and not at `root/.`."""
+    copilot = cli_agent_info("copilot")
+    home = tmp_path / "home"
+    store = provider_state_dir(copilot)
+
+    assert state_mounts(copilot, home) == (
+        EnvironmentMount(f"{guest_path(home)}/.copilot", store, False),
+        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
+    )
+    assert store.is_dir()
+    assert not has_credentials(copilot)
+
+    (store / "config.json").write_text("{}")
+
+    assert has_credentials(copilot)
+    assert copilot.provision.environment(guest_path(home)) == {
+        "COPILOT_HOME": f"{guest_path(home)}/.copilot"
+    }
+
+
 def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
     machine: Path, tmp_path: Path
 ) -> None:

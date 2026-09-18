@@ -7,8 +7,10 @@ billing period, usage percent, and account gate through the ``_x.ai/billing``
 and ``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``;
 Claude Code prints its usage panel headlessly (and without an LLM turn)
 through ``claude -p /usage``; Antigravity prints model-group quotas the same
-way through ``agy -p /usage --output-format json``.  Tools without a
-structured usage interface simply have no snapshot.
+way through ``agy -p /usage --output-format json``; GitHub Copilot answers
+``account.getQuota`` on the Copilot SDK server that ``copilot --headless
+--stdio`` runs.  Tools without a structured usage interface simply have no
+snapshot.
 
 The window parsing is shared with the Codex adapter's pre-turn rate-limit
 check so both interpret the provider schema identically.
@@ -460,7 +462,12 @@ def _first_text(raw: dict[str, Any], keys: tuple[str, ...]) -> str:
 
 
 def _unit_fraction(raw: Any) -> float | None:
-    """Return a finite fraction in ``[0, 1]``, else ``None``.
+    """Return a finite fraction in ``[0, 1]``, else ``None``."""
+    return _bounded(raw, 1.0)
+
+
+def _bounded(raw: Any, upper: float) -> float | None:
+    """Return a finite number in ``[0, upper]``, else ``None``.
 
     Booleans are excluded so ``True``/``False`` never become 100%/0%.
     """
@@ -470,9 +477,60 @@ def _unit_fraction(raw: Any) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(value) or value < 0.0 or value > 1.0:
+    if not math.isfinite(value) or value < 0.0 or value > upper:
         return None
     return value
+
+
+def parse_copilot_quota(result: Any) -> CliAgentUsageSnapshot:
+    """Build a usage snapshot from an ``account.getQuota`` result.
+
+    ``quotaSnapshots`` is keyed by quota type (``premium_interactions``,
+    ``chat``, ``completions``, ...). The keys are runtime strings, so every
+    finite entitlement becomes a window labelled with its key instead of
+    being matched against a list: ``used_percent`` is
+    ``100 - remainingPercentage`` and ``resetDate`` is the reset time. An
+    unlimited entitlement (``isUnlimitedEntitlement``, or a negative
+    ``entitlementRequests``) has nothing to meter and is skipped, as is a
+    snapshot whose ``remainingPercentage`` is missing, non-numeric,
+    non-finite, or outside 0-100. The period length is not reported, so no
+    window duration is guessed from the reset date. An exhausted quota
+    marks the limit as reached.
+    """
+    snapshots = _as_dict(_as_dict(result).get("quotaSnapshots"))
+    windows = [
+        window
+        for key, raw in snapshots.items()
+        if (window := _parse_copilot_snapshot(key, raw)) is not None
+    ]
+    return CliAgentUsageSnapshot(
+        agent="copilot",
+        windows=windows,
+        limit_reached=any(
+            window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
+        ),
+        checked_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _parse_copilot_snapshot(key: Any, raw: Any) -> CliAgentUsageWindow | None:
+    if not isinstance(key, str) or not key or not isinstance(raw, dict):
+        return None
+    entitlement = raw.get("entitlementRequests")
+    unlimited = raw.get("isUnlimitedEntitlement") is True or (
+        isinstance(entitlement, int | float)
+        and not isinstance(entitlement, bool)
+        and entitlement < 0
+    )
+    remaining = _bounded(raw.get("remainingPercentage"), LIMIT_REACHED_PERCENT)
+    if unlimited or remaining is None:
+        return None
+    return CliAgentUsageWindow(
+        window=key,
+        used_percent=LIMIT_REACHED_PERCENT - remaining,
+        resets_at=_parse_reset(raw.get("resetDate")),
+        label=key,
+    )
 
 
 def _antigravity_command_failure(payload: Any) -> str:
@@ -655,6 +713,53 @@ async def read_antigravity_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot
     return snapshot
 
 
+_COPILOT_LABEL = "GitHub Copilot CLI"
+
+
+async def read_copilot_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
+    """Probe the Copilot SDK server for the account quota.
+
+    ``copilot --headless --stdio`` serves the Copilot SDK protocol (JSON-RPC
+    with Content-Length framing) and signs in with the CLI's own saved
+    login, so GuildBotics never reads the credential store. ``connect``
+    opens the connection and ``account.getQuota`` answers with the quota
+    snapshots. Raises :class:`CliAgentUsageError` when the tool cannot be
+    started, does not answer in time, or rejects a request (no saved login,
+    or a CLI too old to know the method).
+    """
+    environment, process = await _probe(
+        "copilot", "copilot", "--headless", "--stdio", "--no-auto-update"
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            await _probe_request(
+                process,
+                1,
+                "connect",
+                {
+                    # No task kind is served here: the probe only asks.
+                    "supportedTaskKinds": [],
+                    "clientInfo": {"editorName": "guildbotics", "editorVersion": "1"},
+                },
+                label=_COPILOT_LABEL,
+                framing=_CONTENT_LENGTH,
+            )
+            result = await _probe_request(
+                process,
+                2,
+                "account.getQuota",
+                {},
+                label=_COPILOT_LABEL,
+                framing=_CONTENT_LENGTH,
+            )
+    except TimeoutError as exc:
+        raise CliAgentUsageError(f"{_COPILOT_LABEL} did not answer in time.") from exc
+    finally:
+        await process.kill()
+        await environment.close()
+    return parse_copilot_quota(result)
+
+
 async def _print_output(
     tool: str, *command: str, timeout: float, label: str
 ) -> tuple[bytes, int | None]:
@@ -670,23 +775,73 @@ async def _print_output(
     return stdout, process.returncode
 
 
+@dataclass(frozen=True)
+class _Framing:
+    """How one JSON-RPC message sits on the stream.
+
+    ``frame`` wraps an encoded message for sending; ``read`` returns the next
+    message body, or ``b""`` once the stream has ended.
+    """
+
+    frame: Callable[[bytes], bytes]
+    read: Callable[[EnvironmentProcess], Awaitable[bytes]]
+
+
+async def _read_line(process: EnvironmentProcess) -> bytes:
+    return await process.stdout.readline()
+
+
+async def _read_content_length(process: EnvironmentProcess) -> bytes:
+    """Read one ``Content-Length`` framed body (the LSP / vscode-jsonrpc form)."""
+    length = 0
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            return b""
+        if not line.strip():
+            if length:
+                break
+            continue
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            try:
+                length = int(value)
+            except ValueError as exc:
+                raise CliAgentUsageError(f"Malformed frame header: {line!r}") from exc
+    try:
+        return await process.stdout.readexactly(length)
+    except asyncio.IncompleteReadError:
+        return b""
+
+
+#: Newline-delimited JSON (Codex App Server, ACP).
+_JSONL = _Framing(frame=lambda body: body + b"\n", read=_read_line)
+#: ``Content-Length`` headers (the Copilot SDK server).
+_CONTENT_LENGTH = _Framing(
+    frame=lambda body: b"Content-Length: %d\r\n\r\n%s" % (len(body), body),
+    read=_read_content_length,
+)
+
+
 async def _probe_request(
     process: EnvironmentProcess,
     request_id: int,
     method: str,
     params: dict[str, Any],
     label: str = "Codex App Server",
+    framing: _Framing = _JSONL,
 ) -> Any:
     await _probe_send(
         process,
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+        framing,
     )
     while True:
-        line = await process.stdout.readline()
-        if not line:
+        body = await framing.read(process)
+        if not body:
             raise CliAgentUsageError(f"{label} closed the stream.")
         try:
-            message = json.loads(line)
+            message = json.loads(body)
         except json.JSONDecodeError:
             continue
         if (
@@ -700,8 +855,10 @@ async def _probe_request(
         return message.get("result")
 
 
-async def _probe_send(process: EnvironmentProcess, message: dict[str, Any]) -> None:
-    process.stdin.write(json.dumps(message).encode() + b"\n")
+async def _probe_send(
+    process: EnvironmentProcess, message: dict[str, Any], framing: _Framing = _JSONL
+) -> None:
+    process.stdin.write(framing.frame(json.dumps(message).encode()))
     await process.stdin.drain()
 
 
@@ -712,6 +869,7 @@ CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]
     "antigravity": read_antigravity_usage,
     "claude": read_claude_usage,
     "codex": read_codex_usage,
+    "copilot": read_copilot_usage,
     "grok": read_grok_usage,
 }
 

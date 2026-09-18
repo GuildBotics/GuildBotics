@@ -15,17 +15,22 @@ from guildbotics.intelligences.agent_runtime.usage import (
     parse_antigravity_usage,
     parse_claude_usage,
     parse_codex_rate_limits,
+    parse_copilot_quota,
     parse_grok_billing,
     read_antigravity_usage,
     read_claude_usage,
     read_codex_usage,
+    read_copilot_usage,
     read_grok_usage,
 )
 
+_FIXTURES = Path(__file__).parent / "fixtures"
 _ANTIGRAVITY_USAGE_FIXTURE = json.loads(
-    (Path(__file__).parent / "fixtures" / "antigravity_usage_1_2_5.json").read_text(
-        encoding="utf-8"
-    )
+    (_FIXTURES / "antigravity_usage_1_2_5.json").read_text(encoding="utf-8")
+)
+#: Measured on GitHub Copilot CLI 1.0.86 (``account.getQuota``), anonymized.
+_COPILOT_QUOTA_FIXTURE = json.loads(
+    (_FIXTURES / "copilot_quota_1_0_86.json").read_text(encoding="utf-8")
 )
 
 
@@ -890,11 +895,266 @@ async def test_read_antigravity_usage_raises_on_auth_exit_json_or_empty(
     assert fake_environment.started[-1].closed
 
 
+def test_parse_copilot_quota_reads_measured_snapshots() -> None:
+    snapshot = parse_copilot_quota(_COPILOT_QUOTA_FIXTURE)
+
+    # Unlimited chat / completions have no meter; only the finite budget shows.
+    assert snapshot.agent == "copilot"
+    assert [
+        (w.window, w.used_percent, w.resets_at, w.window_minutes, w.label)
+        for w in snapshot.windows
+    ] == [
+        (
+            "premium_interactions",
+            30.0,
+            "2026-10-01T00:00:00-07:00",
+            None,
+            "premium_interactions",
+        )
+    ]
+    assert not snapshot.limit_reached
+    assert snapshot.checked_at
+
+
+@pytest.mark.parametrize(
+    ("remaining", "used", "limit_reached"),
+    [(0, 100.0, True), (100, 0.0, False), (68.5, 31.5, False)],
+)
+def test_parse_copilot_quota_accepts_remaining_percentage_boundaries(
+    remaining, used, limit_reached
+) -> None:
+    snapshot = parse_copilot_quota(_copilot_payload(remainingPercentage=remaining))
+
+    assert [w.used_percent for w in snapshot.windows] == [used]
+    assert snapshot.limit_reached is limit_reached
+
+
+@pytest.mark.parametrize(
+    "remaining", [None, "abc", float("nan"), float("inf"), -1, 100.5, True]
+)
+def test_parse_copilot_quota_drops_unusable_remaining_percentage(remaining) -> None:
+    payload = _copilot_payload(remainingPercentage=remaining)
+    if remaining is None:
+        del payload["quotaSnapshots"]["premium_interactions"]["remainingPercentage"]
+
+    assert parse_copilot_quota(payload).windows == []
+
+
+@pytest.mark.parametrize(
+    "entitlement",
+    [
+        {"isUnlimitedEntitlement": True, "entitlementRequests": 0},
+        {"isUnlimitedEntitlement": False, "entitlementRequests": -1},
+    ],
+)
+def test_parse_copilot_quota_skips_unlimited_entitlements(entitlement) -> None:
+    assert parse_copilot_quota(_copilot_payload(**entitlement)).windows == []
+
+
+def test_parse_copilot_quota_keeps_unknown_quota_keys_and_missing_reset() -> None:
+    payload = _copilot_payload(key="new_budget", resetDate=None)
+    del payload["quotaSnapshots"]["new_budget"]["resetDate"]
+
+    snapshot = parse_copilot_quota(payload)
+
+    assert [(w.window, w.label, w.resets_at) for w in snapshot.windows] == [
+        ("new_budget", "new_budget", "")
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {},
+        {"quotaSnapshots": []},
+        {"quotaSnapshots": {"chat": "text", "": {"remainingPercentage": 5}}},
+    ],
+)
+def test_parse_copilot_quota_tolerates_empty_and_malformed_input(payload) -> None:
+    snapshot = parse_copilot_quota(payload)
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+def _copilot_payload(key: str = "premium_interactions", **fields: Any) -> dict:
+    entry = {
+        "isUnlimitedEntitlement": False,
+        "entitlementRequests": 300,
+        "usedRequests": 90,
+        "remainingPercentage": 70,
+        "resetDate": "2026-10-01T00:00:00-07:00",
+        **fields,
+    }
+    return {"quotaSnapshots": {key: entry}}
+
+
+class _FramedWriter:
+    """Fake stdin that parses ``Content-Length`` frames into messages."""
+
+    def __init__(self, process: _CopilotProcess) -> None:
+        self.process = process
+        self.buffer = b""
+
+    def write(self, data: bytes) -> None:
+        self.buffer += data
+        while True:
+            header, separator, rest = self.buffer.partition(b"\r\n\r\n")
+            if not separator:
+                return
+            name, _, length = header.partition(b":")
+            assert name == b"Content-Length", header
+            body, self.buffer = rest[: int(length)], rest[int(length) :]
+            self.process.handle(json.loads(body))
+
+    async def drain(self) -> None:
+        return None
+
+
+class _CopilotProcess:
+    """Fake ``copilot --headless --stdio`` speaking the Copilot SDK protocol."""
+
+    def __init__(self, quota: dict[str, Any] | None = None, error: Any = None) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stdin = _FramedWriter(self)
+        self.returncode: int | None = None
+        self.messages: list[dict[str, Any]] = []
+        self.quota = _COPILOT_QUOTA_FIXTURE if quota is None else quota
+        self.error = error
+
+    def handle(self, message: dict[str, Any]) -> None:
+        self.messages.append(message)
+        if "method" not in message or "id" not in message:
+            return
+        request_id = message["id"]
+        if message["method"] == "connect":
+            # The server may interleave notifications; the probe must skip them.
+            self._feed({"jsonrpc": "2.0", "method": "session.event", "params": {}})
+            self._feed(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {"ok": True, "protocolVersion": 3, "version": "1.0.86"},
+                }
+            )
+        elif message["method"] == "account.getQuota":
+            if self.error is not None:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "error": self.error})
+            else:
+                self._feed({"jsonrpc": "2.0", "id": request_id, "result": self.quota})
+
+    def _feed(self, message: dict[str, Any]) -> None:
+        body = json.dumps(message).encode()
+        self.stdout.feed_data(b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_probes_sdk_server(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("copilot", "--headless", "--stdio", "--no-auto-update")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_copilot_usage()
+
+    assert [message["method"] for message in process.messages] == [
+        "connect",
+        "account.getQuota",
+    ]
+    assert process.messages[0]["params"]["supportedTaskKinds"] == []
+    assert [(w.window, w.used_percent) for w in snapshot.windows] == [
+        ("premium_interactions", 30.0)
+    ]
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": -32601, "message": "Unhandled method account.getQuota"},
+        {"code": -32603, "message": "Selected authentication is no longer available"},
+    ],
+)
+async def test_read_copilot_usage_raises_on_rpc_error(
+    monkeypatch, fake_environment, error
+) -> None:
+    process = _CopilotProcess(error=error)
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match=error["message"]):
+        await read_copilot_usage()
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_raises_when_stream_closes(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.stdout.feed_eof()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="closed the stream"):
+        await read_copilot_usage()
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_raises_when_server_stays_silent(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="did not answer in time"):
+        await read_copilot_usage(timeout=0.05)
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
+async def test_read_copilot_usage_rejects_malformed_frame_header(
+    monkeypatch, fake_environment
+) -> None:
+    process = _CopilotProcess()
+    process.handle = lambda _message: None  # type: ignore[method-assign]
+    process.stdout.feed_data(b"Content-Length: many\r\n\r\n{}")
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError, match="Malformed frame header"):
+        await read_copilot_usage()
+
+
 def test_usage_reader_registry_covers_supported_tools() -> None:
     assert {
         "antigravity": read_antigravity_usage,
         "claude": read_claude_usage,
         "codex": read_codex_usage,
+        "copilot": read_copilot_usage,
         "grok": read_grok_usage,
     } == CLI_AGENT_USAGE_READERS
 
