@@ -1247,7 +1247,7 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             windows=[
                 UsageWindow(
                     window="subscription",
-                    used_percent=33.0,
+                    used_percent=0.0,
                     resets_at="2026-07-24T00:00:00+00:00",
                     window_minutes=10_080,
                 )
@@ -1278,7 +1278,7 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
     assert first.usages[1].agent == "claude"
     assert first.usages[1].windows[1].label == "Fable"
     assert first.usages[2].agent == "grok"
-    assert first.usages[2].windows[0].used_percent == 33.0
+    assert first.usages[2].windows[0].used_percent == 0.0
     assert first.usages[2].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
     assert second == first
 

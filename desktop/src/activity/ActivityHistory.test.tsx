@@ -1096,12 +1096,12 @@ describe("ActivityHistoryPage", () => {
     expect(description).not.toContain(i18n.t("activity.usage.elapsed", { percent: 0 }).slice(0, 4));
   });
 
-  it("shows Grok's weekly usage meter and reset time", async () => {
+  it("shows Grok's weekly 0% usage meter and reset time", async () => {
     mockMemberUsage("grok", {
       windows: [
         {
           window: "subscription",
-          used_percent: 33,
+          used_percent: 0,
           resets_at: "2026-07-04T09:00:00Z",
           window_minutes: 10080,
         },
@@ -1110,7 +1110,7 @@ describe("ActivityHistoryPage", () => {
     });
     renderActivity();
 
-    const meter = await screen.findByRole("meter", { name: "1w 33%" });
+    const meter = await screen.findByRole("meter", { name: "1w 0%" });
     const row = meter.closest(".activity-member-usage-row");
     expect(row).toHaveTextContent(localeShortDate("2026-07-04T09:00:00Z"));
     expect(row?.querySelector(".activity-member-usage-window")).toHaveAttribute(
