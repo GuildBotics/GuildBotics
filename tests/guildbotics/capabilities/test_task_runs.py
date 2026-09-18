@@ -136,11 +136,12 @@ def test_task_run_done_with_code_publish_requires_pr_create(tmp_path):
     assert status.evidence_types == ["git_publish", "pr_create"]
 
 
-def test_task_run_accepts_pr_review_comment_evidence(tmp_path):
+@pytest.mark.parametrize("evidence_type", ["pr_review_comment", "pr_review"])
+def test_task_run_accepts_pr_review_evidence(tmp_path, evidence_type):
     store = TaskRunStore(tmp_path)
     payload = {"html_url": "https://github.com/owner/repo/pull/7#discussion_r123"}
-    store.append_evidence("run-done", "pr_review_comment", payload)
-    store.append_evidence("run-asking", "pr_review_comment", payload)
+    store.append_evidence("run-done", evidence_type, payload)
+    store.append_evidence("run-asking", evidence_type, payload)
 
     done = store.complete(
         "run-done",
@@ -157,8 +158,8 @@ def test_task_run_accepts_pr_review_comment_evidence(tmp_path):
         "aiko",
     )
 
-    assert done.evidence_types == ["pr_review_comment"]
-    assert asking.evidence_types == ["pr_review_comment"]
+    assert done.evidence_types == [evidence_type]
+    assert asking.evidence_types == [evidence_type]
 
 
 def test_task_run_enforces_shared_boundary_guarantees(

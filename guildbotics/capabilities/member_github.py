@@ -25,6 +25,7 @@ from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_author_type,
     get_github_username,
+    normalize_login,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -55,6 +56,11 @@ _PRIMARY_FAILED_CONCLUSIONS = {
     "timed_out",
 }
 _SUCCESS_CONCLUSIONS = {"neutral", "skipped", "success"}
+_REVIEW_EVENTS = {
+    "approve": "APPROVE",
+    "request-changes": "REQUEST_CHANGES",
+    "comment": "COMMENT",
+}
 
 
 class MemberCapabilityError(RuntimeError):
@@ -575,20 +581,29 @@ class MemberGitHubCapabilityService:
     async def task_completion_readiness(
         self, ticket_url: str, evidence: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Revalidate every PR identified by a ticket run before completion."""
-        urls = self._task_pull_request_urls(ticket_url, evidence)
+        """Revalidate every PR a ticket run is answerable for before completion.
+
+        PRs the run pushed to or opened (evidence) are always targets. The
+        ticket itself, when it is a PR, and PRs linked from an issue ticket
+        are targets only when the member authored them: a reviewer cannot
+        make someone else's PR ready.
+        """
+        touched = self._task_pull_request_urls(evidence)
         try:
             ticket = self.parse_url(ticket_url)
         except (MemberCapabilityError, ValueError):
             ticket = None
+        urls = [ticket_url] if ticket is not None and ticket.kind == "pull" else []
+        urls.extend(touched)
         if ticket is not None and ticket.kind == "issue":
-            for url in await self._linked_pull_request_urls(ticket):
-                if url not in urls:
-                    urls.append(url)
+            urls.extend(await self._linked_pull_request_urls(ticket))
         results = []
-        for url in urls:
+        for url in dict.fromkeys(urls):
             resource = self.parse_url(url, expected_kind="pull")
-            if not _pull_request_readiness_applies(await self._pull_request(resource)):
+            pr = await self._pull_request(resource)
+            if not _pull_request_readiness_applies(pr) or (
+                url not in touched and not self._authored(pr)
+            ):
                 continue
             result = await self.pr_checks(url)
             if result["readiness"] != "not_applicable":
@@ -869,6 +884,39 @@ class MemberGitHubCapabilityService:
         )
         return _comment_result(comment)
 
+    async def pr_review(self, url: str, body: str, event: str) -> dict[str, Any]:
+        """Submit a review verdict on the PR head as a GitHub review.
+
+        A review, unlike a conversation comment, is what GitHub counts: it
+        consumes a pending review request and lists the member under
+        ``reviewed-by``, so the patrol can follow the PR from then on.
+        """
+        if event not in _REVIEW_EVENTS:
+            raise MemberCapabilityError(
+                "Review event must be one of " + ", ".join(sorted(_REVIEW_EVENTS)) + "."
+            )
+        resource = self.parse_url(url, expected_kind="pull")
+        pr = await self._pull_request(resource)
+        head_sha = self._pull_request_head_sha(resource, pr)
+        client = await self._get_client()
+        resp = await client.post(
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews",
+            json={
+                "body": body.rstrip(),
+                "event": _REVIEW_EVENTS[event],
+                "commit_id": head_sha,
+            },
+        )
+        _raise_for_status(resp)
+        review = resp.json()
+        return {
+            "review_id": review.get("id"),
+            "html_url": review.get("html_url"),
+            "state": review.get("state"),
+            "commit_id": head_sha,
+            "submitted_at": review.get("submitted_at"),
+        }
+
     async def pr_review_comment(
         self,
         url: str,
@@ -994,10 +1042,14 @@ class MemberGitHubCapabilityService:
             return None
         return parts[0], parts[1]
 
-    def _task_pull_request_urls(
-        self, ticket_url: str, evidence: list[dict[str, Any]]
-    ) -> list[str]:
-        candidates = [ticket_url]
+    def _authored(self, pr: dict[str, Any]) -> bool:
+        login = str((pr.get("user") or {}).get("login") or "")
+        return normalize_login(login) == normalize_login(
+            get_github_username(self.person)
+        )
+
+    def _task_pull_request_urls(self, evidence: list[dict[str, Any]]) -> list[str]:
+        candidates: list[str] = []
         for record in evidence:
             payload = record.get("payload")
             if not isinstance(payload, dict):

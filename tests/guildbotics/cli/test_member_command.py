@@ -2684,6 +2684,93 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "issue_update"
 
 
+def test_member_github_pr_review_reads_stdin_and_records_evidence(monkeypatch):
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    calls = {}
+
+    def fake_resolve_member_context(identifier):
+        assert identifier == "aiko"
+        return FakeContext(person), person
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def pr_review(self, pr_url, body, event):
+            calls.update({"pr_url": pr_url, "body": body, "event": event})
+            return {
+                "review_id": 555,
+                "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+                "state": "APPROVED",
+                "commit_id": "abc123",
+                "submitted_at": "2026-01-01T00:00:00Z",
+            }
+
+        async def aclose(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", fake_resolve_member_context
+    )
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "review",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--event",
+            "approve",
+            "--content-stdin",
+        ],
+        input="Nothing blocks this.\n",
+    )
+    lease.release()
+
+    assert result.exit_code == 0
+    assert calls == {
+        "pr_url": "https://github.com/owner/repo/pull/7",
+        "body": "Nothing blocks this.\n",
+        "event": "approve",
+        "closed": True,
+    }
+    payload = json.loads(result.output)
+    assert payload["review_id"] == 555
+    assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "pr_review"
+
+
+def test_member_github_pr_review_rejects_unknown_event():
+    runner = CliRunner()
+
+    result = runner.invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "review",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--event",
+            "lgtm",
+            "--content-stdin",
+        ],
+        input="x\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--event'" in result.output
+
+
 def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
     lease = _set_workflow_delegation(monkeypatch)

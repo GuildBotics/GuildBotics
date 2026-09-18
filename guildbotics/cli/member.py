@@ -1920,6 +1920,36 @@ async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
         await service.aclose()
 
 
+@pr.command(name="review")
+@_person_option
+@click.option("--url", "pr_url", required=True, help="Pull request URL.")
+@click.option(
+    "--event",
+    required=True,
+    type=click.Choice(["approve", "request-changes", "comment"]),
+    help="Review verdict submitted on the current PR head.",
+)
+@_required_content_stdin_option
+@_json_format_option
+def pr_review(person: str, pr_url: str, event: str, output_format: str) -> None:
+    body = _read_stdin("pull request review body")
+    _run(
+        _pr_review(person, pr_url, event, body),
+        output_format=output_format,
+    )
+
+
+async def _pr_review(person: str, pr_url: str, event: str, body: str) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        result = await service.pr_review(pr_url, body, event)
+        TaskRunStore().append_evidence(current_task_run_id(), "pr_review", result)
+        return result
+    finally:
+        await service.aclose()
+
+
 @pr.command(name="review-comment")
 @_person_option
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
