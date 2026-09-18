@@ -166,7 +166,11 @@ def _service(person_type="machine_user"):
 
 
 async def _open_pull_request(_resource):
-    return {"state": "open"}
+    return {"state": "open", "user": {"login": "bot"}}
+
+
+async def _someone_elses_open_pull_request(_resource):
+    return {"state": "open", "user": {"login": "someone"}}
 
 
 def test_parse_github_issue_and_pull_request_urls():
@@ -337,6 +341,57 @@ async def test_pr_reply_uses_pull_replies_endpoint():
             None,
         )
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "github_event"),
+    [
+        ("approve", "APPROVE"),
+        ("request-changes", "REQUEST_CHANGES"),
+        ("comment", "COMMENT"),
+    ],
+)
+async def test_pr_review_submits_a_review_on_the_current_head(event, github_event):
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    fake.post_payloads["/repos/owner/repo/pulls/7/reviews"] = {
+        "id": 555,
+        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+        "submitted_at": "2026-01-01T00:00:00Z",
+    }
+    service._client = fake
+
+    result = await service.pr_review(
+        "https://github.com/owner/repo/pull/7", "Looks good.\n", event
+    )
+
+    assert result == {
+        "review_id": 555,
+        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+        "commit_id": "abc123",
+        "submitted_at": "2026-01-01T00:00:00Z",
+    }
+    assert fake.posts == [
+        (
+            "/repos/owner/repo/pulls/7/reviews",
+            {"body": "Looks good.", "event": github_event, "commit_id": "abc123"},
+            None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_review_rejects_unknown_event():
+    service = _service()
+
+    with pytest.raises(MemberCapabilityError, match="Review event must be one of"):
+        await service.pr_review("https://github.com/owner/repo/pull/7", "x", "lgtm")
 
 
 @pytest.mark.asyncio
@@ -1074,6 +1129,7 @@ async def test_task_completion_checks_only_open_pull_requests_from_issue_timelin
             },
             "/repos/owner/repo/pulls/8": {
                 "state": "open",
+                "user": {"login": "bot"},
                 "html_url": "https://github.com/owner/repo/pull/8",
                 "head": {
                     "sha": "open-head",
@@ -1107,6 +1163,49 @@ async def test_task_completion_checks_only_open_pull_requests_from_issue_timelin
         "merged-head" in endpoint or "deleted-base" in endpoint
         for endpoint in endpoints
     )
+
+
+@pytest.mark.asyncio
+async def test_task_completion_skips_reviewed_prs_the_member_did_not_write(
+    monkeypatch,
+):
+    """A reviewer completes on someone else's PR; only PRs it pushed to gate."""
+    service = _service()
+    calls = []
+
+    async def fake_pr_checks(url, **_kwargs):
+        calls.append(url)
+        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
+
+    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _someone_elses_open_pull_request)
+
+    async def fake_linked_pull_request_urls(_resource):
+        return ["https://github.com/owner/repo/pull/9"]
+
+    monkeypatch.setattr(
+        service, "_linked_pull_request_urls", fake_linked_pull_request_urls
+    )
+
+    assert (
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/pull/7", []
+        )
+        == []
+    )
+    assert (
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/issues/1", []
+        )
+        == []
+    )
+    results = await service.task_completion_readiness(
+        "https://github.com/owner/repo/pull/7",
+        [{"payload": {"pr_url": "https://github.com/owner/repo/pull/8"}}],
+    )
+
+    assert calls == ["https://github.com/owner/repo/pull/8"]
+    assert len(results) == 1
 
 
 @pytest.mark.asyncio

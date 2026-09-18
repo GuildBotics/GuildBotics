@@ -303,11 +303,19 @@ Once work starts, you interact with the member like this:
 
 - When the member has a question, it posts it as a ticket comment. Answer in a ticket comment and the member picks up your answer on its next check and continues
 - When the task completes, the member leaves a comment / PR URL / review reply / reaction
-- Review the PR created from the ticket on the PR itself. Unresolved review threads are delegated back to the member in charge
+- Review the PR created from the ticket on the PR itself. The member follows the PR through the pull request patrol, not through the ticket (→ [Pull Request Patrol](#pull-request-patrol))
 
 To stop, press **Stop**. The service stops accepting new work and exits after in-flight work finishes. If you do not want to wait, press **Force stop** to cancel the in-flight work.
 
 To start and stop the service from the CLI, see [Run on a Server](#run-on-a-server).
+
+### Pull Request Patrol
+
+Before looking at the ticket lanes, every patrol run checks the open pull requests under the project owner that involve the member. No ticket is needed for this; the PR itself is the unit of work.
+
+- **PRs the member wrote**: unresolved review threads whose last word is someone else's, review summaries, and conversation comments the member has not answered yet are picked up. The member fixes the code where the point is valid, replies in each thread, and answers the comments
+- **PRs the member reviews**: the member reviews again when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when someone replies in a thread the member took part in, or when new commits land after its last review. Re-review on new commits stops after 3 rounds: the member announces that on the PR, and only replies in its threads or an explicit review request bring it back
+- The verdict is submitted as a GitHub review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Ask for the first review in Slack or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
 
 ## Ask for Work in Slack
 

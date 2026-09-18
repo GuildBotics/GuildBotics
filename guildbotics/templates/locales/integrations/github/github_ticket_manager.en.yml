@@ -1,2 +1,3 @@
 en:
   add_custom_field_options: "\n\nPlease add the following options to the custom field %{field}:%{options}\n"
+  review_limit_reached: "I have reviewed this pull request %{count} times, the limit for automatic re-review, so I will stop re-reviewing on new commits for now. Ask me directly when you want another review."

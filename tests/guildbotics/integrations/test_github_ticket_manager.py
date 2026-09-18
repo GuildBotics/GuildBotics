@@ -3,9 +3,14 @@ from typing import Any
 
 import pytest
 
+from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
+from guildbotics.integrations.workflow_status_comment import (
+    parse_workflow_status_comment,
+)
+from guildbotics.utils.i18n_tool import t
 
 
 class _Response:
@@ -33,11 +38,12 @@ class _Manager(GitHubTicketManager):
         responses: dict[str, Any] | None = None,
         lane_map: dict[str, str] | None = None,
         statuses: list[str] | None = None,
+        github_username: str = "aiko-gh",
     ):
         person = Person(
             person_id="aiko",
             name="Aiko",
-            account_info={"github_username": "aiko-gh"},
+            account_info={"github_username": github_username},
         )
         services: dict[str, dict[str, Any]] = {
             "ticket_manager": {
@@ -75,10 +81,11 @@ class _Manager(GitHubTicketManager):
         }
         self.moved: list[tuple[Task, str]] = []
         self.related_pulls: list[dict[str, Any]] = []
-        self.review_threads: list[dict[str, Any]] | None = None
-        self.reactions_by_comment: dict[str, list[dict[str, Any]]] = {}
+        # Pull request patrol inputs: search hits and the GraphQL node per PR.
+        self.search_items: list[dict[str, Any]] = []
+        self.pull_request_nodes: dict[int, dict[str, Any]] = {}
+        self.comments_added: list[tuple[Task, str]] = []
         self.graphql_queries: list[str] = []
-        self.graphql_error = False
 
     async def login(self):
         return self.client_stub
@@ -95,29 +102,16 @@ class _Manager(GitHubTicketManager):
     ) -> list[dict[str, Any]]:
         return self.related_pulls
 
+    async def _search_pull_requests(self) -> list[dict[str, Any]]:
+        return self.search_items
+
+    async def add_comment_to_ticket(self, task: Task, comment: str) -> None:
+        self.comments_added.append((task, comment))
+
     async def _graphql(self, query: str, variables: dict) -> dict:
         self.graphql_queries.append(query)
-        if self.graphql_error:
-            raise RuntimeError("GraphQL failed")
-        if "PullRequestReviewComment" in query:
-            return {
-                "node": {
-                    "reactions": {
-                        "nodes": self.reactions_by_comment.get(variables["id"], []),
-                        "pageInfo": {"endCursor": None, "hasNextPage": False},
-                    }
-                }
-            }
-        return {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {
-                        "nodes": self.review_threads or [],
-                        "pageInfo": {"endCursor": None, "hasNextPage": False},
-                    }
-                }
-            }
-        }
+        node = self.pull_request_nodes.get(int(variables.get("number") or 0))
+        return {"repository": {"pullRequest": node}}
 
 
 def _item(
@@ -179,34 +173,6 @@ def _comments(number: int, comments: list[dict[str, str]]) -> dict[str, Any]:
             for index, comment in enumerate(comments)
         ]
     }
-
-
-def _review_thread(
-    *,
-    is_resolved: bool = False,
-    comments: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "isResolved": is_resolved,
-        "comments": {
-            "nodes": [
-                _review_comment_node(index, comment)
-                for index, comment in enumerate(comments)
-            ]
-        },
-    }
-
-
-def _review_comment_node(index: int, comment: dict[str, Any]) -> dict[str, Any]:
-    node = {
-        "id": comment.get("id", f"comment-{index}"),
-        "body": comment.get("body", ""),
-        "createdAt": f"2026-01-01T00:0{index}:00Z",
-        "author": {"login": comment["user"]},
-    }
-    if "reactions" in comment:
-        node["reactions"] = {"nodes": comment["reactions"]}
-    return node
 
 
 def _pull() -> dict[str, Any]:
@@ -311,73 +277,6 @@ async def test_mention_does_not_allow_unassigned_ready_ticket():
 
 
 @pytest.mark.asyncio
-async def test_unhandled_pr_review_is_skipped_if_latest_comment_is_rate_limited_suppress():
-    from guildbotics.integrations.workflow_status_comment import (
-        WORKFLOW_STATUS_CODE_BLOCK,
-    )
-
-    suppressing_body = f"""
-```{WORKFLOW_STATUS_CODE_BLOCK}
-{{
-  "kind": "workflow_error",
-  "routing": "suppress",
-  "reason": "rate_limited",
-  "person_id": "aiko"
-}}
-```
-"""
-    manager = _Manager(
-        items=[_item(number=1, status="In Progress")],
-        responses=_comments(1, [{"user": "aiko-gh", "body": suppressing_body}]),
-    )
-    manager.related_pulls = [_pull()]
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    task = await manager.get_task_to_work_on()
-
-    assert task is None
-
-
-@pytest.mark.asyncio
-async def test_unhandled_pr_review_is_selected_if_rate_limited_comment_is_not_latest():
-    from guildbotics.integrations.workflow_status_comment import (
-        WORKFLOW_STATUS_CODE_BLOCK,
-    )
-
-    suppressing_body = f"""
-```{WORKFLOW_STATUS_CODE_BLOCK}
-{{
-  "kind": "workflow_error",
-  "routing": "suppress",
-  "reason": "rate_limited",
-  "person_id": "aiko"
-}}
-```
-"""
-    manager = _Manager(
-        items=[_item(number=1, status="In Progress")],
-        responses=_comments(
-            1,
-            [
-                {"user": "aiko-gh", "body": suppressing_body},
-                {"user": "human", "body": "Try again now"},
-            ],
-        ),
-    )
-    manager.related_pulls = [_pull()]
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    task = await manager.get_task_to_work_on()
-
-    assert task is not None
-    assert task.trigger_reason == "pull_request_review"
-
-
-@pytest.mark.asyncio
 async def test_working_ticket_runs_only_when_last_issue_comment_is_not_mine():
     manager = _Manager(
         items=[_item(number=1, status="In Progress")],
@@ -465,41 +364,6 @@ async def test_backlog_ticket_with_unhandled_comment_is_ignored():
 
 
 @pytest.mark.asyncio
-async def test_open_pr_with_unhandled_review_triggers_task():
-    manager = _Manager(items=[_item(number=1, status="In Progress")])
-    manager.related_pulls = [
-        {
-            "url": "https://github.com/GuildBotics/repo/pull/2",
-            "owner": "GuildBotics",
-            "repo": "repo",
-            "number": 2,
-            "state": "open",
-            "updated_at": "2026-01-02T00:00:00Z",
-        }
-    ]
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    task = await manager.get_task_to_work_on()
-
-    assert task is not None
-    assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
-    assert task.trigger_reason == "pull_request_review"
-
-
-@pytest.mark.asyncio
-async def test_open_pr_review_is_ignored_when_ticket_is_not_mine():
-    manager = _Manager(items=[_item(number=1, status="In Progress", assignee="other")])
-    manager.related_pulls = [_pull()]
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    assert await manager.get_task_to_work_on() is None
-
-
-@pytest.mark.asyncio
 async def test_merged_pr_does_not_move_ticket_when_ticket_is_not_mine():
     manager = _Manager(items=[_item(number=1, status="In Progress", assignee="other")])
     manager.related_pulls = [
@@ -515,98 +379,6 @@ async def test_merged_pr_does_not_move_ticket_when_ticket_is_not_mine():
 
     assert await manager.get_task_to_work_on() is None
     assert manager.moved == []
-
-
-@pytest.mark.asyncio
-async def test_unresolved_review_thread_with_last_reviewer_comment_is_unhandled():
-    manager = _Manager(items=[])
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-
-    assert await manager._has_unhandled_pull_request_review(_pull()) is True
-
-
-@pytest.mark.asyncio
-async def test_resolved_review_thread_is_not_unhandled():
-    manager = _Manager(items=[])
-    manager.review_threads = [
-        _review_thread(
-            is_resolved=True,
-            comments=[{"user": "reviewer", "body": "Please fix"}],
-        )
-    ]
-
-    assert await manager._has_unhandled_pull_request_review(_pull()) is False
-
-
-@pytest.mark.asyncio
-async def test_review_thread_with_last_agent_comment_is_not_unhandled():
-    manager = _Manager(items=[])
-    manager.review_threads = [
-        _review_thread(
-            comments=[
-                {"user": "reviewer", "body": "Please fix"},
-                {"user": "aiko-gh", "body": "Fixed"},
-            ]
-        )
-    ]
-
-    assert await manager._has_unhandled_pull_request_review(_pull()) is False
-
-
-@pytest.mark.asyncio
-async def test_review_thread_with_agent_reaction_is_not_unhandled():
-    manager = _Manager(items=[])
-    manager.review_threads = [
-        _review_thread(
-            comments=[
-                {
-                    "user": "reviewer",
-                    "body": "No code change needed?",
-                    "reactions": [{"content": "ROCKET", "user": {"login": "aiko-gh"}}],
-                }
-            ]
-        )
-    ]
-
-    assert await manager._has_unhandled_pull_request_review(_pull()) is False
-
-
-@pytest.mark.asyncio
-async def test_review_thread_reactions_are_loaded_separately_to_avoid_node_limit():
-    manager = _Manager(items=[])
-    manager.review_threads = [
-        _review_thread(
-            comments=[
-                {
-                    "id": "review-comment-1",
-                    "user": "reviewer",
-                    "body": "No code change needed?",
-                }
-            ]
-        )
-    ]
-    manager.reactions_by_comment = {
-        "review-comment-1": [{"content": "ROCKET", "user": {"login": "aiko-gh"}}]
-    }
-
-    assert await manager._has_unhandled_pull_request_review(_pull()) is False
-
-    review_thread_query = manager.graphql_queries[0]
-    assert "reviewThreads(first: 50" in review_thread_query
-    assert "comments(last: 1)" in review_thread_query
-    assert "reactions(first:" not in review_thread_query
-    assert any("PullRequestReviewComment" in query for query in manager.graphql_queries)
-
-
-@pytest.mark.asyncio
-async def test_review_thread_query_failure_is_not_silently_downgraded():
-    manager = _Manager(items=[])
-    manager.graphql_error = True
-
-    with pytest.raises(RuntimeError, match="GraphQL failed"):
-        await manager._has_unhandled_pull_request_review(_pull())
 
 
 @pytest.mark.asyncio
@@ -1140,58 +912,6 @@ async def test_failed_status_comment_before_the_assignment_does_not_suppress():
     assert task.trigger_reason == "ready_lane"
 
 
-def _manager_with_unhandled_review(status_comment_at: str) -> "_Manager":
-    """A PR review waiting on the member, plus a failed status comment.
-
-    The review keeps the ticket selectable on its own, so whether the ticket is
-    returned depends only on the workflow-status suppression — unlike the ready
-    and working lanes, where the member's own last comment blocks it anyway.
-    """
-    manager = _Manager(
-        items=[
-            _item(
-                number=1,
-                status="In Progress",
-                assignee=None,
-                agent="⚙aiko",
-                agent_updated_at="2026-01-05T00:00:00Z",
-            )
-        ],
-        responses=_comments(
-            1,
-            [
-                {
-                    "user": "aiko-gh",
-                    "body": _status_comment("failed"),
-                    "created_at": status_comment_at,
-                }
-            ],
-        ),
-    )
-    manager.related_pulls = [_pull()]
-    manager.review_threads = [
-        _review_thread(comments=[{"user": "reviewer", "body": "Please fix"}])
-    ]
-    return manager
-
-
-@pytest.mark.asyncio
-async def test_failed_status_comment_after_the_assignment_still_suppresses():
-    manager = _manager_with_unhandled_review("2026-01-06T00:00:00Z")
-
-    assert await manager.get_task_to_work_on() is None
-
-
-@pytest.mark.asyncio
-async def test_failed_status_comment_before_the_assignment_leaves_review_actionable():
-    manager = _manager_with_unhandled_review("2026-01-03T00:00:00Z")
-
-    task = await manager.get_task_to_work_on()
-
-    assert task is not None
-    assert task.trigger_reason == "pull_request_review"
-
-
 @pytest.mark.asyncio
 async def test_unknown_assignment_time_keeps_every_comment():
     """Without an assignment time nothing can be excluded, so the brake holds."""
@@ -1274,3 +994,326 @@ async def test_latest_assignment_wins_when_both_paths_assign_this_member():
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
+
+
+def _search_item(number: int = 2, repo: str = "repo") -> dict[str, Any]:
+    return {
+        "number": number,
+        "html_url": f"https://github.com/GuildBotics/{repo}/pull/{number}",
+        "repository_url": f"https://api.github.com/repos/GuildBotics/{repo}",
+        "updated_at": f"2026-01-0{number}T00:00:00Z",
+    }
+
+
+def _pull_request_node(
+    *,
+    number: int = 2,
+    author: str = "aiko-gh",
+    head: str = "head-2",
+    reviews: list[dict[str, Any]] | None = None,
+    comments: list[dict[str, Any]] | None = None,
+    threads: list[dict[str, Any]] | None = None,
+    requested: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": f"PR{number}",
+        "number": number,
+        "url": f"https://github.com/GuildBotics/repo/pull/{number}",
+        "title": f"pr {number}",
+        "body": "body",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "headRefOid": head,
+        "author": {"login": author},
+        "reviewRequests": {
+            "nodes": [
+                {"requestedReviewer": {"login": login}} for login in requested or []
+            ]
+        },
+        "reviews": {"nodes": reviews or []},
+        "comments": {"nodes": comments or []},
+        "reviewThreads": {"nodes": threads or []},
+    }
+
+
+def _review(
+    author: str,
+    *,
+    commit: str,
+    submitted_at: str = "2026-01-01T01:00:00Z",
+    state: str = "COMMENTED",
+    body: str = "",
+    reply: bool = False,
+) -> dict[str, Any]:
+    return {
+        "author": {"login": author},
+        "state": state,
+        "body": body,
+        "submittedAt": submitted_at,
+        "commit": {"oid": commit},
+        "comments": {"nodes": [{"replyTo": {"id": "root"} if reply else None}]},
+    }
+
+
+def _thread(last_author: str, *participants: str, resolved: bool = False) -> dict:
+    return {
+        "isResolved": resolved,
+        "participants": {
+            "nodes": [
+                {"author": {"login": login}} for login in (*participants, last_author)
+            ]
+        },
+        "latest": {
+            "nodes": [{"author": {"login": last_author}, "reactions": {"nodes": []}}]
+        },
+    }
+
+
+def _patrol_manager(node: dict[str, Any], items: list[dict] | None = None) -> _Manager:
+    manager = _Manager(items=items or [])
+    manager.search_items = [_search_item(node["number"])]
+    manager.pull_request_nodes = {node["number"]: node}
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_own_pr_with_unanswered_review_thread_is_feedback_work():
+    manager = _patrol_manager(_pull_request_node(threads=[_thread("reviewer")]))
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "pull_request_feedback"
+    assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
+    assert task.url == task.pull_request_url
+    assert task.number == 2
+    assert task.repository == "repo"
+    assert task.status == Task.IN_PROGRESS
+    assert task.assignee == "aiko"
+
+
+@pytest.mark.asyncio
+async def test_pull_request_work_precedes_the_ready_lane():
+    manager = _patrol_manager(
+        _pull_request_node(threads=[_thread("reviewer")]),
+        items=[_item(number=1, status="Todo")],
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "pull_request_feedback"
+
+
+@pytest.mark.asyncio
+async def test_ready_lane_is_selected_when_no_pull_request_needs_the_member():
+    manager = _patrol_manager(
+        _pull_request_node(threads=[_thread("aiko-gh", "reviewer")]),
+        items=[_item(number=1, status="Todo")],
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_reviewed_pr_with_new_commits_is_review_work():
+    manager = _patrol_manager(
+        _pull_request_node(
+            author="other", head="head-3", reviews=[_review("aiko-gh", commit="head-2")]
+        )
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "pull_request_review"
+
+
+@pytest.mark.asyncio
+async def test_review_limit_is_announced_once_and_not_dispatched():
+    node = _pull_request_node(
+        author="other",
+        head="head-4",
+        reviews=[
+            _review(
+                "aiko-gh",
+                commit=f"head-{index}",
+                submitted_at=f"2026-01-0{index}T00:00:00Z",
+            )
+            for index in (1, 2, 3)
+        ],
+    )
+    manager = _patrol_manager(node)
+
+    assert await manager.get_task_to_work_on() is None
+    assert len(manager.comments_added) == 1
+    task, body = manager.comments_added[0]
+    assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
+    status = parse_workflow_status_comment(body)
+    assert status is not None and status.reason == "review_limit"
+    assert (
+        t("integrations.github.github_ticket_manager.review_limit_reached", count=3)
+        in body
+    )
+
+    # Once the notice is on the PR, later patrols stay quiet.
+    node["comments"]["nodes"].append(
+        {
+            "author": {"login": "aiko-gh"},
+            "body": body,
+            "createdAt": "2026-01-09T00:00:00Z",
+        }
+    )
+    assert await manager.get_task_to_work_on() is None
+    assert len(manager.comments_added) == 1
+
+
+@pytest.mark.asyncio
+async def test_oldest_updated_pull_request_is_served_first():
+    manager = _Manager(items=[])
+    manager.search_items = [_search_item(3), _search_item(2)]
+    manager.pull_request_nodes = {
+        2: _pull_request_node(number=2, threads=[_thread("reviewer")]),
+        3: _pull_request_node(number=3, threads=[_thread("reviewer")]),
+    }
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None and task.number == 3
+
+
+@pytest.mark.asyncio
+async def test_open_pr_keeps_its_issue_out_of_the_working_lane():
+    """Feedback on a PR is followed on the PR; the issue is never re-dispatched."""
+    manager = _Manager(
+        items=[_item(number=1, status="In Progress")],
+        responses=_comments(1, [{"user": "human", "body": "Also do this"}]),
+    )
+    manager.related_pulls = [_pull()]
+
+    assert await manager.get_task_to_work_on() is None
+    assert manager.moved == []
+
+
+@pytest.mark.asyncio
+async def test_get_ticket_url_prefers_the_task_url():
+    manager = _Manager(items=[])
+    task = Task(
+        id="PR2",
+        title="pr",
+        description="",
+        repository="repo",
+        url="https://github.com/GuildBotics/repo/pull/2",
+    )
+
+    assert (
+        await manager.get_ticket_url(task, markdown=False)
+        == "https://github.com/GuildBotics/repo/pull/2"
+    )
+    assert manager.graphql_queries == []
+
+
+class _SearchClient:
+    """Records search calls and answers each qualifier with its own hits."""
+
+    def __init__(self, hits: dict[str, list[dict[str, Any]]], status: int = 200):
+        self.hits = hits
+        self.status = status
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, endpoint: str, **kwargs):
+        assert endpoint == "/search/issues"
+        params = kwargs["params"]
+        self.calls.append(params)
+        qualifier = params["q"].split()[-1].split(":")[0]
+        response = _Response({"items": self.hits.get(qualifier, [])}, self.status)
+        response.text = "boom"
+        return response
+
+
+@pytest.mark.asyncio
+async def test_search_covers_both_roles_and_dedupes_oldest_first():
+    manager = _Manager(items=[])
+    client = _SearchClient(
+        {
+            "author": [_search_item(3), _search_item(2)],
+            "reviewed-by": [_search_item(2), _search_item(4)],
+            "review-requested": [_search_item(1)],
+        }
+    )
+    manager.client_stub = client
+
+    items = await GitHubTicketManager._search_pull_requests(manager)
+
+    assert [params["q"] for params in client.calls] == [
+        "is:pr is:open user:GuildBotics author:aiko-gh",
+        "is:pr is:open user:GuildBotics reviewed-by:aiko-gh",
+        "is:pr is:open user:GuildBotics review-requested:aiko-gh",
+    ]
+    assert all(params["per_page"] == 100 for params in client.calls)
+    assert [item["number"] for item in items] == [1, 2, 3, 4]
+
+
+@pytest.mark.asyncio
+async def test_search_failure_is_not_silently_downgraded():
+    manager = _Manager(items=[])
+    manager.client_stub = _SearchClient({}, status=422)
+
+    with pytest.raises(RuntimeError, match="422"):
+        await GitHubTicketManager._search_pull_requests(manager)
+
+
+@pytest.mark.asyncio
+async def test_pull_request_load_reads_repository_from_the_search_hit():
+    manager = _Manager(items=[])
+    manager.pull_request_nodes = {5: _pull_request_node(number=5)}
+
+    pull_request = await manager._load_pull_request(_search_item(5, repo="other-repo"))
+
+    assert pull_request.repository == "other-repo"
+    assert pull_request.number == 5
+    assert "headRefOid" in manager.graphql_queries[0]
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        await manager._load_pull_request(_search_item(6))
+
+
+@pytest.mark.asyncio
+async def test_app_member_is_recognized_under_the_graphql_login():
+    """The board reads GraphQL, which names an App ``<app>``; the member's
+    username is the REST form ``<app>[bot]``. Both assignment paths and the
+    assignment time must still find the member."""
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee="aiko-app",
+                assigned_events=[
+                    {"login": "aiko-app", "created_at": "2026-01-05T00:00:00Z"}
+                ],
+            )
+        ],
+        responses=_comments(
+            1,
+            [
+                {
+                    "user": "aiko-app[bot]",
+                    "body": "Done earlier",
+                    "created_at": "2026-01-04T00:00:00Z",
+                }
+            ],
+        ),
+        github_username="aiko-app[bot]",
+    )
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.assignee == "aiko"
+    # The comment predates the assignment, so it is not this member's answer.
+    assert task.trigger_reason == "ready_lane"
+    assert task.comments[0].author_type == Message.ASSISTANT
+    assert manager._text_mentions_me("@aiko-app please")

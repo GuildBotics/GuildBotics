@@ -114,8 +114,9 @@ async def _build_task_error_message(
 
 
 def _work_type(task: Task) -> str:
+    """``issue``, or the pull request role the patrol selected the task for."""
     if task.pull_request_url:
-        return "pull_request_review"
+        return task.trigger_reason or "pull_request_feedback"
     return "issue"
 
 
@@ -251,19 +252,21 @@ async def _main(
 def _prepare_command(context: Context, ticket_url: str) -> str:
     """Build the exact ``git prepare`` command for this run.
 
-    The workflow already knows whether this is a PR review (``pull_request_url``
-    is set), so it hands the agent a ready-to-run command. For PR review this
-    includes ``--pr-url`` so the PR head branch is checked out; without it
-    ``prepare`` would fall back to issue mode and silently work on a new
-    ``ticket/<n>`` branch instead of the PR under review.
+    The workflow already knows whether this is pull request work
+    (``pull_request_url`` is set), so it hands the agent a ready-to-run
+    command. Pull request work anchors on ``--pr-url`` so the PR head branch
+    is checked out; without it ``prepare`` would work on a new ``ticket/<n>``
+    branch instead of the PR.
     """
     person_id = context.person.person_id
-    command = (
+    if context.task.pull_request_url:
+        return (
+            f"guildbotics member git prepare --person {person_id} "
+            f"--pr-url {context.task.pull_request_url}"
+        )
+    return (
         f"guildbotics member git prepare --person {person_id} --issue-url {ticket_url}"
     )
-    if context.task.pull_request_url:
-        command += f" --pr-url {context.task.pull_request_url}"
-    return command
 
 
 async def main(context: Context) -> AgentResponse | None:
