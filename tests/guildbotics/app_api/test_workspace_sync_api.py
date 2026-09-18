@@ -307,12 +307,11 @@ def test_retrying_an_unsynchronized_workspace_changes_nothing(
 def test_retrying_a_synchronized_workspace_reports_its_state(
     client: TestClient,
 ) -> None:
-    """Retrying leaves the workspace synchronizing and carrying no error.
+    """Retrying a healthy workspace reports that attempt, with no error.
 
-    Which state the queue is in at the instant the answer is composed is the
-    worker's to say: it runs cycles on its own timer, and one that starts
-    between the retry and the read reports "fetching" rather than "idle". That
-    is a true answer about a healthy queue, so it is not what this asserts.
+    The attempt runs a cycle under lock and answers with that cycle, so a
+    successful retry is idle. The worker may start another cycle afterwards;
+    that later state belongs to a subsequent status read, not this response.
     """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
@@ -322,13 +321,17 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     assert payload["enabled"] is True
     assert payload["last_error_code"] is None
     assert payload["last_error_detail"] is None
-    assert payload["state"] != "disabled"
+    assert payload["state"] == "idle"
 
 
 def test_a_hub_that_fails_reports_what_it_printed(
     client: TestClient, workspace: Path
 ) -> None:
-    """The Desktop shows why the hub failed, in the words Git used."""
+    """The Desktop shows why the hub failed, in the words Git used.
+
+    Retry answers with this attempt, so a missing hub is unreachable even if
+    the worker has already started its next cycle when the response is sent.
+    """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
     hub_root().rename(hub_root().with_name("gone"))

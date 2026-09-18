@@ -509,13 +509,24 @@ class WorkspaceSyncService:
         return stopped
 
     def retry(self) -> WorkspaceSyncStatus:
-        """Try again after an unreachable hub or repaired shared data."""
+        """Try again after an unreachable hub or repaired shared data.
+
+        The response is this attempt: ``resume()`` returns the cycle it just
+        ran, while its locks are still held. A worker cycle that starts after
+        those locks are released is a later status, not this one.
+        """
         manager = current_sync_manager()
         if manager is None:
             return self.activate()
         with _reporting("sync_retry_failed"):
-            manager.resume()
-        return self.get_status()
+            status = manager.resume()
+        repository = _repository()
+        return _status_model(
+            status,
+            None if repository is None else repository.remote_url(),
+            [] if repository is None else _rejected(repository),
+            live_error_code=self._live_error_code,
+        )
 
     def change_hub(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncStatus:
         """Point the selected workspace at a different hub.
