@@ -1214,13 +1214,13 @@ describe("formatCompactReset", () => {
 });
 
 describe("usageWindowElapsedPercent", () => {
-  const window = {
+  // Typed so a stale or missing field fails typecheck instead of lingering.
+  const window: CliAgentUsageWindow = {
     window: "primary",
     used_percent: 0,
     resets_at: "2026-07-01T14:00:00Z",
     window_minutes: 300,
     label: "",
-    detail: false,
   };
 
   it.each([
