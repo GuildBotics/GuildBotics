@@ -343,7 +343,8 @@ def test_a_hub_that_fails_reports_what_it_printed(
     """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    hub_root().rename(hub_root().with_name("gone"))
+    with activation.paused_workspace_sync(workspace):
+        hub_root().rename(hub_root().with_name("gone"))
 
     payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
 
