@@ -27,6 +27,13 @@ _ANTIGRAVITY_USAGE_FIXTURE = json.loads(
         encoding="utf-8"
     )
 )
+_GROK_ZERO_USAGE_FIXTURE = json.loads(
+    (
+        Path(__file__).parent
+        / "fixtures"
+        / "grok_billing_unified_weekly_zero_1_0_34.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def test_parse_codex_rate_limits_reads_camel_case_buckets() -> None:
@@ -218,6 +225,59 @@ def test_parse_grok_billing_reads_subscription_window() -> None:
     assert window.resets_at == "2026-08-14T07:37:18.756767+00:00"
     assert window.window_minutes == 10_080
     assert snapshot.checked_at
+
+
+def test_parse_grok_billing_normalizes_omitted_unified_weekly_zero() -> None:
+    snapshot = parse_grok_billing(
+        _GROK_ZERO_USAGE_FIXTURE["billing"],
+        _GROK_ZERO_USAGE_FIXTURE["subscription"],
+    )
+
+    assert not snapshot.limit_reached
+    assert len(snapshot.windows) == 1
+    window = snapshot.windows[0]
+    assert window.window == "subscription"
+    assert window.used_percent == 0
+    assert window.resets_at == "2026-09-25T07:37:18.756767+00:00"
+    assert window.window_minutes == 10_080
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("subscription", "authenticated", False),
+        ("subscription", "authenticated", None),
+        ("subscription_meta", "gate", {"reason": "usage_limit"}),
+        ("config", "isUnifiedBillingUser", False),
+        ("config", "isUnifiedBillingUser", None),
+        ("period", "type", "USAGE_PERIOD_TYPE_MONTHLY"),
+        ("period", "start", None),
+        ("period", "start", "bad"),
+        ("period", "end", None),
+        ("period", "end", "bad"),
+        ("period", "end", "2026-09-18T07:37:18.756767+00:00"),
+    ],
+)
+def test_parse_grok_billing_does_not_infer_zero_without_all_evidence(
+    section: str, key: str, value: Any
+) -> None:
+    billing = json.loads(json.dumps(_GROK_ZERO_USAGE_FIXTURE["billing"]))
+    subscription = json.loads(json.dumps(_GROK_ZERO_USAGE_FIXTURE["subscription"]))
+    target = {
+        "subscription": subscription,
+        "subscription_meta": subscription["meta"],
+        "config": billing["config"],
+        "period": billing["config"]["currentPeriod"],
+    }[section]
+    if value is None:
+        target.pop(key)
+    else:
+        target[key] = value
+
+    snapshot = parse_grok_billing(billing, subscription)
+
+    assert snapshot.windows == []
+    assert snapshot.limit_reached is (section == "subscription_meta")
 
 
 @pytest.mark.parametrize(

@@ -201,25 +201,36 @@ def parse_grok_billing(billing: Any, subscription: Any) -> CliAgentUsageSnapshot
     """Build a usage snapshot from Grok's billing and subscription results.
 
     Grok reports the subscription quota as ``creditUsagePercent``. Accounts
-    that do not expose that field produce no subscription window rather than a
-    synthetic 0%. When subscription usage is available, a configured on-demand
-    credit budget yields a separate percent. An active account gate marks the
-    limit as reached.
+    with unified weekly billing omit that field while the new period is at 0%.
+    That one authenticated, ungated shape becomes an explicit 0%; other absent
+    or invalid percentages produce no subscription window. When subscription
+    usage is available, a configured on-demand credit budget yields a separate
+    percent. An active account gate marks the limit as reached.
     """
     config = _as_dict(_as_dict(billing).get("config"))
     period = _as_dict(config.get("currentPeriod"))
+    subscription_data = _as_dict(subscription)
+    gate = _as_dict(subscription_data.get("meta")).get("gate")
     windows: list[CliAgentUsageWindow] = []
     subscription_percent = _optional_decimal_val(config.get("creditUsagePercent"))
+    resets_at = _parse_reset(period.get("end"))
+    period_minutes = _minutes_between(_parse_reset(period.get("start")), resets_at)
+    if (
+        "creditUsagePercent" not in config
+        and subscription_data.get("authenticated") is True
+        and gate is None
+        and config.get("isUnifiedBillingUser") is True
+        and period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY"
+        and period_minutes is not None
+    ):
+        subscription_percent = 0.0
     if subscription_percent is not None:
-        resets_at = _parse_reset(period.get("end"))
         windows.append(
             CliAgentUsageWindow(
                 window="subscription",
                 used_percent=subscription_percent,
                 resets_at=resets_at,
-                window_minutes=_minutes_between(
-                    _parse_reset(period.get("start")), resets_at
-                ),
+                window_minutes=period_minutes,
             )
         )
         cap = _decimal_val(config.get("onDemandCap"))
@@ -230,9 +241,9 @@ def parse_grok_billing(billing: Any, subscription: Any) -> CliAgentUsageSnapshot
                     window="on_demand", used_percent=round(used / cap * 100.0, 1)
                 )
             )
-    limit_reached = bool(
-        _as_dict(_as_dict(subscription).get("meta")).get("gate")
-    ) or any(window.used_percent >= LIMIT_REACHED_PERCENT for window in windows)
+    limit_reached = bool(gate) or any(
+        window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
+    )
     return CliAgentUsageSnapshot(
         agent="grok",
         windows=windows,
