@@ -485,6 +485,9 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.1
 を固定しており、構造化payloadは 1.2.5 で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
-既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。利用枠を
-提供しないアカウントや、そのJSONではない出力は「使用量情報なし」のままにし、TUI・status line・
-タブ区切り本文の解析や、0% / 100% の合成はしません。
+既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /
+`5h` 以外の `window` は期間を推測せず、生の値をラベルに残して行を見分けられるようにします。
+Claude / Codex と同様、`limit_reached` はどれか1枠が枯渇したときに真になるので、別グループに
+余裕があってもメンバー見出しの「Rate limit 中」は点灯します。利用枠を提供しないアカウントや、
+そのJSONではない出力は「使用量情報なし」のままにし、TUI・status line・タブ区切り本文の解析や、
+0% / 100% の合成はしません。

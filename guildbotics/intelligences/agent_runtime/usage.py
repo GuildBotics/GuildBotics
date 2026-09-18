@@ -393,7 +393,10 @@ def parse_antigravity_usage(result: Any) -> CliAgentUsageSnapshot:
     (1 remaining means unused) becomes
     ``used_percent = (1 - remaining_fraction) * 100``. Missing, non-numeric,
     non-finite, or out-of-range fractions are dropped rather than synthesized
-    as 0% or 100%. TUI, status-line, and tab-separated text are not parsed.
+    as 0% or 100%. Known windows (``weekly``, ``5h``) get a duration in
+    minutes; any other non-empty ``window`` stays as a row and folds the raw
+    value into ``label`` so the Activity view can still tell periods apart.
+    TUI, status-line, and tab-separated text are not parsed.
     """
     command = _as_dict(_as_dict(result).get("command"))
     groups = _as_dict(command.get("data")).get("groups")
@@ -429,13 +432,23 @@ def _parse_antigravity_bucket(raw: Any, label: str) -> CliAgentUsageWindow | Non
     remaining = _unit_fraction(raw.get("remaining_fraction"))
     if remaining is None:
         return None
+    window_minutes = _ANTIGRAVITY_WINDOW_MINUTES.get(window)
     return CliAgentUsageWindow(
         window=window,
         used_percent=(1.0 - remaining) * 100.0,
         resets_at=_parse_reset(raw.get("reset_time")),
-        window_minutes=_ANTIGRAVITY_WINDOW_MINUTES.get(window),
-        label=label,
+        window_minutes=window_minutes,
+        label=_antigravity_window_label(label, window, window_minutes),
     )
+
+
+def _antigravity_window_label(
+    label: str, window: str, window_minutes: int | None
+) -> str:
+    """Keep unknown periods distinguishable without guessing their duration."""
+    if window_minutes is not None:
+        return label
+    return f"{label} ({window})" if label else window
 
 
 def _first_text(raw: dict[str, Any], keys: tuple[str, ...]) -> str:

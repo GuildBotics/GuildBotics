@@ -476,6 +476,32 @@ def test_parse_antigravity_usage_drops_unusable_remaining_fraction(
     assert not snapshot.limit_reached
 
 
+@pytest.mark.parametrize(
+    ("window", "group_name", "window_minutes", "label"),
+    [
+        ("weekly", "Gemini models", 10_080, "Gemini models"),
+        ("5h", "Gemini models", 300, "Gemini models"),
+        ("daily", "Gemini models", None, "Gemini models (daily)"),
+        ("monthly", "Gemini models", None, "Gemini models (monthly)"),
+        ("daily", "", None, "daily"),
+    ],
+)
+def test_parse_antigravity_usage_folds_unknown_window_into_label(
+    window: str, group_name: str, window_minutes: int | None, label: str
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload(
+            {"window": window, "remaining_fraction": 0.5},
+            group_name=group_name,
+        )
+    )
+
+    parsed = snapshot.windows[0]
+    assert parsed.window == window
+    assert parsed.window_minutes == window_minutes
+    assert parsed.label == label
+
+
 def test_parse_antigravity_usage_keeps_same_period_windows_under_group_labels() -> None:
     snapshot = parse_antigravity_usage(_ANTIGRAVITY_USAGE_FIXTURE)
     weekly = [window for window in snapshot.windows if window.window == "weekly"]
@@ -505,19 +531,15 @@ def test_parse_antigravity_usage_ignores_text_and_malformed_payloads() -> None:
         assert not snapshot.limit_reached
 
 
-def _antigravity_payload(bucket: dict[str, Any]) -> dict[str, Any]:
+def _antigravity_payload(
+    bucket: dict[str, Any], group_name: str = "Gemini models"
+) -> dict[str, Any]:
+    group: dict[str, Any] = {"buckets": [{"window": "weekly", **bucket}]}
+    if group_name:
+        group["name"] = group_name
     return {
         "status": "SUCCESS",
-        "command": {
-            "data": {
-                "groups": [
-                    {
-                        "name": "Gemini models",
-                        "buckets": [{"window": "weekly", **bucket}],
-                    }
-                ]
-            }
-        },
+        "command": {"data": {"groups": [group]}},
     }
 
 
