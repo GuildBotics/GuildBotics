@@ -166,7 +166,11 @@ def _service(person_type="machine_user"):
 
 
 async def _open_pull_request(_resource):
-    return {"state": "open"}
+    return {"state": "open", "user": {"login": "bot"}}
+
+
+async def _someone_elses_open_pull_request(_resource):
+    return {"state": "open", "user": {"login": "someone"}}
 
 
 def test_parse_github_issue_and_pull_request_urls():
@@ -1074,6 +1078,7 @@ async def test_task_completion_checks_only_open_pull_requests_from_issue_timelin
             },
             "/repos/owner/repo/pulls/8": {
                 "state": "open",
+                "user": {"login": "bot"},
                 "html_url": "https://github.com/owner/repo/pull/8",
                 "head": {
                     "sha": "open-head",
@@ -1107,6 +1112,49 @@ async def test_task_completion_checks_only_open_pull_requests_from_issue_timelin
         "merged-head" in endpoint or "deleted-base" in endpoint
         for endpoint in endpoints
     )
+
+
+@pytest.mark.asyncio
+async def test_task_completion_skips_reviewed_prs_the_member_did_not_write(
+    monkeypatch,
+):
+    """A reviewer completes on someone else's PR; only PRs it pushed to gate."""
+    service = _service()
+    calls = []
+
+    async def fake_pr_checks(url, **_kwargs):
+        calls.append(url)
+        return {"pr_url": url, "readiness": "ready", "completion_blockers": []}
+
+    monkeypatch.setattr(service, "pr_checks", fake_pr_checks)
+    monkeypatch.setattr(service, "_pull_request", _someone_elses_open_pull_request)
+
+    async def fake_linked_pull_request_urls(_resource):
+        return ["https://github.com/owner/repo/pull/9"]
+
+    monkeypatch.setattr(
+        service, "_linked_pull_request_urls", fake_linked_pull_request_urls
+    )
+
+    assert (
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/pull/7", []
+        )
+        == []
+    )
+    assert (
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/issues/1", []
+        )
+        == []
+    )
+    results = await service.task_completion_readiness(
+        "https://github.com/owner/repo/pull/7",
+        [{"payload": {"pr_url": "https://github.com/owner/repo/pull/8"}}],
+    )
+
+    assert calls == ["https://github.com/owner/repo/pull/8"]
+    assert len(results) == 1
 
 
 @pytest.mark.asyncio

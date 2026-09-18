@@ -575,20 +575,29 @@ class MemberGitHubCapabilityService:
     async def task_completion_readiness(
         self, ticket_url: str, evidence: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        """Revalidate every PR identified by a ticket run before completion."""
-        urls = self._task_pull_request_urls(ticket_url, evidence)
+        """Revalidate every PR a ticket run is answerable for before completion.
+
+        PRs the run pushed to or opened (evidence) are always targets. The
+        ticket itself, when it is a PR, and PRs linked from an issue ticket
+        are targets only when the member authored them: a reviewer cannot
+        make someone else's PR ready.
+        """
+        touched = self._task_pull_request_urls(evidence)
         try:
             ticket = self.parse_url(ticket_url)
         except (MemberCapabilityError, ValueError):
             ticket = None
+        urls = [ticket_url] if ticket is not None and ticket.kind == "pull" else []
+        urls.extend(touched)
         if ticket is not None and ticket.kind == "issue":
-            for url in await self._linked_pull_request_urls(ticket):
-                if url not in urls:
-                    urls.append(url)
+            urls.extend(await self._linked_pull_request_urls(ticket))
         results = []
-        for url in urls:
+        for url in dict.fromkeys(urls):
             resource = self.parse_url(url, expected_kind="pull")
-            if not _pull_request_readiness_applies(await self._pull_request(resource)):
+            pr = await self._pull_request(resource)
+            if not _pull_request_readiness_applies(pr) or (
+                url not in touched and not self._authored(pr)
+            ):
                 continue
             result = await self.pr_checks(url)
             if result["readiness"] != "not_applicable":
@@ -994,10 +1003,12 @@ class MemberGitHubCapabilityService:
             return None
         return parts[0], parts[1]
 
-    def _task_pull_request_urls(
-        self, ticket_url: str, evidence: list[dict[str, Any]]
-    ) -> list[str]:
-        candidates = [ticket_url]
+    def _authored(self, pr: dict[str, Any]) -> bool:
+        login = str((pr.get("user") or {}).get("login") or "")
+        return login.lower() == get_github_username(self.person).lower()
+
+    def _task_pull_request_urls(self, evidence: list[dict[str, Any]]) -> list[str]:
+        candidates: list[str] = []
         for record in evidence:
             payload = record.get("payload")
             if not isinstance(payload, dict):

@@ -39,7 +39,9 @@ class StubTicketManager:
 
     async def get_ticket_url(self, task: Task, markdown: bool = True):
         issue_id = task.id or "1"
-        url = f"https://github.com/GuildBotics/GuildBotics/issues/{issue_id}"
+        url = (
+            task.url or f"https://github.com/GuildBotics/GuildBotics/issues/{issue_id}"
+        )
         return f"[{task.title}]({url})" if markdown else url
 
 
@@ -204,14 +206,18 @@ async def test_run_accepts_task_completion_written_to_workspace_state_store(tmp_
 
 
 @pytest.mark.asyncio
-async def test_run_passes_pull_request_work_type():
+@pytest.mark.parametrize(
+    "trigger_reason", ["pull_request_feedback", "pull_request_review"]
+)
+async def test_run_passes_pull_request_work_type(trigger_reason):
     task = Task(
-        id="1",
+        id="PR2",
         title="T",
         description="D",
         status=Task.IN_PROGRESS,
+        url="https://github.com/GuildBotics/GuildBotics/pull/2",
         pull_request_url="https://github.com/GuildBotics/GuildBotics/pull/2",
-        trigger_reason="pull_request_review",
+        trigger_reason=trigger_reason,
     )
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
@@ -220,13 +226,16 @@ async def test_run_passes_pull_request_work_type():
 
     kwargs = ctx.invocations[0][2]
     assert kwargs["pull_request_url"].endswith("/pull/2")
-    assert kwargs["work_type"] == "pull_request_review"
-    # PR review trigger: prepare command must include --pr-url so the agent
-    # checks out the PR head branch instead of a fresh ticket/<n> branch.
+    assert kwargs["ticket_url"] == task.url
+    # The patrol names the member's role on the PR; the prompt branches on it.
+    assert kwargs["work_type"] == trigger_reason
+    # Pull request work anchors on --pr-url so the agent checks out the PR head
+    # branch instead of a fresh ticket/<n> branch.
     assert kwargs["prepare_command"].endswith(
-        "--issue-url https://github.com/GuildBotics/GuildBotics/issues/1 "
         "--pr-url https://github.com/GuildBotics/GuildBotics/pull/2"
     )
+    assert "--issue-url" not in kwargs["prepare_command"]
+    assert tm.moved == []
     assert tm.commented == []
 
 

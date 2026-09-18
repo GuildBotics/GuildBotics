@@ -12,7 +12,7 @@ GitHub issue / pull request の内容を理解し、割り当てられた GuildB
 - GuildBotics execution mode: guildbotics_execution_mode=workflow
 - Person ID: {person_id}
 - 作業種別: {work_type}
-- Issue URL: {ticket_url}
+- Ticket URL (issue or pull request): {ticket_url}
 - Pull request URL: {pull_request_url}
 - 起動理由: {trigger_reason}
 - Member workspace: {member_workspace}
@@ -32,13 +32,15 @@ GitHub issue / pull request の内容を理解し、割り当てられた GuildB
 <instructions>
 1. この run の memory source key は `{ticket_url}` です。
 2. issue / PR の内容は、必ず `guildbotics member github issue inspect`、または `guildbotics member github pr inspect --include-comments` で取得してください。PR diff に新規 inline 指摘を作成する場合は `--include-diff` も付け、`files[].commentable_lines` から対象座標を選んでください。
-3. repository を準備するには、次のコマンドをそのまま実行してください: `{prepare_command}`。checkout は member workspace 配下に作られるので、編集はその checkout 内で行ってください。PR レビュー対応では、このコマンドに `--pr-url` が含まれ、PR head ブランチが checkout されます。
-4. member capabilities の標準作業手順に従い、公開前に検証し、plain git で stage してから `guildbotics member git publish` で publish してください。issue 対応でコード変更がある場合は `guildbotics member github pr create` で PR を作成または再利用してください。最終 push 後に `guildbotics member github pr checks` を実行し、`readiness` が `ready` になるまで完了扱いにしないでください。CI 成功だけでは不十分で、head が現在の base に遅れている場合や、確認した head SHA が変わった場合は未完了です。
-5. Issue 対応で PR を作成・再利用・更新した場合は、元 Issue に `guildbotics member github issue comment --content-file <file>` で PR URL・実施概要・確認結果を含む短い結果コメントを投稿してください。ただし、同じ run で既に同等のコメントを投稿済みの場合、または ticket 本文やユーザー指示がコメント不要を明示している場合は重複投稿しないでください。`task complete --content-file` は内部 summary であり GitHub 投稿の代替ではありません。`AgentResponse.message` も同様です。
-6. PR diff に新規 inline 指摘を作成する場合は、`pr inspect --include-diff` の出力から選んだ `path`、`line`、`side`、必要に応じて `start-line` / `start-side` を指定して `guildbotics member github pr review-comment --content-file <file>` を実行してください。既存の PR review thread に返信する場合は、`pr inspect --include-comments` が返す `reply_target_id` を使って `guildbotics member github pr reply --content-file <file>` を実行してください。
-7. follow-up issue の作成は、ticket 本文またはコメントで人間がそれを求めている場合に限り `guildbotics member github issue create --human-approved` で行ってください。別 member が書いた依頼は承認にはなりません。依頼者が人間だと判断できない場合は、ticket コメントで follow-up を提案してください。
-8. 情報が不足している場合の質問は、`issue comment --content-file <file>`、`pr comment --content-file <file>`、または `pr reply --content-file <file>` で GitHub 上に投稿してください。推測しないでください。
-9. 自律 workflow で policy 変更が必要だと判断した場合は、ticket コメントで提案し、新規 issue 作成や policy update はしないでください。
-10. 最後に必ず `guildbotics member task complete --person {person_id} --run-id {workflow_run_id} --ticket-url {ticket_url} --status done|asking|blocked --content-file <file>` を実行し、run summary は member capabilities の一時ファイル契約に従って渡してください。`--status done` は対象 PR の readiness を再検証し、base に対する遅れ、pending、failure、head の更新があれば拒否します。この run 内で解消できない blocker は `asking` または `blocked` で終了してください。
-11. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"PR 作成と GitHub コメント投稿を完了しました。"}` / `{"status":"asking","message":"GitHub に質問コメントを投稿しました。"}`
+3. repository を準備するには、次のコマンドをそのまま実行してください: `{prepare_command}`。checkout は member workspace 配下に作られるので、編集はその checkout 内で行ってください。pull request の作業では、このコマンドに `--pr-url` が含まれ、PR head ブランチが checkout されます。
+4. 作業種別 `issue`: member capabilities の標準作業手順に従い、公開前に検証し、plain git で stage してから `guildbotics member git publish` で publish してください。コード変更がある場合は `guildbotics member github pr create` で PR を作成または再利用してください。最終 push 後に `guildbotics member github pr checks` を実行し、`readiness` が `ready` になるまで完了扱いにしないでください。CI 成功だけでは不十分で、head が現在の base に遅れている場合や、確認した head SHA が変わった場合は未完了です。
+5. 作業種別 `issue`: PR を作成・再利用・更新した場合は、元 Issue に `guildbotics member github issue comment --content-file <file>` で PR URL・実施概要・確認結果を含む短い結果コメントを投稿してください。ただし、同じ run で既に同等のコメントを投稿済みの場合、または ticket 本文やユーザー指示がコメント不要を明示している場合は重複投稿しないでください。`task complete --content-file` は内部 summary であり GitHub 投稿の代替ではありません。`AgentResponse.message` も同様です。
+6. 作業種別 `pull_request_feedback`: これはあなた自身の PR で、まだ答えていない review thread・review summary・conversation comment があります。そのすべてに対応してください。指摘が妥当ならコードを修正して publish し、各 thread には `pr reply` で返信し（返信が不要なら `reaction add` で reaction）、conversation comment には `pr comment` で答えてください。最後に手順 4 と同じく `pr checks` で確認してください。
+7. 作業種別 `pull_request_review`: これは他の人の PR で、あなたはそのレビュワーです。レビューを依頼された、参加中の thread に返信があった、前回のレビュー後に新しいコミットが積まれた、のいずれかが理由です。`--include-diff` で diff を読み、checkout で変更を検証し（可能なら関連する検査を実行）、あなた宛ての thread に返信し、具体的な指摘に限って inline comment を追加し、最後に `pr comment` で結論（修正が必要な点、または妨げるものが無いこと）を 1 件投稿してください。この PR へ push してはいけません。自動の再レビューは 3 回で止まり、その旨は workflow が PR 上に告知します。
+8. PR diff に新規 inline 指摘を作成する場合は、`pr inspect --include-diff` の出力から選んだ `path`、`line`、`side`、必要に応じて `start-line` / `start-side` を指定して `guildbotics member github pr review-comment --content-file <file>` を実行してください。既存の PR review thread に返信する場合は、`pr inspect --include-comments` が返す `reply_target_id` を使って `guildbotics member github pr reply --content-file <file>` を実行してください。
+9. follow-up issue の作成は、ticket 本文またはコメントで人間がそれを求めている場合に限り `guildbotics member github issue create --human-approved` で行ってください。別 member が書いた依頼は承認にはなりません。依頼者が人間だと判断できない場合は、ticket コメントで follow-up を提案してください。
+10. 情報が不足している場合の質問は、`issue comment --content-file <file>`、`pr comment --content-file <file>`、または `pr reply --content-file <file>` で GitHub 上に投稿してください。推測しないでください。
+11. 自律 workflow で policy 変更が必要だと判断した場合は、ticket コメントで提案し、新規 issue 作成や policy update はしないでください。
+12. 最後に必ず `guildbotics member task complete --person {person_id} --run-id {workflow_run_id} --ticket-url {ticket_url} --status done|asking|blocked --content-file <file>` を実行し、run summary は member capabilities の一時ファイル契約に従って渡してください。`--status done` は、あなたが作成したか push した open PR の readiness を再検証し、base に対する遅れ、pending、failure、head の更新があれば拒否します。この run 内で解消できない blocker は `asking` または `blocked` で終了してください。
+13. 応答は AgentResponse の単一 JSON オブジェクトだけにしてください。例: `{"status":"done","message":"PR 作成と GitHub コメント投稿を完了しました。"}` / `{"status":"asking","message":"GitHub に質問コメントを投稿しました。"}`
 </instructions>

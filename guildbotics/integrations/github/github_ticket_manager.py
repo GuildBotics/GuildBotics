@@ -16,10 +16,21 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_name,
 )
+from guildbotics.integrations.github.pull_request_patrol import (
+    MAX_REVIEW_ROUNDS,
+    PULL_REQUEST_QUERY,
+    REVIEW_LIMIT,
+    REVIEW_LIMIT_REASON,
+    PullRequest,
+    parse_pull_request,
+    pull_request_work,
+)
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
+    render_workflow_status_comment,
     suppresses_ticket_selection,
+    workflow_status_comment_payload,
 )
 from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
@@ -614,18 +625,6 @@ class GitHubTicketManager(TicketManager):
     def _is_my_response(self, username: str) -> bool:
         return get_author_type(self.person, username) == Message.ASSISTANT
 
-    def _is_my_reaction(self, reaction: dict[str, Any]) -> bool:
-        user = reaction.get("user") or {}
-        login = str(user.get("login") or "").lower()
-        return bool(login and login == self._username_lower)
-
-    def _has_my_reaction(self, comment: dict[str, Any]) -> bool:
-        reactions = comment.get("reactions") or {}
-        for reaction in reactions.get("nodes") or []:
-            if self._is_my_reaction(reaction):
-                return True
-        return False
-
     def _text_mentions_me(self, text: str | None) -> bool:
         """
         Return True when the given text contains a mention of the current user.
@@ -754,134 +753,6 @@ class GitHubTicketManager(TicketManager):
         open_pulls = [pull for pull in pulls if pull.get("state") == "open"]
         candidates = open_pulls or pulls
         return max(candidates, key=lambda pull: str(pull.get("updated_at") or ""))
-
-    async def _has_unhandled_pull_request_review(self, pull: dict[str, Any]) -> bool:
-        review_threads = await self._get_pull_request_review_threads(pull)
-        for thread in review_threads:
-            if await self._is_unhandled_review_thread(thread):
-                return True
-        return False
-
-    async def _get_pull_request_review_threads(
-        self, pull: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        owner = pull["owner"]
-        repo = pull["repo"]
-        number = pull["number"]
-        query = """
-        query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 50, after: $after) {
-                nodes {
-                  isResolved
-                  comments(last: 1) {
-                    nodes {
-                      id
-                      body
-                      createdAt
-                      author { login }
-                    }
-                  }
-                }
-                pageInfo {
-                  endCursor
-                  hasNextPage
-                }
-              }
-            }
-          }
-        }
-        """
-
-        threads: list[dict[str, Any]] = []
-        after: str | None = None
-        while True:
-            data = await self._graphql(
-                query,
-                {
-                    "owner": owner,
-                    "repo": repo,
-                    "number": number,
-                    "after": after,
-                },
-            )
-
-            pull_request = (data.get("repository") or {}).get("pullRequest")
-            if not pull_request:
-                raise RuntimeError(
-                    f"Pull request review threads unavailable for {owner}/{repo}#{number}"
-                )
-            review_threads = pull_request["reviewThreads"]
-            threads.extend(review_threads.get("nodes") or [])
-            page_info = review_threads["pageInfo"]
-            if not page_info["hasNextPage"]:
-                return threads
-            after = page_info["endCursor"]
-
-    async def _get_comment_reactions(self, comment_id: str) -> list[dict[str, Any]]:
-        query = """
-        query($id: ID!, $after: String) {
-          node(id: $id) {
-            ... on PullRequestReviewComment {
-              reactions(first: 100, after: $after) {
-                nodes {
-                  content
-                  user { login }
-                }
-                pageInfo {
-                  endCursor
-                  hasNextPage
-                }
-              }
-            }
-          }
-        }
-        """
-
-        reactions: list[dict[str, Any]] = []
-        after: str | None = None
-        while True:
-            data = await self._graphql(query, {"id": comment_id, "after": after})
-            node = data.get("node")
-            if not node:
-                raise RuntimeError(
-                    f"Pull request review comment reactions unavailable for {comment_id}"
-                )
-            reaction_connection = node["reactions"]
-            reactions.extend(reaction_connection.get("nodes") or [])
-            page_info = reaction_connection["pageInfo"]
-            if not page_info["hasNextPage"]:
-                return reactions
-            after = page_info["endCursor"]
-
-    async def _comment_has_my_reaction(self, comment: dict[str, Any]) -> bool:
-        reactions = comment.get("reactions")
-        if reactions is not None:
-            return self._has_my_reaction(comment)
-        comment_id = str(comment.get("id") or "")
-        if not comment_id:
-            return False
-        return any(
-            self._is_my_reaction(r)
-            for r in await self._get_comment_reactions(comment_id)
-        )
-
-    async def _is_unhandled_review_thread(self, thread: dict[str, Any]) -> bool:
-        if thread.get("isResolved"):
-            return False
-
-        comments = (thread.get("comments") or {}).get("nodes") or []
-        if not comments:
-            return False
-
-        comments = sorted(comments, key=lambda c: c.get("createdAt") or "")
-        last_comment = comments[-1]
-        author = last_comment.get("author") or {}
-        login = str(author.get("login") or "")
-        if login and self._is_my_response(login):
-            return False
-        return not await self._comment_has_my_reaction(last_comment)
 
     def _latest_assigned_event_time(self, issue: dict[str, Any]) -> str:
         """Return when this member was last added to the issue's assignees.
@@ -1050,20 +921,13 @@ class GitHubTicketManager(TicketManager):
 
         pull = await self._select_related_pull_request(task, issue_number)
         if pull:
+            # A merged PR finishes the ticket; an open one is followed on the
+            # PR itself by the pull request patrol, never through the issue.
             if pull.get("state") == "merged":
                 await self.move_ticket(task, Task.DONE)
-                return None
-            if pull.get("state") != "open":
-                return None
-
-        if _latest_workflow_status_suppresses_selection(since_assignment):
             return None
 
-        if pull:
-            if await self._has_unhandled_pull_request_review(pull):
-                task.pull_request_url = str(pull["url"])
-                task.trigger_reason = "pull_request_review"
-                return task
+        if _latest_workflow_status_suppresses_selection(since_assignment):
             return None
 
         if since_assignment and not last_comment_is_mine:
@@ -1078,9 +942,16 @@ class GitHubTicketManager(TicketManager):
         """
         Retrieve a ticket that the person can work on.
 
+        Open pull requests the member wrote or reviews come first: they are
+        work in flight that someone is waiting on. Then the ready lane, then
+        the working lane.
+
         Returns:
             Task | None: The next available Task or None.
         """
+        pull_request = await self._select_pull_request_work()
+        if pull_request is not None:
+            return pull_request
 
         all_items = await self.get_all_tickets()
         tasks, task_metadata = self._build_project_tasks(all_items)
@@ -1093,6 +964,105 @@ class GitHubTicketManager(TicketManager):
             if selected:
                 return selected
         return None
+
+    # --------------------------------------------------------------------- #
+    #   Pull request patrol                                                 #
+    # --------------------------------------------------------------------- #
+
+    async def _search_pull_requests(self) -> list[dict[str, Any]]:
+        """Open PRs under the project owner that name this member.
+
+        Search is the one listing that needs no repository list and works for
+        both PAT and GitHub App logins (``<app>[bot]``). Three qualifiers cover
+        the two roles: written by, reviewed by, and review requested from the
+        member (the last never matches a GitHub App, which GitHub cannot
+        request a review from).
+        """
+        client = await self.login()
+        found: dict[str, dict[str, Any]] = {}
+        for qualifier in ("author", "reviewed-by", "review-requested"):
+            resp = await client.get(
+                "/search/issues",
+                params={
+                    "q": f"is:pr is:open user:{self.owner} {qualifier}:{self.username}",
+                    "per_page": 100,
+                    "sort": "updated",
+                    "order": "asc",
+                },
+            )
+            if resp.status_code >= HTTP_BAD_REQUEST:
+                raise RuntimeError(
+                    f"Pull request search failed ({resp.status_code}): {resp.text}"
+                )
+            for item in resp.json().get("items") or []:
+                found.setdefault(str(item.get("html_url") or ""), item)
+        return sorted(
+            found.values(), key=lambda item: str(item.get("updated_at") or "")
+        )
+
+    async def _load_pull_request(self, item: dict[str, Any]) -> PullRequest:
+        owner, _, repo = (
+            str(item.get("repository_url") or "")
+            .rpartition("/repos/")[2]
+            .partition("/")
+        )
+        data = await self._graphql(
+            PULL_REQUEST_QUERY,
+            {"owner": owner, "repo": repo, "number": int(item["number"])},
+        )
+        node = (data.get("repository") or {}).get("pullRequest")
+        if not node:
+            raise RuntimeError(f"Pull request unavailable: {item.get('html_url')}")
+        return parse_pull_request(node, repo)
+
+    async def _select_pull_request_work(self) -> Task | None:
+        """The oldest-updated open PR that asks something of this member."""
+        for item in await self._search_pull_requests():
+            pull_request = await self._load_pull_request(item)
+            work = pull_request_work(pull_request, self._username_lower)
+            if work is None:
+                continue
+            task = self._pull_request_task(pull_request, work)
+            if work == REVIEW_LIMIT:
+                await self._announce_review_limit(task)
+                continue
+            return task
+        return None
+
+    def _pull_request_task(
+        self, pull_request: PullRequest, trigger_reason: str
+    ) -> Task:
+        return Task(
+            id=pull_request.node_id,
+            number=pull_request.number,
+            url=pull_request.url,
+            title=pull_request.title,
+            description=pull_request.body,
+            status=Task.IN_PROGRESS,
+            created_at=_parse_timestamp(pull_request.created_at),
+            repository=pull_request.repository,
+            assignee=self.person.person_id,
+            pull_request_url=pull_request.url,
+            trigger_reason=trigger_reason,
+        )
+
+    async def _announce_review_limit(self, task: Task) -> None:
+        """Say once on the PR that automatic re-review has stopped."""
+        await self.add_comment_to_ticket(
+            task,
+            render_workflow_status_comment(
+                body=t(
+                    "integrations.github.github_ticket_manager.review_limit_reached",
+                    count=MAX_REVIEW_ROUNDS,
+                ),
+                payload=workflow_status_comment_payload(
+                    reason=REVIEW_LIMIT_REASON,
+                    person_id=self.person.person_id,
+                    run_id="",
+                    subject_id=task.pull_request_url or "",
+                ),
+            ),
+        )
 
     async def _get_project_item_id(self, issue_node_id: str) -> str:
 
@@ -1169,7 +1139,11 @@ class GitHubTicketManager(TicketManager):
         """
         client = await self.login()
         assert task.id, "Task ID must be set before commenting"
-        issue_number = await self._get_issue_number(task.id)
+        issue_number = (
+            task.number
+            if task.number is not None
+            else await self._get_issue_number(task.id)
+        )
         # Fetch issue to determine the author for mention
         issue_resp = await client.get(
             f"{self._get_issue_path(task.repository)}/{issue_number}"
@@ -1213,7 +1187,9 @@ class GitHubTicketManager(TicketManager):
             str: The ticket URL.
         """
         assert task.id, "Task ID must be set before getting URL"
-        if not task.repository:
+        if task.url:
+            url = task.url
+        elif not task.repository:
             url = self.url
         else:
             issue_id = await self._get_issue_number(task.id)
