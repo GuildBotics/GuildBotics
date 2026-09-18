@@ -6,8 +6,9 @@ tool's own structured interface.  Codex exposes them through the
 billing period, usage percent, and account gate through the ``_x.ai/billing``
 and ``_x.ai/auth/check_subscription`` extension requests of ``grok agent stdio``;
 Claude Code prints its usage panel headlessly (and without an LLM turn)
-through ``claude -p /usage``.  Tools without a structured usage interface
-simply have no snapshot.
+through ``claude -p /usage``; Antigravity prints model-group quotas the same
+way through ``agy -p /usage --output-format json``.  Tools without a
+structured usage interface simply have no snapshot.
 
 The window parsing is shared with the Codex adapter's pre-turn rate-limit
 check so both interpret the provider schema identically.
@@ -378,6 +379,104 @@ def _parse_claude_reset(raw: str, now: datetime | None = None) -> str:
     return reset.isoformat()
 
 
+_ANTIGRAVITY_WINDOW_MINUTES = {
+    "weekly": _CLAUDE_WEEK_MINUTES,
+    "5h": _CLAUDE_SESSION_MINUTES,
+}
+
+
+def parse_antigravity_usage(result: Any) -> CliAgentUsageSnapshot:
+    """Build a usage snapshot from ``agy -p /usage --output-format json``.
+
+    The measured 1.2.5 payload keeps quotas in
+    ``command.data.groups[].buckets[]``. Each bucket's ``remaining_fraction``
+    (1 remaining means unused) becomes
+    ``used_percent = (1 - remaining_fraction) * 100``. Missing, non-numeric,
+    non-finite, or out-of-range fractions are dropped rather than synthesized
+    as 0% or 100%. TUI, status-line, and tab-separated text are not parsed.
+    """
+    command = _as_dict(_as_dict(result).get("command"))
+    groups = _as_dict(command.get("data")).get("groups")
+    windows: list[CliAgentUsageWindow] = []
+    if isinstance(groups, list):
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            label = _first_text(group, ("name", "title", "label", "id"))
+            buckets = group.get("buckets")
+            if not isinstance(buckets, list):
+                continue
+            for bucket in buckets:
+                window = _parse_antigravity_bucket(bucket, label)
+                if window is not None:
+                    windows.append(window)
+    return CliAgentUsageSnapshot(
+        agent="antigravity",
+        windows=windows,
+        limit_reached=any(
+            window.used_percent >= LIMIT_REACHED_PERCENT for window in windows
+        ),
+        checked_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _parse_antigravity_bucket(raw: Any, label: str) -> CliAgentUsageWindow | None:
+    if not isinstance(raw, dict):
+        return None
+    window = raw.get("window")
+    if not isinstance(window, str) or not window:
+        return None
+    remaining = _unit_fraction(raw.get("remaining_fraction"))
+    if remaining is None:
+        return None
+    return CliAgentUsageWindow(
+        window=window,
+        used_percent=(1.0 - remaining) * 100.0,
+        resets_at=_parse_reset(raw.get("reset_time")),
+        window_minutes=_ANTIGRAVITY_WINDOW_MINUTES.get(window),
+        label=label,
+    )
+
+
+def _first_text(raw: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _unit_fraction(raw: Any) -> float | None:
+    """Return a finite fraction in ``[0, 1]``, else ``None``.
+
+    Booleans are excluded so ``True``/``False`` never become 100%/0%.
+    """
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0.0 or value > 1.0:
+        return None
+    return value
+
+
+def _antigravity_command_failure(payload: Any) -> str:
+    data = _as_dict(payload)
+    status = data.get("status")
+    error = data.get("error")
+    if isinstance(error, dict):
+        error = error.get("message") or error.get("type") or error
+    failed = (isinstance(status, str) and status and status != "SUCCESS") or (
+        isinstance(error, str) and error
+    )
+    if not failed:
+        return ""
+    detail = error if isinstance(error, str) and error else status
+    return f"Antigravity /usage failed: {detail}"
+
+
 async def _probe(
     tool: str, *command: str
 ) -> tuple[AgentEnvironment, EnvironmentProcess]:
@@ -484,7 +583,7 @@ async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
     tool cannot be started, does not answer in time, or reports no usage
     lines (e.g. API-key auth, where the plan panel does not exist).
     """
-    environment, process = await _probe(
+    stdout, _returncode = await _print_output(
         "claude",
         "claude",
         "-p",
@@ -493,15 +592,9 @@ async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
         "json",
         # The probe must not pile a resumable session onto disk per poll.
         "--no-session-persistence",
+        timeout=timeout,
+        label="Claude Code",
     )
-    try:
-        async with asyncio.timeout(timeout):
-            stdout, _ = await process.communicate()
-    except TimeoutError as exc:
-        raise CliAgentUsageError("Claude Code did not answer in time.") from exc
-    finally:
-        await process.kill()
-        await environment.close()
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
@@ -513,6 +606,55 @@ async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
     if not snapshot.windows:
         raise CliAgentUsageError("Claude Code reported no usage windows.")
     return snapshot
+
+
+async def read_antigravity_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
+    """Probe ``agy -p /usage --output-format json`` for account quotas.
+
+    The slash command is read-only: it starts no agent turn, spends no quota,
+    and leaves no conversation. Raises :class:`CliAgentUsageError` when the
+    tool cannot be started, exits non-zero, prints no structured JSON, fails
+    authentication, or reports no usable quota windows. Accounts that do not
+    expose quotas stay unavailable rather than synthesizing 0%.
+    """
+    stdout, returncode = await _print_output(
+        "antigravity",
+        "agy",
+        "-p",
+        "/usage",
+        "--output-format",
+        "json",
+        timeout=timeout,
+        label="Antigravity",
+    )
+    if returncode:
+        raise CliAgentUsageError(f"Antigravity /usage exited {returncode}.")
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise CliAgentUsageError("Antigravity printed no usage JSON.") from exc
+    failure = _antigravity_command_failure(payload)
+    if failure:
+        raise CliAgentUsageError(failure)
+    snapshot = parse_antigravity_usage(payload)
+    if not snapshot.windows:
+        raise CliAgentUsageError("Antigravity reported no usage windows.")
+    return snapshot
+
+
+async def _print_output(
+    tool: str, *command: str, timeout: float, label: str
+) -> tuple[bytes, int | None]:
+    environment, process = await _probe(tool, *command)
+    try:
+        async with asyncio.timeout(timeout):
+            stdout, _stderr = await process.communicate()
+    except TimeoutError as exc:
+        raise CliAgentUsageError(f"{label} did not answer in time.") from exc
+    finally:
+        await process.kill()
+        await environment.close()
+    return stdout, process.returncode
 
 
 async def _probe_request(
@@ -554,6 +696,7 @@ async def _probe_send(process: EnvironmentProcess, message: dict[str, Any]) -> N
 #: catalog name (:mod:`guildbotics.intelligences.cli_agents`).  Tools absent
 #: here have no snapshot and never appear in the usage response.
 CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]]] = {
+    "antigravity": read_antigravity_usage,
     "claude": read_claude_usage,
     "codex": read_codex_usage,
     "grok": read_grok_usage,

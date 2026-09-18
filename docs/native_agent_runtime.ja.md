@@ -479,3 +479,12 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 `thinking_tokens` / `cache_read_tokens` / `total_tokens`）を報告するため、共通のトークン項目へ
 正規化して扱います。一方でセッション文脈量の絶対値は報告しないため、文脈使用率による切り替えは
 作動せず、有効期間・turn数・トークン累計の上限だけが機能します。これはGrok Buildと同じ状況です。
+
+アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
+`agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.1
+を固定しており、構造化payloadは 1.2.5 で確認しています。`command.data.groups[].buckets[]` に
+モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
+既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。利用枠を
+提供しないアカウントや、そのJSONではない出力は「使用量情報なし」のままにし、TUI・status line・
+タブ区切り本文の解析や、0% / 100% の合成はしません。

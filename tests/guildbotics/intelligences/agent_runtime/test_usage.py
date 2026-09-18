@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,12 +12,20 @@ from guildbotics.intelligences.agent_runtime import usage as usage_module
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
+    parse_antigravity_usage,
     parse_claude_usage,
     parse_codex_rate_limits,
     parse_grok_billing,
+    read_antigravity_usage,
     read_claude_usage,
     read_codex_usage,
     read_grok_usage,
+)
+
+_ANTIGRAVITY_USAGE_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "antigravity_usage_1_2_5.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -392,6 +401,126 @@ def test_parse_claude_usage_tolerates_empty_and_malformed_input() -> None:
         assert not snapshot.limit_reached
 
 
+def test_parse_antigravity_usage_reads_measured_model_group_windows() -> None:
+    snapshot = parse_antigravity_usage(_ANTIGRAVITY_USAGE_FIXTURE)
+
+    assert snapshot.agent == "antigravity"
+    assert snapshot.limit_reached
+    assert [
+        (
+            window.window,
+            round(window.used_percent, 4),
+            window.window_minutes,
+            window.label,
+            window.resets_at,
+        )
+        for window in snapshot.windows
+    ] == [
+        (
+            "weekly",
+            6.22,
+            10_080,
+            "Gemini models",
+            "2026-09-25T07:50:32+00:00",
+        ),
+        (
+            "5h",
+            37.5,
+            300,
+            "Gemini models",
+            "2026-09-18T15:07:00+00:00",
+        ),
+        (
+            "weekly",
+            0.0,
+            10_080,
+            "Claude and GPT models",
+            "2026-09-25T07:50:32+00:00",
+        ),
+        (
+            "5h",
+            100.0,
+            300,
+            "Claude and GPT models",
+            "2026-09-18T15:07:00+00:00",
+        ),
+    ]
+    assert snapshot.checked_at
+
+
+@pytest.mark.parametrize("remaining", [0, 0.0, 1, 1.0, 0.5])
+def test_parse_antigravity_usage_accepts_remaining_fraction_boundaries(
+    remaining: float,
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload({"remaining_fraction": remaining})
+    )
+
+    window = snapshot.windows[0]
+    assert window.used_percent == pytest.approx((1.0 - remaining) * 100.0)
+    assert snapshot.limit_reached is (remaining == 0)
+
+
+@pytest.mark.parametrize(
+    "remaining",
+    [None, "bad", True, False, -0.1, 1.1, float("nan"), float("inf"), float("-inf")],
+)
+def test_parse_antigravity_usage_drops_unusable_remaining_fraction(
+    remaining: Any,
+) -> None:
+    snapshot = parse_antigravity_usage(
+        _antigravity_payload({"remaining_fraction": remaining})
+    )
+
+    assert snapshot.windows == []
+    assert not snapshot.limit_reached
+
+
+def test_parse_antigravity_usage_keeps_same_period_windows_under_group_labels() -> None:
+    snapshot = parse_antigravity_usage(_ANTIGRAVITY_USAGE_FIXTURE)
+    weekly = [window for window in snapshot.windows if window.window == "weekly"]
+    five_hour = [window for window in snapshot.windows if window.window == "5h"]
+
+    assert [window.label for window in weekly] == [
+        "Gemini models",
+        "Claude and GPT models",
+    ]
+    assert [window.label for window in five_hour] == [
+        "Gemini models",
+        "Claude and GPT models",
+    ]
+
+
+def test_parse_antigravity_usage_ignores_text_and_malformed_payloads() -> None:
+    for raw in (
+        "",
+        "Gemini models\tweekly\t0.9\t2026-09-25T07:50:32Z",
+        "remaining_fraction=0.5",
+        None,
+        {"command": {"data": {"groups": "bad"}}},
+        {"groups": [{"name": "Gemini models", "buckets": []}]},
+    ):
+        snapshot = parse_antigravity_usage(raw)
+        assert snapshot.windows == []
+        assert not snapshot.limit_reached
+
+
+def _antigravity_payload(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "SUCCESS",
+        "command": {
+            "data": {
+                "groups": [
+                    {
+                        "name": "Gemini models",
+                        "buckets": [{"window": "weekly", **bucket}],
+                    }
+                ]
+            }
+        },
+    }
+
+
 class _Writer:
     def __init__(self, process: _Process) -> None:
         self.process = process
@@ -674,8 +803,74 @@ async def test_read_claude_usage_raises_on_error_or_empty_panel(
         assert fake_environment.started[-1].closed
 
 
+class _AntigravityProcess:
+    """Fake ``agy -p /usage`` returning one JSON document on stdout."""
+
+    def __init__(self, payload: Any, returncode: int = 0):
+        self.payload = payload
+        self.returncode: int | None = None
+        self._exit = returncode
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        self.returncode = self._exit
+        raw = (
+            self.payload
+            if isinstance(self.payload, bytes)
+            else json.dumps(self.payload).encode()
+        )
+        return raw, b""
+
+
+@pytest.mark.asyncio
+async def test_read_antigravity_usage_probes_print_mode(
+    monkeypatch, fake_environment
+) -> None:
+    process = _AntigravityProcess(_ANTIGRAVITY_USAGE_FIXTURE)
+
+    async def create_process(*args, **_kwargs):
+        assert args == ("agy", "-p", "/usage", "--output-format", "json")
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    snapshot = await read_antigravity_usage()
+
+    assert snapshot.agent == "antigravity"
+    assert snapshot.windows[0].label == "Gemini models"
+    assert snapshot.windows[-1].used_percent == 100.0
+    assert snapshot.limit_reached
+    assert fake_environment.started[-1].closed
+    assert fake_environment.started[-1].tool == "antigravity"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload,returncode",
+    [
+        ({"status": "ERROR", "error": "UNAUTHENTICATED"}, 0),
+        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 1),
+        (b"agy exploded", 0),
+        ({"status": "SUCCESS", "command": {"data": {"groups": []}}}, 0),
+    ],
+)
+async def test_read_antigravity_usage_raises_on_auth_exit_json_or_empty(
+    monkeypatch, fake_environment, payload, returncode
+) -> None:
+    process = _AntigravityProcess(payload, returncode=returncode)
+
+    async def create_process(*_args, **_kwargs):
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    with pytest.raises(CliAgentUsageError):
+        await read_antigravity_usage()
+    assert fake_environment.started[-1].closed
+
+
 def test_usage_reader_registry_covers_supported_tools() -> None:
     assert {
+        "antigravity": read_antigravity_usage,
         "claude": read_claude_usage,
         "codex": read_codex_usage,
         "grok": read_grok_usage,

@@ -912,6 +912,50 @@ describe("ActivityHistoryPage", () => {
     );
   });
 
+  it("distinguishes Antigravity model-group windows of the same duration", async () => {
+    mockMemberUsage("antigravity", {
+      windows: [
+        {
+          window: "5h",
+          used_percent: 37.5,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+          label: "Gemini models",
+        },
+        {
+          window: "weekly",
+          used_percent: 6,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+          label: "Gemini models",
+        },
+        {
+          window: "5h",
+          used_percent: 100,
+          resets_at: "2026-07-01T14:00:00Z",
+          window_minutes: 300,
+          label: "Claude and GPT models",
+        },
+        {
+          window: "weekly",
+          used_percent: 0,
+          resets_at: "2026-07-04T09:00:00Z",
+          window_minutes: 10080,
+          label: "Claude and GPT models",
+        },
+      ],
+      limit_reached: true,
+    });
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h Gemini models 38%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w Gemini models 6%" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("meter", { name: "5h Claude and GPT models 100%" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "1w Claude and GPT models 0%" })).toBeInTheDocument();
+  });
+
   const usageDetail = (used: number, elapsed: number, resetsAt: string) => {
     const headroom = elapsed - used;
     return [

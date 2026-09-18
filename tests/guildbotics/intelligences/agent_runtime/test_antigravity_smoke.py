@@ -181,3 +181,46 @@ async def test_real_antigravity_read_only_turn_is_recorded_as_unenforced(
         assert result.output.strip() == "READONLY", result.output
     finally:
         await adapter.close()
+
+
+async def test_real_antigravity_usage_probe_is_read_only(tmp_path) -> None:
+    """`agy -p /usage` must not start a turn, spend quota, or save a conversation."""
+    import asyncio
+
+    from guildbotics.intelligences.agent_runtime.usage import (
+        parse_antigravity_usage,
+        read_antigravity_usage,
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        "agy",
+        "-p",
+        "/usage",
+        "--output-format",
+        "json",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=tmp_path,
+    )
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    print("usage probe stderr:", stderr.decode(errors="replace")[:500])
+    payload = json.loads(stdout)
+    print(
+        json.dumps(
+            {
+                "conversation_id": payload.get("conversation_id"),
+                "num_turns": payload.get("num_turns"),
+                "usage": payload.get("usage"),
+                "status": payload.get("status"),
+            },
+            ensure_ascii=False,
+        )
+    )
+    assert payload.get("conversation_id") in ("", None)
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    assert (usage.get("total_tokens") or 0) == 0
+    assert (payload.get("num_turns") or 0) == 0
+    assert parse_antigravity_usage(payload).windows
+    snapshot = await read_antigravity_usage()
+    assert snapshot.agent == "antigravity"
+    assert snapshot.windows
