@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PureWindowsPath
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -17,6 +17,25 @@ CLI_AGENT_ROOT = "cli_agents"
 #: ``cli_agents/<tool>/<slot>.yml``
 _CLI_AGENT_PATH_PARTS = 3
 _CLI_AGENT_TOOL_INDEX = 1
+
+
+def _names_a_place_inside(value: str) -> bool:
+    """Whether ``value`` stays inside the directory it is relative to.
+
+    The catalog spells these the way the guest does, in POSIX, but the very
+    same strings are joined onto host paths, where Windows reads ``\\`` as a
+    separator and ``C:`` as a drive. So a name is checked the stricter of the
+    two ways: a backslash, a drive, a leading separator or a ``..`` is not a
+    name inside the directory, it is a way out of it.
+    """
+    name = value.rstrip("/")
+    path = PureWindowsPath(name)
+    return (
+        bool(path.parts)
+        and "\\" not in name
+        and not path.anchor  # A drive, or a leading separator, on either OS.
+        and ".." not in path.parts
+    )
 
 
 class CliAgentProvision(BaseModel):
@@ -94,10 +113,23 @@ class CliAgentProvision(BaseModel):
         allowlist say nothing.
         """
         for entry in persisted:
-            parts = PurePosixPath(entry.rstrip("/")).parts
-            if not parts or ".." in parts or PurePosixPath(entry).is_absolute():
+            if not _names_a_place_inside(entry):
                 raise ValueError(f"'{entry}' is not an entry under the state root")
         return persisted
+
+    @field_validator("state_root", "auth")
+    @classmethod
+    def _stays_where_it_belongs(cls, value: str) -> str:
+        """The state root is a place under the home, and ``auth`` under it.
+
+        Both are joined onto this device's store as well as onto the guest's
+        home, so the same rule the allowlist follows holds for them: an empty
+        value is a tool that is not provisioned yet, and anything else names
+        a place inside.
+        """
+        if value and not _names_a_place_inside(value):
+            raise ValueError(f"'{value}' is not a place inside the directory above it")
+        return value
 
     @property
     def provisioned(self) -> bool:

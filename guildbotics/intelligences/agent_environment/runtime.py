@@ -391,9 +391,14 @@ class AgentEnvironment:
                 volumes=_volumes(spec),
                 network=_network(spec),
             )
-        except Exception as exc:
+        except BaseException as exc:
+            # Cancellation is not an ``Exception``: a turn the service
+            # cancelled while its microVM was starting must hand its state
+            # back too, and it is not a boot failure to report.
             if on_close is not None:
                 on_close()
+            if not isinstance(exc, Exception):
+                raise
             raise AgentEnvironmentError(
                 _start_failure(
                     build=False,
@@ -405,7 +410,7 @@ class AgentEnvironment:
         environment = cls(sandbox, spec, on_close)
         try:
             await _ipv4_only(sandbox)
-        except AgentEnvironmentError:
+        except BaseException:
             await environment.close()
             raise
         return environment
@@ -445,7 +450,12 @@ class AgentEnvironment:
         return EnvironmentProcess(handle, limit=limit)
 
     async def close(self) -> None:
-        """Stop the microVM; every process inside it ends with it."""
+        """Stop the microVM; every process inside it ends with it.
+
+        What the caller has to do once the microVM is gone runs even when
+        the stop itself is cancelled, because the turn's state is on this
+        device either way.
+        """
         if self._closed:
             return
         self._closed = True

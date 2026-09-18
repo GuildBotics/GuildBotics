@@ -473,6 +473,55 @@ async def test_a_boot_that_fails_still_hands_the_turn_s_state_back(
 
 
 @pytest.mark.asyncio
+async def test_a_start_cancelled_while_the_microvm_boots_hands_the_turn_s_state_back(
+    sandbox: type[_Sandbox], monkeypatch
+) -> None:
+    """A cancelled turn is not a boot failure, and cancellation is not an
+    `Exception`: the turn's directory holds its credentials either way."""
+    gone: list[str] = []
+
+    async def cancelled(name: str, **kwargs: Any) -> _Sandbox:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(_Sandbox, "create", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await AgentEnvironment.start(
+            _spec(),
+            snapshot="s",
+            on_close=lambda: gone.append("released"),
+            **_RESOURCES,
+        )
+
+    assert gone == ["released"]
+
+
+@pytest.mark.asyncio
+async def test_a_start_cancelled_after_the_microvm_boots_stops_it_and_hands_back(
+    sandbox: type[_Sandbox], monkeypatch
+) -> None:
+    """The microVM exists by the time IPv6 is switched off, so a cancellation
+    there has to stop it as well as hand the turn's state back."""
+    gone: list[str] = []
+
+    async def cancelled(self: _Sandbox, cmd: str, args: list[str], **kwargs: Any):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(_Sandbox, "exec_stream", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await AgentEnvironment.start(
+            _spec(),
+            snapshot="s",
+            on_close=lambda: gone.append("released"),
+            **_RESOURCES,
+        )
+
+    assert sandbox.instance is not None and sandbox.instance.stopped
+    assert gone == ["released"]
+
+
+@pytest.mark.asyncio
 async def test_a_sandbox_that_cannot_switch_off_ipv6_hands_the_turn_s_state_back(
     sandbox: type[_Sandbox],
 ) -> None:
