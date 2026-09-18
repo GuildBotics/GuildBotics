@@ -138,6 +138,13 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Comment on a PR conversation.",
             ),
             (
+                "guildbotics member github pr review --person <person> --url <pr_url> "
+                "--event approve|request-changes|comment --content-file <file>",
+                "Submit a review verdict on the PR head as a GitHub review; a "
+                "conversation comment does not consume a review request or make "
+                "the member a reviewer.",
+            ),
+            (
                 "guildbotics member github pr review-comment --person <person> --url <pr_url> "
                 "--path <file> --line <n> [--side LEFT|RIGHT] [--start-line <n> --start-side LEFT|RIGHT] "
                 "--content-file <file>",

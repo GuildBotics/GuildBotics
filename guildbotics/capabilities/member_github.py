@@ -55,6 +55,11 @@ _PRIMARY_FAILED_CONCLUSIONS = {
     "timed_out",
 }
 _SUCCESS_CONCLUSIONS = {"neutral", "skipped", "success"}
+_REVIEW_EVENTS = {
+    "approve": "APPROVE",
+    "request-changes": "REQUEST_CHANGES",
+    "comment": "COMMENT",
+}
 
 
 class MemberCapabilityError(RuntimeError):
@@ -877,6 +882,39 @@ class MemberGitHubCapabilityService:
             body,
         )
         return _comment_result(comment)
+
+    async def pr_review(self, url: str, body: str, event: str) -> dict[str, Any]:
+        """Submit a review verdict on the PR head as a GitHub review.
+
+        A review, unlike a conversation comment, is what GitHub counts: it
+        consumes a pending review request and lists the member under
+        ``reviewed-by``, so the patrol can follow the PR from then on.
+        """
+        if event not in _REVIEW_EVENTS:
+            raise MemberCapabilityError(
+                "Review event must be one of " + ", ".join(sorted(_REVIEW_EVENTS)) + "."
+            )
+        resource = self.parse_url(url, expected_kind="pull")
+        pr = await self._pull_request(resource)
+        head_sha = self._pull_request_head_sha(resource, pr)
+        client = await self._get_client()
+        resp = await client.post(
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews",
+            json={
+                "body": body.rstrip(),
+                "event": _REVIEW_EVENTS[event],
+                "commit_id": head_sha,
+            },
+        )
+        _raise_for_status(resp)
+        review = resp.json()
+        return {
+            "review_id": review.get("id"),
+            "html_url": review.get("html_url"),
+            "state": review.get("state"),
+            "commit_id": head_sha,
+            "submitted_at": review.get("submitted_at"),
+        }
 
     async def pr_review_comment(
         self,

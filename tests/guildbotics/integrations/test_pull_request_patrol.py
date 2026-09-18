@@ -75,7 +75,10 @@ def _comment(author: str, body: str, at: str) -> dict[str, Any]:
 
 
 def _thread(
-    *authors: str, resolved: bool = False, reactors: list[str] | None = None
+    *authors: str,
+    resolved: bool = False,
+    reactors: list[str] | None = None,
+    at: str = "2026-01-02T00:00:00Z",
 ) -> dict[str, Any]:
     return {
         "isResolved": resolved,
@@ -84,6 +87,7 @@ def _thread(
             "nodes": [
                 {
                     "author": {"login": authors[-1]},
+                    "createdAt": at,
                     "reactions": {
                         "nodes": [{"user": {"login": r}} for r in reactors or []]
                     },
@@ -139,6 +143,7 @@ def test_parse_lower_cases_logins_and_orders_by_time():
     thread = pr.threads[0]
     assert thread.participants == {"bob", ME}
     assert thread.last_author == ME
+    assert thread.last_created_at == "2026-01-02T00:00:00Z"
     assert thread.last_reactors == {"bob"}
 
 
@@ -251,13 +256,51 @@ def test_own_pr_status_notices_are_neither_feedback_nor_replies():
     assert _work(reviewer_notice) is None
 
 
-def test_failed_notice_as_my_latest_comment_suppresses_everything():
+def test_failed_notice_as_my_latest_comment_suppresses_earlier_feedback():
     node = _node(
-        reviewThreads={"nodes": [_thread("reviewer")]},
+        reviewThreads={"nodes": [_thread("reviewer", at="2026-01-02T00:00:00Z")]},
         comments={"nodes": [_comment(ME, _notice("failed"), "2026-01-03T00:00:00Z")]},
     )
 
     assert _work(node) is None
+
+
+@pytest.mark.parametrize(
+    "later_activity",
+    [
+        {"reviewThreads": {"nodes": [_thread("reviewer", at="2026-01-04T00:00:00Z")]}},
+        {
+            "reviews": {
+                "nodes": [
+                    _review(
+                        "reviewer",
+                        state="CHANGES_REQUESTED",
+                        body="Fix",
+                        at="2026-01-04T00:00:00Z",
+                    )
+                ]
+            }
+        },
+    ],
+    ids=["thread_reply", "review"],
+)
+def test_activity_after_a_failure_notice_lifts_the_suppression(later_activity):
+    """A failure puts the PR on hold until someone acts on it, in any place."""
+    node = _node(
+        comments={"nodes": [_comment(ME, _notice("failed"), "2026-01-03T00:00:00Z")]},
+        **later_activity,
+    )
+
+    assert _work(node) == FEEDBACK
+
+
+def test_thread_reply_after_a_failure_notice_restarts_review_work():
+    node = _theirs(
+        reviewThreads={"nodes": [_thread(ME, "other", at="2026-01-04T00:00:00Z")]},
+        comments={"nodes": [_comment(ME, _notice("failed"), "2026-01-03T00:00:00Z")]},
+    )
+
+    assert _work(node) == REVIEW
 
 
 # --- reviewer role ------------------------------------------------------- #
@@ -275,6 +318,14 @@ def test_requested_review_is_review_work():
     node = _theirs(reviewRequests={"nodes": [{"requestedReviewer": {"login": ME}}]})
 
     assert _work(node) == REVIEW
+
+
+def test_submitted_review_consumes_the_request_and_settles_the_pr():
+    """GitHub drops the request once the member submits a review (``pr review``);
+    the snapshot then shows only that review at the current head."""
+    node = _theirs(reviews={"nodes": [_review(ME, commit="head-2", body="LGTM")]})
+
+    assert _work(node) is None
 
 
 def test_reply_in_my_thread_is_review_work():

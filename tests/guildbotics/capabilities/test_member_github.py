@@ -344,6 +344,57 @@ async def test_pr_reply_uses_pull_replies_endpoint():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "github_event"),
+    [
+        ("approve", "APPROVE"),
+        ("request-changes", "REQUEST_CHANGES"),
+        ("comment", "COMMENT"),
+    ],
+)
+async def test_pr_review_submits_a_review_on_the_current_head(event, github_event):
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "head": {"sha": "abc123", "ref": "feature", "repo": {"full_name": "owner/repo"}}
+    }
+    fake.post_payloads["/repos/owner/repo/pulls/7/reviews"] = {
+        "id": 555,
+        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+        "submitted_at": "2026-01-01T00:00:00Z",
+    }
+    service._client = fake
+
+    result = await service.pr_review(
+        "https://github.com/owner/repo/pull/7", "Looks good.\n", event
+    )
+
+    assert result == {
+        "review_id": 555,
+        "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-555",
+        "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+        "commit_id": "abc123",
+        "submitted_at": "2026-01-01T00:00:00Z",
+    }
+    assert fake.posts == [
+        (
+            "/repos/owner/repo/pulls/7/reviews",
+            {"body": "Looks good.", "event": github_event, "commit_id": "abc123"},
+            None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pr_review_rejects_unknown_event():
+    service = _service()
+
+    with pytest.raises(MemberCapabilityError, match="Review event must be one of"):
+        await service.pr_review("https://github.com/owner/repo/pull/7", "x", "lgtm")
+
+
+@pytest.mark.asyncio
 async def test_pr_review_comment_posts_diff_coordinates():
     service = _service()
     fake = FakeClient()

@@ -72,6 +72,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
           latest: comments(last: 1) {
             nodes {
               author { login }
+              createdAt
               reactions(first: 100) { nodes { user { login } } }
             }
           }
@@ -109,6 +110,7 @@ class ReviewThread:
     resolved: bool
     participants: frozenset[str]
     last_author: str
+    last_created_at: str
     last_reactors: frozenset[str]
 
 
@@ -172,6 +174,7 @@ def parse_pull_request(node: dict, repository: str) -> PullRequest:
                     for comment in _nodes(thread, "participants")
                 ),
                 last_author=_login(last.get("author")),
+                last_created_at=str(last.get("createdAt") or ""),
                 last_reactors=frozenset(
                     _login(reaction.get("user"))
                     for reaction in _nodes(last, "reactions")
@@ -256,15 +259,33 @@ def _has_unanswered_feedback(pr: PullRequest, me: str) -> bool:
     return bool(feedback) and max(feedback) > max(replies, default="")
 
 
+def _latest_activity_by_others(pr: PullRequest, me: str) -> str:
+    """When someone other than the member last did anything on the PR."""
+    return max(
+        [comment.created_at for comment in pr.comments if comment.author != me]
+        + [review.submitted_at for review in pr.reviews if review.author != me]
+        + [thread.last_created_at for thread in pr.threads if thread.last_author != me],
+        default="",
+    )
+
+
 def _is_suppressed(pr: PullRequest, me: str) -> bool:
-    """The member's latest comment is a failure or rate-limit notice."""
+    """The member's latest comment is a failure or rate-limit notice that
+    nobody has acted on since.
+
+    Any later activity by someone else (a conversation comment, a review, a
+    reply in a thread) lifts the notice, so a thread reply can restart work
+    that a failure put on hold.
+    """
     if not pr.comments:
         return False
     latest = pr.comments[-1]
     if latest.author != me:
         return False
     status = parse_workflow_status_comment(latest.body)
-    return status is not None and suppresses_ticket_selection(status)
+    if status is None or not suppresses_ticket_selection(status):
+        return False
+    return _latest_activity_by_others(pr, me) <= latest.created_at
 
 
 def review_rounds(pr: PullRequest, me: str) -> set[str]:

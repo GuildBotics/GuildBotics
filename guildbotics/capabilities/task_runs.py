@@ -83,6 +83,7 @@ class RunStore:
     TICKET_WRITE_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
+        "pr_review",
         "pr_review_comment",
         "pr_reply",
         "reaction_add",
@@ -94,6 +95,7 @@ class RunStore:
     TICKET_COMMENT_EVIDENCE_TYPES: ClassVar[set[str]] = {
         "issue_comment",
         "pr_comment",
+        "pr_review",
         "pr_review_comment",
         "pr_reply",
     }
