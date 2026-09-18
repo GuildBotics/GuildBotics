@@ -434,6 +434,62 @@ async def test_a_runtime_refusal_becomes_a_boundary_error(
         await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
 
 
+@pytest.mark.asyncio
+async def test_what_the_caller_has_to_do_once_the_microvm_is_gone_runs_exactly_once(
+    sandbox: type[_Sandbox],
+) -> None:
+    """The provider's persisted state is taken out of a turn's directory when
+    the microVM is gone, however the turn ended, and taken out once."""
+    gone: list[str] = []
+
+    boundary = await AgentEnvironment.start(
+        _spec(), snapshot="s", on_close=lambda: gone.append("released"), **_RESOURCES
+    )
+    assert gone == []
+
+    await boundary.close()
+    await boundary.close()
+
+    assert gone == ["released"]
+
+
+@pytest.mark.asyncio
+async def test_a_boot_that_fails_still_hands_the_turn_s_state_back(
+    sandbox: type[_Sandbox], monkeypatch
+) -> None:
+    monkeypatch.setattr(runtime.secrets, "token_hex", lambda n: "x")
+    monkeypatch.setattr(runtime, "_NAME_PREFIX", "fail-")
+    gone: list[str] = []
+
+    with pytest.raises(AgentEnvironmentError):
+        await AgentEnvironment.start(
+            _spec(),
+            snapshot="s",
+            on_close=lambda: gone.append("released"),
+            **_RESOURCES,
+        )
+
+    assert gone == ["released"]
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_switch_off_ipv6_hands_the_turn_s_state_back(
+    sandbox: type[_Sandbox],
+) -> None:
+    sandbox.ipv4_only_code = 2
+    gone: list[str] = []
+
+    with pytest.raises(AgentEnvironmentError):
+        await AgentEnvironment.start(
+            _spec(),
+            snapshot="s",
+            on_close=lambda: gone.append("released"),
+            **_RESOURCES,
+        )
+
+    assert gone == ["released"]
+
+
 # --- run ------------------------------------------------------------------------
 
 

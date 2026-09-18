@@ -236,6 +236,14 @@ GuildBoticsによる認証probeやトークン更新は行いません。
 認証情報をrenameで置き換えるGrok Buildは、認証情報を専用ディレクトリ
 （`~/.grok/auth/auth.json`、`GROK_AUTH_PATH`で指定）に置き、ディレクトリごとbindします。
 
+GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き換え、置き場所は
+`COPILOT_HOME`以外に指定できないため、そこへファイルをbindするとCLIが無言で終了します。
+そのためCopilotのstate rootはturn専用のディレクトリとし、storeからは認証情報とセッションだけを
+複製して渡します。turnの終わりに書き戻すのもこの2つだけで、同じrootにあるinstructions・hooks・
+MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残したものはディレクトリごと
+破棄します。turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
+実行中のturnのものではありえない古いディレクトリを削除します。
+
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか
 プロセスへ届かず、後述のとおりAI CLIツールの環境からは認証情報名の変数を取り除くためです。

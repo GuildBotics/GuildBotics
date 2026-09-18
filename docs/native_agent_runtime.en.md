@@ -297,6 +297,16 @@ another file over it fails. Grok Build renames its credentials into place, so th
 live in a directory of their own (`~/.grok/auth/auth.json`, set through
 `GROK_AUTH_PATH`) that is bound whole.
 
+GitHub Copilot renames `config.json` into place at its state root at every start and
+can be pointed nowhere but `COPILOT_HOME`, so a file bound there makes the CLI exit
+at once without a word. Its root is therefore a directory of the turn's own, filled
+from the store with the credentials and the sessions and with nothing else; when the
+turn ends only those two go back, and everything else the turn left there -- the
+instructions, hooks, MCP servers, extensions, plugins, permissions and logs Copilot
+reads from the same root -- is discarded with the directory. A turn that is killed
+leaves its directory behind, and the next turn of that provider removes what is too
+old to belong to a live one.
+
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the
 process through the environment, and credential-named variables are stripped from the AI

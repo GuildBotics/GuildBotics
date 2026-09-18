@@ -348,9 +348,15 @@ class EnvironmentProcess:
 class AgentEnvironment:
     """One turn's microVM."""
 
-    def __init__(self, sandbox: Any, spec: AgentEnvironmentSpec) -> None:
+    def __init__(
+        self,
+        sandbox: Any,
+        spec: AgentEnvironmentSpec,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
         self._sandbox = sandbox
         self._closed = False
+        self._on_close = on_close
         self.spec = spec
 
     @classmethod
@@ -361,11 +367,15 @@ class AgentEnvironment:
         snapshot: str,
         memory_mib: int,
         cpus: int,
+        on_close: Callable[[], None] | None = None,
     ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
         The sandbox is ephemeral: stopping it removes it, so nothing of a
-        turn outlives the turn.
+        turn outlives the turn. ``on_close`` is what the caller has to do
+        once the microVM is gone -- take the provider's persisted state out
+        of the turn's directory -- and it runs exactly once, whether the boot
+        failed, the turn ended, or the turn was cancelled.
         """
         import microsandbox
 
@@ -382,6 +392,8 @@ class AgentEnvironment:
                 network=_network(spec),
             )
         except Exception as exc:
+            if on_close is not None:
+                on_close()
             raise AgentEnvironmentError(
                 _start_failure(
                     build=False,
@@ -390,7 +402,7 @@ class AgentEnvironment:
                     cpus=cpus,
                 )
             ) from exc
-        environment = cls(sandbox, spec)
+        environment = cls(sandbox, spec, on_close)
         try:
             await _ipv4_only(sandbox)
         except AgentEnvironmentError:
@@ -442,6 +454,9 @@ class AgentEnvironment:
         except Exception:
             with suppress(Exception):
                 await self._sandbox.destroy(force=True)
+        finally:
+            if self._on_close is not None:
+                self._on_close()
 
 
 @dataclass(frozen=True, slots=True)

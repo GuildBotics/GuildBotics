@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
@@ -43,9 +43,17 @@ class CliAgentProvision(BaseModel):
     file: the tool may rewrite it in place, but replacing it by renaming
     another file over it fails (``EBUSY``) and the refresh is lost. A tool that
     renames its credentials into place keeps them in a persisted directory of
-    their own instead, where ``auth_env`` points it -- or, when it renames
-    them into the state root itself and can be pointed nowhere else, the
-    root is that directory (``./``) and everything under it persists.
+    their own instead, where ``auth_env`` points it.
+
+    ``writable_root`` is for the tool that can be pointed nowhere else and
+    renames a file into the state root itself (Copilot's ``config.json``): a
+    file bound there makes it fail, and binding the root would make the whole
+    root -- the tool's instructions, hooks, MCP servers, plugins, permissions
+    -- outlive the turn. Such a tool gets a directory of its own for the turn,
+    filled with the ``persisted`` entries and nothing else; when the turn ends
+    only those entries go back into the store. ``persisted`` stays the
+    allowlist either way, so what a turn leaves anywhere else under the root
+    is gone with the turn.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -63,12 +71,33 @@ class CliAgentProvision(BaseModel):
     #: credentials do not stay at their default place under the state root.
     auth_env: str = ""
     persisted: tuple[str, ...] = ()
+    #: Whether the state root itself must be a writable directory of the
+    #: turn's own, because the tool renames files into it.
+    writable_root: bool = False
     #: The login command, run interactively inside the environment.
     login: tuple[str, ...] = ()
     #: The provider's own domains, which every turn may reach whatever its
     #: network mode: the tool is nothing without its API. ``*.example.com``
     #: is a suffix. GuildBotics' list, not the user's.
     api_domains: tuple[str, ...] = ()
+
+    @field_validator("persisted")
+    @classmethod
+    def _entries_stay_under_the_root(
+        cls, persisted: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Every persisted entry names something strictly under the state root.
+
+        The root itself is never one of them. A tool whose root must be
+        writable says so with ``writable_root`` and still names what of it is
+        kept; an entry that is the root, or climbs out of it, would make that
+        allowlist say nothing.
+        """
+        for entry in persisted:
+            parts = PurePosixPath(entry.rstrip("/")).parts
+            if not parts or ".." in parts or PurePosixPath(entry).is_absolute():
+                raise ValueError(f"'{entry}' is not an entry under the state root")
+        return persisted
 
     @property
     def provisioned(self) -> bool:
@@ -193,14 +222,18 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # environment -- the login keeps its token in `config.json` at the
         # state root, which Copilot rewrites by renaming a new file over it at
         # every start (a file bound there makes the CLI exit at once, without
-        # a word). COPILOT_HOME is the only place it can be pointed at, so
-        # the whole root is the persisted directory.
+        # a word). COPILOT_HOME is the only place it can be pointed at, so the
+        # root is the turn's own writable directory and the credentials and
+        # the sessions are what is kept of it. The rest of the root is
+        # Copilot's instructions, hooks, MCP servers, extensions, plugins,
+        # permissions and logs, and stays the turn's.
         provision=CliAgentProvision(
             package="@github/copilot@1.0.86",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
             auth="config.json",  # holds `authTokens` beside the login names
-            persisted=("./",),
+            persisted=("config.json", "session-state/"),
+            writable_root=True,
             login=("copilot", "login", "--device-code"),
             api_domains=(
                 "github.com",

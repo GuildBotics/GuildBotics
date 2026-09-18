@@ -2,10 +2,12 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
+    CliAgentProvision,
     cli_agent_default_path,
     cli_agent_executable,
     cli_agent_name_from_path,
@@ -237,9 +239,9 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
-        # Persisted itself, or inside a persisted directory (`./` is the root).
+        # Persisted itself, or inside a persisted directory.
         assert provision.auth in provision.persisted or any(
-            entry.endswith("/") and provision.auth.startswith(entry.removeprefix("./"))
+            entry.endswith("/") and provision.auth.startswith(entry)
             for entry in provision.persisted
         ), agent.name
         expected = (
@@ -250,6 +252,16 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         if provision.auth_env:
             expected[provision.auth_env] = f"/h/{provision.state_root}/{provision.auth}"
         assert provision.environment("/h") == expected, agent.name
+
+
+def test_no_tool_persists_its_state_root_itself() -> None:
+    """`persisted` is the allowlist of what outlives a turn, so the root is
+    never one of its entries -- not even for a tool whose root has to be
+    writable, which is exactly where everything else the tool reads
+    (instructions, hooks, MCP servers, plugins, permissions) sits."""
+    for entry in ("./", ".", "", "/etc", "sessions/../.."):
+        with pytest.raises(ValidationError):
+            CliAgentProvision(state_root=".tool", persisted=(entry,))
 
 
 #: Where each tool refreshes its login, as observed from the tool itself.
