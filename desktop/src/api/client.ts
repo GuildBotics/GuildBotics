@@ -238,9 +238,6 @@ export type CliAgentUsageWindow = {
   // Human-readable qualifier beyond the duration (e.g. a per-model budget's
   // model name).
   label: string;
-  // Supplementary window: counts toward the limit state but is shown only in
-  // the expanded usage detail, not as its own meter.
-  detail: boolean;
 };
 
 export type CliAgentUsage = {

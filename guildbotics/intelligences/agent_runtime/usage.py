@@ -52,9 +52,7 @@ class CliAgentUsageWindow:
     """One rate-limit window (e.g. the 5-hour or weekly budget).
 
     ``label`` is a human-readable qualifier beyond the window duration (e.g. a
-    per-model budget's model name). A ``detail`` window is supplementary: it
-    still counts toward the limit state, but the frontend shows it only in the
-    expanded usage detail, not as its own meter.
+    per-model budget's model name).
     """
 
     window: str
@@ -62,7 +60,6 @@ class CliAgentUsageWindow:
     resets_at: str = ""
     window_minutes: int | None = None
     label: str = ""
-    detail: bool = False
 
 
 @dataclass(frozen=True)
@@ -272,16 +269,16 @@ def _minutes_between(start_iso: str, end_iso: str) -> int | None:
 
 
 #: One usage line of the ``/usage`` panel, e.g.
-#: ``Current session: 24% used · resets Aug 8 at 11:10am (Asia/Tokyo)``.
+#: ``Current session: 24% used · resets Aug 8, 11:10am (Asia/Tokyo)``.
 _CLAUDE_USAGE_LINE = re.compile(
     r"^(?P<name>[^:\n]+):\s+(?P<percent>\d+(?:\.\d+)?)% used"
     r"(?:\s+·\s+resets\s+(?P<reset>[^\n]+?))?\s*$",
     re.MULTILINE,
 )
 _CLAUDE_WEEK_MODEL = re.compile(r"^Current week \((?P<model>[^)]+)\)$")
-#: ``Aug 8 at 11:10am (Asia/Tokyo)`` / ``Aug 8 at 10am (Asia/Tokyo)``.
+#: ``Aug 8, 11:10am (Asia/Tokyo)`` / ``Aug 8, 10am (Asia/Tokyo)``.
 _CLAUDE_RESET = re.compile(
-    r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2})\s+at\s+"
+    r"^(?P<month>[A-Za-z]{3,9})\s+(?P<day>\d{1,2}),\s+"
     r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<ampm>am|pm)"
     r"(?:\s+\((?P<tz>[^)]+)\))?$"
 )
@@ -296,9 +293,9 @@ def parse_claude_usage(
 
     The panel is text, so parsing is tolerant: only lines shaped like
     ``<name>: <n>% used[ · resets <time>]`` become windows, and a reset time
-    that cannot be interpreted is dropped rather than guessed.  The session
-    and all-models weekly budgets are the summary meters; per-model weekly
-    budgets (and any unrecognized budget line) become ``detail`` windows.
+    that cannot be interpreted is dropped rather than guessed.  An
+    unrecognized budget line keeps its name as the label and has no known
+    period.
     """
     text = result if isinstance(result, str) else ""
     windows: list[CliAgentUsageWindow] = []
@@ -334,7 +331,6 @@ def parse_claude_usage(
                 resets_at=resets_at,
                 window_minutes=_CLAUDE_WEEK_MINUTES if model else None,
                 label=model.group("model") if model else name,
-                detail=True,
             )
         )
     return CliAgentUsageSnapshot(

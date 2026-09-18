@@ -454,6 +454,14 @@ const resources = {
           label: "Rate limited",
           reset: "Reset: {{reset}}",
         },
+        usage: {
+          used: "Used {{percent}}%",
+          elapsed: "Period elapsed {{percent}}%",
+          headroom: "{{points}} pt headroom",
+          over: "{{points}} pt over pace",
+          onPace: "On pace",
+          resets: "Resets {{reset}}",
+        },
         status: {
           retry_scheduled: "Retry scheduled",
           abandoned: "Abandoned",
@@ -2479,6 +2487,14 @@ const resources = {
         rateLimit: {
           label: "Rate limit 中",
           reset: "Reset: {{reset}}",
+        },
+        usage: {
+          used: "使用量 {{percent}}%",
+          elapsed: "期間経過 {{percent}}%",
+          headroom: "{{points}}pt余裕",
+          over: "{{points}}pt超過",
+          onPace: "ペース通り",
+          resets: "{{reset}}にリセット",
         },
         status: {
           retry_scheduled: "再試行待ち",

@@ -10,10 +10,12 @@ import {
   Text,
   TextInput,
   Title,
+  Tooltip,
   type FloatingPosition,
 } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import {
@@ -1336,29 +1338,69 @@ function usageWindowName(window: CliAgentUsage["windows"][number]): string {
   return [usageWindowLabel(window), window.label].filter(Boolean).join(" ");
 }
 
+// Where the usage observation sits inside the reset period, as a percent
+// clamped to 0-100. Both sides of the pace comparison use the same instant
+// (checked_at). Null when the provider does not report a complete period:
+// the duration label is never used to synthesize one.
+export function usageWindowElapsedPercent(
+  window: CliAgentUsage["windows"][number],
+  checkedAt: string,
+): number | null {
+  const resetMs = new Date(window.resets_at).getTime();
+  const checkedMs = new Date(checkedAt).getTime();
+  const windowMs = (window.window_minutes ?? 0) * 60_000;
+  if (!Number.isFinite(resetMs) || !Number.isFinite(checkedMs) || windowMs <= 0) {
+    return null;
+  }
+  const elapsed = ((checkedMs - (resetMs - windowMs)) / windowMs) * 100;
+  return Math.max(0, Math.min(100, Math.round(elapsed)));
+}
+
+// The pace wording: the elapsed share minus the used share, in points of the
+// displayed (rounded) values, followed by the full reset timestamp.
+function usageWindowDetail(
+  window: CliAgentUsage["windows"][number],
+  percent: number,
+  elapsed: number | null,
+  t: TFunction,
+): string {
+  const parts = [t("activity.usage.used", { percent })];
+  if (elapsed !== null) {
+    const headroom = elapsed - percent;
+    parts.push(
+      t("activity.usage.elapsed", { percent: elapsed }),
+      headroom === 0
+        ? t("activity.usage.onPace")
+        : t(headroom > 0 ? "activity.usage.headroom" : "activity.usage.over", {
+            points: Math.abs(headroom),
+          }),
+    );
+  }
+  if (window.resets_at) {
+    parts.push(t("activity.usage.resets", { reset: formatShortTimestamp(window.resets_at) }));
+  }
+  return parts.join(" · ");
+}
+
 function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
+  const { t } = useTranslation();
   if (usage.windows.length === 0) {
     return null;
   }
-  // Detail windows stay out of the meters to keep the member cell compact;
-  // they appear in the hover detail instead. A provider that marks every
-  // window as detail still gets meters, so the usage never vanishes.
-  const summaryWindows = usage.windows.filter((window) => !window.detail);
-  const meterWindows = summaryWindows.length > 0 ? summaryWindows : usage.windows;
-  const meters = (
+  return (
     <div className="activity-member-usage">
-      {meterWindows.map((window, index) => {
+      {usage.windows.map((window, index) => {
         const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
+        const elapsed = usageWindowElapsedPercent(window, usage.checked_at);
+        const detail = usageWindowDetail(window, percent, elapsed, t);
         const label = usageWindowName(window);
         const labelPrefix = label ? `${label} ` : "";
         const reset = window.resets_at ? formatCompactReset(window.resets_at) : "";
         const level = percent >= 100 ? "danger" : percent >= 80 ? "warning" : "";
-        const summary = `${labelPrefix}${percent}%`;
         // The row uses display:contents, so the native tooltip has to live on
-        // the visible cells rather than the row wrapper.
-        const title = window.resets_at
-          ? `${summary}${summary ? " · " : ""}${formatShortTimestamp(window.resets_at)}`
-          : summary;
+        // the visible cells rather than the row wrapper. On the meter it is
+        // also the accessible description.
+        const title = label ? `${label} · ${detail}` : detail;
         return (
           <span
             key={`${window.window}-${index}`}
@@ -1369,51 +1411,33 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
                 {label}
               </span>
             ) : null}
-            <span
-              className="activity-member-usage-bar"
-              role="meter"
-              title={title}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label={`${labelPrefix}${percent}%`}
-            >
-              <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
-            </span>
+            {/* A native title never shows on keyboard focus, so focus gets the
+                same text through a tooltip; hover keeps the native one. */}
+            <Tooltip label={title} events={{ hover: false, focus: true, touch: true }} withinPortal>
+              <span
+                className="activity-member-usage-bar"
+                role="meter"
+                tabIndex={0}
+                title={title}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-label={`${labelPrefix}${percent}%`}
+              >
+                <span className="activity-member-usage-fill" style={{ width: `${percent}%` }} />
+                {elapsed !== null ? (
+                  <span
+                    className="activity-member-usage-elapsed"
+                    style={{ "--usage-elapsed": `${elapsed}%` } as CSSProperties}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </span>
+            </Tooltip>
             <span className="activity-member-usage-value" title={title}>
               {`${percent}%${reset ? ` · ${reset}` : ""}`}
             </span>
           </span>
-        );
-      })}
-    </div>
-  );
-  if (meterWindows.length === usage.windows.length) {
-    return meters;
-  }
-  return (
-    <HoverCard openDelay={150} closeDelay={80} withinPortal>
-      <HoverCard.Target>{meters}</HoverCard.Target>
-      <HoverCard.Dropdown className="activity-hover-card">
-        <MemberUsageDetail usage={usage} />
-      </HoverCard.Dropdown>
-    </HoverCard>
-  );
-}
-
-// The hover detail lists every window — including the detail-flagged ones the
-// meters omit — with full reset timestamps.
-function MemberUsageDetail({ usage }: { usage: CliAgentUsage }) {
-  return (
-    <div className="activity-member-usage-detail">
-      {usage.windows.map((window, index) => {
-        const percent = `${Math.round(window.used_percent)}%`;
-        const reset = window.resets_at ? formatShortTimestamp(window.resets_at) : "";
-        return (
-          <div key={`${window.window}-${index}`} className="activity-member-usage-detail-row">
-            <span className="activity-member-usage-detail-name">{usageWindowName(window)}</span>
-            <span>{[percent, reset].filter(Boolean).join(" · ")}</span>
-          </div>
         );
       })}
     </div>
