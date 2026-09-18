@@ -36,7 +36,6 @@ from guildbotics.sync.manager import (
     GitSyncStatus,
     build_git_sync_manager,
 )
-from guildbotics.sync.rejections import RecordedRejection, describe_rejected
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
@@ -56,51 +55,21 @@ def current_sync_manager() -> GitSyncManager | None:
 ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
 
 
-@dataclass(frozen=True)
-class ResumedSync:
-    """One retry cycle and the repository view taken with it.
+def run_current_sync[Result](
+    operation: Callable[[GitSyncManager, Path], Result],
+) -> Result | None:
+    """Run an operation against one coherent process-wide sync selection.
 
-    Status, hub URL, and rejected changes (refs joined with that workspace's
-    recorded paths) belong to the same manager. They are captured while the
-    activation lock is held, so a workspace switch cannot pair this attempt
-    with another workspace's repository or events.
-    """
-
-    status: GitSyncStatus
-    hub_url: str | None
-    rejected: tuple[RecordedRejection, ...]
-
-
-def resume_current_sync(
-    *,
-    observe: Callable[[], None] | None = None,
-) -> ResumedSync | None:
-    """Run one retry cycle on the running queue, or None when none is running.
-
-    The lifecycle lock is kept through manager selection, resume, the
-    snapshot of that manager's repository and rejection events, and
-    ``observe``. Otherwise a concurrent workspace switch can stop this queue
-    and activate another, and the retry response would mix the attempt with
-    the newly selected workspace.
-
-    Args:
-        observe (Callable[[], None] | None): Called while the lock is still
-            held, after the snapshot. The retry API uses this to capture
-            process-wide fields that belong on the same response.
+    The manager and its workspace root are selected together, and the
+    lifecycle lock stays held until ``operation`` returns. Composition roots
+    use this boundary whenever a result combines manager state with other
+    workspace data; otherwise a concurrent switch can pair manager A with
+    repository B. The operation must not re-enter sync lifecycle functions.
     """
     with _lock:
         if _manager is None or _workspace is None:
             return None
-        status = _manager.resume()
-        repository = LocalSyncRepository(_workspace)
-        attempt = ResumedSync(
-            status=status,
-            hub_url=repository.remote_url(),
-            rejected=describe_rejected(repository.list_rejected(), _workspace),
-        )
-        if observe is not None:
-            observe()
-        return attempt
+        return operation(_manager, _workspace)
 
 
 @dataclass(frozen=True)

@@ -352,11 +352,18 @@ def test_a_hub_that_fails_reports_what_it_printed(
     assert "fatal:" in payload["last_error_detail"]
 
 
-def test_retry_keeps_the_attempt_workspace_after_a_switch_starts(
-    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("operation_name", "manager_method"),
+    [("get_status", "status"), ("retry", "resume")],
+)
+def test_status_operations_keep_one_workspace_while_a_switch_starts(
+    workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+    manager_method: str,
 ) -> None:
-    """Rejected paths and live error belong to the attempt, not the workspace
-    selected after the activation lock is released."""
+    """Every response field belongs to the selected manager's workspace."""
     first_root = workspace
     hub = tmp_path / "hub.git"
     Repo.init(hub, bare=True, initial_branch="main")
@@ -389,21 +396,21 @@ def test_retry_keeps_the_attempt_workspace_after_a_switch_starts(
     service._live_error_code = "relay_failed"
     inside = threading.Event()
     release = threading.Event()
-    real_resume = first.resume
+    real_method = getattr(first, manager_method)
 
-    def delayed_resume() -> GitSyncStatus:
+    def delayed_manager_operation() -> GitSyncStatus:
         inside.set()
         assert release.wait(5)
-        return real_resume()
+        return real_method()
 
-    monkeypatch.setattr(first, "resume", delayed_resume)
+    monkeypatch.setattr(first, manager_method, delayed_manager_operation)
     result: list[workspace_sync.WorkspaceSyncStatus] = []
 
-    def retry() -> None:
-        result.append(service.retry())
+    def read_status() -> None:
+        result.append(getattr(service, operation_name)())
 
-    retrier = threading.Thread(target=retry)
-    retrier.start()
+    reader = threading.Thread(target=read_status)
+    reader.start()
     assert inside.wait(5)
 
     def switch() -> None:
@@ -414,9 +421,9 @@ def test_retry_keeps_the_attempt_workspace_after_a_switch_starts(
     switcher = threading.Thread(target=switch)
     switcher.start()
     switcher.join(0.2)
-    assert switcher.is_alive(), "a workspace switch entered while retry held the lock"
+    assert switcher.is_alive(), "a workspace switch entered during a status operation"
     release.set()
-    retrier.join(5)
+    reader.join(5)
     switcher.join(5)
 
     payload = result[0]

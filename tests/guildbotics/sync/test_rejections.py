@@ -9,8 +9,7 @@ import pytest
 
 from guildbotics.observability.activity_event_store import is_domain_activity_event
 from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
-from guildbotics.sync.local_repository import RejectedChange
-from guildbotics.sync.rejections import describe_rejected, record_update_rejected
+from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import workspace_sync_port
 from guildbotics.workspace.validation import validate_shared_file
 from tests.guildbotics.sync.conftest import WORKSPACE_ID, Device
@@ -45,45 +44,6 @@ def test_a_rejection_says_where_the_stashed_commit_can_be_found(recorded: dict) 
         "state/chat_state/slack/aiko/c.json",
     ]
     assert recorded["occurred_at"]
-
-
-def test_described_rejections_read_the_given_workspace_not_the_selected_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Event lookup is pinned to the repository's workspace, so a retry that
-    outlives a switch does not join A's ref with B's paths."""
-    first = tmp_path / "mac"
-    second = tmp_path / "windows"
-    first.mkdir()
-    second.mkdir()
-    monkeypatch.setattr(workspace_sync_port, "_port", RecordingPort())
-    record_update_rejected(
-        rejection_id="0198ab00-0000-7000-8000-0000000000aa",
-        paths=["config/team/project.yml"],
-        device_id="device-mac",
-        workspace_id=WORKSPACE_ID,
-        workspace_root=first,
-    )
-    record_update_rejected(
-        rejection_id="0198ab00-0000-7000-8000-0000000000aa",
-        paths=["config/team/other.yml"],
-        device_id="device-windows",
-        workspace_id=WORKSPACE_ID,
-        workspace_root=second,
-    )
-    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(second))
-
-    described = describe_rejected(
-        (
-            RejectedChange(
-                rejection_id="0198ab00-0000-7000-8000-0000000000aa",
-                occurred_at="2026-09-18T00:00:00+00:00",
-            ),
-        ),
-        first,
-    )
-
-    assert described[0].paths == ("config/team/project.yml",)
 
 
 def test_a_rejection_never_carries_the_content_that_was_not_accepted(

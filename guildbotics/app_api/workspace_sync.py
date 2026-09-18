@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,6 +49,8 @@ from guildbotics.hub import (
 )
 from guildbotics.hub.relay import ServiceOwner
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
+from guildbotics.observability.activity_event_store import ActivityEventStore
+from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.runtime.live_state import LiveState, LiveStatePort
 from guildbotics.runtime.relay_runtime import RelayRuntime
 from guildbotics.runtime.service_owner import (
@@ -62,22 +65,23 @@ from guildbotics.sync import (
     GitSyncManager,
     GitSyncStatus,
     LocalSyncRepository,
-    RecordedRejection,
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
     activate_workspace_sync,
     clone_workspace,
-    current_sync_manager,
     deactivate_workspace_sync,
-    describe_rejected,
     enroll,
     paused_workspace_sync,
     preview_enrollment,
-    resume_current_sync,
+    run_current_sync,
     synchronize_once,
 )
-from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
+from guildbotics.utils.fileio import (
+    WorkspaceNotConfiguredError,
+    get_workspace_root,
+    get_workspace_state_path,
+)
 from guildbotics.utils.live_freshness import live_status
 from guildbotics.utils.openssh import OpenSshNotFoundError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
@@ -247,14 +251,15 @@ class WorkspaceSyncService:
 
     def get_service_owner(self) -> WorkspaceServiceOwner:
         """Read the persistent Hub owner, without changing it."""
-        workspace_id = _workspace_id()
+        root = _workspace_root()
+        workspace_id = _workspace_id(root)
         if workspace_id is None:
             raise AppApiError(
                 "workspace_not_configured",
                 "workspace_not_configured.service_owner",
                 status_code=409,
             )
-        repository = _repository()
+        repository = _repository(root)
         remote_url = repository.remote_url() if repository is not None else None
         if not remote_url:
             return WorkspaceServiceOwner(workspace_id=workspace_id)
@@ -268,8 +273,9 @@ class WorkspaceSyncService:
 
     def transfer_service_owner(self, device_id: str) -> WorkspaceServiceOwner:
         """Move ownership only through the explicit Desktop action."""
-        workspace_id = _workspace_id()
-        repository = _repository()
+        root = _workspace_root()
+        workspace_id = _workspace_id(root)
+        repository = _repository(root)
         remote_url = repository.remote_url() if repository is not None else None
         if workspace_id is None or not remote_url:
             raise AppApiError(
@@ -325,7 +331,7 @@ class WorkspaceSyncService:
         knows which it is from the hub's own workspace list.
         """
         location = _location(request.hub)
-        target = request.workspace_id or _workspace_id() or ""
+        target = request.workspace_id or _workspace_id(_workspace_root()) or ""
         with _reporting("sync_preview_failed"):
             if not target or target not in self._workspace_ids(location):
                 raise AppApiError(
@@ -393,31 +399,30 @@ class WorkspaceSyncService:
 
     def get_status(self) -> WorkspaceSyncStatus:
         """Report the selected workspace's synchronization state."""
-        manager = current_sync_manager()
-        repository = _repository()
+        running = run_current_sync(
+            lambda manager, root: self._running_status(manager.status(), root)
+        )
+        if running is not None:
+            return running
+
+        root = _workspace_root()
+        repository = _repository(root)
         if repository is None or not repository.has_remote():
             return WorkspaceSyncStatus(
                 enabled=False,
-                workspace_id=_workspace_id(),
+                workspace_id=_workspace_id(root),
                 device_id=ensure_device_identity().device_id,
                 live_error_code=self._live_error_code,
             )
-        if manager is None:
-            # Enabled but not running yet, which is what a process that has not
-            # activated this workspace sees.
-            return WorkspaceSyncStatus(
-                enabled=True,
-                workspace_id=_workspace_id(),
-                device_id=ensure_device_identity().device_id,
-                hub_url=repository.remote_url(),
-                state="idle",
-                rejected_changes=_rejected(repository),
-                live_error_code=self._live_error_code,
-            )
-        return _status_model(
-            manager.status(),
-            repository.remote_url(),
-            _rejected(repository),
+        # Enabled but not running yet, which is what a process that has not
+        # activated this workspace sees.
+        return WorkspaceSyncStatus(
+            enabled=True,
+            workspace_id=_workspace_id(root),
+            device_id=ensure_device_identity().device_id,
+            hub_url=repository.remote_url(),
+            state="idle",
+            rejected_changes=_rejected(repository),
             live_error_code=self._live_error_code,
         )
 
@@ -428,7 +433,7 @@ class WorkspaceSyncService:
         ref is the only copy, held only here. It exists so the warning can end
         without a second record of what the user has already looked at.
         """
-        repository = _repository()
+        repository = _repository(_workspace_root())
         if repository is None:
             raise AppApiError(
                 "workspace_not_configured",
@@ -458,9 +463,12 @@ class WorkspaceSyncService:
         the owner command reuses its client. A missing Hub answer is a start
         failure; later owner probes return ``None`` and only block new work.
         """
-        manager = current_sync_manager()
-        if manager is None:
-            return None
+        return run_current_sync(self._prepare_running_service_owner)
+
+    def _prepare_running_service_owner(
+        self, manager: GitSyncManager, workspace_root: Path
+    ) -> Callable[[], bool | None]:
+        """Prepare ownership while the manager and relay root cannot diverge."""
         failure = manager.synchronize().failure
         if failure is not None:
             raise AppApiError(
@@ -470,7 +478,7 @@ class WorkspaceSyncService:
             )
         runtime = self._relay_runtime
         if runtime is None:
-            self._restart_relay(manager, _workspace_root())
+            self._restart_relay(manager, workspace_root)
             runtime = self._relay_runtime
         if runtime is None:
             raise AppApiError(
@@ -511,30 +519,18 @@ class WorkspaceSyncService:
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after an unreachable hub or repaired shared data.
 
-        The response is this attempt: manager selection, ``resume()``, that
-        manager's repository snapshot (hub URL and rejected refs joined with
-        that workspace's events), and the live error observed before the
-        activation lock is released. A workspace switch waits rather than
-        pairing this cycle with another workspace. A worker cycle that
-        starts after those locks are released is a later status, not this
-        one.
+        The response is this attempt: manager selection, ``resume()``, and all
+        workspace-dependent response fields are evaluated inside the same
+        lifecycle operation. A workspace switch waits rather than pairing the
+        attempt with another workspace.
         """
-        live_error_code: str | None = None
-
-        def observe() -> None:
-            nonlocal live_error_code
-            live_error_code = self._live_error_code
-
         with _reporting("sync_retry_failed"):
-            attempt = resume_current_sync(observe=observe)
-        if attempt is None:
+            result = run_current_sync(
+                lambda manager, root: self._running_status(manager.resume(), root)
+            )
+        if result is None:
             return self.activate()
-        return _status_model(
-            attempt.status,
-            attempt.hub_url,
-            _rejected_models(attempt.rejected),
-            live_error_code=live_error_code,
-        )
+        return result
 
     def change_hub(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncStatus:
         """Point the selected workspace at a different hub.
@@ -557,6 +553,18 @@ class WorkspaceSyncService:
         return self.activate()
 
     # -- Internals ----------------------------------------------------------
+
+    def _running_status(
+        self, status: GitSyncStatus, workspace_root: Path
+    ) -> WorkspaceSyncStatus:
+        """Build one response from the manager's explicit workspace root."""
+        repository = LocalSyncRepository(workspace_root)
+        return _status_model(
+            status,
+            repository.remote_url(),
+            _rejected(repository),
+            live_error_code=self._live_error_code,
+        )
 
     @contextmanager
     def _paused(self) -> Iterator[None]:
@@ -583,8 +591,7 @@ class WorkspaceSyncService:
                 status_code=409,
             ) from exc
         finally:
-            manager = current_sync_manager()
-            self._restart_relay(manager, _workspace_root())
+            run_current_sync(self._restart_relay)
 
     def _restart_relay(
         self,
@@ -674,8 +681,9 @@ class WorkspaceSyncService:
         this workspace, so everything that has to reach that machine -- Git
         aside -- asks here rather than resolving a hub of its own.
         """
-        workspace_id = _workspace_id()
-        repository = _repository()
+        root = _workspace_root()
+        workspace_id = _workspace_id(root)
+        repository = _repository(root)
         remote_url = repository.remote_url() if repository is not None else None
         if workspace_id is None or not remote_url:
             return None
@@ -757,11 +765,10 @@ def _key_fingerprint() -> str | None:
     return None if key is None else key.fingerprint
 
 
-def _repository() -> LocalSyncRepository | None:
-    try:
-        repository = LocalSyncRepository(_workspace_root())
-    except WorkspaceNotConfiguredError:
+def _repository(workspace_root: Path | None) -> LocalSyncRepository | None:
+    if workspace_root is None:
         return None
+    repository = LocalSyncRepository(workspace_root)
     return repository if repository.initialized else None
 
 
@@ -772,12 +779,11 @@ def _workspace_root() -> Path | None:
         return None
 
 
-def _workspace_id() -> str | None:
+def _workspace_id(workspace_root: Path | None) -> str | None:
     """Return this workspace's identifier, without creating one."""
-    root = _workspace_root()
-    if root is None:
+    if workspace_root is None:
         return None
-    identity = read_workspace_identity(root)
+    identity = read_workspace_identity(workspace_root)
     return identity.workspace_id if identity is not None else None
 
 
@@ -815,23 +821,51 @@ def _rejected(repository: LocalSyncRepository) -> list[RejectedChangeModel]:
     The events are only read when there is a ref to describe, which is almost
     never -- so the usual answer costs one ``for-each-ref`` and nothing else.
     """
-    return _rejected_models(
-        describe_rejected(repository.list_rejected(), repository.workspace_root)
-    )
-
-
-def _rejected_models(
-    held: Sequence[RecordedRejection],
-) -> list[RejectedChangeModel]:
-    """Describe already-joined rejected refs for the API."""
+    held = repository.list_rejected()
+    if not held:
+        return []
+    recorded = _recorded_rejections(repository.workspace_root)
     return [
         RejectedChangeModel(
             rejection_id=change.rejection_id,
-            occurred_at=change.occurred_at,
-            paths=list(change.paths),
+            occurred_at=recorded.get(change.rejection_id, ("", []))[0]
+            or change.occurred_at,
+            paths=recorded.get(change.rejection_id, ("", []))[1],
         )
         for change in held
     ]
+
+
+def _recorded_rejections(
+    workspace_root: Path,
+) -> dict[str, tuple[str, list[str]]]:
+    """Return ``rejection_id -> (time, paths)`` from one workspace's events.
+
+    A ref whose event is missing still appears in the list: the identifier and
+    the ref are what the recovery procedure needs, and saying nothing about a
+    change that is being held would be worse than saying less about it.
+    """
+    recorded: dict[str, tuple[str, list[str]]] = {}
+    store = ActivityEventStore(
+        get_workspace_state_path("events", workspace_root=workspace_root),
+        workspace_root=workspace_root,
+    )
+    for event in store.list_between(
+        datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    ):
+        if event.get("kind") != SYNC_UPDATE_REJECTED:
+            continue
+        payload = event.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        rejection_id = str(payload.get("rejection_id") or "")
+        if not rejection_id:
+            continue
+        paths = payload.get("paths")
+        recorded[rejection_id] = (
+            str(event.get("occurred_at") or ""),
+            [str(path) for path in paths] if isinstance(paths, list) else [],
+        )
+    return recorded
 
 
 def _unsendable(changes: Sequence[UnsendableChange]) -> list[UnsendableChangeModel]:
