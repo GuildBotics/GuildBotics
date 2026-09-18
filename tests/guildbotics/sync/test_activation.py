@@ -10,7 +10,8 @@ from git import Repo
 
 from guildbotics.sync import activation, enrollment
 from guildbotics.sync.local_repository import GITIGNORE_CONTENT, LocalSyncRepository
-from guildbotics.sync.manager import GitSyncManager
+from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
+from guildbotics.workspace.identity import read_workspace_identity
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -291,3 +292,62 @@ def test_reactivating_revives_a_worker_that_died_after_a_timed_out_stop(
 
     revived = manager._worker  # noqa: SLF001
     assert revived is not None and revived.is_alive()
+
+
+def test_resume_returns_nothing_when_no_queue_is_running() -> None:
+    assert activation.resume_current_sync() is None
+
+
+def test_resume_keeps_a_workspace_switch_out_until_the_attempt_finishes(
+    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry and a workspace switch share the activation lock, so the
+    attempt's status cannot be paired with the newly selected hub."""
+    first_root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), first_root)
+    other_hub = tmp_path / "other-hub.git"
+    Repo.init(other_hub, bare=True, initial_branch="main")
+    second_root = _workspace(tmp_path / "windows")
+    enrollment.enroll(str(other_hub), second_root)
+    first = activation.activate_workspace_sync(first_root)
+    assert first is not None
+    first_identity = read_workspace_identity(first_root)
+    assert first_identity is not None
+    first_hub = LocalSyncRepository(first_root).remote_url()
+    inside = threading.Event()
+    release = threading.Event()
+    real_resume = first.resume
+
+    def delayed_resume() -> GitSyncStatus:
+        inside.set()
+        assert release.wait(5)
+        return real_resume()
+
+    monkeypatch.setattr(first, "resume", delayed_resume)
+    attempt: list[activation.ResumedSync | None] = []
+
+    def retry() -> None:
+        attempt.append(activation.resume_current_sync())
+
+    retrier = threading.Thread(target=retry)
+    retrier.start()
+    assert inside.wait(5)
+
+    def switch() -> None:
+        activation.activate_workspace_sync(second_root)
+
+    switcher = threading.Thread(target=switch)
+    switcher.start()
+    switcher.join(0.2)
+
+    assert switcher.is_alive(), "a workspace switch entered while retry held the lock"
+    release.set()
+    retrier.join(5)
+    switcher.join(5)
+
+    resumed = attempt[0]
+    assert resumed is not None
+    assert resumed.status.workspace_id == first_identity.workspace_id
+    assert resumed.hub_url == first_hub
+    assert resumed.rejected == ()
+    assert activation.current_sync_manager() is not first

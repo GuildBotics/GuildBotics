@@ -27,7 +27,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
+from guildbotics.sync.local_repository import (
+    LocalSyncRepository,
+    RejectedChange,
+    SyncRepositoryError,
+)
 from guildbotics.sync.manager import (
     GitSyncManager,
     GitSyncStatus,
@@ -50,6 +54,40 @@ def current_sync_manager() -> GitSyncManager | None:
 
 
 ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class ResumedSync:
+    """One retry cycle and the repository view taken with it.
+
+    The status, hub URL, and rejected refs belong to the same manager. They
+    are captured while the activation lock is held, so a workspace switch
+    cannot pair this attempt with another workspace's repository.
+    """
+
+    status: GitSyncStatus
+    hub_url: str | None
+    rejected: tuple[RejectedChange, ...]
+
+
+def resume_current_sync() -> ResumedSync | None:
+    """Run one retry cycle on the running queue, or None when none is running.
+
+    The lifecycle lock is kept through manager selection, resume, and the
+    snapshot of that manager's repository. Otherwise a concurrent workspace
+    switch can stop this queue and activate another, and the retry response
+    would mix the attempt's status with the newly selected hub.
+    """
+    with _lock:
+        if _manager is None or _workspace is None:
+            return None
+        status = _manager.resume()
+        repository = LocalSyncRepository(_workspace)
+        return ResumedSync(
+            status=status,
+            hub_url=repository.remote_url(),
+            rejected=repository.list_rejected(),
+        )
 
 
 @dataclass(frozen=True)

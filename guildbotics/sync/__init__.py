@@ -16,12 +16,14 @@ reaches synchronization through the port.
 from __future__ import annotations
 
 from guildbotics.sync.activation import (
+    ResumedSync,
     SyncStillStoppingError,
     activate_workspace_sync,
     current_sync_manager,
     deactivate_workspace_sync,
     hub_remote_url,
     paused_workspace_sync,
+    resume_current_sync,
     synchronize_once,
 )
 from guildbotics.sync.commits import UnsendableChange
@@ -60,6 +62,7 @@ __all__ = [
     "LocalSyncRepository",
     "PreviewMode",
     "RejectedChange",
+    "ResumedSync",
     "SharedDataAnomaly",
     "SyncRepositoryError",
     "SyncState",
@@ -76,5 +79,6 @@ __all__ = [
     "paused_workspace_sync",
     "preview_enrollment",
     "record_update_rejected",
+    "resume_current_sync",
     "synchronize_once",
 ]

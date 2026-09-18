@@ -65,6 +65,7 @@ from guildbotics.sync import (
     GitSyncManager,
     GitSyncStatus,
     LocalSyncRepository,
+    RejectedChange,
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
@@ -75,6 +76,7 @@ from guildbotics.sync import (
     enroll,
     paused_workspace_sync,
     preview_enrollment,
+    resume_current_sync,
     synchronize_once,
 )
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError, get_workspace_root
@@ -511,20 +513,20 @@ class WorkspaceSyncService:
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after an unreachable hub or repaired shared data.
 
-        The response is this attempt: ``resume()`` returns the cycle it just
-        ran, while its locks are still held. A worker cycle that starts after
-        those locks are released is a later status, not this one.
+        The response is this attempt: manager selection, ``resume()``, and
+        that manager's repository snapshot share the activation lock. A
+        workspace switch waits rather than pairing this cycle with another
+        workspace's hub URL. A worker cycle that starts after those locks
+        are released is a later status, not this one.
         """
-        manager = current_sync_manager()
-        if manager is None:
-            return self.activate()
         with _reporting("sync_retry_failed"):
-            status = manager.resume()
-        repository = _repository()
+            attempt = resume_current_sync()
+        if attempt is None:
+            return self.activate()
         return _status_model(
-            status,
-            None if repository is None else repository.remote_url(),
-            [] if repository is None else _rejected(repository),
+            attempt.status,
+            attempt.hub_url,
+            _rejected_models(attempt.rejected),
             live_error_code=self._live_error_code,
         )
 
@@ -807,7 +809,13 @@ def _rejected(repository: LocalSyncRepository) -> list[RejectedChangeModel]:
     The events are only read when there is a ref to describe, which is almost
     never -- so the usual answer costs one ``for-each-ref`` and nothing else.
     """
-    held = repository.list_rejected()
+    return _rejected_models(repository.list_rejected())
+
+
+def _rejected_models(
+    held: Sequence[RejectedChange],
+) -> list[RejectedChangeModel]:
+    """Describe already-listed rejected refs, using recorded paths when present."""
     if not held:
         return []
     recorded = _recorded_rejections()
