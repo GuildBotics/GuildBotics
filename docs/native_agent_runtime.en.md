@@ -548,3 +548,18 @@ Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
 the same shared keys every other adapter uses. It reports no absolute session
 context size, so context-usage rotation does not arm for Antigravity; only the TTL,
 turn-count, and token-total limits do. This is the same situation as Grok.
+
+Account quotas are a separate path from those per-turn counters. From Antigravity
+CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
+slash command without starting an agent turn, spending quota, or leaving a
+conversation. GuildBotics pins Antigravity CLI 1.2.1 in the isolated environment
+and verified the structured payload on 1.2.5: `command.data.groups[].buckets[]`
+carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
+`reset_time`. Those buckets become the same usage meters the Activity view already
+shows for Claude, Codex, and Grok. A `window` other than `weekly` / `5h` keeps
+its raw value in the label so rows stay distinguishable; GuildBotics does not
+guess a duration from the name. As with Claude and Codex, `limit_reached` is
+true when any window is exhausted, so the member badge can light while another
+model group still has quota. Accounts that do not expose quotas, and payloads
+that are not that JSON, stay unavailable; GuildBotics does not parse the TUI,
+the status line, or tab-separated text, and it does not synthesize 0% or 100%.

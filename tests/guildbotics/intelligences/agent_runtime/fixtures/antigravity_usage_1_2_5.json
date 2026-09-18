@@ -1,0 +1,57 @@
+{
+  "conversation_id": "",
+  "status": "SUCCESS",
+  "response": "",
+  "duration_seconds": 0.18,
+  "num_turns": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 0,
+    "total_tokens": 0
+  },
+  "command": {
+    "name": "/usage",
+    "data": {
+      "groups": [
+        {
+          "id": "gemini",
+          "name": "Gemini models",
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.9378,
+              "reset_time": "2026-09-25T07:50:32Z"
+            },
+            {
+              "id": "gemini-5h",
+              "window": "5h",
+              "remaining_fraction": 0.625,
+              "reset_time": "2026-09-18T15:07:00Z"
+            }
+          ]
+        },
+        {
+          "id": "claude-gpt",
+          "name": "Claude and GPT models",
+          "buckets": [
+            {
+              "id": "claude-gpt-weekly",
+              "window": "weekly",
+              "remaining_fraction": 1,
+              "reset_time": "2026-09-25T07:50:32Z"
+            },
+            {
+              "id": "claude-gpt-5h",
+              "window": "5h",
+              "remaining_fraction": 0,
+              "reset_time": "2026-09-18T15:07:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
