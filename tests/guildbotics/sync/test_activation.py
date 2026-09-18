@@ -11,7 +11,7 @@ from git import Repo
 from guildbotics.sync import activation, enrollment
 from guildbotics.sync.local_repository import GITIGNORE_CONTENT, LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
-from guildbotics.workspace.identity import read_workspace_identity
+from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -22,6 +22,7 @@ from guildbotics.utils.workspace_sync_port import (
     set_workspace_sync_port,
     write_shared_text,
 )
+from guildbotics.workspace.identity import read_workspace_identity
 
 CONFIG = "config/team/project.yml"
 
@@ -312,8 +313,28 @@ def test_resume_keeps_a_workspace_switch_out_until_the_attempt_finishes(
     first = activation.activate_workspace_sync(first_root)
     assert first is not None
     first_identity = read_workspace_identity(first_root)
+    second_identity = read_workspace_identity(second_root)
     assert first_identity is not None
+    assert second_identity is not None
     first_hub = LocalSyncRepository(first_root).remote_url()
+    rejection_id = "01a01500-0000-7000-8000-00000000000a"
+    first_repository = LocalSyncRepository(first_root)
+    first_repository.save_rejected(rejection_id, first_repository.head() or "")
+    record_update_rejected(
+        rejection_id=rejection_id,
+        paths=[CONFIG],
+        device_id="device-mac",
+        workspace_id=first_identity.workspace_id,
+        workspace_root=first_root,
+    )
+    record_update_rejected(
+        rejection_id=rejection_id,
+        paths=["config/team/other.yml"],
+        device_id="device-windows",
+        workspace_id=second_identity.workspace_id,
+        workspace_root=second_root,
+    )
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(first_root))
     inside = threading.Event()
     release = threading.Event()
     real_resume = first.resume
@@ -325,15 +346,20 @@ def test_resume_keeps_a_workspace_switch_out_until_the_attempt_finishes(
 
     monkeypatch.setattr(first, "resume", delayed_resume)
     attempt: list[activation.ResumedSync | None] = []
+    observed_manager: list[GitSyncManager | None] = []
 
     def retry() -> None:
-        attempt.append(activation.resume_current_sync())
+        def observe() -> None:
+            observed_manager.append(activation.current_sync_manager())
+
+        attempt.append(activation.resume_current_sync(observe=observe))
 
     retrier = threading.Thread(target=retry)
     retrier.start()
     assert inside.wait(5)
 
     def switch() -> None:
+        monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(second_root))
         activation.activate_workspace_sync(second_root)
 
     switcher = threading.Thread(target=switch)
@@ -349,5 +375,7 @@ def test_resume_keeps_a_workspace_switch_out_until_the_attempt_finishes(
     assert resumed is not None
     assert resumed.status.workspace_id == first_identity.workspace_id
     assert resumed.hub_url == first_hub
-    assert resumed.rejected == ()
+    assert [item.rejection_id for item in resumed.rejected] == [rejection_id]
+    assert resumed.rejected[0].paths == (CONFIG,)
+    assert observed_manager == [first]
     assert activation.current_sync_manager() is not first

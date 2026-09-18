@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
-from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -49,8 +48,6 @@ from guildbotics.hub import (
 )
 from guildbotics.hub.relay import ServiceOwner
 from guildbotics.hub.relay_client import HubRelayClient, HubRelayClientError
-from guildbotics.observability.activity_event_store import ActivityEventStore
-from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
 from guildbotics.runtime.live_state import LiveState, LiveStatePort
 from guildbotics.runtime.relay_runtime import RelayRuntime
 from guildbotics.runtime.service_owner import (
@@ -65,7 +62,7 @@ from guildbotics.sync import (
     GitSyncManager,
     GitSyncStatus,
     LocalSyncRepository,
-    RejectedChange,
+    RecordedRejection,
     SyncRepositoryError,
     SyncStillStoppingError,
     UnsendableChange,
@@ -73,6 +70,7 @@ from guildbotics.sync import (
     clone_workspace,
     current_sync_manager,
     deactivate_workspace_sync,
+    describe_rejected,
     enroll,
     paused_workspace_sync,
     preview_enrollment,
@@ -513,21 +511,29 @@ class WorkspaceSyncService:
     def retry(self) -> WorkspaceSyncStatus:
         """Try again after an unreachable hub or repaired shared data.
 
-        The response is this attempt: manager selection, ``resume()``, and
-        that manager's repository snapshot share the activation lock. A
-        workspace switch waits rather than pairing this cycle with another
-        workspace's hub URL. A worker cycle that starts after those locks
-        are released is a later status, not this one.
+        The response is this attempt: manager selection, ``resume()``, that
+        manager's repository snapshot (hub URL and rejected refs joined with
+        that workspace's events), and the live error observed before the
+        activation lock is released. A workspace switch waits rather than
+        pairing this cycle with another workspace. A worker cycle that
+        starts after those locks are released is a later status, not this
+        one.
         """
+        live_error_code: str | None = None
+
+        def observe() -> None:
+            nonlocal live_error_code
+            live_error_code = self._live_error_code
+
         with _reporting("sync_retry_failed"):
-            attempt = resume_current_sync()
+            attempt = resume_current_sync(observe=observe)
         if attempt is None:
             return self.activate()
         return _status_model(
             attempt.status,
             attempt.hub_url,
             _rejected_models(attempt.rejected),
-            live_error_code=self._live_error_code,
+            live_error_code=live_error_code,
         )
 
     def change_hub(self, request: WorkspaceSyncEnableRequest) -> WorkspaceSyncStatus:
@@ -809,51 +815,23 @@ def _rejected(repository: LocalSyncRepository) -> list[RejectedChangeModel]:
     The events are only read when there is a ref to describe, which is almost
     never -- so the usual answer costs one ``for-each-ref`` and nothing else.
     """
-    return _rejected_models(repository.list_rejected())
+    return _rejected_models(
+        describe_rejected(repository.list_rejected(), repository.workspace_root)
+    )
 
 
 def _rejected_models(
-    held: Sequence[RejectedChange],
+    held: Sequence[RecordedRejection],
 ) -> list[RejectedChangeModel]:
-    """Describe already-listed rejected refs, using recorded paths when present."""
-    if not held:
-        return []
-    recorded = _recorded_rejections()
+    """Describe already-joined rejected refs for the API."""
     return [
         RejectedChangeModel(
             rejection_id=change.rejection_id,
-            occurred_at=recorded.get(change.rejection_id, ("", []))[0]
-            or change.occurred_at,
-            paths=recorded.get(change.rejection_id, ("", []))[1],
+            occurred_at=change.occurred_at,
+            paths=list(change.paths),
         )
         for change in held
     ]
-
-
-def _recorded_rejections() -> dict[str, tuple[str, list[str]]]:
-    """Return ``rejection_id -> (time, paths)`` from this workspace's events.
-
-    A ref whose event is missing still appears in the list: the identifier and
-    the ref are what the recovery procedure needs, and saying nothing about a
-    change that is being held would be worse than saying less about it.
-    """
-    recorded: dict[str, tuple[str, list[str]]] = {}
-    for event in ActivityEventStore().list_between(
-        datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
-    ):
-        if event.get("kind") != SYNC_UPDATE_REJECTED:
-            continue
-        payload = event.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
-        rejection_id = str(payload.get("rejection_id") or "")
-        if not rejection_id:
-            continue
-        paths = payload.get("paths")
-        recorded[rejection_id] = (
-            str(event.get("occurred_at") or ""),
-            [str(path) for path in paths] if isinstance(paths, list) else [],
-        )
-    return recorded
 
 
 def _unsendable(changes: Sequence[UnsendableChange]) -> list[UnsendableChangeModel]:

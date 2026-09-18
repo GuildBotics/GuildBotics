@@ -50,7 +50,11 @@ from guildbotics.sync.manager import (
     SyncState,
     build_git_sync_manager,
 )
-from guildbotics.sync.rejections import record_update_rejected
+from guildbotics.sync.rejections import (
+    RecordedRejection,
+    describe_rejected,
+    record_update_rejected,
+)
 
 __all__ = [
     "EnrollmentError",
@@ -61,6 +65,7 @@ __all__ = [
     "GitSyncStatus",
     "LocalSyncRepository",
     "PreviewMode",
+    "RecordedRejection",
     "RejectedChange",
     "ResumedSync",
     "SharedDataAnomaly",
@@ -74,6 +79,7 @@ __all__ = [
     "clone_workspace",
     "current_sync_manager",
     "deactivate_workspace_sync",
+    "describe_rejected",
     "enroll",
     "hub_remote_url",
     "paused_workspace_sync",

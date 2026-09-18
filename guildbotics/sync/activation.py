@@ -22,14 +22,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from guildbotics.sync.local_repository import (
     LocalSyncRepository,
-    RejectedChange,
     SyncRepositoryError,
 )
 from guildbotics.sync.manager import (
@@ -37,6 +36,7 @@ from guildbotics.sync.manager import (
     GitSyncStatus,
     build_git_sync_manager,
 )
+from guildbotics.sync.rejections import RecordedRejection, describe_rejected
 from guildbotics.utils.fileio import WorkspaceNotConfiguredError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError, sync_repository_lock
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
@@ -60,34 +60,47 @@ ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
 class ResumedSync:
     """One retry cycle and the repository view taken with it.
 
-    The status, hub URL, and rejected refs belong to the same manager. They
-    are captured while the activation lock is held, so a workspace switch
-    cannot pair this attempt with another workspace's repository.
+    Status, hub URL, and rejected changes (refs joined with that workspace's
+    recorded paths) belong to the same manager. They are captured while the
+    activation lock is held, so a workspace switch cannot pair this attempt
+    with another workspace's repository or events.
     """
 
     status: GitSyncStatus
     hub_url: str | None
-    rejected: tuple[RejectedChange, ...]
+    rejected: tuple[RecordedRejection, ...]
 
 
-def resume_current_sync() -> ResumedSync | None:
+def resume_current_sync(
+    *,
+    observe: Callable[[], None] | None = None,
+) -> ResumedSync | None:
     """Run one retry cycle on the running queue, or None when none is running.
 
-    The lifecycle lock is kept through manager selection, resume, and the
-    snapshot of that manager's repository. Otherwise a concurrent workspace
-    switch can stop this queue and activate another, and the retry response
-    would mix the attempt's status with the newly selected hub.
+    The lifecycle lock is kept through manager selection, resume, the
+    snapshot of that manager's repository and rejection events, and
+    ``observe``. Otherwise a concurrent workspace switch can stop this queue
+    and activate another, and the retry response would mix the attempt with
+    the newly selected workspace.
+
+    Args:
+        observe (Callable[[], None] | None): Called while the lock is still
+            held, after the snapshot. The retry API uses this to capture
+            process-wide fields that belong on the same response.
     """
     with _lock:
         if _manager is None or _workspace is None:
             return None
         status = _manager.resume()
         repository = LocalSyncRepository(_workspace)
-        return ResumedSync(
+        attempt = ResumedSync(
             status=status,
             hub_url=repository.remote_url(),
-            rejected=repository.list_rejected(),
+            rejected=describe_rejected(repository.list_rejected(), _workspace),
         )
+        if observe is not None:
+            observe()
+        return attempt
 
 
 @dataclass(frozen=True)
