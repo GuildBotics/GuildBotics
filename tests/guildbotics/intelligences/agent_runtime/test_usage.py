@@ -227,10 +227,15 @@ def test_parse_grok_billing_reads_subscription_window() -> None:
     assert snapshot.checked_at
 
 
-def test_parse_grok_billing_normalizes_omitted_unified_weekly_zero() -> None:
+@pytest.mark.parametrize("gate", [None, "", {}])
+def test_parse_grok_billing_normalizes_omitted_unified_weekly_zero(gate: Any) -> None:
+    subscription = {
+        **_GROK_ZERO_USAGE_FIXTURE["subscription"],
+        "meta": {"gate": gate},
+    }
     snapshot = parse_grok_billing(
         _GROK_ZERO_USAGE_FIXTURE["billing"],
-        _GROK_ZERO_USAGE_FIXTURE["subscription"],
+        subscription,
     )
 
     assert not snapshot.limit_reached
@@ -303,7 +308,7 @@ def test_parse_grok_billing_accepts_subscription_percent_boundaries(
 @pytest.mark.parametrize(
     "used_percent", [None, "bad", -1, True, float("nan"), float("inf")]
 )
-def test_parse_grok_billing_drops_missing_or_invalid_subscription_percent(
+def test_parse_grok_billing_drops_explicit_null_or_invalid_subscription_percent(
     used_percent: Any,
 ) -> None:
     billing = {
@@ -315,7 +320,7 @@ def test_parse_grok_billing_drops_missing_or_invalid_subscription_percent(
         }
     }
 
-    snapshot = parse_grok_billing(billing, {})
+    snapshot = parse_grok_billing(billing, _GROK_ZERO_USAGE_FIXTURE["subscription"])
 
     assert snapshot.windows == []
     assert not snapshot.limit_reached

@@ -218,7 +218,7 @@ def parse_grok_billing(billing: Any, subscription: Any) -> CliAgentUsageSnapshot
     if (
         "creditUsagePercent" not in config
         and subscription_data.get("authenticated") is True
-        and gate is None
+        and not gate
         and config.get("isUnifiedBillingUser") is True
         and period.get("type") == "USAGE_PERIOD_TYPE_WEEKLY"
         and period_minutes is not None
