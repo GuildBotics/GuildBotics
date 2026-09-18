@@ -303,9 +303,12 @@ at once without a word. Its root is therefore a directory of the turn's own, fil
 from the store with the credentials and the sessions and with nothing else; when the
 turn ends only those two go back, and everything else the turn left there -- the
 instructions, hooks, MCP servers, extensions, plugins, permissions and logs Copilot
-reads from the same root -- is discarded with the directory. A turn that is killed
-leaves its directory behind, and the next turn of that provider removes what is too
-old to belong to a live one.
+reads from the same root -- is discarded with the directory. Neither half of that
+copy follows a symbolic link, at the root or anywhere under it: a turn writes under a
+prompt's direction, and a link it leaves names a place on the device rather than in
+the guest, so following one would carry a file of the device into the store or a file
+of the turn out of it. A turn that is killed leaves its directory behind, and the next
+turn of that provider removes what is too old to belong to a live one.
 
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the

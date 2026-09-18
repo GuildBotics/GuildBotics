@@ -241,7 +241,10 @@ GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き�
 そのためCopilotのstate rootはturn専用のディレクトリとし、storeからは認証情報とセッションだけを
 複製して渡します。turnの終わりに書き戻すのもこの2つだけで、同じrootにあるinstructions・hooks・
 MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残したものはディレクトリごと
-破棄します。turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
+破棄します。この複製はどちらの向きでも、rootでもその配下でもシンボリックリンクを辿りません。
+turnはpromptの指示で書くので、そこに残されたリンクはguestではなく端末上の場所を指し、辿れば
+端末のファイルがstoreへ入り、turnのファイルがstoreの外へ出てしまうためです。
+turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
 実行中のturnのものではありえない古いディレクトリを削除します。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う

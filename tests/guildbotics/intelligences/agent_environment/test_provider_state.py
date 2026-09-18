@@ -205,6 +205,101 @@ def test_only_the_persisted_entries_of_a_turn_reach_the_store_and_the_next_turn(
     assert (next_root / "session-state/one.json").read_text() == '{"turn": 1}'
 
 
+def test_what_a_turn_reached_through_a_link_stays_out_of_the_store(
+    machine: Path, tmp_path: Path, symlinks
+) -> None:
+    """A turn writes into its root under a prompt's direction, so what it
+    names there is the prompt's to choose -- including a link, which the host
+    resolves on the device rather than in the guest. Neither half of the
+    boundary follows one, at the root or anywhere under it, so no file of the
+    device is read into the store by being pointed at."""
+    copilot = cli_agent_info("copilot")
+    home = tmp_path / "home"
+    store = provider_state_dir(copilot)
+    store.mkdir(parents=True)
+    (store / "config.json").write_text('{"authTokens": "old"}')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret.txt").write_text("the device's own")
+
+    turn = bind_state(copilot, home)
+    root = turn.mounts[0].host
+    assert root is not None
+    (root / "config.json").unlink()
+    (root / "config.json").symlink_to(elsewhere / "secret.txt")
+    (root / "session-state/taken.json").symlink_to(elsewhere / "secret.txt")
+    (root / "session-state/deep").mkdir()
+    (root / "session-state/deep/taken.json").symlink_to(elsewhere / "secret.txt")
+    (root / "session-state/kept.json").write_text('{"turn": 1}')
+
+    turn.release()
+
+    assert (store / "config.json").read_text() == '{"authTokens": "old"}'
+    assert not (store / "session-state/taken.json").exists()
+    assert not (store / "session-state/deep/taken.json").exists()
+    assert (store / "session-state/kept.json").read_text() == '{"turn": 1}'
+    assert not any(
+        path.is_file() and path.read_bytes() == b"the device's own"
+        for path in store.rglob("*")
+    )
+
+
+def test_a_link_in_the_store_reaches_no_turn_and_is_not_written_through(
+    machine: Path, tmp_path: Path, symlinks
+) -> None:
+    """The other half of the boundary: a link left in the store -- a login
+    runs with the whole store bound -- neither carries a file of the device
+    into a turn's root nor takes what the turn wrote wherever it points."""
+    copilot = cli_agent_info("copilot")
+    home = tmp_path / "home"
+    store = provider_state_dir(copilot)
+    (store / "session-state").mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "secret.txt").write_text("the device's own")
+    (store / "config.json").symlink_to(elsewhere / "secret.txt")
+    (store / "session-state/one.json").symlink_to(elsewhere / "secret.txt")
+
+    turn = bind_state(copilot, home)
+    root = turn.mounts[0].host
+    assert root is not None
+
+    assert not (root / "config.json").exists()
+    assert not (root / "session-state/one.json").exists()
+
+    (root / "config.json").write_text('{"authTokens": "refreshed"}')
+    (root / "session-state/one.json").write_text('{"turn": 1}')
+    turn.release()
+
+    assert (elsewhere / "secret.txt").read_text() == "the device's own"
+    assert (store / "config.json").is_symlink()
+    assert (store / "session-state/one.json").is_symlink()
+
+
+def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
+    machine: Path, tmp_path: Path, symlinks
+) -> None:
+    """A provider whose entries are bound from the store binds them by name,
+    and a link is a path of the device's rather than the store's: it is
+    neither bound into a turn nor read as a saved login."""
+    codex = cli_agent_info("codex")
+    home = tmp_path / "home"
+    store = provider_state_dir(codex)
+    store.mkdir(parents=True)
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "sessions").mkdir(parents=True)
+    (elsewhere / "auth.json").write_text("{}")
+    (store / "auth.json").symlink_to(elsewhere / "auth.json")
+    (store / "sessions").symlink_to(elsewhere / "sessions", target_is_directory=True)
+
+    mounts = bind_state(codex, home).mounts
+
+    assert not has_credentials(codex)
+    assert mounts == (
+        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
+    )
+
+
 def test_a_turn_beside_another_keeps_its_sessions(
     machine: Path, tmp_path: Path
 ) -> None:

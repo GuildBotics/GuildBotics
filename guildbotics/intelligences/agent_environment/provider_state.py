@@ -28,13 +28,14 @@ user's in that environment to carry anywhere.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironment
 from guildbotics.intelligences.agent_environment.spec import (
@@ -77,12 +78,33 @@ def cache_dir() -> Path:
     return get_machine_state_path(*STATE_ROOT, CACHE_DIR)
 
 
+def _named_inside(root: Path, entry: str) -> Path | None:
+    """Where ``entry`` is under ``root``, or None if a link stands in for it.
+
+    A store and a turn's own directory hold files and directories, and
+    nothing else. A link is not one of them: the host resolves it wherever
+    it points, and what it points at was spelled inside a turn, for the
+    guest's file system, by whatever the turn was told to write. Following
+    one would let any host file be read into the store, or a turn's file be
+    written anywhere on the device, which is the allowlist saying nothing at
+    all. Every component is checked, because a link one level up carries
+    everything under it out of the root just as well.
+    """
+    path = root
+    for part in PurePosixPath(entry).parts:
+        path = path / part
+        if path.is_symlink() or os.path.isjunction(path):
+            return None
+    return path
+
+
 def has_credentials(tool: CliAgentInfo) -> bool:
     """Whether the provider's credentials exist in this device's store."""
     provision = tool.provision
-    return (
-        bool(provision.auth) and (provider_state_dir(tool) / provision.auth).is_file()
-    )
+    if not provision.auth:
+        return False
+    auth = _named_inside(provider_state_dir(tool), provision.auth)
+    return auth is not None and auth.is_file()
 
 
 def authentication_failed(tool: CliAgentInfo) -> bool:
@@ -153,7 +175,9 @@ def bind_state(tool: CliAgentInfo, home: Path | None = None) -> ProviderState:
         store = provider_state_dir(tool)
         mounts = []
         for entry in provision.persisted:
-            host = store / entry.rstrip("/")
+            host = _named_inside(store, entry.rstrip("/"))
+            if host is None:
+                continue
             if entry.endswith("/"):
                 host.mkdir(parents=True, exist_ok=True, mode=0o700)
             elif not host.is_file():
@@ -191,18 +215,37 @@ def _copy_persisted(tool: CliAgentInfo, source_root: Path, target_root: Path) ->
     store, where a session directory is merged rather than replacing what a
     turn running beside this one saved. A file is replaced whole, because a
     half-written credentials file is what the next turn would read as its
-    login.
+    login. A link is copied from neither side and written over on neither,
+    at any depth, so what crosses this boundary is only ever a file the root
+    itself holds.
     """
     for entry in tool.provision.persisted:
         name = entry.rstrip("/")
-        source, target = source_root / name, target_root / name
+        source = _named_inside(source_root, name)
+        target = _named_inside(target_root, name)
+        if target is None:
+            continue
         if entry.endswith("/"):
             target.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if source.is_dir():
-                shutil.copytree(source, target, dirs_exist_ok=True)
-        elif source.is_file():
+            if source is not None and source.is_dir():
+                _copy_tree(source, target)
+        elif source is not None and source.is_file():
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             atomic_write_bytes(target, source.read_bytes())
+
+
+def _copy_tree(source: Path, target: Path) -> None:
+    """Merge a directory into another, taking what each of them owns itself."""
+    for child in source.iterdir():
+        taken = _named_inside(source, child.name)
+        into = _named_inside(target, child.name)
+        if taken is None or into is None:
+            continue
+        if taken.is_dir():
+            into.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _copy_tree(taken, into)
+        elif taken.is_file():
+            shutil.copy2(taken, into)
 
 
 def login_spec(
