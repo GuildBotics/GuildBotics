@@ -22,12 +22,15 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from guildbotics.sync.local_repository import LocalSyncRepository, SyncRepositoryError
+from guildbotics.sync.local_repository import (
+    LocalSyncRepository,
+    SyncRepositoryError,
+)
 from guildbotics.sync.manager import (
     GitSyncManager,
     GitSyncStatus,
@@ -45,11 +48,33 @@ _workspace: Path | None = None
 
 
 def current_sync_manager() -> GitSyncManager | None:
-    """Return the queue running in this process, or None when none is."""
+    """Return the queue running in this process, or None when none is.
+
+    This is a pointer, not a snapshot. Combining it with the selected
+    workspace's repository is how a status read pairs one workspace's queue
+    with another's hub. Callers that need both use :func:`run_current_sync`.
+    """
     return _manager
 
 
 ONE_SHOT_LOCK_TIMEOUT_SECONDS = 1.0
+
+
+def run_current_sync[Result](
+    operation: Callable[[GitSyncManager, Path], Result],
+) -> Result | None:
+    """Run an operation against one coherent process-wide sync selection.
+
+    The manager and its workspace root are selected together, and the
+    lifecycle lock stays held until ``operation`` returns. Composition roots
+    use this boundary whenever a result combines manager state with other
+    workspace data; otherwise a concurrent switch can pair manager A with
+    repository B. The operation must not re-enter sync lifecycle functions.
+    """
+    with _lock:
+        if _manager is None or _workspace is None:
+            return None
+        return operation(_manager, _workspace)
 
 
 @dataclass(frozen=True)

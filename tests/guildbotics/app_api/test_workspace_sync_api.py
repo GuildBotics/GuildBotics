@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from git import Repo
 
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.api import create_app
@@ -14,11 +16,18 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.hub.host import hub_root
 from guildbotics.runtime.live_state import LiveState
-from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
-from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
-from guildbotics.sync.manager import GitSyncManager
+from guildbotics.sync import (
+    activation,
+    current_sync_manager,
+    deactivate_workspace_sync,
+    enrollment,
+)
+from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
+from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
+from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.utils.sync_lock import sync_lock_path
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
 from guildbotics.workspace.identity import read_workspace_identity
@@ -307,12 +316,11 @@ def test_retrying_an_unsynchronized_workspace_changes_nothing(
 def test_retrying_a_synchronized_workspace_reports_its_state(
     client: TestClient,
 ) -> None:
-    """Retrying leaves the workspace synchronizing and carrying no error.
+    """Retrying a healthy workspace reports that attempt, with no error.
 
-    Which state the queue is in at the instant the answer is composed is the
-    worker's to say: it runs cycles on its own timer, and one that starts
-    between the retry and the read reports "fetching" rather than "idle". That
-    is a true answer about a healthy queue, so it is not what this asserts.
+    The attempt runs a cycle under lock and answers with that cycle, so a
+    successful retry is idle. The worker may start another cycle afterwards;
+    that later state belongs to a subsequent status read, not this response.
     """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
@@ -322,13 +330,17 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     assert payload["enabled"] is True
     assert payload["last_error_code"] is None
     assert payload["last_error_detail"] is None
-    assert payload["state"] != "disabled"
+    assert payload["state"] == "idle"
 
 
 def test_a_hub_that_fails_reports_what_it_printed(
     client: TestClient, workspace: Path
 ) -> None:
-    """The Desktop shows why the hub failed, in the words Git used."""
+    """The Desktop shows why the hub failed, in the words Git used.
+
+    Retry answers with this attempt, so a missing hub is unreachable even if
+    the worker has already started its next cycle when the response is sent.
+    """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
     hub_root().rename(hub_root().with_name("gone"))
@@ -338,6 +350,88 @@ def test_a_hub_that_fails_reports_what_it_printed(
     assert payload["state"] == "unreachable"
     assert payload["last_error_code"] == "HubCommandError"
     assert "fatal:" in payload["last_error_detail"]
+
+
+@pytest.mark.parametrize(
+    ("operation_name", "manager_method"),
+    [("get_status", "status"), ("retry", "resume")],
+)
+def test_status_operations_keep_one_workspace_while_a_switch_starts(
+    workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_name: str,
+    manager_method: str,
+) -> None:
+    """Every response field belongs to the selected manager's workspace."""
+    first_root = workspace
+    hub = tmp_path / "hub.git"
+    Repo.init(hub, bare=True, initial_branch="main")
+    enrollment.enroll(str(hub), first_root)
+    other_hub = tmp_path / "other-hub.git"
+    Repo.init(other_hub, bare=True, initial_branch="main")
+    second_root = tmp_path / "windows"
+    second_root.mkdir()
+    (second_root / ".guildbotics" / "state").mkdir(parents=True)
+    (second_root / ".guildbotics" / CONFIG).parent.mkdir(parents=True, exist_ok=True)
+    (second_root / ".guildbotics" / CONFIG).write_bytes(b"name: other\n")
+    enrollment.enroll(str(other_hub), second_root)
+
+    first = activation.activate_workspace_sync(first_root)
+    assert first is not None
+    first_identity = read_workspace_identity(first_root)
+    second_identity = read_workspace_identity(second_root)
+    assert first_identity is not None
+    assert second_identity is not None
+    rejection_id = _reject(first_root)
+    record_update_rejected(
+        rejection_id=rejection_id,
+        paths=["config/team/other.yml"],
+        device_id="device-windows",
+        workspace_id=second_identity.workspace_id,
+        workspace_root=second_root,
+    )
+
+    service = workspace_sync.WorkspaceSyncService()
+    service._live_error_code = "relay_failed"
+    inside = threading.Event()
+    release = threading.Event()
+    real_method = getattr(first, manager_method)
+
+    def delayed_manager_operation() -> GitSyncStatus:
+        inside.set()
+        assert release.wait(5)
+        return real_method()
+
+    monkeypatch.setattr(first, manager_method, delayed_manager_operation)
+    result: list[workspace_sync.WorkspaceSyncStatus] = []
+
+    def read_status() -> None:
+        result.append(getattr(service, operation_name)())
+
+    reader = threading.Thread(target=read_status)
+    reader.start()
+    assert inside.wait(5)
+
+    def switch() -> None:
+        monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(second_root))
+        service.deactivate()
+        activation.activate_workspace_sync(second_root)
+
+    switcher = threading.Thread(target=switch)
+    switcher.start()
+    switcher.join(0.2)
+    assert switcher.is_alive(), "a workspace switch entered during a status operation"
+    release.set()
+    reader.join(5)
+    switcher.join(5)
+
+    payload = result[0]
+    assert payload.workspace_id == first_identity.workspace_id
+    assert payload.rejected_changes[0].rejection_id == rejection_id
+    assert payload.rejected_changes[0].paths == [CONFIG]
+    assert payload.live_error_code == "relay_failed"
+    assert LocalSyncRepository(first_root).remote_url() == payload.hub_url
 
 
 # -- Taking a workspace from a hub --------------------------------------------
