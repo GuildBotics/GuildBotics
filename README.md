@@ -553,7 +553,6 @@ The workspace in use is recorded in `~/.guildbotics/data/active-workspace.json`.
 guildbotics workspace status
 guildbotics workspace current
 guildbotics workspace use /path/to/workspace
-guildbotics workspace migrate --from /path/to/source-checkout --to /path/to/guildbotics-workspace
 ```
 
 The workspace used by `guildbotics member` commands is resolved in this order:

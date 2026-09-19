@@ -548,7 +548,6 @@ OS キーチェーンに保存されたシークレットは自動で読み込�
 guildbotics workspace status
 guildbotics workspace current
 guildbotics workspace use /path/to/workspace
-guildbotics workspace migrate --from /path/to/source-checkout --to /path/to/guildbotics-workspace
 ```
 
 `guildbotics member` コマンドが使うワークスペースは、次の順で解決されます。

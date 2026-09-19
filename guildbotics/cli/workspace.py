@@ -7,7 +7,6 @@ from typing import Any
 import click
 
 from guildbotics.cli._options import format_option
-from guildbotics.utils.workspace_migrate import migrate_workspace
 from guildbotics.utils.workspace_state import (
     read_active_workspace,
     workspace_status_payload,
@@ -49,48 +48,6 @@ def current_workspace(output_format: str) -> None:
             "GuildBotics desktop."
         )
     _print(workspace_status_payload(state), output_format)
-
-
-@workspace.command(name="migrate")
-@click.option(
-    "--from",
-    "source_dir",
-    required=True,
-    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    help="Existing source checkout that contains .guildbotics/.",
-)
-@click.option(
-    "--to",
-    "destination_dir",
-    required=True,
-    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    help="New dedicated GuildBotics workspace root.",
-)
-@_format_option
-def migrate_workspace_command(
-    source_dir: Path, destination_dir: Path, output_format: str
-) -> None:
-    """Copy a source-checkout workspace into a dedicated workspace root.
-
-    With the same --from and --to directory, upgrade an already-dedicated
-    workspace root from the old data/ layout in place.
-    """
-    try:
-        result = migrate_workspace(source_dir, destination_dir)
-    except (FileNotFoundError, FileExistsError, NotADirectoryError, OSError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    payload = {
-        "source": str(result.source),
-        "destination": str(result.destination),
-        "copied": result.copied,
-        "skipped": result.skipped,
-        "notices": result.notices,
-        **workspace_status_payload(),
-    }
-    _print(payload, output_format)
-    if output_format != "json":
-        for notice in result.notices:
-            click.echo(f"Notice: {notice}")
 
 
 @workspace.command(name="status")
