@@ -976,6 +976,10 @@ class GitHubTicketManager(TicketManager):
         the two roles: written by, reviewed by, and review requested from the
         member (the last never matches a GitHub App, which GitHub cannot
         request a review from).
+
+        Draft PRs are left out at the search: a draft is the human's "hands
+        off" switch, so neither role acts on it until someone marks the PR
+        ready for review.
         """
         client = await self.login()
         found: dict[str, dict[str, Any]] = {}
@@ -983,7 +987,10 @@ class GitHubTicketManager(TicketManager):
             resp = await client.get(
                 "/search/issues",
                 params={
-                    "q": f"is:pr is:open user:{self.owner} {qualifier}:{self.username}",
+                    "q": (
+                        f"is:pr is:open draft:false user:{self.owner} "
+                        f"{qualifier}:{self.username}"
+                    ),
                     "per_page": 100,
                     "sort": "updated",
                     "order": "asc",
