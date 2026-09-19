@@ -50,6 +50,11 @@ def stop_request_path() -> Path:
 
 def read_stop_request(path: Path | None = None) -> StopRequest | None:
     request_path = path or stop_request_path()
+    with _request_lock(request_path):
+        return _read_stop_request(request_path)
+
+
+def _read_stop_request(request_path: Path) -> StopRequest | None:
     try:
         return StopRequest.from_dict(
             json.loads(request_path.read_text(encoding="utf-8"))
@@ -59,18 +64,18 @@ def read_stop_request(path: Path | None = None) -> StopRequest | None:
 
 
 @contextmanager
-def _request_write_lock(path: Path) -> Iterator[None]:
+def _request_lock(path: Path) -> Iterator[None]:
     lock_path = path.with_name(f"{path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open_lock_file(lock_path) as lock_file:
-        _acquire_request_write_lock(lock_file)
+        _acquire_request_lock(lock_file)
         try:
             yield
         finally:
             unlock_file(lock_file)
 
 
-def _acquire_request_write_lock(lock_file: IO[str]) -> None:
+def _acquire_request_lock(lock_file: IO[str]) -> None:
     deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
     while True:
         try:
@@ -92,8 +97,8 @@ def write_stop_request(
     """Atomically publish a monotonic stop request for one service instance."""
     request_path = path or stop_request_path()
     request_path.parent.mkdir(parents=True, exist_ok=True)
-    with _request_write_lock(request_path):
-        current = read_stop_request(request_path)
+    with _request_lock(request_path):
+        current = _read_stop_request(request_path)
         if (
             current is not None
             and current.service_instance_id == service_instance_id
@@ -119,7 +124,8 @@ def write_stop_request(
 
 def clear_stop_request(path: Path | None = None) -> None:
     request_path = path or stop_request_path()
-    request_path.unlink(missing_ok=True)
+    with _request_lock(request_path):
+        request_path.unlink(missing_ok=True)
 
 
 class ServiceControlWatcher:
