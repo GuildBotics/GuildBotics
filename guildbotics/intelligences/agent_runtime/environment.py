@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-from guildbotics.intelligences.agent_environment.provider_state import state_mounts
+from guildbotics.intelligences.agent_environment.provider_state import bind_state
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
@@ -88,6 +88,7 @@ async def start_turn_environment(
     """
     tool, status, nameservers, resources = _ready(tool_name)
     home = guest_home()
+    state = bind_state(tool)
     spec = build_environment_spec(
         context.contract,
         context.cwd,
@@ -95,9 +96,9 @@ async def start_turn_environment(
         provider_domains=tool.provision.api_domains,
         env={**_PROVIDER_ENV, **tool.provision.environment(home), **env},
         nameservers=nameservers,
-        mounts=(*state_mounts(tool), *mounts),
+        mounts=(*state.mounts, *mounts),
     )
-    return await _start(spec, status, resources)
+    return await _start(spec, status, resources, on_close=state.release)
 
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:
@@ -105,10 +106,11 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
     model catalog. Only the tool's state is bound, and only its API is open."""
     tool, status, nameservers, resources = _ready(tool_name)
     home = guest_home()
+    state = bind_state(tool)
     spec = AgentEnvironmentSpec(
         cwd=home,
         home=home,
-        mounts=state_mounts(tool),
+        mounts=state.mounts,
         network=EnvironmentNetwork(
             unrestricted=False,
             domains=tool.provision.api_domains,
@@ -118,7 +120,7 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
         ),
         env={**_PROVIDER_ENV, **tool.provision.environment(home)},
     )
-    return await _start(spec, status, resources)
+    return await _start(spec, status, resources, on_close=state.release)
 
 
 def _ready(
@@ -156,6 +158,8 @@ async def _start(
     spec: AgentEnvironmentSpec,
     status: SnapshotStatus,
     resources: EnvironmentResources,
+    *,
+    on_close: Callable[[], None],
 ) -> AgentEnvironment:
     try:
         return await AgentEnvironment.start(
@@ -163,6 +167,7 @@ async def _start(
             snapshot=str(status.path),
             memory_mib=resources.memory_mib,
             cpus=resources.cpus,
+            on_close=on_close,
         )
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc

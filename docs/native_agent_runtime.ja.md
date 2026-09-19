@@ -236,6 +236,19 @@ GuildBoticsによる認証probeやトークン更新は行いません。
 認証情報をrenameで置き換えるGrok Buildは、認証情報を専用ディレクトリ
 （`~/.grok/auth/auth.json`、`GROK_AUTH_PATH`で指定）に置き、ディレクトリごとbindします。
 
+GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き換え、置き場所は
+`COPILOT_HOME`以外に指定できないため、そこへファイルをbindするとCLIが無言で終了します。
+そのためCopilotのstate rootはturn専用のディレクトリとします。セッション（`session-state/`）は
+他のプロバイダと同じくstoreからその下へbindし、turnはそこへ直接書きます。`config.json`だけを
+storeからそのディレクトリへ複製し、turnの終わりにstoreへ書き戻します。同じrootにある
+instructions・hooks・MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残した
+ものはディレクトリごと破棄します。storeとturnディレクトリの名前は、端末上で解決した先が
+そのディレクトリの中にあるときだけ使います。turnはpromptの指示で書き、loginはstore全体を
+bindして動くので、そこに残されたリンクはguestではなく端末上の場所を指し、辿れば端末の
+ディレクトリがturnにbindされたり、端末のファイルがstoreへ入ったりするためです。
+turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
+実行中のturnのものではありえない古いディレクトリを削除します。
+
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
 `cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか
 プロセスへ届かず、後述のとおりAI CLIツールの環境からは認証情報名の変数を取り除くためです。
@@ -451,7 +464,7 @@ ACPを使うadapterではさらに、trusted member capability transportに必�
 バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 1.0.34、GitHub Copilot CLI 1.0.77です。
+確認します。動作確認済みの基準バージョンは、Grok Build 1.0.34、GitHub Copilot CLI 1.0.77と1.0.86です。
 Antigravity 1.1.11が必要なflagを公開することは確認済みですが、追加した補助workspaceからMCP設定を
 読み込めることは、trusted member transportの対応版と宣言する前の実機確認項目として残します。
 
@@ -470,10 +483,29 @@ API-key利用では、利用率0%を生成せず「使用量情報なし」と�
 GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく報告しません。標準の
 `usage_update`も、独自拡張の通知も届きません。そのためGitHub Copilotでは使用量が空のままとなり、
 有効期間・turn数・使用量・`context_limit`による切り替えはこの版では作動しません。標準の
-`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します。GitHub Copilotの
+`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します（隔離環境が固定する
+1.0.86では、turn中に`usage_update`が届くことを確認しています）。GitHub Copilotの
 利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
 `rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
 プロトコルエラーとして扱い、セッションを切り替えて回復します。
+
+GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
+提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
+GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.86を固定しており（1.0.83のserverには
+`account.getQuota`が存在しないため更新しました）、`connect`のあとに`account.getQuota`を呼ぶと
+`quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
+`entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
+種別は実行時の文字列なので一覧で選別せず、有限の枠をすべて種別名をラベルにした行として
+`used_percent = 100 - remainingPercentage`で正規化し、`resetDate`をリセット時刻にします。
+ただし`resetDate`が取得時刻以前のときは次のリセットを示していないので捨てます（実測では、
+APIが3種別すべてに要求時刻そのものを`resetDate`として返すことがありました）。
+無制限の枠（`isUnlimitedEntitlement`、または負の`entitlementRequests`。実測では無制限の
+`chat` / `completions`が`entitlementRequests: 0`と`remainingPercentage: 100`を返します）は
+メーターに載せず、`remainingPercentage`が欠落・非数値・非有限・0〜100の範囲外の枠は捨てます。
+期間の長さは返されないため、リセット日から期間を推測しません。残量0%の枠があれば
+`limit_reached`になります。認証はCopilot CLI自身の保存済みログインに閉じ、GuildBoticsが
+認証ファイルを読んだり独自にHTTP通信したりしません。この取得はターンを開始せず、利用枠を
+消費しません。
 
 Antigravityはターンごとのトークン使用量（`input_tokens` / `output_tokens` /
 `thinking_tokens` / `cache_read_tokens` / `total_tokens`）を報告するため、共通のトークン項目へ

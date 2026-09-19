@@ -348,9 +348,15 @@ class EnvironmentProcess:
 class AgentEnvironment:
     """One turn's microVM."""
 
-    def __init__(self, sandbox: Any, spec: AgentEnvironmentSpec) -> None:
+    def __init__(
+        self,
+        sandbox: Any,
+        spec: AgentEnvironmentSpec,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
         self._sandbox = sandbox
         self._closed = False
+        self._on_close = on_close
         self.spec = spec
 
     @classmethod
@@ -361,11 +367,15 @@ class AgentEnvironment:
         snapshot: str,
         memory_mib: int,
         cpus: int,
+        on_close: Callable[[], None] | None = None,
     ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
         The sandbox is ephemeral: stopping it removes it, so nothing of a
-        turn outlives the turn.
+        turn outlives the turn. ``on_close`` is what the caller has to do
+        once the microVM is gone -- take the provider's persisted state out
+        of the turn's directory -- and it runs exactly once, whether the boot
+        failed, the turn ended, or the turn was cancelled.
         """
         import microsandbox
 
@@ -381,7 +391,14 @@ class AgentEnvironment:
                 volumes=_volumes(spec),
                 network=_network(spec),
             )
-        except Exception as exc:
+        except BaseException as exc:
+            # Cancellation is not an ``Exception``: a turn the service
+            # cancelled while its microVM was starting must hand its state
+            # back too, and it is not a boot failure to report.
+            if on_close is not None:
+                on_close()
+            if not isinstance(exc, Exception):
+                raise
             raise AgentEnvironmentError(
                 _start_failure(
                     build=False,
@@ -390,10 +407,10 @@ class AgentEnvironment:
                     cpus=cpus,
                 )
             ) from exc
-        environment = cls(sandbox, spec)
+        environment = cls(sandbox, spec, on_close)
         try:
             await _ipv4_only(sandbox)
-        except AgentEnvironmentError:
+        except BaseException:
             await environment.close()
             raise
         return environment
@@ -433,7 +450,12 @@ class AgentEnvironment:
         return EnvironmentProcess(handle, limit=limit)
 
     async def close(self) -> None:
-        """Stop the microVM; every process inside it ends with it."""
+        """Stop the microVM; every process inside it ends with it.
+
+        What the caller has to do once the microVM is gone runs even when
+        the stop itself is cancelled, because the turn's state is on this
+        device either way.
+        """
         if self._closed:
             return
         self._closed = True
@@ -442,6 +464,9 @@ class AgentEnvironment:
         except Exception:
             with suppress(Exception):
                 await self._sandbox.destroy(force=True)
+        finally:
+            if self._on_close is not None:
+                self._on_close()
 
 
 @dataclass(frozen=True, slots=True)

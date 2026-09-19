@@ -2,10 +2,12 @@ import os
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
+    CliAgentProvision,
     cli_agent_default_path,
     cli_agent_executable,
     cli_agent_name_from_path,
@@ -237,6 +239,7 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
+        # Persisted itself, or inside a persisted directory.
         assert provision.auth in provision.persisted or any(
             entry.endswith("/") and provision.auth.startswith(entry)
             for entry in provision.persisted
@@ -249,6 +252,48 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         if provision.auth_env:
             expected[provision.auth_env] = f"/h/{provision.state_root}/{provision.auth}"
         assert provision.environment("/h") == expected, agent.name
+
+
+#: Spellings that leave the directory they are relative to, on either OS.
+#: The catalog is written in POSIX, but these strings are joined onto host
+#: paths too, where Windows reads `\` as a separator and `C:` as a drive.
+_WAYS_OUT = (
+    "./",
+    ".",
+    "/etc",
+    "sessions/../..",
+    "../outside",
+    "..\\outside",
+    "C:\\outside",
+    "C:outside",
+    "\\\\host\\share",
+    "sessions\\..\\..",
+)
+
+
+@pytest.mark.parametrize("way_out", _WAYS_OUT)
+def test_a_provision_only_names_places_inside_the_directory_above(way_out: str) -> None:
+    """`persisted` is the allowlist of what outlives a turn, so the root is
+    never one of its entries -- not even for a tool whose root has to be
+    writable, which is exactly where everything else the tool reads
+    (instructions, hooks, MCP servers, plugins, permissions) sits. The state
+    root and the credentials are joined onto the same host store, so they
+    follow the rule too."""
+    with pytest.raises(ValidationError):
+        CliAgentProvision(state_root=".tool", persisted=(way_out,))
+    with pytest.raises(ValidationError):
+        CliAgentProvision(state_root=".tool", auth=way_out)
+    with pytest.raises(ValidationError):
+        CliAgentProvision(state_root=way_out)
+
+
+def test_a_tool_that_is_not_provisioned_yet_names_nothing() -> None:
+    """Naming nothing is how an unprovisioned tool is spelled; naming the
+    empty entry in the allowlist is something else -- it is the root."""
+    assert CliAgentProvision().persisted == ()
+
+    with pytest.raises(ValidationError):
+        CliAgentProvision(state_root=".tool", persisted=("",))
 
 
 #: Where each tool refreshes its login, as observed from the tool itself.

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
@@ -17,6 +17,25 @@ CLI_AGENT_ROOT = "cli_agents"
 #: ``cli_agents/<tool>/<slot>.yml``
 _CLI_AGENT_PATH_PARTS = 3
 _CLI_AGENT_TOOL_INDEX = 1
+
+
+def _names_a_place_inside(value: str) -> bool:
+    """Whether ``value`` stays inside the directory it is relative to.
+
+    The catalog spells these the way the guest does, in POSIX, but the very
+    same strings are joined onto host paths, where Windows reads ``\\`` as a
+    separator and ``C:`` as a drive. So a name is checked the stricter of the
+    two ways: a backslash, a drive, a leading separator or a ``..`` is not a
+    name inside the directory, it is a way out of it.
+    """
+    name = value.rstrip("/")
+    path = PureWindowsPath(name)
+    return (
+        bool(path.parts)
+        and "\\" not in name
+        and not path.anchor  # A drive, or a leading separator, on either OS.
+        and ".." not in path.parts
+    )
 
 
 class CliAgentProvision(BaseModel):
@@ -44,6 +63,16 @@ class CliAgentProvision(BaseModel):
     another file over it fails (``EBUSY``) and the refresh is lost. A tool that
     renames its credentials into place keeps them in a persisted directory of
     their own instead, where ``auth_env`` points it.
+
+    ``writable_root`` is for the tool that can be pointed nowhere else and
+    renames a file into the state root itself (Copilot's ``config.json``): a
+    file bound there makes it fail, and binding the root would make the whole
+    root -- the tool's instructions, hooks, MCP servers, plugins, permissions
+    -- outlive the turn. Such a tool gets a directory of its own for the turn
+    as its root. The persisted directories are bound under it from the store
+    as for every other tool; the persisted files are copied into it and, when
+    the turn ends, copied back. ``persisted`` stays the allowlist either way,
+    so what a turn leaves anywhere else under the root is gone with the turn.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -61,12 +90,46 @@ class CliAgentProvision(BaseModel):
     #: credentials do not stay at their default place under the state root.
     auth_env: str = ""
     persisted: tuple[str, ...] = ()
+    #: Whether the state root itself must be a writable directory of the
+    #: turn's own, because the tool renames files into it.
+    writable_root: bool = False
     #: The login command, run interactively inside the environment.
     login: tuple[str, ...] = ()
     #: The provider's own domains, which every turn may reach whatever its
     #: network mode: the tool is nothing without its API. ``*.example.com``
     #: is a suffix. GuildBotics' list, not the user's.
     api_domains: tuple[str, ...] = ()
+
+    @field_validator("persisted")
+    @classmethod
+    def _entries_stay_under_the_root(
+        cls, persisted: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Every persisted entry names something strictly under the state root.
+
+        The root itself is never one of them. A tool whose root must be
+        writable says so with ``writable_root`` and still names what of it is
+        kept; an entry that is the root, or climbs out of it, would make that
+        allowlist say nothing.
+        """
+        for entry in persisted:
+            if not _names_a_place_inside(entry):
+                raise ValueError(f"'{entry}' is not an entry under the state root")
+        return persisted
+
+    @field_validator("state_root", "auth")
+    @classmethod
+    def _stays_where_it_belongs(cls, value: str) -> str:
+        """The state root is a place under the home, and ``auth`` under it.
+
+        Both are joined onto this device's store as well as onto the guest's
+        home, so the same rule the allowlist follows holds for them: an empty
+        value is a tool that is not provisioned yet, and anything else names
+        a place inside.
+        """
+        if value and not _names_a_place_inside(value):
+            raise ValueError(f"'{value}' is not a place inside the directory above it")
+        return value
 
     @property
     def provisioned(self) -> bool:
@@ -188,14 +251,21 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         executable="copilot",
         config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
         # Without a system credential store -- there is none in the
-        # environment -- the login keeps its token in a file under the state
-        # root; which file is confirmed against a real login.
+        # environment -- the login keeps its token in `config.json` at the
+        # state root, which Copilot rewrites by renaming a new file over it at
+        # every start (a file bound there makes the CLI exit at once, without
+        # a word). COPILOT_HOME is the only place it can be pointed at, so the
+        # root is the turn's own writable directory and the credentials and
+        # the sessions are what is kept of it. The rest of the root is
+        # Copilot's instructions, hooks, MCP servers, extensions, plugins,
+        # permissions and logs, and stays the turn's.
         provision=CliAgentProvision(
-            package="@github/copilot@1.0.83",
+            package="@github/copilot@1.0.86",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
             auth="config.json",  # holds `authTokens` beside the login names
             persisted=("config.json", "session-state/"),
+            writable_root=True,
             login=("copilot", "login", "--device-code"),
             api_domains=(
                 "github.com",

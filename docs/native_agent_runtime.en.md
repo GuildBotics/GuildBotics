@@ -297,6 +297,22 @@ another file over it fails. Grok Build renames its credentials into place, so th
 live in a directory of their own (`~/.grok/auth/auth.json`, set through
 `GROK_AUTH_PATH`) that is bound whole.
 
+GitHub Copilot renames `config.json` into place at its state root at every start and
+can be pointed nowhere but `COPILOT_HOME`, so a file bound there makes the CLI exit
+at once without a word. Its root is therefore a directory of the turn's own. The
+sessions (`session-state/`) are bound under it from the store as for every other
+provider, and the turn writes into them directly; `config.json` alone is copied into
+the directory from the store and copied back when the turn ends. Everything else the
+turn left there -- the instructions, hooks, MCP servers, extensions, plugins,
+permissions and logs Copilot reads from the same root -- is discarded with the
+directory. A name in the store or in the turn's directory is used only when what it
+resolves to on the device lies inside that directory: a turn writes under a prompt's
+direction and a login runs with the whole store bound, so a link either leaves names a
+place on the device rather than in the guest, and following it would bind a directory
+of the device into a turn or carry a file of the device into the store. A turn that is
+killed leaves its directory behind, and the next turn of that provider removes what is
+too old to belong to a live one.
+
 For Grok Build, GuildBotics selects only one advertised authentication method: the saved
 login `cached_token`. The API key method is never used -- a key could only reach the
 process through the environment, and credential-named variables are stripped from the AI
@@ -514,7 +530,7 @@ any newer CLI that still exposes those capabilities keeps working. Antigravity
 capability detection reads `agy --help` (which prints to stderr and exits 0) and
 requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 1.0.34 and GitHub Copilot CLI 1.0.77. Antigravity
+verified baselines are Grok Build 1.0.34 and GitHub Copilot CLI 1.0.77 and 1.0.86. Antigravity
 1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
 workspace remains an explicit machine-verification item before the adapter is declared
 supported for the trusted member transport.
@@ -537,11 +553,35 @@ GitHub Copilot CLI 1.0.77 reports no token usage over ACP at all: neither the st
 `usage_update` nor a private extension channel carries one. Usage counters therefore
 stay empty for Copilot, and the TTL, turn-count, usage, and `context_limit` rotations
 that depend on them do not arm on that version. The standard handling is implemented,
-so a version that does emit `usage_update` is picked up without a change. Copilot rate
+so a version that does emit `usage_update` is picked up without a change (1.0.86, the
+version the isolated environment pins, was observed sending `usage_update` during a
+turn). Copilot rate
 limits are likewise classified only from structured RPC error data -- its weekly quota
 identifier `user_weekly_rate_limited` among them -- and never from stderr text or
 assistant prose; an error that cannot be classified becomes a protocol failure that
 rotates the session.
+
+GitHub Copilot's account quota comes from a different path than that ACP turn: the
+Copilot SDK server protocol (JSON-RPC with `Content-Length` framing) that the same
+CLI serves through `copilot --headless --stdio`. GuildBotics pins GitHub Copilot CLI
+1.0.86 in the isolated environment (the 1.0.83 server had no `account.getQuota`, so
+the pin moved). After `connect`, `account.getQuota` answers with `quotaSnapshots`
+keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
+carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
+`resetDate`. The keys are runtime strings, so they are not filtered against a list:
+every finite budget becomes a row labelled with its key, normalized as
+`used_percent = 100 - remainingPercentage` with `resetDate` as the reset time when it
+lies ahead of the probe (the API has been measured answering every snapshot with the
+request's own instant as `resetDate`; a reset already passed names no coming reset
+and is dropped). An
+unlimited budget (`isUnlimitedEntitlement`, or a negative `entitlementRequests`; the
+measured unlimited `chat` / `completions` report `entitlementRequests: 0` with
+`remainingPercentage: 100`) gets no meter, and a snapshot whose
+`remainingPercentage` is missing, non-numeric, non-finite, or outside 0-100 is
+dropped. The period length is not reported, so no duration is guessed from the
+reset date. A budget at 0% remaining sets `limit_reached`. Authentication stays
+inside the Copilot CLI's own saved login: GuildBotics neither reads the credential
+file nor adds a direct HTTP call. The probe starts no turn and spends no quota.
 
 Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
 `thinking_tokens`, `cache_read_tokens`, `total_tokens`), which are normalized onto
