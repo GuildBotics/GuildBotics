@@ -21,8 +21,14 @@ from guildbotics.utils.workspace_sync_port import (
     set_workspace_sync_port,
     write_shared_text,
 )
+from tests.guildbotics.sync.fake_activation import install_memory_activation
 
 CONFIG = "config/team/project.yml"
+
+
+@pytest.fixture
+def memory_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_memory_activation(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -88,22 +94,21 @@ def test_activation_refreshes_generated_ignore_rules(tmp_path: Path, hub: Path) 
     assert ignore.read_text() == GITIGNORE_CONTENT
 
 
-def test_activating_twice_keeps_the_one_queue(tmp_path: Path, hub: Path) -> None:
+def test_activating_twice_keeps_the_one_queue(
+    tmp_path: Path, memory_activation: None
+) -> None:
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
 
     first = activation.activate_workspace_sync(root)
 
     assert activation.activate_workspace_sync(root) is first
 
 
-def test_switching_workspaces_replaces_the_queue(tmp_path: Path, hub: Path) -> None:
+def test_switching_workspaces_replaces_the_queue(
+    tmp_path: Path, memory_activation: None
+) -> None:
     first_root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), first_root)
-    other_hub = tmp_path / "other-hub.git"
-    Repo.init(other_hub, bare=True, initial_branch="main")
     second_root = _workspace(tmp_path / "windows")
-    enrollment.enroll(str(other_hub), second_root)
 
     first = activation.activate_workspace_sync(first_root)
     second = activation.activate_workspace_sync(second_root)
@@ -113,10 +118,9 @@ def test_switching_workspaces_replaces_the_queue(tmp_path: Path, hub: Path) -> N
 
 
 def test_deactivating_restores_the_port_that_does_nothing(
-    tmp_path: Path, hub: Path
+    tmp_path: Path, memory_activation: None
 ) -> None:
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     activation.activate_workspace_sync(root)
 
     activation.deactivate_workspace_sync()
@@ -146,16 +150,14 @@ def test_a_shared_write_reaches_the_running_queue(tmp_path: Path, hub: Path) -> 
 
 
 def test_a_queue_that_will_not_stop_blocks_the_next_workspace(
-    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    memory_activation: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two threads on one repository interleave reset, checkout, and commit,
     and a switch that went ahead anyway would leave the old one running."""
     first_root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), first_root)
-    other_hub = tmp_path / "other-hub.git"
-    Repo.init(other_hub, bare=True, initial_branch="main")
     second_root = _workspace(tmp_path / "windows")
-    enrollment.enroll(str(other_hub), second_root)
     stuck = activation.activate_workspace_sync(first_root)
     assert stuck is not None
     monkeypatch.setattr(stuck, "stop", lambda timeout=5.0: False)
@@ -167,12 +169,13 @@ def test_a_queue_that_will_not_stop_blocks_the_next_workspace(
 
 
 def test_a_queue_that_will_not_stop_keeps_receiving_writes(
-    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    memory_activation: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Detaching the port from a worker that is still committing would leave
     its own workspace's saves announced to nobody."""
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     manager = activation.activate_workspace_sync(root)
     assert manager is not None
     monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
@@ -182,11 +185,12 @@ def test_a_queue_that_will_not_stop_keeps_receiving_writes(
 
 
 def test_reactivating_the_same_workspace_reuses_its_queue(
-    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    memory_activation: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """It is that workspace's own queue, so there is nothing to make room for."""
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     manager = activation.activate_workspace_sync(root)
     assert manager is not None
     monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
@@ -195,13 +199,12 @@ def test_reactivating_the_same_workspace_reuses_its_queue(
 
 
 def test_a_pause_keeps_every_other_activation_out_for_its_whole_body(
-    tmp_path: Path, hub: Path
+    tmp_path: Path, memory_activation: None
 ) -> None:
     """Holding the lock only across the stop would let a second request see no
     manager and walk into the same repository, or start a queue beside the
     work in progress."""
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     activation.activate_workspace_sync(root)
     order: list[str] = []
     inside = threading.Event()
@@ -233,10 +236,9 @@ def test_a_pause_keeps_every_other_activation_out_for_its_whole_body(
 
 
 def test_a_pause_restores_the_queue_after_the_body_fails(
-    tmp_path: Path, hub: Path
+    tmp_path: Path, memory_activation: None
 ) -> None:
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     activation.activate_workspace_sync(root)
 
     with pytest.raises(RuntimeError), activation.paused_workspace_sync(root):
@@ -247,7 +249,9 @@ def test_a_pause_restores_the_queue_after_the_body_fails(
 
 
 def test_a_pause_that_cannot_take_the_lock_restores_the_queue(
-    tmp_path: Path, hub: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    memory_activation: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A busy repository lock stops the pause, not the synchronization.
 
@@ -256,7 +260,6 @@ def test_a_pause_that_cannot_take_the_lock_restores_the_queue(
     synchronizing.
     """
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     activation.activate_workspace_sync(root)
     monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
 
@@ -269,13 +272,12 @@ def test_a_pause_that_cannot_take_the_lock_restores_the_queue(
 
 
 def test_reactivating_revives_a_worker_that_died_after_a_timed_out_stop(
-    tmp_path: Path, hub: Path
+    tmp_path: Path, memory_activation: None
 ) -> None:
     """stop() withdraws a timed-out request, but a worker that observed it
     before the withdrawal exits anyway, leaving the registered manager without
     a worker. Activation is the pass every caller repairs that on."""
     root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), root)
     manager = activation.activate_workspace_sync(root)
     assert manager is not None
     # The race, made deterministic: the worker sees the stop request and exits
@@ -298,15 +300,11 @@ def test_a_current_operation_returns_nothing_when_no_queue_is_running() -> None:
 
 
 def test_a_current_operation_keeps_a_workspace_switch_out_until_it_finishes(
-    tmp_path: Path, hub: Path
+    tmp_path: Path, memory_activation: None
 ) -> None:
     """Manager and workspace stay one selection for the whole operation."""
     first_root = _workspace(tmp_path / "mac")
-    enrollment.enroll(str(hub), first_root)
-    other_hub = tmp_path / "other-hub.git"
-    Repo.init(other_hub, bare=True, initial_branch="main")
     second_root = _workspace(tmp_path / "windows")
-    enrollment.enroll(str(other_hub), second_root)
     first = activation.activate_workspace_sync(first_root)
     assert first is not None
     inside = threading.Event()
