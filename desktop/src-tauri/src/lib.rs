@@ -222,6 +222,7 @@ fn request_backend_shutdown(port: u16, token: &str) -> io::Result<Duration> {
 
 /// Whether the backend has work that a quit would cut off. Anything short of
 /// a clear "no" counts as yes: an unreadable state says nothing about the work.
+#[cfg(any(target_os = "macos", test))]
 fn backend_has_active_work(port: u16, token: &str) -> bool {
     let Ok((200, body)) = backend_request(port, token, "GET", "/scheduler/status") else {
         return true;
@@ -235,6 +236,7 @@ fn backend_has_active_work(port: u16, token: &str) -> bool {
 /// Whether a quit the app did not start itself (the Dock's Quit, logout) has
 /// to go through the frontend's guard first. An idle app lets it proceed, so
 /// it never holds up a logout it has no reason to.
+#[cfg(target_os = "macos")]
 pub(crate) fn quit_needs_confirmation(app: &tauri::AppHandle) -> bool {
     app.try_state::<BackendState>()
         .is_none_or(|state| backend_has_active_work(state.port, &state.token))
