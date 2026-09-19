@@ -115,6 +115,67 @@ def test_new_service_instance_replaces_stale_request(tmp_path) -> None:
     assert not path.exists()
 
 
+def test_clear_stop_request_waits_for_writer(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "stop-request.json"
+    write_stop_request("service-1", "graceful", path)
+    replace_started = threading.Event()
+    clear_finished = threading.Event()
+    release_writer = threading.Event()
+    failures: list[BaseException] = []
+    real_replace = os.replace
+
+    def blocking_replace(source, target) -> None:
+        replace_started.set()
+        assert release_writer.wait(timeout=1)
+        real_replace(source, target)
+
+    def write() -> None:
+        try:
+            write_stop_request("service-1", "cancel", path)
+        except BaseException as exc:
+            failures.append(exc)
+
+    def clear() -> None:
+        try:
+            clear_stop_request(path)
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            clear_finished.set()
+
+    monkeypatch.setattr(service_control.os, "replace", blocking_replace)
+    writer = threading.Thread(target=write)
+    clearer = threading.Thread(target=clear)
+
+    writer.start()
+    assert replace_started.wait(timeout=1)
+    clearer.start()
+    try:
+        assert not clear_finished.wait(timeout=0.1)
+    finally:
+        release_writer.set()
+        writer.join(timeout=1)
+        clearer.join(timeout=1)
+
+    assert not writer.is_alive()
+    assert not clearer.is_alive()
+    assert failures == []
+    assert clear_finished.is_set()
+    assert not path.exists()
+
+
+def test_clear_stop_request_ignores_control_lock_timeout(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "stop-request.json"
+    write_stop_request("service-1", "graceful", path)
+    monkeypatch.setattr(service_control, "_LOCK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(service_control, "_LOCK_RETRY_SECONDS", 0.001)
+
+    with service_control._request_lock(path):
+        clear_stop_request(path)
+
+    assert path.exists()
+
+
 def test_watcher_accepts_only_matching_instance_and_escalates(tmp_path) -> None:
     path = tmp_path / "stop-request.json"
     calls: list[bool] = []

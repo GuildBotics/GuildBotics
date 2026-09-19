@@ -106,7 +106,11 @@ def write_stop_request(
 
 def clear_stop_request(path: Path | None = None) -> None:
     request_path = path or stop_request_path()
-    request_path.unlink(missing_ok=True)
+    try:
+        with _request_lock(request_path):
+            request_path.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 class ServiceControlWatcher:
