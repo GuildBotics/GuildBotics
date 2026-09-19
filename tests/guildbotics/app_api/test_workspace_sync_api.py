@@ -377,19 +377,18 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
 
 
 def test_a_hub_that_fails_reports_what_it_printed(
-    client: TestClient, workspace: Path
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Desktop shows why the hub failed, in the words Git used.
 
-    Retry answers with this attempt, so a missing hub is unreachable even if
-    the worker has already started its next cycle when the response is sent.
+    This is a real Git transport test. Queue lifecycle and its stop timeout are
+    covered separately, so starting a worker here would only make moving the
+    Hub depend on CI load before the transport failure can be exercised.
     """
+    monkeypatch.setattr(GitSyncManager, "start", lambda _self: True)
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    # Stop the queue before moving the Hub: Windows rejects renaming a directory
-    # while the worker has an open handle below it (#524).
-    with activation.paused_workspace_sync(workspace):
-        hub_root().rename(hub_root().with_name("gone"))
+    hub_root().rename(hub_root().with_name("gone"))
 
     payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
 
