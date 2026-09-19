@@ -517,15 +517,6 @@ class KeyringSecretStore(SecretStore):
         """
         self._write_index(self._read_index())
 
-    def adopt_shared_generations(self) -> None:
-        """Record that this device holds every generation in the shared index.
-
-        Used when a workspace arrives on a device whose keychain already has
-        the values (e.g. the one-shot workspace relocation on the same machine).
-        """
-        index = self._read_index()
-        self._align_local_generations(index, list(index["keys"]))
-
     def shared_generation(self, key: str) -> int | None:
         """Return the shared generation recorded for ``key``, if any."""
         meta = self._read_index()["keys"].get(key)
@@ -616,16 +607,6 @@ class KeyringSecretStore(SecretStore):
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-
-    def _align_local_generations(self, index: dict[str, Any], keys: list[str]) -> None:
-        local = self._read_local()
-        for key in keys:
-            meta = index["keys"].get(key) or {}
-            generation = _as_generation(meta.get("generation"))
-            if generation is None:
-                continue
-            local["keys"][key] = {"generation": generation, "pending_send": False}
-        self._write_local(local)
 
     def _drop_local_generation(self, key: str) -> None:
         local = self._read_local()

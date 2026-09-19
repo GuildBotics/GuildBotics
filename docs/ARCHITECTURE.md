@@ -488,9 +488,6 @@ Invariants:
   whose value is decided by the machine rather than the workspace belongs in `local/` —
   absolute paths, but also hotkeys, since which combinations are free depends on the OS,
   the other applications installed, and the keyboard layout.
-- `guildbotics workspace migrate --from <checkout> --to <workspace>` copies an old
-  source-checkout `.guildbotics/` into a dedicated workspace without changing the
-  user's source repository.
 - `GUILDBOTICS_WORKSPACE_ROOT` is published at the workspace application boundary.
   Agent execution copies that resolved value into `AgentExecutionContext`.
 - There is no `GUILDBOTICS_DATA_DIR` override and no workspace `.env` file.

@@ -117,7 +117,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics version`](#guildbotics-version) | Print version. |
 | [`guildbotics workspace`](#guildbotics-workspace) | Manage the active GuildBotics workspace used by AI CLI tools. |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
-| [`guildbotics workspace migrate`](#guildbotics-workspace-migrate) | Copy a source-checkout workspace into a dedicated workspace root. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
 | [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
 
@@ -1834,7 +1833,6 @@ guildbotics workspace [OPTIONS] COMMAND [ARGS]...
 | Subcommand | Summary |
 | --- | --- |
 | [`guildbotics workspace current`](#guildbotics-workspace-current) | Show the persisted active workspace. |
-| [`guildbotics workspace migrate`](#guildbotics-workspace-migrate) | Copy a source-checkout workspace into a dedicated workspace root. |
 | [`guildbotics workspace status`](#guildbotics-workspace-status) | Show active workspace status without failing when it is missing. |
 | [`guildbotics workspace use`](#guildbotics-workspace-use) | Persist the active workspace for desktop and external AI CLI tools. |
 
@@ -1848,24 +1846,6 @@ guildbotics workspace current [OPTIONS]
 
 | Option | Description |
 | --- | --- |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
-## `guildbotics workspace migrate`
-
-Copy a source-checkout workspace into a dedicated workspace root.
-
-With the same --from and --to directory, upgrade an already-dedicated
-workspace root from the old data/ layout in place.
-
-```text
-guildbotics workspace migrate [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--from DIRECTORY` | Existing source checkout that contains .guildbotics/. [required] |
-| `--to DIRECTORY` | New dedicated GuildBotics workspace root. [required] |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |
 
