@@ -1247,10 +1247,11 @@ async def test_search_covers_both_roles_and_dedupes_oldest_first():
 
     items = await GitHubTicketManager._search_pull_requests(manager)
 
+    # ``draft:false`` keeps a PR a human converted to draft out of both roles.
     assert [params["q"] for params in client.calls] == [
-        "is:pr is:open user:GuildBotics author:aiko-gh",
-        "is:pr is:open user:GuildBotics reviewed-by:aiko-gh",
-        "is:pr is:open user:GuildBotics review-requested:aiko-gh",
+        "is:pr is:open draft:false user:GuildBotics author:aiko-gh",
+        "is:pr is:open draft:false user:GuildBotics reviewed-by:aiko-gh",
+        "is:pr is:open draft:false user:GuildBotics review-requested:aiko-gh",
     ]
     assert all(params["per_page"] == 100 for params in client.calls)
     assert [item["number"] for item in items] == [1, 2, 3, 4]

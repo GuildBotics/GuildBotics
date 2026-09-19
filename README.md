@@ -316,6 +316,7 @@ Before looking at the ticket lanes, every patrol run checks the open pull reques
 - **PRs the member wrote**: unresolved review threads whose last word is someone else's, review summaries, and conversation comments the member has not answered yet are picked up. The member fixes the code where the point is valid, replies in each thread, and answers the comments
 - **PRs the member reviews**: the member reviews again when a review is requested (personal-token members only; GitHub cannot request a review from a GitHub App), when someone replies in a thread the member took part in, or when new commits land after its last review. Re-review on new commits stops after 3 rounds: the member announces that on the PR, and only replies in its threads or an explicit review request bring it back
 - The verdict is submitted as a GitHub review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Ask for the first review in Slack or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
+- **Draft PRs are skipped**, in both roles. To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits
 
 ## Ask for Work in Slack
 

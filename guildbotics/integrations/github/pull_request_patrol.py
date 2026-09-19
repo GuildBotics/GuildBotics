@@ -18,6 +18,10 @@ landed after the member's last review. Re-reviews on new commits stop after
 
 Workflow status notices (rate limit, failure, review limit) are neither
 feedback nor replies: they only suppress selection or mark the limit.
+
+A draft PR reaches neither role. Draft is the switch a human flips to take a
+PR into their own hands (only humans may change it), and the manager's search
+excludes drafts before any snapshot is loaded.
 """
 
 from __future__ import annotations
