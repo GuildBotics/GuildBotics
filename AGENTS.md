@@ -400,7 +400,9 @@ Windows では、Git repository を作るテストの一時 path が `MAX_PATH` 
 短いテスト専用の base directory を指定する:
 
 ```powershell
-uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --basetemp=C:/gb-pytest
+uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
+uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts --basetemp=C:/gb-pytest-git --junitxml=C:/gb-pytest-git.xml --phase-durations-json=C:/gb-pytest-git-phases.json
+uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder --basetemp=C:/gb-pytest-rest --junitxml=C:/gb-pytest-rest.xml --phase-durations-json=C:/gb-pytest-rest-phases.json
 ```
 
 CI は `mypy` と `pytest` を Windows でも実行する（`.github/workflows/ci.yml` の

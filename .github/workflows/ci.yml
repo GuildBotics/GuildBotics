@@ -74,6 +74,13 @@ jobs:
     # suite there. Only the checks whose result can differ by operating system
     # run here: Ruff, Pylint and the CLI reference cannot.
     runs-on: windows-latest
+    name: test-windows (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - git-contracts
+          - remainder
     env:
       UV_LOCKED: "1"
     steps:
@@ -93,7 +100,13 @@ jobs:
         run: uv sync --extra test --extra dev
 
       - name: Run Mypy
+        if: matrix.shard == 'remainder'
         run: uv run --no-sync mypy guildbotics
+
+      - name: Verify Windows shard coverage
+        run: >-
+          uv run --no-sync python -m pytest tests/ --collect-only -qq
+          --verify-windows-shards
 
       - name: Run tests
         # A short base directory: tests create Git repositories, whose own
@@ -102,4 +115,17 @@ jobs:
         # long tail on the four-core hosted runner.
         run: >-
           uv run --no-sync python -m pytest tests/ -n 8 --durations=30
+          --windows-shard=${{ matrix.shard }}
           --basetemp=${{ runner.temp }}/gb
+          --junitxml=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
+          --phase-durations-json=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}-phases.json
+
+      - name: Upload Windows pytest durations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-pytest-durations-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
+            ${{ runner.temp }}/pytest-windows-${{ matrix.shard }}-phases.json
+          if-no-files-found: error

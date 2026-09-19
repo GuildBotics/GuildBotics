@@ -1,15 +1,33 @@
 import logging
 import os
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import git
+import pytest
 
 from guildbotics.utils.git_tool import (
     GitTool,
     build_git_auth_environment,
     create_git_askpass_script,
 )
+
+
+@pytest.fixture(autouse=True)
+def close_git_tools(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep every GitTool alive until its fixture-owned explicit close."""
+    tools: list[GitTool] = []
+    original_init = GitTool.__init__
+
+    def tracked_init(tool, *args, **kwargs):
+        original_init(tool, *args, **kwargs)
+        tools.append(tool)
+
+    monkeypatch.setattr(GitTool, "__init__", tracked_init)
+    yield
+    for tool in reversed(tools):
+        tool.close()
 
 
 def _setup_bare_remote_with_main(tmp_path: Path) -> Path:
@@ -26,30 +44,30 @@ def _setup_bare_remote_with_main(tmp_path: Path) -> Path:
         Path: Filesystem path to the bare remote repository.
     """
     remote_bare = tmp_path / "remote.git"
-    git.Repo.init(remote_bare, bare=True)
+    with git.Repo.init(remote_bare, bare=True):
+        pass
 
     work = tmp_path / "work"
-    repo = git.Repo.init(work)
+    with git.Repo.init(work) as repo:
+        # Configure identity for making commits in the seed repository
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "Seed User")
+            cw.set_value("user", "email", "seed@example.com")
 
-    # Configure identity for making commits in the seed repository
-    with repo.config_writer() as cw:
-        cw.set_value("user", "name", "Seed User")
-        cw.set_value("user", "email", "seed@example.com")
+        (work / "README.md").write_text("hello\n", encoding="utf-8")
+        repo.git.add(A=True)
+        repo.index.commit("initial commit")
 
-    (work / "README.md").write_text("hello\n", encoding="utf-8")
-    repo.git.add(A=True)
-    repo.index.commit("initial commit")
+        # Ensure the 'main' branch exists and is current
+        try:
+            repo.git.checkout("-b", "main")
+        except git.GitCommandError:
+            # If the branch already exists for some reason, just ensure we are on it
+            repo.git.checkout("main")
 
-    # Ensure the 'main' branch exists and is current
-    try:
-        repo.git.checkout("-b", "main")
-    except git.GitCommandError:
-        # If the branch already exists for some reason, just ensure we are on it
-        repo.git.checkout("main")
-
-    # Push to the bare remote
-    repo.create_remote("origin", str(remote_bare))
-    repo.git.push("--set-upstream", "origin", "HEAD:main")
+        # Push to the bare remote
+        repo.create_remote("origin", str(remote_bare))
+        repo.git.push("--set-upstream", "origin", "HEAD:main")
 
     return remote_bare
 
@@ -176,9 +194,8 @@ def test_member_auth_environment_resets_configured_credential_helpers(
 ) -> None:
     monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
     repo_path = tmp_path / "repo"
-    repo = git.Repo.init(repo_path)
     helper_marker = tmp_path / "external-helper-ran"
-    with repo.config_writer() as writer:
+    with git.Repo.init(repo_path) as repo, repo.config_writer() as writer:
         writer.set_value(
             "credential",
             "helper",
@@ -222,15 +239,15 @@ def test_checkout_branch_uses_remote_branch_when_available(tmp_path: Path):
     tool, _, remote = _init_git_tool(tmp_path)
 
     seed = tmp_path / "seed"
-    seed_repo = git.Repo.clone_from(str(remote), seed)
-    with seed_repo.config_writer() as cw:
-        cw.set_value("user", "name", "Seed User")
-        cw.set_value("user", "email", "seed@example.com")
-    seed_repo.git.checkout("-b", "feature/remote-only")
-    (seed / "remote.txt").write_text("remote branch content\n", encoding="utf-8")
-    seed_repo.git.add(A=True)
-    remote_commit = seed_repo.index.commit("remote branch commit").hexsha
-    seed_repo.git.push("--set-upstream", "origin", "feature/remote-only")
+    with git.Repo.clone_from(str(remote), seed) as seed_repo:
+        with seed_repo.config_writer() as cw:
+            cw.set_value("user", "name", "Seed User")
+            cw.set_value("user", "email", "seed@example.com")
+        seed_repo.git.checkout("-b", "feature/remote-only")
+        (seed / "remote.txt").write_text("remote branch content\n", encoding="utf-8")
+        seed_repo.git.add(A=True)
+        remote_commit = seed_repo.index.commit("remote branch commit").hexsha
+        seed_repo.git.push("--set-upstream", "origin", "feature/remote-only")
 
     tool.checkout_branch("feature/remote-only")
 
