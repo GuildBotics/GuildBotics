@@ -1,4 +1,20 @@
-from tests.windows_shards import verify_windows_shards, windows_shard_for_nodeid
+from pathlib import Path
+
+import yaml
+
+from tests.windows_shards import (
+    WINDOWS_SHARDS,
+    verify_windows_shards,
+    windows_shard_for_nodeid,
+)
+
+
+def test_ci_runs_every_windows_shard() -> None:
+    workflow_path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    ci_shards = workflow["jobs"]["test-windows"]["strategy"]["matrix"]["shard"]
+
+    assert tuple(ci_shards) == WINDOWS_SHARDS
 
 
 def test_real_git_contracts_have_their_own_windows_shard() -> None:

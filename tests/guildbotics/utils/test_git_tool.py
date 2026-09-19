@@ -135,6 +135,15 @@ def test_init_with_auth_token_uses_temporary_askpass(tmp_path: Path):
     assert not askpass_path.exists()
 
 
+def test_close_releases_repository_reference_and_is_idempotent(tmp_path: Path) -> None:
+    tool, _, _ = _init_git_tool(tmp_path)
+
+    tool.close()
+
+    assert getattr(tool, "repo", None) is None
+    tool.close()
+
+
 def test_reopening_repository_preserves_dormant_config_value(tmp_path: Path):
     """Identity updates must not turn quoted text into active Git directives."""
     tool, workspace, remote = _init_git_tool(tmp_path)

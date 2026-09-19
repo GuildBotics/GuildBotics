@@ -396,8 +396,10 @@ uv run --no-sync pylint guildbotics
 uv run --no-sync python -m pytest tests/ -n auto --durations=30
 ```
 
-Windows では、Git repository を作るテストの一時 path が `MAX_PATH` を超えないよう、
-短いテスト専用の base directory を指定する:
+Windows の全テストは `git-contracts` と `remainder` の 2 shard に分かれている。
+最初の collection で全 node ID がちょうど 1 つの shard に入ることを検証し、その後の
+2 コマンドを両方実行して全件を走らせる。Git repository を作るテストの一時 path が
+`MAX_PATH` を超えないよう、各 shard には短いテスト専用の base directory を指定する:
 
 ```powershell
 uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
@@ -405,10 +407,11 @@ uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git
 uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder --basetemp=C:/gb-pytest-rest --junitxml=C:/gb-pytest-rest.xml --phase-durations-json=C:/gb-pytest-rest-phases.json
 ```
 
-CI は `mypy` と `pytest` を Windows でも実行する（`.github/workflows/ci.yml` の
-`test-windows` job）。OS で結果が変わらない検査（ruff / pylint / CLI reference /
-Markdown リンク）は Linux のみ。手元の Windows で CI と同じ結果にするには、
-次の 3 つが要る:
+CI の Windows check は `test-windows (git-contracts)` と
+`test-windows (remainder)` の 2 つで、両方が成功して初めて Windows の全 pytest を
+網羅する。`mypy` は `remainder` shard で 1 回だけ実行する。OS で結果が変わらない検査
+（ruff / pylint / CLI reference / Markdown リンク）は Linux のみ。手元の Windows で
+CI と同じ結果にするには、次の 3 つが要る:
 
 - **開発者モードを有効にする**（設定 → システム → 開発者向け）。symlink を作る
   テストは、昇格していないセッションでは作成権限が無く skip される（`tests/conftest.py`
