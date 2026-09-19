@@ -608,16 +608,6 @@ class KeyringSecretStore(SecretStore):
             encoding="utf-8",
         )
 
-    def _align_local_generations(self, index: dict[str, Any], keys: list[str]) -> None:
-        local = self._read_local()
-        for key in keys:
-            meta = index["keys"].get(key) or {}
-            generation = _as_generation(meta.get("generation"))
-            if generation is None:
-                continue
-            local["keys"][key] = {"generation": generation, "pending_send": False}
-        self._write_local(local)
-
     def _drop_local_generation(self, key: str) -> None:
         local = self._read_local()
         if key in local["keys"]:
