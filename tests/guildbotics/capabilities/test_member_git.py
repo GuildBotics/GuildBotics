@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 
 import git
@@ -12,6 +13,7 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
 )
 from guildbotics.entities.team import Person, Project, Team
+from tests.git_seed import WorkerGitSeed
 
 
 @pytest.fixture(autouse=True)
@@ -47,34 +49,22 @@ def _person() -> Person:
     )
 
 
-def _seed_remote(tmp_path: Path) -> Path:
-    remote = tmp_path / "remote.git"
-    git.Repo.init(remote, bare=True)
-    seed_path = tmp_path / "seed"
-    seed = git.Repo.init(seed_path)
-    with seed.config_writer() as writer:
-        writer.set_value("user", "name", "Seed")
-        writer.set_value("user", "email", "seed@example.com")
-    (seed_path / "README.md").write_text("initial\n", encoding="utf-8")
-    seed.git.add(A=True)
-    seed.index.commit("initial")
-    try:
-        seed.git.checkout("main")
-    except git.GitCommandError:
-        seed.git.checkout("-b", "main")
-    seed.create_remote("origin", str(remote))
-    seed.git.push("--set-upstream", "origin", "main")
-    return remote
+@pytest.fixture
+def workspace_repo(
+    tmp_path: Path, worker_git_seed: WorkerGitSeed
+) -> Callable[[Path], tuple[git.Repo, Path]]:
+    """Copy a fully independent remote and worktree from the worker seed."""
 
+    def create(workspace: Path) -> tuple[git.Repo, Path]:
+        remote = tmp_path / "remote.git"
+        worker_git_seed.copy(worker_git_seed.member_remote, remote)
+        repo_path = workspace / "repo"
+        worker_git_seed.copy(worker_git_seed.member_worktree, repo_path)
+        repo = git.Repo(repo_path)
+        repo.remote("origin").set_url(str(remote))
+        return repo, repo_path
 
-def _workspace_repo(tmp_path: Path, workspace: Path) -> tuple[git.Repo, Path]:
-    remote = _seed_remote(tmp_path)
-    repo_path = workspace / "repo"
-    repo = git.Repo.clone_from(str(remote), repo_path, branch="main")
-    with repo.config_writer() as writer:
-        writer.set_value("user", "name", "Existing")
-        writer.set_value("user", "email", "existing@example.com")
-    return repo, repo_path
+    return create
 
 
 _IN_PROGRESS_GIT_FILES = (
@@ -139,12 +129,14 @@ def test_member_git_auth_environment_disables_external_helpers(
 
 
 @pytest.mark.asyncio
-async def test_publish_commits_pushes_and_preserves_worktree(monkeypatch, tmp_path):
+async def test_publish_commits_pushes_and_preserves_worktree(
+    monkeypatch, tmp_path, workspace_repo
+):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     readme = repo_path / "README.md"
     readme.write_text("initial\nchanged\n", encoding="utf-8")
     untracked = repo_path / "new.txt"
@@ -173,12 +165,12 @@ async def test_publish_commits_pushes_and_preserves_worktree(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_commit_does_not_push(monkeypatch, tmp_path):
+async def test_commit_does_not_push(monkeypatch, tmp_path, workspace_repo):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
     repo.git.add(A=True)
 
@@ -198,12 +190,14 @@ async def test_commit_does_not_push(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_commit_without_staged_changes_is_a_no_op(monkeypatch, tmp_path):
+async def test_commit_without_staged_changes_is_a_no_op(
+    monkeypatch, tmp_path, workspace_repo
+):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     head_before = repo.head.commit.hexsha
     # Working-tree edit that the caller never staged: nothing should be committed.
     (repo_path / "README.md").write_text("initial\nunstaged\n", encoding="utf-8")
@@ -218,13 +212,13 @@ async def test_commit_without_staged_changes_is_a_no_op(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_commit_during_merge_creates_merge_commit_and_clears_merge_state(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     ours, theirs = _diverged_readme_branches(repo, repo_path)
     with pytest.raises(git.GitCommandError):
         repo.git.merge("theirs")
@@ -246,13 +240,13 @@ async def test_commit_during_merge_creates_merge_commit_and_clears_merge_state(
 
 @pytest.mark.asyncio
 async def test_commit_during_merge_with_ours_tree_creates_merge_commit(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     ours, theirs = _diverged_readme_branches(repo, repo_path)
     with pytest.raises(git.GitCommandError):
         repo.git.merge("theirs")
@@ -270,12 +264,14 @@ async def test_commit_during_merge_with_ours_tree_creates_merge_commit(
 
 
 @pytest.mark.asyncio
-async def test_commit_succeeds_when_repository_requires_gpg_sign(monkeypatch, tmp_path):
+async def test_commit_succeeds_when_repository_requires_gpg_sign(
+    monkeypatch, tmp_path, workspace_repo
+):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     with repo.config_writer() as writer:
         writer.set_value("commit", "gpgsign", "true")
     (repo_path / "README.md").write_text("initial\nsigned-config\n", encoding="utf-8")
@@ -292,13 +288,13 @@ async def test_commit_succeeds_when_repository_requires_gpg_sign(monkeypatch, tm
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["cherry-pick", "revert"])
 async def test_commit_consumes_sequencer_head_after_conflict_resolution(
-    monkeypatch, tmp_path, operation
+    monkeypatch, tmp_path, operation, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     ours, theirs = _diverged_readme_branches(repo, repo_path)
     sequencer_file = "CHERRY_PICK_HEAD" if operation == "cherry-pick" else "REVERT_HEAD"
     with pytest.raises(git.GitCommandError):
@@ -325,12 +321,12 @@ async def test_commit_consumes_sequencer_head_after_conflict_resolution(
 
 
 @pytest.mark.asyncio
-async def test_push_pushes_existing_commit(monkeypatch, tmp_path):
+async def test_push_pushes_existing_commit(monkeypatch, tmp_path, workspace_repo):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
     repo.git.add(A=True)
     commit_sha = repo.index.commit("local commit").hexsha
@@ -345,12 +341,14 @@ async def test_push_pushes_existing_commit(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_push_without_local_commits_reports_up_to_date(monkeypatch, tmp_path):
+async def test_push_without_local_commits_reports_up_to_date(
+    monkeypatch, tmp_path, workspace_repo
+):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    _workspace_repo(tmp_path, workspace)
+    workspace_repo(workspace)
 
     result = await service.push(workspace / "repo")
 
@@ -363,13 +361,13 @@ async def test_push_without_local_commits_reports_up_to_date(monkeypatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_push_includes_readiness_for_open_prs_on_the_branch(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    _, repo_path = _workspace_repo(tmp_path, workspace)
+    _, repo_path = workspace_repo(workspace)
     calls = {}
 
     async def fake_open_pr_checks(remote_url, branch):
@@ -404,13 +402,13 @@ async def test_push_includes_readiness_for_open_prs_on_the_branch(
     ],
 )
 async def test_push_stays_successful_when_pr_readiness_lookup_fails(
-    monkeypatch, tmp_path, failure
+    monkeypatch, tmp_path, failure, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     (repo_path / "README.md").write_text("initial\ncommitted\n", encoding="utf-8")
     repo.git.add(A=True)
     commit_sha = repo.index.commit("local commit").hexsha
@@ -431,12 +429,12 @@ async def test_push_stays_successful_when_pr_readiness_lookup_fails(
 
 
 @pytest.mark.asyncio
-async def test_push_rejected_by_remote_raises(monkeypatch, tmp_path):
+async def test_push_rejected_by_remote_raises(monkeypatch, tmp_path, workspace_repo):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     # A second clone advances the remote first, so the member's push is the
     # non-fast-forward the remote refuses.
     other_path = tmp_path / "other"
@@ -464,12 +462,14 @@ async def test_push_rejected_by_remote_raises(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_push_failing_hard_raises_with_git_error_as_cause(monkeypatch, tmp_path):
+async def test_push_failing_hard_raises_with_git_error_as_cause(
+    monkeypatch, tmp_path, workspace_repo
+):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    repo, repo_path = _workspace_repo(tmp_path, workspace)
+    repo, repo_path = workspace_repo(workspace)
     (repo_path / "README.md").write_text("initial\nlocal\n", encoding="utf-8")
     repo.git.add(A=True)
     local_sha = repo.index.commit("local commit").hexsha
@@ -662,12 +662,12 @@ async def test_publish_rejects_repo_outside_member_workspace(tmp_path):
 
 @pytest.mark.asyncio
 async def test_publish_current_workspace_allows_current_repo_outside_member_workspace(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, workspace_repo
 ):
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     service.workspace_root = tmp_path / "workspace" / "aiko"
-    repo, repo_path = _workspace_repo(tmp_path, tmp_path / "current")
+    repo, repo_path = workspace_repo(tmp_path / "current")
     (repo_path / "README.md").write_text("initial\ncurrent\n", encoding="utf-8")
     repo.git.add(A=True)
     before_branch = repo.active_branch.name
@@ -687,11 +687,11 @@ async def test_publish_current_workspace_allows_current_repo_outside_member_work
 
 @pytest.mark.asyncio
 async def test_publish_current_workspace_rejects_repo_that_is_not_current_workspace(
-    tmp_path,
+    tmp_path, workspace_repo
 ):
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     service.workspace_root = tmp_path / "workspace" / "aiko"
-    _, current_repo_path = _workspace_repo(tmp_path, tmp_path / "current")
+    _, current_repo_path = workspace_repo(tmp_path / "current")
     other_repo = git.Repo.init(tmp_path / "other")
 
     with pytest.raises(MemberCapabilityError, match="current workspace repository"):
@@ -701,11 +701,11 @@ async def test_publish_current_workspace_rejects_repo_that_is_not_current_worksp
 
 
 @pytest.mark.asyncio
-async def test_publish_rejects_empty_commit_message(tmp_path):
+async def test_publish_rejects_empty_commit_message(tmp_path, workspace_repo):
     service = MemberGitWorkspaceService(_person(), _team(_person()))
     workspace = tmp_path / "workspace" / "aiko"
     service.workspace_root = workspace
-    _, repo_path = _workspace_repo(tmp_path, workspace)
+    _, repo_path = workspace_repo(workspace)
 
     with pytest.raises(MemberCapabilityError, match="must not be empty"):
         await service.publish(repo_path, "  \n")

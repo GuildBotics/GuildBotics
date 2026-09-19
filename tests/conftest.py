@@ -1,8 +1,10 @@
 import contextlib
+import json
 import logging
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -11,9 +13,120 @@ import pytest
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
-from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
+from guildbotics.utils.import_utils import ClassResolver
+from tests.git_seed import WorkerGitSeed
+from tests.windows_shards import (
+    WINDOWS_SHARDS,
+    verify_windows_shards,
+    windows_shard_for_nodeid,
+)
+
+_PHASE_DURATION_OUTPUT: Path | None = None
+_PHASE_DURATIONS: list[dict[str, object]] = []
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--phase-durations-json",
+        metavar="PATH",
+        help="Write setup/call/teardown durations as machine-readable JSON.",
+    )
+    parser.addoption(
+        "--windows-shard",
+        choices=WINDOWS_SHARDS,
+        help="Run exactly one duration-balanced Windows test shard.",
+    )
+    parser.addoption(
+        "--verify-windows-shards",
+        action="store_true",
+        help="Verify that every collected node ID belongs to exactly one shard.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    global _PHASE_DURATION_OUTPUT
+    if hasattr(config, "workerinput"):
+        return
+    value = config.getoption("phase_durations_json")
+    _PHASE_DURATION_OUTPUT = Path(value) if value else None
+    _PHASE_DURATIONS.clear()
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if _PHASE_DURATION_OUTPUT is None or report.when not in {
+        "setup",
+        "call",
+        "teardown",
+    }:
+        return
+    _PHASE_DURATIONS.append(
+        {
+            "nodeid": report.nodeid,
+            "phase": report.when,
+            "outcome": report.outcome,
+            "duration_seconds": round(report.duration, 6),
+        }
+    )
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    if _PHASE_DURATION_OUTPUT is None:
+        return
+    _PHASE_DURATION_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    _PHASE_DURATION_OUTPUT.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "exit_status": int(session.exitstatus),
+                "phases": sorted(
+                    _PHASE_DURATIONS,
+                    key=lambda item: (str(item["nodeid"]), str(item["phase"])),
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    shard = config.getoption("windows_shard")
+    if shard is None:
+        return
+    selected: list[pytest.Item] = []
+    deselected: list[pytest.Item] = []
+    for item in items:
+        (
+            selected if windows_shard_for_nodeid(item.nodeid) == shard else deselected
+        ).append(item)
+    items[:] = selected
+    config.hook.pytest_deselected(items=deselected)
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    if not session.config.getoption("verify_windows_shards"):
+        return
+    counts = verify_windows_shards([item.nodeid for item in session.items])
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(
+            "Windows shard coverage: "
+            + ", ".join(f"{shard}={counts[shard]}" for shard in WINDOWS_SHARDS)
+        )
+
+
+@pytest.fixture(scope="session")
+def worker_git_seed(tmp_path_factory: pytest.TempPathFactory):
+    """Build invariant Git history once in each xdist worker."""
+    seed = WorkerGitSeed.create(tmp_path_factory.mktemp("git-seed"))
+    yield seed
+    seed.assert_unchanged()
 
 
 @pytest.fixture(autouse=True)

@@ -141,6 +141,9 @@ class GitTool:
     def close(self) -> None:
         repo = getattr(self, "repo", None)
         if repo is not None:
+            # Make Repo finalization happen here instead of during later GC, which
+            # can emit invalid-handle warnings on Windows.
+            del self.repo
             repo.close()
         if self._askpass_path is None:
             return
