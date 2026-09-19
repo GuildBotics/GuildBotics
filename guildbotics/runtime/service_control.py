@@ -5,19 +5,14 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import IO, Literal
+from typing import Literal
 from uuid import uuid4
 
-from guildbotics.utils.advisory_lock import (
-    lock_file_nonblocking,
-    open_lock_file,
-    unlock_file,
-)
+from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.fileio import get_machine_state_path
 
 StopStage = Literal["graceful", "cancel"]
@@ -50,8 +45,11 @@ def stop_request_path() -> Path:
 
 def read_stop_request(path: Path | None = None) -> StopRequest | None:
     request_path = path or stop_request_path()
-    with _request_lock(request_path):
-        return _read_stop_request(request_path)
+    try:
+        with _request_lock(request_path):
+            return _read_stop_request(request_path)
+    except OSError:
+        return None
 
 
 def _read_stop_request(request_path: Path) -> StopRequest | None:
@@ -65,28 +63,12 @@ def _read_stop_request(request_path: Path) -> StopRequest | None:
 
 @contextmanager
 def _request_lock(path: Path) -> Iterator[None]:
-    lock_path = path.with_name(f"{path.name}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open_lock_file(lock_path) as lock_file:
-        _acquire_request_lock(lock_file)
-        try:
-            yield
-        finally:
-            unlock_file(lock_file)
-
-
-def _acquire_request_lock(lock_file: IO[str]) -> None:
-    deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
-    while True:
-        try:
-            lock_file_nonblocking(lock_file)
-            return
-        except BlockingIOError as exc:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "Timed out acquiring the service-control lock."
-                ) from exc
-            time.sleep(_LOCK_RETRY_SECONDS)
+    with held_lock(
+        path.with_name(f"{path.name}.lock"),
+        timeout=_LOCK_TIMEOUT_SECONDS,
+        poll_interval=_LOCK_RETRY_SECONDS,
+    ):
+        yield
 
 
 def write_stop_request(
@@ -124,8 +106,7 @@ def write_stop_request(
 
 def clear_stop_request(path: Path | None = None) -> None:
     request_path = path or stop_request_path()
-    with _request_lock(request_path):
-        request_path.unlink(missing_ok=True)
+    request_path.unlink(missing_ok=True)
 
 
 class ServiceControlWatcher:

@@ -170,3 +170,29 @@ def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
             assert calls == [False, True]
         finally:
             watcher.close()
+
+
+def test_watcher_recovers_after_control_lock_timeout(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "stop-request.json"
+    calls: list[bool] = []
+    monkeypatch.setattr(service_control, "_LOCK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(service_control, "_LOCK_RETRY_SECONDS", 0.001)
+    watcher = ServiceControlWatcher(
+        "service-1",
+        lambda *, cancel: calls.append(cancel),
+        path=path,
+        poll_seconds=0.001,
+    )
+
+    try:
+        with service_control._request_lock(path):
+            watcher.start()
+            time.sleep(0.05)
+
+        write_stop_request("service-1", "graceful", path)
+        deadline = time.monotonic() + 1
+        while calls != [False] and time.monotonic() < deadline:
+            time.sleep(0.001)
+        assert calls == [False]
+    finally:
+        watcher.close()
