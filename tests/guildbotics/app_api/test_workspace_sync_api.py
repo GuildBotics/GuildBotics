@@ -1,4 +1,8 @@
-"""The Desktop's hub and synchronization endpoints, against real repositories."""
+"""The Desktop's hub and synchronization endpoints at their owning boundaries.
+
+Repository transport cases use real Git repositories. Lifecycle and presentation
+cases use the same manager with repository facts held in memory.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +12,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from git import Repo
 
 from guildbotics.app_api import workspace_sync
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
+from guildbotics.app_api.models import RejectedChangeModel
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.hub.host import hub_root
 from guildbotics.runtime.live_state import LiveState
@@ -20,17 +24,21 @@ from guildbotics.sync import (
     activation,
     current_sync_manager,
     deactivate_workspace_sync,
-    enrollment,
 )
-from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.sync.manager import GitSyncManager, GitSyncStatus
-from guildbotics.sync.rejections import record_update_rejected
 from guildbotics.utils import sync_lock as sync_lock_module
 from guildbotics.utils.advisory_lock import held_lock
 from guildbotics.utils.live_freshness import LIVE_HEARTBEAT_INTERVAL_SECONDS
 from guildbotics.utils.sync_lock import sync_lock_path
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
-from guildbotics.workspace.identity import read_workspace_identity
+from guildbotics.workspace.identity import (
+    ensure_workspace_identity,
+    read_workspace_identity,
+)
+from tests.guildbotics.sync.fake_activation import (
+    MemoryRepository,
+    install_memory_activation,
+)
 
 HTTP_OK = 200
 HTTP_CONFLICT = 409
@@ -76,6 +84,42 @@ def client(workspace: Path) -> TestClient:
         activation._manager = None
         activation._workspace = None
         set_workspace_sync_port(None)
+
+
+@pytest.fixture
+def memory_sync(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> GitSyncManager:
+    """Run the real lifecycle while repository state stays in memory."""
+    identity = ensure_workspace_identity(workspace)
+    install_memory_activation(monkeypatch)
+    monkeypatch.setattr(
+        workspace_sync,
+        "_location",
+        lambda *_args, **_kwargs: workspace_sync.HubLocation(),
+    )
+    monkeypatch.setattr(workspace_sync, "LocalSyncRepository", MemoryRepository)
+    monkeypatch.setattr(
+        workspace_sync.connection,
+        "hub_remote_url",
+        lambda *_args, **_kwargs: "memory:///hub",
+    )
+    monkeypatch.setattr(
+        workspace_sync.WorkspaceSyncService,
+        "_workspace_ids",
+        lambda *_args, **_kwargs: [identity.workspace_id],
+    )
+    monkeypatch.setattr(
+        workspace_sync.WorkspaceSyncService,
+        "_restart_relay",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        workspace_sync.WorkspaceSyncService,
+        "_remote_url",
+        lambda *_args, **_kwargs: "memory:///hub",
+    )
+    manager = activation.activate_workspace_sync(workspace)
+    assert manager is not None
+    return manager
 
 
 def _json(response) -> dict:
@@ -131,10 +175,9 @@ def test_listed_live_state_stays_online_when_the_publisher_clock_lags(
 
 
 def test_desktop_owner_transfer_accepts_only_this_device(
-    client: TestClient,
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    del memory_sync
 
     response = client.post(
         "/workspace/service-owner/transfer",
@@ -279,7 +322,10 @@ def test_a_preview_before_a_first_connection_leaves_no_repository(
 
 
 def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
-    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    workspace: Path,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A preview that outwaits sync.lock is a retryable answer, not a crash.
 
@@ -287,17 +333,15 @@ def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
     the user should read "try again", and the queue the pause stopped must be
     running again afterwards.
     """
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
     monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
 
     with held_lock(sync_lock_path(workspace)):
         response = client.post(
             "/workspace/sync/preview",
             headers=AUTH_HEADERS,
-            json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+            json={"hub": {}, "workspace_id": identity.workspace_id},
         )
 
     assert response.status_code == HTTP_CONFLICT
@@ -314,7 +358,7 @@ def test_retrying_an_unsynchronized_workspace_changes_nothing(
 
 
 def test_retrying_a_synchronized_workspace_reports_its_state(
-    client: TestClient,
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
     """Retrying a healthy workspace reports that attempt, with no error.
 
@@ -322,8 +366,7 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     successful retry is idle. The worker may start another cycle afterwards;
     that later state belongs to a subsequent status read, not this response.
     """
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    del memory_sync
 
     payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
 
@@ -363,36 +406,33 @@ def test_status_operations_keep_one_workspace_while_a_switch_starts(
     workspace: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    memory_sync: GitSyncManager,
     operation_name: str,
     manager_method: str,
 ) -> None:
     """Every response field belongs to the selected manager's workspace."""
     first_root = workspace
-    hub = tmp_path / "hub.git"
-    Repo.init(hub, bare=True, initial_branch="main")
-    enrollment.enroll(str(hub), first_root)
-    other_hub = tmp_path / "other-hub.git"
-    Repo.init(other_hub, bare=True, initial_branch="main")
     second_root = tmp_path / "windows"
     second_root.mkdir()
     (second_root / ".guildbotics" / "state").mkdir(parents=True)
     (second_root / ".guildbotics" / CONFIG).parent.mkdir(parents=True, exist_ok=True)
     (second_root / ".guildbotics" / CONFIG).write_bytes(b"name: other\n")
-    enrollment.enroll(str(other_hub), second_root)
+    ensure_workspace_identity(second_root)
 
-    first = activation.activate_workspace_sync(first_root)
-    assert first is not None
+    first = memory_sync
     first_identity = read_workspace_identity(first_root)
-    second_identity = read_workspace_identity(second_root)
     assert first_identity is not None
-    assert second_identity is not None
-    rejection_id = _reject(first_root)
-    record_update_rejected(
-        rejection_id=rejection_id,
-        paths=["config/team/other.yml"],
-        device_id="device-windows",
-        workspace_id=second_identity.workspace_id,
-        workspace_root=second_root,
+    rejection = RejectedChangeModel(
+        rejection_id="rejected-first",
+        occurred_at="2026-09-19T00:00:00Z",
+        paths=[CONFIG],
+    )
+    monkeypatch.setattr(
+        workspace_sync,
+        "_rejected",
+        lambda repository: (
+            [rejection] if repository.workspace_root == first_root.resolve() else []
+        ),
     )
 
     service = workspace_sync.WorkspaceSyncService()
@@ -431,10 +471,10 @@ def test_status_operations_keep_one_workspace_while_a_switch_starts(
 
     payload = result[0]
     assert payload.workspace_id == first_identity.workspace_id
-    assert payload.rejected_changes[0].rejection_id == rejection_id
+    assert payload.rejected_changes[0].rejection_id == rejection.rejection_id
     assert payload.rejected_changes[0].paths == [CONFIG]
     assert payload.live_error_code == "relay_failed"
-    assert LocalSyncRepository(first_root).remote_url() == payload.hub_url
+    assert MemoryRepository(first_root).remote_url() == payload.hub_url
 
 
 # -- Taking a workspace from a hub --------------------------------------------
@@ -498,19 +538,21 @@ def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
 
 
 def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
-    client: TestClient, workspace: Path
+    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    monkeypatch.setattr(
+        workspace_sync,
+        "_location",
+        lambda *_args, **_kwargs: workspace_sync.HubLocation(),
     )
+    identity = ensure_workspace_identity(workspace)
 
     response = client.post(
         "/workspace/sync/clone",
         headers=AUTH_HEADERS,
         json={
             "hub": {},
-            "workspace_id": enabled["workspace_id"],
+            "workspace_id": identity.workspace_id,
             "workspace_dir": str(workspace),
         },
     )
@@ -581,12 +623,11 @@ def test_the_user_can_say_they_are_done_with_a_displaced_commit(
 
 
 def test_a_rejection_id_that_names_no_ref_is_refused(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
     """The identifier reaches Git as part of a ref name, so anything that is
     not one of ours is turned away before it gets there."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    del memory_sync
 
     response = client.post(
         "/workspace/sync/rejections/heads-main/discard", headers=AUTH_HEADERS
@@ -607,21 +648,18 @@ def test_this_device_reports_no_key_before_one_is_made(client: TestClient) -> No
 
 
 def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
-    client: TestClient, tmp_path: Path
+    client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
     """A key not registered yet, a hub that is off, a wrong address: these are
     the normal way this fails, so the Desktop has to be able to show them."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    identity = ensure_workspace_identity(workspace)
 
     response = client.post(
         "/workspace/sync/clone",
         headers=AUTH_HEADERS,
         json={
             "hub": {"endpoint": "hub.invalid"},
-            "workspace_id": enabled["workspace_id"],
+            "workspace_id": identity.workspace_id,
             "workspace_dir": str(tmp_path / "second"),
         },
     )
@@ -652,47 +690,47 @@ def test_a_workspace_identifier_that_is_not_one_is_refused(
 # -- The queue and the enrollment work never share the repository -------------
 
 
-def _enabled(client: TestClient) -> dict:
-    client.post("/hub", headers=AUTH_HEADERS)
-    return _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
-
-
 def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    workspace: Path,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Enrolling commits, fetches, and resets the branch the running queue is
-    working in, so the two must never be in there together."""
-    enabled = _enabled(client)
+    working in, so the two must never be in there together. The real enrollment
+    path through the endpoint is covered by the corresponding enable tests;
+    this change-hub case isolates the queue lifecycle boundary."""
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
     running: list[bool] = []
-    real_enroll = workspace_sync.enroll
     monkeypatch.setattr(
         workspace_sync,
         "enroll",
-        lambda *args, **kwargs: (
-            running.append(current_sync_manager() is not None),
-            real_enroll(*args, **kwargs),
-        )[1],
+        lambda *args, **kwargs: running.append(current_sync_manager() is not None),
     )
 
-    client.post(
+    response = client.post(
         "/workspace/sync/hub",
         headers=AUTH_HEADERS,
-        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+        json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
+    _json(response)
     assert running == [False]
 
 
 def test_the_queue_is_running_again_after_a_failed_hub_change(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    workspace: Path,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed attempt must not leave a workspace that has a hub quietly not
     synchronizing. The failure has to happen inside the pause to prove it: a
     request rejected before the queue stops would pass without testing anything.
     """
-    enabled = _enabled(client)
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
     paused: list[bool] = []
 
     def failing_enroll(*args: object, **kwargs: object) -> None:
@@ -704,7 +742,7 @@ def test_the_queue_is_running_again_after_a_failed_hub_change(
     response = client.post(
         "/workspace/sync/hub",
         headers=AUTH_HEADERS,
-        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+        json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
     assert response.status_code == HTTP_CONFLICT
@@ -714,9 +752,13 @@ def test_the_queue_is_running_again_after_a_failed_hub_change(
 
 
 def test_a_queue_that_will_not_stop_blocks_the_hub_change(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    workspace: Path,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    enabled = _enabled(client)
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
     manager = current_sync_manager()
     assert manager is not None
     monkeypatch.setattr(manager, "stop", lambda timeout=5.0: False)
@@ -724,7 +766,7 @@ def test_a_queue_that_will_not_stop_blocks_the_hub_change(
     response = client.post(
         "/workspace/sync/hub",
         headers=AUTH_HEADERS,
-        json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+        json={"hub": {}, "workspace_id": identity.workspace_id},
     )
 
     assert response.status_code == HTTP_CONFLICT
@@ -781,10 +823,10 @@ def test_the_device_list_is_empty_until_this_machine_joins_one(
 
 
 def test_this_machine_appears_once_it_has_a_record(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    del memory_sync
+    workspace_sync.WorkspaceSyncService().activate()
 
     payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
 
@@ -795,11 +837,13 @@ def test_this_machine_appears_once_it_has_a_record(
 
 
 def test_activation_republishes_the_current_device_key_fingerprint(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del memory_sync
     monkeypatch.setattr(workspace_sync, "_key_fingerprint", lambda: None)
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    workspace_sync.WorkspaceSyncService().activate()
     assert (
         _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"][0][
             "ssh_public_key_fingerprint"
@@ -817,10 +861,10 @@ def test_activation_republishes_the_current_device_key_fingerprint(
 
 
 def test_renaming_this_machine_publishes_the_new_name(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    del memory_sync
+    workspace_sync.WorkspaceSyncService().activate()
 
     payload = _json(
         client.post(

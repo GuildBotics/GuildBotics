@@ -98,6 +98,8 @@ jobs:
       - name: Run tests
         # A short base directory: tests create Git repositories, whose own
         # paths are long enough to pass MAX_PATH from the default one.
+        # Eight workers keep Git subprocess and file-I/O waits from leaving a
+        # long tail on the four-core hosted runner.
         run: >-
-          uv run --no-sync python -m pytest tests/ -n auto --durations=30
+          uv run --no-sync python -m pytest tests/ -n 8 --durations=30
           --basetemp=${{ runner.temp }}/gb

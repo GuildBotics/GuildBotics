@@ -20,73 +20,12 @@ from guildbotics.secrets import (
     is_unconfirmed,
     transfer_status,
 )
-from guildbotics.secrets.hub_client import (
-    HUB_CONFLICT,
-    HUB_LOCKED,
-    HUB_MISSING,
-    HubSecretClient,
-    HubSecretIndex,
-    HubFetchResult,
-    HubSendResult,
-    SecretOffer,
-)
+from guildbotics.secrets.hub_client import HubFetchResult, HubSendResult, SecretOffer
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.keychain import SecretStoreError
-from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.secret_store import KeyringSecretStore, SecretKeyStatus
-
-
-class FakeHub(HubSecretClient):
-    """A hub holding values in memory, with the base check the real one makes."""
-
-    def __init__(self, locked: bool = False):
-        self.values: dict[str, str] = {}
-        self.held: dict[str, int] = {}
-        self.locked = locked
-        self.offered: list[SecretOffer] = []
-        self.requested: list[list[str]] = []
-
-    def index(self) -> HubSecretIndex:
-        return HubSecretIndex(
-            generations=dict(self.held),
-            available=not self.locked,
-            locked=self.locked,
-        )
-
-    def send(self, entries: list[SecretOffer]) -> list[HubSendResult]:
-        self.offered.extend(entries)
-        results = []
-        for offer in entries:
-            if self.locked:
-                results.append(HubSendResult(key=offer.key, status=HUB_LOCKED))
-                continue
-            current = self.held.get(offer.key)
-            if current is not None and current != offer.candidate - 1:
-                results.append(HubSendResult(key=offer.key, status=HUB_CONFLICT))
-                continue
-            self.values[offer.key] = offer.value
-            self.held[offer.key] = offer.candidate
-            results.append(
-                HubSendResult(
-                    key=offer.key, status="stored", generation=offer.candidate
-                )
-            )
-        return results
-
-    def fetch(self, keys: list[str]) -> list[HubFetchResult]:
-        self.requested.append(list(keys))
-        results = []
-        for key in keys:
-            held = self.held.get(key)
-            if held is None:
-                results.append(HubFetchResult(key=key, status=HUB_MISSING))
-                continue
-            results.append(
-                HubFetchResult(
-                    key=key, status="sent", generation=held, value=self.values[key]
-                )
-            )
-        return results
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
+from tests.guildbotics.secrets.fake_hub import FakeHub
 
 
 @pytest.fixture

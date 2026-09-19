@@ -1,7 +1,9 @@
-"""The Desktop's Secret endpoints, against a real hub on this machine.
+"""The Desktop's Secret endpoints at their owning boundaries.
 
 Two things are asserted throughout: what the screen is told about each key, and
-that no response, anywhere, carries a value.
+that no response, anywhere, carries a value. State and transfer cases use the
+same in-memory Hub Secret contract as the transfer layer; the two transport
+cases keep a real same-machine Hub and loopback Desktop.
 """
 
 from __future__ import annotations
@@ -11,24 +13,29 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from guildbotics.app_api import workspace_secrets
 from guildbotics.app_api.api import create_app
 from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.app_api.workspace_sync import WorkspaceSyncService
+from guildbotics.hub.connection import HubLocation
 from guildbotics.sync import activation, current_sync_manager, deactivate_workspace_sync
 from guildbotics.sync.manager import GitSyncManager
 from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.secret_store import KeyringSecretStore
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
+from tests.guildbotics.secrets.fake_hub import FakeHub
 
 HTTP_OK = 200
 HTTP_CONFLICT = 409
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 TOKEN = "ghp-000111222333"
+WORKSPACE_ID = "0198ab00-0000-7000-8000-000000000001"
 
 
 def test_desktop_self_http_transfers_through_its_own_event_loop(
-    connected,
+    real_connected,
     monkeypatch,
     fake_keyring,
     workspace,
@@ -36,13 +43,15 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
     """The synchronous screen API calls the same server's binary API over TCP."""
     import threading
     import time
+
     import httpx
     import uvicorn
+
     from guildbotics.hub import secret_transport
     from guildbotics.utils.local_api import LocalApiEndpoint
 
     config = uvicorn.Config(
-        connected.app,
+        real_connected.app,
         host="127.0.0.1",
         port=0,
         lifespan="off",
@@ -65,7 +74,7 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
                 base_url=f"http://127.0.0.1:{port}",
                 headers=AUTH_HEADERS,
                 trust_env=False,
-                timeout=10,
+                timeout=30,
             ) as browser:
                 health = browser.get("/health").json()
                 endpoint = LocalApiEndpoint(
@@ -107,14 +116,14 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
             assert not thread.is_alive()
 
 
-def test_mac_hub_requires_desktop_with_localized_guidance(connected, monkeypatch):
+def test_mac_hub_requires_desktop_with_localized_guidance(real_connected, monkeypatch):
     from guildbotics.hub import secret_transport
     from guildbotics.utils.i18n_tool import t
 
     _store().set("A_TOKEN", TOKEN)
     monkeypatch.setattr(secret_transport, "DELEGATES_TO_DESKTOP", True)
     monkeypatch.setattr(secret_transport, "read_endpoint", lambda: None)
-    payload = _json(connected.get("/workspace/secrets", headers=AUTH_HEADERS))
+    payload = _json(real_connected.get("/workspace/secrets", headers=AUTH_HEADERS))
     assert payload["hub_reachable"] is True
     assert payload["hub_secret_store"] == {
         "available": False,
@@ -122,7 +131,7 @@ def test_mac_hub_requires_desktop_with_localized_guidance(connected, monkeypatch
         "error_code": "desktop_required",
     }
     for operation in ("send", "fetch"):
-        response = connected.post(
+        response = real_connected.post(
             f"/workspace/secrets/{operation}",
             headers={**AUTH_HEADERS, "X-GuildBotics-Language": "ja"},
             json={"keys": []},
@@ -168,7 +177,7 @@ def client(workspace: Path):
 
 
 @pytest.fixture
-def connected(client: TestClient) -> TestClient:
+def real_connected(client: TestClient) -> TestClient:
     """A workspace sharing with a hub this same machine hosts."""
     client.post("/hub", headers=AUTH_HEADERS)
     assert (
@@ -177,6 +186,20 @@ def connected(client: TestClient) -> TestClient:
         ).status_code
         == HTTP_OK
     )
+    return client
+
+
+@pytest.fixture
+def connected(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """A connected workspace whose Hub Secret boundary is held in memory."""
+    hub = FakeHub()
+    monkeypatch.setattr(workspace_secrets, "hub_secret_client", lambda *_: hub)
+    monkeypatch.setattr(
+        WorkspaceSyncService,
+        "hub_target",
+        lambda _self: (HubLocation(), WORKSPACE_ID),
+    )
+    monkeypatch.setattr(WorkspaceSyncService, "refresh", lambda _self: None)
     return client
 
 
