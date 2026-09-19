@@ -89,7 +89,7 @@ def client(workspace: Path) -> TestClient:
 @pytest.fixture
 def memory_sync(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> GitSyncManager:
     """Run the real lifecycle while repository state stays in memory."""
-    ensure_workspace_identity(workspace)
+    identity = ensure_workspace_identity(workspace)
     install_memory_activation(monkeypatch)
     monkeypatch.setattr(
         workspace_sync,
@@ -97,6 +97,16 @@ def memory_sync(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> GitSyncMana
         lambda *_args, **_kwargs: workspace_sync.HubLocation(),
     )
     monkeypatch.setattr(workspace_sync, "LocalSyncRepository", MemoryRepository)
+    monkeypatch.setattr(
+        workspace_sync.connection,
+        "hub_remote_url",
+        lambda *_args, **_kwargs: "memory:///hub",
+    )
+    monkeypatch.setattr(
+        workspace_sync.WorkspaceSyncService,
+        "_workspace_ids",
+        lambda *_args, **_kwargs: [identity.workspace_id],
+    )
     monkeypatch.setattr(
         workspace_sync.WorkspaceSyncService,
         "_restart_relay",
@@ -165,10 +175,9 @@ def test_listed_live_state_stays_online_when_the_publisher_clock_lags(
 
 
 def test_desktop_owner_transfer_accepts_only_this_device(
-    client: TestClient,
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    del memory_sync
 
     response = client.post(
         "/workspace/service-owner/transfer",
@@ -313,7 +322,10 @@ def test_a_preview_before_a_first_connection_leaves_no_repository(
 
 
 def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
-    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    workspace: Path,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A preview that outwaits sync.lock is a retryable answer, not a crash.
 
@@ -321,17 +333,15 @@ def test_a_busy_sync_repository_answers_busy_and_keeps_the_queue(
     the user should read "try again", and the queue the pause stopped must be
     running again afterwards.
     """
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
     monkeypatch.setattr(sync_lock_module, "LOCK_TIMEOUT_SECONDS", 0.01)
 
     with held_lock(sync_lock_path(workspace)):
         response = client.post(
             "/workspace/sync/preview",
             headers=AUTH_HEADERS,
-            json={"hub": {}, "workspace_id": enabled["workspace_id"]},
+            json={"hub": {}, "workspace_id": identity.workspace_id},
         )
 
     assert response.status_code == HTTP_CONFLICT
@@ -528,19 +538,17 @@ def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
 
 
 def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
-    client: TestClient, workspace: Path
+    client: TestClient, workspace: Path, memory_sync: GitSyncManager
 ) -> None:
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    del memory_sync
+    identity = ensure_workspace_identity(workspace)
 
     response = client.post(
         "/workspace/sync/clone",
         headers=AUTH_HEADERS,
         json={
             "hub": {},
-            "workspace_id": enabled["workspace_id"],
+            "workspace_id": identity.workspace_id,
             "workspace_dir": str(workspace),
         },
     )
@@ -611,12 +619,11 @@ def test_the_user_can_say_they_are_done_with_a_displaced_commit(
 
 
 def test_a_rejection_id_that_names_no_ref_is_refused(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
     """The identifier reaches Git as part of a ref name, so anything that is
     not one of ours is turned away before it gets there."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    del memory_sync
 
     response = client.post(
         "/workspace/sync/rejections/heads-main/discard", headers=AUTH_HEADERS
@@ -637,21 +644,18 @@ def test_this_device_reports_no_key_before_one_is_made(client: TestClient) -> No
 
 
 def test_a_hub_that_cannot_be_reached_is_an_answer_not_a_crash(
-    client: TestClient, tmp_path: Path
+    client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
     """A key not registered yet, a hub that is off, a wrong address: these are
     the normal way this fails, so the Desktop has to be able to show them."""
-    client.post("/hub", headers=AUTH_HEADERS)
-    enabled = _json(
-        client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
-    )
+    identity = ensure_workspace_identity(workspace)
 
     response = client.post(
         "/workspace/sync/clone",
         headers=AUTH_HEADERS,
         json={
             "hub": {"endpoint": "hub.invalid"},
-            "workspace_id": enabled["workspace_id"],
+            "workspace_id": identity.workspace_id,
             "workspace_dir": str(tmp_path / "second"),
         },
     )
@@ -813,10 +817,10 @@ def test_the_device_list_is_empty_until_this_machine_joins_one(
 
 
 def test_this_machine_appears_once_it_has_a_record(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    del memory_sync
+    workspace_sync.WorkspaceSyncService().activate()
 
     payload = _json(client.get("/workspace/devices", headers=AUTH_HEADERS))
 
@@ -827,11 +831,13 @@ def test_this_machine_appears_once_it_has_a_record(
 
 
 def test_activation_republishes_the_current_device_key_fingerprint(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    memory_sync: GitSyncManager,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del memory_sync
     monkeypatch.setattr(workspace_sync, "_key_fingerprint", lambda: None)
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    workspace_sync.WorkspaceSyncService().activate()
     assert (
         _json(client.get("/workspace/devices", headers=AUTH_HEADERS))["devices"][0][
             "ssh_public_key_fingerprint"
@@ -849,10 +855,10 @@ def test_activation_republishes_the_current_device_key_fingerprint(
 
 
 def test_renaming_this_machine_publishes_the_new_name(
-    client: TestClient, workspace: Path
+    client: TestClient, memory_sync: GitSyncManager
 ) -> None:
-    _json(client.post("/hub", headers=AUTH_HEADERS))
-    _json(client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}}))
+    del memory_sync
+    workspace_sync.WorkspaceSyncService().activate()
 
     payload = _json(
         client.post(

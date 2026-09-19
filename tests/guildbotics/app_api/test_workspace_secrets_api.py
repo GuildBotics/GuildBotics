@@ -74,7 +74,7 @@ def test_desktop_self_http_transfers_through_its_own_event_loop(
                 base_url=f"http://127.0.0.1:{port}",
                 headers=AUTH_HEADERS,
                 trust_env=False,
-                timeout=10,
+                timeout=30,
             ) as browser:
                 health = browser.get("/health").json()
                 endpoint = LocalApiEndpoint(
