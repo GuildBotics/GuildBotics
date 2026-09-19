@@ -16,11 +16,7 @@ class MemoryRepository(LocalSyncRepository):
     """Expose only the repository facts lifecycle and presentation tests need."""
 
     def __init__(self, workspace_root: Path):
-        self._root = workspace_root.resolve()
-
-    @property
-    def workspace_root(self) -> Path:
-        return self._root
+        super().__init__(workspace_root)
 
     @property
     def initialized(self) -> bool:
@@ -33,7 +29,7 @@ class MemoryRepository(LocalSyncRepository):
         return True
 
     def remote_url(self) -> str:
-        return f"memory:///{self._root.name}"
+        return f"memory:///{self.workspace_root.name}"
 
     def head(self) -> None:
         return None

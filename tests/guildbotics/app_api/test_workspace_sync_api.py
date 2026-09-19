@@ -538,9 +538,13 @@ def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
 
 
 def test_a_copy_refuses_a_directory_that_already_holds_a_workspace(
-    client: TestClient, workspace: Path, memory_sync: GitSyncManager
+    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    del memory_sync
+    monkeypatch.setattr(
+        workspace_sync,
+        "_location",
+        lambda *_args, **_kwargs: workspace_sync.HubLocation(),
+    )
     identity = ensure_workspace_identity(workspace)
 
     response = client.post(
@@ -693,7 +697,9 @@ def test_changing_the_hub_stops_the_queue_before_it_touches_the_repository(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Enrolling commits, fetches, and resets the branch the running queue is
-    working in, so the two must never be in there together."""
+    working in, so the two must never be in there together. The real enrollment
+    path through the endpoint is covered by the corresponding enable tests;
+    this change-hub case isolates the queue lifecycle boundary."""
     del memory_sync
     identity = ensure_workspace_identity(workspace)
     running: list[bool] = []
