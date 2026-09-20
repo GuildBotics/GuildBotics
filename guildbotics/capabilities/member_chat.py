@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import httpx
 
+from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_github import MemberCapabilityError
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.chat_profile import get_chat_slack_base_url
@@ -182,6 +183,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         rendered_body = self._render_participant_text(body)
+        ensure_chat_current(self.person.person_id)
         try:
             result = await self._chat().post_message(resolved_channel_id, rendered_body)
         except Exception as exc:
@@ -205,6 +207,7 @@ class MemberChatCapabilityService:
     ) -> dict[str, Any]:
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
         rendered_body = self._render_participant_text(body)
+        ensure_chat_current(self.person.person_id)
         try:
             result = await self._chat().post_message(
                 resolved_channel_id, rendered_body, thread_ts=thread_ts
@@ -232,6 +235,7 @@ class MemberChatCapabilityService:
             raise MemberCapabilityError(f"Unsupported chat reaction: {reaction}")
         semantic_reaction = cast(SemanticReaction, reaction)
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
+        ensure_chat_current(self.person.person_id)
         try:
             await self._chat().add_reaction(
                 resolved_channel_id, message_ts, semantic_reaction

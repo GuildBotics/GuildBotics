@@ -20,3 +20,10 @@ ja:
     unavailable_with_holder: "person execution lease は PID %{pid}（%{source}: %{command}）が使用しています。"
   sync:
     invalid_identity: "Workspace 同期を開始できませんでした。%{path} が不正です。コマンドによる変更はまだ行われていません。ファイルを修復してから再実行してください。"
+  chat_updates:
+    catching_up: "受信したメッセージがWorkspace同期の書き込みロック待ちで保存されていません。少し待ってchat updatesを再試行してください。この状態だけを理由に公開やblocked完了を行わないでください。"
+    invalid_run: "このメンバーのチャット入力が実行にありません。現在のチャットワークフローの実行IDを指定してください。"
+    unavailable: "チャット受信が停止しているか、受信状態の更新が途絶えています。受信の復旧を待ち、公開操作は行わないでください。"
+    not_checked: "この入力に対する新着確認がまだ行われていません。"
+    new_messages: "前回の確認後に元のスレッドへ新着メッセージが届いています。"
+    required: "%{reason} guildbotics member chat updates --person %{person} --run-id %{run_id} を実行し、結果を読んで操作内容を再検討してから再試行してください。"

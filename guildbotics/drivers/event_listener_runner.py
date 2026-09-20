@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from guildbotics.entities.team import Person
@@ -14,6 +15,7 @@ from guildbotics.integrations.chat_profile import (
     get_chat_slack_base_url,
     get_chat_subscriptions,
 )
+from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
@@ -31,6 +33,7 @@ from guildbotics.runtime.event_listener import (
     EventListener,
     IncomingChatEvent,
 )
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError, shared_write_lock
 
 SubscriptionSignature = tuple[tuple[tuple[str, str], ...], ...]
 ResolvedSubscriptions = dict[str, "ChatBackfillPolicy"]
@@ -83,6 +86,13 @@ class EventListenerRunner:
         # awaits so a stop overlapping a backfill does not exceed the stop timeout.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._active_cycle: asyncio.Task[None] | None = None
+        self._receive_wakeup = asyncio.Event()
+        self._receive_status = ChatReceiveStatus()
+        self._backfill_waiting: set[tuple[str, str, str]] = set()
+        self._connection_subscriptions: dict[
+            SlackConnectionKey, list[tuple[Person, ResolvedSubscriptions]]
+        ] = {}
+        self._undelivered: dict[SlackConnectionKey, list[IncomingChatEvent]] = {}
         self._listeners: dict[SlackConnectionKey, EventListener] = {}
         self._listener_tokens: dict[SlackConnectionKey, str] = {}
         self._connection_person_ids: dict[SlackConnectionKey, list[str]] = {}
@@ -172,6 +182,37 @@ class EventListenerRunner:
                     self._on_stopped()
 
     async def _run_loop(self) -> None:
+        # A stopped runner can restart on a new event loop.
+        self._receive_wakeup = asyncio.Event()
+        receiver = asyncio.create_task(self._receive_loop())
+        try:
+            await self._backfill_loop()
+        finally:
+            receiver.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await receiver
+            finally:
+                await self._aclose_sources()
+
+    def _wake_receiver(self) -> None:
+        loop = self._loop
+        if loop is not None:
+            with suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._receive_wakeup.set)
+
+    async def _receive_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._receive_wakeup.clear()
+            for key in list(self._connection_subscriptions):
+                try:
+                    self._flush_listener(key)
+                except OSError as exc:
+                    self._log_warning("chat receiver heartbeat failed: %s", exc)
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._receive_wakeup.wait(), timeout=1.0)
+
+    async def _backfill_loop(self) -> None:
         while not self._stop_event.is_set():
             self._cycle_count += 1
             try:
@@ -195,7 +236,6 @@ class EventListenerRunner:
             self._events_pending_count,
             self._events_backfilled_count,
         )
-        await self._aclose_sources()
 
     async def _run_once(self) -> None:
         await self._drain_backfill_and_queue()
@@ -216,65 +256,108 @@ class EventListenerRunner:
             self._log_info(
                 "event listener runner: no active event listener subscriptions"
             )
+        for key, subscribers in self._connection_subscriptions.items():
+            for person, channels in subscribers:
+                for channel_id in channels:
+                    if not any(
+                        p.person_id == person.person_id and channel_id in c
+                        for p, c in grouped.get(key, [])
+                    ):
+                        self._receive_status.save(
+                            key.service,
+                            person.person_id,
+                            channel_id,
+                            state="unavailable",
+                        )
+        self._connection_subscriptions = grouped
         for key, person_subs in grouped.items():
             if self._stop_event.is_set():
                 break
-            listener = self._get_or_create_listener(key)
-            listener.start()
-            drained_events = listener.drain_events()
-            pending_count = 0
-            for incoming in drained_events:
-                if self._stop_event.is_set():
-                    break
-                for person, subscriptions in person_subs:
-                    if incoming.channel_id not in subscriptions:
-                        continue
-                    if self._is_processed_for_person(person, incoming):
-                        continue
-                    if is_suppressed_chat_event(incoming.event):
-                        self._state_store.mark_processed_event(
-                            incoming.service_name,
-                            person.person_id,
-                            incoming.channel_id,
-                            incoming.event.event_id,
-                        )
-                        continue
-                    self._state_store.upsert_pending_event(
-                        incoming.service_name,
-                        person.person_id,
-                        incoming.channel_id,
-                        incoming.event,
-                        subscriptions[incoming.channel_id].participation,
-                    )
-                    pending_count += 1
-            # Backfill members concurrently (Slack I/O only). The actual chat
-            # workflow runs later in each member's scheduler worker, which keeps
-            # a member's chat/ticket/scheduled work on one serial queue.
-            backfilled_results = await asyncio.gather(
+            self._get_or_create_listener(key).start()
+            self._flush_listener(key)
+            backfilled = await asyncio.gather(
                 *(
                     self._backfill_person(person, key.service, subscriptions)
                     for person, subscriptions in person_subs
                 )
             )
-            backfilled_count = sum(backfilled_results)
-            self._events_drained_count += len(drained_events)
-            self._events_pending_count += pending_count
-            self._events_backfilled_count += backfilled_count
-            if drained_events or backfilled_count:
-                self._log_info(
-                    "listener queue summary: base_url=%s token_hash=%s drained=%d "
-                    "pending=%d backfilled=%d subscribers=%d total_drained=%d "
-                    "total_pending=%d total_backfilled=%d",
-                    key.base_url,
-                    key.app_token_hash[:12],
-                    len(drained_events),
-                    pending_count,
-                    backfilled_count,
-                    len(person_subs),
-                    self._events_drained_count,
-                    self._events_pending_count,
-                    self._events_backfilled_count,
+            self._events_backfilled_count += sum(backfilled)
+
+    def _flush_listener(self, key: SlackConnectionKey) -> None:
+        listener = self._listeners.get(key)
+        if listener is None:
+            return
+        subscribers = self._connection_subscriptions.get(key, [])
+        pending = self._undelivered.setdefault(key, [])
+        state: ReceiveState = "ready"
+        try:
+            drained = listener.drain_events()
+            self._events_drained_count += len(drained)
+            pending.extend(drained)
+            # Never block the event loop behind sync. Re-entrant writes below
+            # inherit this lock, and the receive loop retries on its next wake.
+            if pending:
+                with shared_write_lock(timeout=0):
+                    while pending:
+                        incoming = pending[0]
+                        for person, subscriptions in subscribers:
+                            if (
+                                incoming.channel_id not in subscriptions
+                                or self._is_processed_for_person(person, incoming)
+                            ):
+                                continue
+                            if is_suppressed_chat_event(incoming.event):
+                                self._state_store.mark_processed_event(
+                                    incoming.service_name,
+                                    person.person_id,
+                                    incoming.channel_id,
+                                    incoming.event.event_id,
+                                )
+                            else:
+                                self._state_store.upsert_pending_event(
+                                    incoming.service_name,
+                                    person.person_id,
+                                    incoming.channel_id,
+                                    incoming.event,
+                                    subscriptions[incoming.channel_id].participation,
+                                )
+                                self._events_pending_count += 1
+                        pending.pop(0)
+        except SharedWriteBusyError:
+            state = "catching_up" if pending else "ready"
+        except Exception as exc:
+            state = "unavailable"
+            self._log_warning("chat receive persistence failed: %s", exc)
+        if not getattr(listener, "connected", False) or self._stop_event.is_set():
+            state = "unavailable"
+        for person, channels in subscribers:
+            for channel_id in channels:
+                scope = (key.service, person.person_id, channel_id)
+                channel_state = (
+                    "catching_up"
+                    if state == "ready" and scope in self._backfill_waiting
+                    else state
                 )
+                self._receive_status.save(*scope, state=channel_state)
+
+    async def _write_backfill[T](
+        self, scope: tuple[str, str, str], write: Callable[[], T]
+    ) -> T:
+        """Wait for sync cooperatively so socket reception and heartbeats continue."""
+        self._backfill_waiting.add(scope)
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    with shared_write_lock(timeout=0):
+                        return write()
+                except SharedWriteBusyError:
+                    if self._receive_status.state(*scope) == "ready":
+                        self._receive_status.save(*scope, state="catching_up")
+                    await asyncio.sleep(1.0)
+            raise asyncio.CancelledError
+        finally:
+            self._backfill_waiting.discard(scope)
+            self._wake_receiver()
 
     async def _backfill_person(
         self,
@@ -471,6 +554,7 @@ class EventListenerRunner:
             app_token=app_token,
             base_url=key.base_url,
             person_ids=self._connection_person_ids.get(key, []),
+            on_activity=self._wake_receiver,
         )
         self._listeners[key] = listener
         self._log_info(
@@ -579,12 +663,16 @@ class EventListenerRunner:
                         exc.error != "thread_not_found"
                     ):
                         raise
-                    self._disable_thread_backfill(
-                        person,
-                        service_name,
-                        channel_id,
-                        thread_state,
-                        exc.error,
+                    await self._write_backfill(
+                        (service_name, person.person_id, channel_id),
+                        partial(
+                            self._disable_thread_backfill,
+                            person,
+                            service_name,
+                            channel_id,
+                            thread_state,
+                            exc.error,
+                        ),
                     )
             return count
         finally:
@@ -625,15 +713,31 @@ class EventListenerRunner:
             for event in page.events:
                 if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
                     continue
-                count += self._upsert_backfilled_event(
-                    service_name, person, channel_id, event, policy.participation
+                count += await self._write_backfill(
+                    (service_name, person.person_id, channel_id),
+                    partial(
+                        self._upsert_backfilled_event,
+                        service_name,
+                        person,
+                        channel_id,
+                        event,
+                        policy.participation,
+                    ),
                 )
             highest_ts = _max_slack_ts(highest_ts, page.oldest_ts)
             cursor = page.cursor
             if not cursor:
                 break
-        self._save_backfill_watermark(
-            service_name, person.person_id, channel_id, state, highest_ts
+        await self._write_backfill(
+            (service_name, person.person_id, channel_id),
+            partial(
+                self._save_backfill_watermark,
+                service_name,
+                person.person_id,
+                channel_id,
+                state,
+                highest_ts,
+            ),
         )
         return count
 
@@ -697,8 +801,16 @@ class EventListenerRunner:
                     continue
                 if cutoff_ts and _compare_slack_ts(event.message_ts, cutoff_ts) <= 0:
                     continue
-                count += self._upsert_backfilled_event(
-                    service_name, person, channel_id, event, policy.participation
+                count += await self._write_backfill(
+                    (service_name, person.person_id, channel_id),
+                    partial(
+                        self._upsert_backfilled_event,
+                        service_name,
+                        person,
+                        channel_id,
+                        event,
+                        policy.participation,
+                    ),
                 )
             cursor = page.cursor
             if not cursor:
@@ -759,6 +871,21 @@ class EventListenerRunner:
         )
 
     async def _aclose_sources(self) -> None:
+        for key, subscribers in self._connection_subscriptions.items():
+            for person, channels in subscribers:
+                for channel_id in channels:
+                    try:
+                        self._receive_status.save(
+                            key.service,
+                            person.person_id,
+                            channel_id,
+                            state="unavailable",
+                        )
+                    except OSError as exc:
+                        self._log_warning(
+                            "chat receiver shutdown status failed: %s", exc
+                        )
+        self._connection_subscriptions.clear()
         for listener in list(self._listeners.values()):
             try:
                 listener.stop()

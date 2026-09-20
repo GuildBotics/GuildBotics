@@ -298,7 +298,7 @@ def test_the_effort_assessor_prompts_share_placeholders_across_languages():
     english = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "en")))
     japanese = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "ja")))
     assert english == japanese
-    assert english == {"latest_message", "previous_thread_context"}
+    assert english == {"unprocessed_messages", "previous_thread_context"}
 
 
 def test_the_effort_assessor_never_offers_low_as_an_automatic_answer():

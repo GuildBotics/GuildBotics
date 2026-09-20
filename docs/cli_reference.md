@@ -64,6 +64,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
 | [`guildbotics member chat reaction add`](#guildbotics-member-chat-reaction-add) | Add a semantic reaction. |
 | [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
+| [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
 | [`guildbotics member context`](#guildbotics-member-context) | Show non-secret member context. |
 | [`guildbotics member git`](#guildbotics-member-git) | Prepare, commit, push, and publish member git workspaces. |
 | [`guildbotics member git commit`](#guildbotics-member-git-commit) | Commit already-staged changes with the member identity. |
@@ -725,6 +726,7 @@ guildbotics member chat [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member chat post`](#guildbotics-member-chat-post) | Post a new channel message. |
 | [`guildbotics member chat reaction`](#guildbotics-member-chat-reaction) | Chat reaction operations. |
 | [`guildbotics member chat reply`](#guildbotics-member-chat-reply) | Reply in a thread in the member voice. |
+| [`guildbotics member chat updates`](#guildbotics-member-chat-updates) | Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable. |
 
 ## `guildbotics member chat complete`
 
@@ -914,6 +916,21 @@ guildbotics member chat reply [OPTIONS]
 | `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member chat updates`
+
+Check the source thread's durable queue before replying or publishing in a chat workflow; reconsider new messages, and stop external writes when reception is unavailable.
+
+```text
+guildbotics member chat updates [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--run-id TEXT` | Chat workflow run whose source thread should be checked. [required] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

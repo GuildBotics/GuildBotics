@@ -346,17 +346,26 @@ def _thread_messages_before_current(context: dict[str, Any]) -> list[dict[str, A
     return messages
 
 
-def _thread_context_input(input: str, context: dict[str, Any], *, mode: str) -> str:
+def _thread_context_input(
+    input: str, context: dict[str, Any], *, mode: str, after_cursor: str = ""
+) -> str:
     if str(context.get("work_kind") or "") != "chat":
         return input
-    if mode == "full":
+    if mode in {"full", "incremental"}:
+        messages = _thread_messages_before_current(context)
+        if mode == "incremental":
+            messages = [
+                item
+                for item in messages
+                if _cursor_is_before(after_cursor, str(item.get("timestamp") or ""))
+            ]
         payload = json.dumps(
-            _thread_messages_before_current(context),
+            messages,
             ensure_ascii=False,
             sort_keys=True,
         )
         return (
-            '<guildbotics_thread_context mode="full">'
+            f'<guildbotics_thread_context mode="{mode}">'
             f"{payload}</guildbotics_thread_context>\n\n{input}"
         )
     return f'<guildbotics_thread_context mode="{mode}" />\n\n{input}'
@@ -438,7 +447,12 @@ def _native_turn_input(
         relation = _cursor_relation(context.context_cursor, conversation.context_cursor)
         if relation == "equal":
             return _continuation_input(input, configured)
-        return _thread_context_input(input, configured, mode="incremental")
+        return _thread_context_input(
+            input,
+            configured,
+            mode="incremental",
+            after_cursor=conversation.context_cursor,
+        )
     if context.conversation_key.work_kind == "chat":
         mode = "full" if context.rebuild_context_complete else "inspect_required"
         return _thread_context_input(input, configured, mode=mode)

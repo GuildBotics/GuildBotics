@@ -116,11 +116,13 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
             return ws1
         return ws2
 
+    activity = []
     listener = SlackSocketEventListener(
         logger=_dummy_logger(),
         app_token="xapp-test",
         http_client=client,
         ws_connect=ws_connect,
+        on_activity=lambda: activity.append(listener.connected),
     )
 
     listener.start()
@@ -142,6 +144,9 @@ def test_slack_socket_listener_reconnects_and_keeps_drained_events(monkeypatch):
     assert [item.event.event_id for item in drained] == ["C1:100.1"]
     assert drained[0].event.metadata["event_type"] == "guildbotics.workflow_status"
     assert any("env-1" in msg for msg in ws1.sent)
+    assert activity[:2] == [True, True]  # Connected, then received an event.
+    assert False in activity
+    assert not listener.connected
 
 
 def test_invalid_auth_surfaces_warning_and_stops_retrying(monkeypatch):

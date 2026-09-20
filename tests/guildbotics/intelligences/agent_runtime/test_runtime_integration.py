@@ -1099,3 +1099,69 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
     persisted = ConversationStore(tmp_path).load(key)
     assert persisted is not None
     assert persisted.generation == 1
+
+
+@pytest.mark.asyncio
+async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setitem(
+        cli_agent.person_cli_agent_mapping,
+        "aiko",
+        {
+            "default": cli_agent.ExecutableInfo(adapter="codex"),
+        },
+    )
+    adapter = _Adapter()
+
+    async def get_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
+    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+    configured = {
+        "run_id": "batch-1",
+        "resume_policy": "auto",
+        "workspace_data_root": str(tmp_path),
+        "work_kind": "chat",
+        "work_identity": "slack:bot:C1:100.1",
+        "context_cursor": "100.1",
+        "event_id": "E1",
+        "rebuild_context": "[]",
+        "rebuild_context_complete": True,
+    }
+    await brain.run_with_execution_details(
+        "first request",
+        cwd=tmp_path,
+        session_state={"agent_execution_context": configured},
+    )
+    configured.update(
+        {
+            "run_id": "batch-2",
+            "context_cursor": "105.1",
+            "event_id": "E3",
+            "rebuild_context": json.dumps(
+                [
+                    {"timestamp": "100.1", "content": "already delivered"},
+                    {"timestamp": "102.1", "content": "discussion between B and C"},
+                    {"timestamp": "104.1", "content": "additional context"},
+                    {"timestamp": "107.1", "content": "future request"},
+                ]
+            ),
+        }
+    )
+    unread = '<unprocessed_messages>["request at 3", "correction at 5"]</unprocessed_messages>'
+    await brain.run_with_execution_details(
+        unread,
+        cwd=tmp_path,
+        session_state={"agent_execution_context": configured},
+    )
+    prompt = adapter.prompts[-1]
+    assert 'mode="incremental"' in prompt
+    assert unread in prompt
+    assert "discussion between B and C" in prompt
+    assert "additional context" in prompt
+    assert "already delivered" not in prompt
+    assert "future request" not in prompt

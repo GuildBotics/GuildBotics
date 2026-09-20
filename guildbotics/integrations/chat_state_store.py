@@ -225,11 +225,17 @@ class ConversationStateStore(ABC):
     ) -> bool:
         """Return True when the event_id is already recorded as processed."""
 
-    @abstractmethod
     def mark_processed_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
     ) -> None:
-        """Record an event as processed."""
+        """Record an event as processed and remove it from the pending queue."""
+        self.mark_processed_events(service, person_id, channel_id, [event_id])
+
+    @abstractmethod
+    def mark_processed_events(
+        self, service: str, person_id: str, channel_id: str, event_ids: list[str]
+    ) -> None:
+        """Acknowledge a batch and remove exactly those IDs from the queue."""
 
     @abstractmethod
     def load_thread_state(

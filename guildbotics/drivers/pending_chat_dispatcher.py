@@ -5,6 +5,8 @@ import threading
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from guildbotics.capabilities.chat_batch import completed_chat_event_ids
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.workflow_completion_events import (
     record_chat_dispatch_abandoned,
     record_chat_dispatch_retry_scheduled,
@@ -67,13 +69,11 @@ class PendingChatDispatcher:
     ) -> int:
         """Drain and process every queued chat event for one member.
 
-        Returns the number of events processed. Events are handled FIFO per
-        Slack thread: while a thread's oldest event is waiting for retry or
-        fails again, later events of the same thread are not dispatched, so a
-        follow-up message can never advance the shared provider conversation
-        past a still-pending earlier event. Other threads (and other members)
-        keep draining independently. A newer message arriving in a blocked
-        thread wakes the waiting head early instead of being run itself.
+        The oldest event starts a workflow that consumes the thread's unread
+        messages together. Acknowledged followers are cleaned up without a
+        second run. On failure the head retains its retry budget and followers
+        stay queued; a new follower can wake it early. Other threads and members
+        drain independently. Returns the number of dispatched events.
         """
         processed = 0
         for service, channel_id in self._state_store.list_pending_channels(
@@ -100,6 +100,10 @@ class PendingChatDispatcher:
                     if not await self._dispatch(person, service, channel_id, pending):
                         break
                     processed += 1
+                    # The workflow consumed a snapshot of this thread. Reload
+                    # its remaining queue on the next pass, rather than using
+                    # followers from the pre-dispatch snapshot.
+                    break
         return processed
 
     def _wake_for_follower(
@@ -219,11 +223,17 @@ class PendingChatDispatcher:
                     and isinstance(exc.holder, TaskRunRecord)
                     and exc.holder.finished_at
                 ):
-                    self._state_store.mark_processed_event(
-                        service, person.person_id, channel_id, event_id
-                    )
-                    self._state_store.remove_pending_event(
-                        service, person.person_id, channel_id, event_id
+                    self._state_store.mark_processed_events(
+                        service,
+                        person.person_id,
+                        channel_id,
+                        [
+                            event_id,
+                            *completed_chat_event_ids(
+                                RunStore().evidence(exc.holder.run_id),
+                                exc.holder.result.status if exc.holder.result else "",
+                            ),
+                        ],
                     )
                     return 1
                 return 0
@@ -286,9 +296,6 @@ class PendingChatDispatcher:
                     self._state_store.mark_processed_event(
                         service, person.person_id, channel_id, event_id
                     )
-                    self._state_store.remove_pending_event(
-                        service, person.person_id, channel_id, event_id
-                    )
                     return 0
                 pending.next_attempt_at = (
                     rate_limit.retry_after_at
@@ -318,9 +325,6 @@ class PendingChatDispatcher:
                 )
                 return 0
             self._state_store.mark_processed_event(
-                service, person.person_id, channel_id, event_id
-            )
-            self._state_store.remove_pending_event(
                 service, person.person_id, channel_id, event_id
             )
             return 1
