@@ -13,7 +13,7 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
-import { GrantsCards, type GrantPrefill } from "./GrantsCards";
+import { DeviceAccessCard, DocumentsCard } from "./GrantsCards";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -63,7 +63,7 @@ function Harness({
   shared?: SharedGrants;
   local?: LocalGrants;
   status?: EnvironmentAccessStatus;
-  prefill?: GrantPrefill;
+  prefill?: { card: string; path: string };
   onShared?: (shared: SharedGrants) => void;
   onLocal?: (local: LocalGrants) => void;
 }) {
@@ -73,16 +73,21 @@ function Harness({
   return (
     <QueryClientProvider client={client}>
       <TestMantineProvider>
-        <GrantsCards
-          shared={shared}
-          local={local}
+        <DocumentsCard
+          documents={shared.documents}
           status={status}
-          prefill={prefill}
-          onSharedChange={(next) => {
+          initialPath={prefill?.card === "grants-documents" ? prefill.path : undefined}
+          onChange={(documents) => {
+            const next = { ...shared, documents };
             setShared(next);
             onShared?.(next);
           }}
-          onLocalChange={(next) => {
+        />
+        <DeviceAccessCard
+          local={local}
+          status={status}
+          initialPath={prefill?.card === "grants-device" ? prefill.path : undefined}
+          onChange={(next) => {
             setLocal(next);
             onLocal?.(next);
           }}
@@ -129,7 +134,7 @@ beforeEach(() => {
   });
 });
 
-describe("GrantsCards", () => {
+describe("directory access cards", () => {
   it("lists documents and, for this device, PATH directories, added paths, denies, and what stays closed", () => {
     render(
       <Harness

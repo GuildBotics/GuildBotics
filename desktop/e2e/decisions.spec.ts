@@ -33,18 +33,7 @@ test("uses the common brain assignment for chat judgment and restores it after r
         ),
     ).toBe(true);
   }
-  expect(
-    await page
-      .getByText("Environment declaration", { exact: true })
-      .last()
-      .evaluate(
-        (node) =>
-          !!(
-            node.compareDocumentPosition(document.getElementById("decision-settings")!) &
-            Node.DOCUMENT_POSITION_PRECEDING
-          ),
-      ),
-  ).toBe(true);
+  await expect(page.getByText("Environment declaration", { exact: true })).toHaveCount(0);
   await expect(card.getByLabel("Jev API key", { exact: true })).toHaveCount(0);
   const row = card;
   await row.getByRole("combobox").nth(0).click();

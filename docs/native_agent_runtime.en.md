@@ -71,8 +71,8 @@ What the environment holds -- the base image and the provider CLIs GuildBotics
 installs at pinned versions -- is built per device as a snapshot and rebuilt
 when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
-**Isolated agent environment** card under **LLM / AI CLI tools** in the
-Desktop shows the runtime, the base image, the snapshot's state (with a
+**Agent execution environment** screen in the Desktop shows the runtime, the
+base image, the snapshot's state (with a
 build button), the assigned resources, the network policy, the DNS resolvers,
 and each tool's login; `guildbotics
 environment status` / `build` / `login` are the same state and actions from
@@ -174,7 +174,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
   The values apply when the next microVM boots. Changing them does not rebuild
   the disk snapshot. `guildbotics environment status` and the Desktop's
-  **Isolated agent environment** card show the assigned values.
+  **Agent execution environment** screen show the assigned values.
 
 - **Network**: one workspace-wide `network:` block in
   `intelligences/agent_environment.yml` states what every member and slot may
@@ -210,7 +210,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
     allow_local_network: false
   ```
 
-All of this is edited in Desktop under **LLM / AI CLI tools → Advanced settings**.
+All of this is edited in Desktop under **Agent execution environment**.
 The "Directories shared by the workspace" card holds the documents; the
 "Directories on this device" card holds the paths and denies added here; both
 judge a typed or picked path before it is added (whether it exists here,

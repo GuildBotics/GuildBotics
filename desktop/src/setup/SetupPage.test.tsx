@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addMemberConfig,
   ApiRequestError,
+  buildAgentEnvironment,
   cloneWorkspaceFromHub,
   deleteMemberConfig,
   ensureAgentField,
@@ -95,6 +96,12 @@ vi.mock("../api/client", async (importOriginal) => {
   return {
     ...actual,
     getDecisionOptions: vi.fn(async () => ({ credential_present: true })),
+    buildAgentEnvironment: vi.fn(async () => environmentStatus()),
+    getAgentEnvironmentImages: vi.fn(async () => ({
+      architecture: "arm64",
+      images: [],
+      problem: "",
+    })),
     saveDecisionCredential: vi.fn(async () => ({ state: "unverified" })),
     addMemberConfig: vi.fn(async () => configWriteResponse()),
     cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
@@ -218,6 +225,14 @@ vi.mock("../api/client", async (importOriginal) => {
         },
       ],
       brain_mapping: [],
+      agent_environment: {
+        image: null,
+        resources: { memory_mib: 4096, cpus: 2 },
+        network: { mode: "deny", allowed_domains: [], allow_local_network: false },
+        dns: { nameservers: "host" },
+      },
+      filesystem_grants: { documents: [] },
+      local_grants: { paths: [], deny: [] },
     })),
     getMemberConfig: vi.fn(async () => memberConfig()),
     getAgentEnvironmentStatus: vi.fn(async () => environmentStatus()),
@@ -422,14 +437,119 @@ describe("SetupPage", () => {
     expect(slot).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("opens the advanced intelligence settings from a sandbox alert link", async () => {
-    renderSetupPage("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
+  it("opens the device access settings from an environment alert link", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    renderSetupPage("/setup?section=environment&focus=grants-device");
 
-    const advanced = await screen.findByRole("button", {
-      name: t("setup.intelligence.advanced"),
-    });
-    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByRole("heading", { name: t("setup.agentEnvironment.title") }),
+    ).toBeInTheDocument();
     expect(await screen.findByTestId("grants:device")).toBeInTheDocument();
+  });
+
+  it("places the agent environment directly after intelligence and shows all scopes together", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    renderSetupPage("/setup?section=environment");
+
+    expect(
+      await screen.findByRole("heading", { name: t("setup.agentEnvironment.title") }),
+    ).toBeInTheDocument();
+    const nav = document.querySelector<HTMLElement>(".setup-nav");
+    expect(nav).not.toBeNull();
+    const navQueries = within(nav!);
+    const buttons = navQueries.getAllByRole("button");
+    const intelligence = navQueries.getByRole("button", { name: t("setup.nav.intelligence") });
+    const environment = navQueries.getByRole("button", { name: t("setup.nav.environment") });
+    expect(buttons.indexOf(environment)).toBe(buttons.indexOf(intelligence) + 1);
+    expect(
+      screen.getByRole("heading", { name: t("setup.agentEnvironment.currentDevice.title") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: t("setup.agentEnvironment.workspace.title") }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: t("setup.agentEnvironment.device.title") }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(t("setup.agentEnvironment.scope.device"))).toHaveLength(2);
+    expect(screen.getByText(t("setup.agentEnvironment.scope.workspace"))).toBeInTheDocument();
+  });
+
+  it("links the selected AI CLI status to the agent environment page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    renderSetupPage("/setup?section=intelligence");
+
+    const link = await screen.findByRole("link", {
+      name: t("setup.intelligence.openEnvironment"),
+    });
+    expect(link).toHaveAttribute("href", "/setup?section=environment");
+
+    await user.click(link);
+    expect(
+      await screen.findByRole("heading", { name: t("setup.agentEnvironment.title") }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps environment controls out of the intelligence advanced settings", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    renderSetupPage("/setup?section=intelligence");
+
+    await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
+    await screen.findByText(t("setup.intelligence.tabs.models"));
+
+    expect(screen.queryByTestId("agent-environment")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("agent-environment-declaration")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("grants:document")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("grants:device")).not.toBeInTheDocument();
+  });
+
+  it("saves only environment settings against the revisions that were loaded", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({ revisions: { "intelligences/agent_environment.yml": "env-1" } }),
+    );
+    renderSetupPage("/setup?section=environment");
+
+    const memory = await screen.findByRole("textbox", {
+      name: t("setup.intelligence.environment.declaration.memory"),
+    });
+    await user.clear(memory);
+    await user.type(memory, "8192");
+    await saveSection(user);
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    expect(body).toMatchObject({
+      expected_revisions: { "intelligences/agent_environment.yml": "env-1" },
+      agent_environment: { resources: { memory_mib: 8192, cpus: 2 } },
+      filesystem_grants: { documents: [] },
+      local_grants: { paths: [], deny: [] },
+    });
+    expect(body).not.toHaveProperty("model_mapping");
+    expect(body).not.toHaveProperty("cli_agent_mapping");
+    expect(body).not.toHaveProperty("brain_mapping");
+  });
+
+  it("keeps snapshot build as an immediate device action outside Save", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(teamIntelligenceConfig());
+    const missing = environmentStatus({
+      snapshot: { state: "missing", name: "guildbotics-new", detail: "", output: [] },
+    });
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(missing);
+    vi.mocked(buildAgentEnvironment).mockResolvedValue({
+      ...missing,
+      snapshot: { state: "building", name: "guildbotics-new", detail: "", output: [] },
+    });
+    renderSetupPage("/setup?section=environment");
+
+    await user.click(
+      await screen.findByRole("button", { name: t("setup.intelligence.environment.build") }),
+    );
+
+    await waitFor(() => expect(buildAgentEnvironment).toHaveBeenCalledTimes(1));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
   it("allows sidebar navigation after opening a members deep link", async () => {
@@ -2184,7 +2304,17 @@ describe("toIntelligenceUpdatePayload", () => {
   };
 
   it("emits a full team-default update", () => {
-    const payload = toIntelligenceUpdatePayload(team);
+    const payload = toIntelligenceUpdatePayload({
+      ...team,
+      agent_environment: {
+        image: null,
+        resources: { memory_mib: 4096, cpus: 2 },
+        network: { mode: "deny", allowed_domains: [], allow_local_network: false },
+        dns: { nameservers: "host" },
+      },
+      filesystem_grants: { documents: [] },
+      local_grants: { paths: [], deny: [] },
+    });
     expect(payload).toMatchObject({
       person_id: null,
       inherit_team_defaults: false,
@@ -2193,6 +2323,9 @@ describe("toIntelligenceUpdatePayload", () => {
       cli_agents: team.cli_agents,
       brain_mapping: team.brain_mapping,
     });
+    expect(payload).not.toHaveProperty("agent_environment");
+    expect(payload).not.toHaveProperty("filesystem_grants");
+    expect(payload).not.toHaveProperty("local_grants");
   });
 
   it("emits a full member override update so the backend can diff definitions", () => {
@@ -3658,6 +3791,14 @@ function teamIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): In
     brain_mapping: [
       { name: "writer", brain_class: "WriterBrain", engine: "llm", target: "default" },
     ],
+    agent_environment: {
+      image: null,
+      resources: { memory_mib: 4096, cpus: 2 },
+      network: { mode: "deny", allowed_domains: [], allow_local_network: false },
+      dns: { nameservers: "host" },
+    },
+    filesystem_grants: { documents: [] },
+    local_grants: { paths: [], deny: [] },
     ...overrides,
   };
 }

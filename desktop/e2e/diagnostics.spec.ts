@@ -12,7 +12,7 @@ test("shows usage checks from the real backend without probing missing credentia
     if (request.url().includes("/intelligences/cli-agents/usage"))
       usageRequests.push(request.url());
   });
-  await page.goto("/#/setup?section=intelligence&focus=agent-environment-tool-codex");
+  await page.goto("/#/setup?section=environment&focus=agent-environment-tool-codex");
   const row = page.locator("#agent-environment-tool-codex");
   await expect(row).toBeVisible();
   await expect(row.getByText("No credentials saved on this device", { exact: true })).toBeVisible();

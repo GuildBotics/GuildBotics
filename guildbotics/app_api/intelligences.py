@@ -123,8 +123,9 @@ class IntelligenceConfigService:
     def update_config(
         self, request: IntelligenceConfigUpdateRequest
     ) -> IntelligenceConfigResult:
-        for assignment in request.brain_mapping:
-            self._to_brain_config(assignment)
+        if request.brain_mapping is not None:
+            for assignment in request.brain_mapping:
+                self._to_brain_config(assignment)
         base_dir = self._scope_dir(request.config_dir, request.person_id)
         target_dir = base_dir / "intelligences"
         if request.person_id and request.inherit_team_defaults:
@@ -140,33 +141,40 @@ class IntelligenceConfigService:
         files: list[CreatedFile] = []
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        model_mapping_file = target_dir / "model_mapping.yml"
-        save_yaml_file(model_mapping_file, request.model_mapping)
-        files.append(CreatedFile(path=model_mapping_file, action="update"))
+        if request.model_mapping is not None:
+            model_mapping_file = target_dir / "model_mapping.yml"
+            save_yaml_file(model_mapping_file, request.model_mapping)
+            files.append(CreatedFile(path=model_mapping_file, action="update"))
 
-        for model in request.models:
-            self._write_model_def(request.config_dir, None, target_dir, model, files)
+        if request.models is not None:
+            for model in request.models:
+                self._write_model_def(
+                    request.config_dir, None, target_dir, model, files
+                )
 
-        cli_mapping_file = target_dir / "cli_agent_mapping.yml"
-        save_yaml_file(
-            cli_mapping_file, self._normalize_cli_mapping(request.cli_agent_mapping)
-        )
-        files.append(CreatedFile(path=cli_mapping_file, action="update"))
-
-        for agent in request.cli_agents:
-            self._write_cli_agent_def(
-                request.config_dir, None, target_dir, agent, files
+        if request.cli_agent_mapping is not None:
+            cli_mapping_file = target_dir / "cli_agent_mapping.yml"
+            save_yaml_file(
+                cli_mapping_file, self._normalize_cli_mapping(request.cli_agent_mapping)
             )
+            files.append(CreatedFile(path=cli_mapping_file, action="update"))
 
-        brain_mapping_file = target_dir / "brain_mapping.yml"
-        save_yaml_file(
-            brain_mapping_file,
-            {
-                assignment.name: self._to_brain_config(assignment)
-                for assignment in request.brain_mapping
-            },
-        )
-        files.append(CreatedFile(path=brain_mapping_file, action="update"))
+        if request.cli_agents is not None:
+            for agent in request.cli_agents:
+                self._write_cli_agent_def(
+                    request.config_dir, None, target_dir, agent, files
+                )
+
+        if request.brain_mapping is not None:
+            brain_mapping_file = target_dir / "brain_mapping.yml"
+            save_yaml_file(
+                brain_mapping_file,
+                {
+                    assignment.name: self._to_brain_config(assignment)
+                    for assignment in request.brain_mapping
+                },
+            )
+            files.append(CreatedFile(path=brain_mapping_file, action="update"))
 
         if request.filesystem_grants is not None:
             grants_file = request.config_dir / FILESYSTEM_GRANTS_PATH
@@ -200,67 +208,75 @@ class IntelligenceConfigService:
         # model parameter, say -- survive a save, and definitions that no longer
         # differ from the team are pruned.
         team = self.read_config(config_dir=request.config_dir, person_id=None)
-        requested_cli = self._normalize_cli_mapping(request.cli_agent_mapping)
-
-        model_override = {
-            slot: path
-            for slot, path in request.model_mapping.items()
-            if team.model_mapping.get(slot) != path
-        }
-        cli_override = {
-            slot: path
-            for slot, path in requested_cli.items()
-            if team.cli_agent_mapping.get(slot) != path
-        }
-        team_brain = {assignment.name: assignment for assignment in team.brain_mapping}
-        brain_override = {
-            assignment.name: self._to_brain_config(assignment)
-            for assignment in request.brain_mapping
-            if team_brain.get(assignment.name) != assignment
-        }
-
         files: list[CreatedFile] = []
 
-        self._reconcile_mapping_file(
-            target_dir / "model_mapping.yml", model_override, files
-        )
-        self._reconcile_mapping_file(
-            target_dir / "cli_agent_mapping.yml", cli_override, files
-        )
-        self._reconcile_mapping_file(
-            target_dir / "brain_mapping.yml", brain_override, files
-        )
-        self._reconcile_member_defs(
-            request.config_dir,
-            target_dir,
-            "models",
-            [
-                model.path
-                for model in request.models
-                if model.path.startswith("models/")
-            ],
-            {model.path: model for model in request.models},
-            lambda base, model: self._model_def_yaml(
-                base,
-                model,
-                self._described_keys(
-                    self._model_effort_descriptors(
-                        request.config_dir, request.person_id, model.path
+        if request.model_mapping is not None:
+            model_override = {
+                slot: path
+                for slot, path in request.model_mapping.items()
+                if team.model_mapping.get(slot) != path
+            }
+            self._reconcile_mapping_file(
+                target_dir / "model_mapping.yml", model_override, files
+            )
+        if request.cli_agent_mapping is not None:
+            requested_cli = self._normalize_cli_mapping(request.cli_agent_mapping)
+            cli_override = {
+                slot: path
+                for slot, path in requested_cli.items()
+                if team.cli_agent_mapping.get(slot) != path
+            }
+            self._reconcile_mapping_file(
+                target_dir / "cli_agent_mapping.yml", cli_override, files
+            )
+        if request.brain_mapping is not None:
+            team_brain = {
+                assignment.name: assignment for assignment in team.brain_mapping
+            }
+            brain_override = {
+                assignment.name: self._to_brain_config(assignment)
+                for assignment in request.brain_mapping
+                if team_brain.get(assignment.name) != assignment
+            }
+            self._reconcile_mapping_file(
+                target_dir / "brain_mapping.yml", brain_override, files
+            )
+        if request.models is not None:
+            self._reconcile_member_defs(
+                request.config_dir,
+                target_dir,
+                "models",
+                [
+                    model.path
+                    for model in request.models
+                    if model.path.startswith("models/")
+                ],
+                {model.path: model for model in request.models},
+                lambda base, model: self._model_def_yaml(
+                    base,
+                    model,
+                    self._described_keys(
+                        self._model_effort_descriptors(
+                            request.config_dir, request.person_id, model.path
+                        ),
+                        f"provider '{self._provider_from_model_path(model.path)}'",
                     ),
-                    f"provider '{self._provider_from_model_path(model.path)}'",
                 ),
-            ),
-            files,
-        )
-        self._reconcile_member_defs(
-            request.config_dir,
-            target_dir,
-            "cli_agents",
-            [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
-            {self._cli_agent_rel_path(agent): agent for agent in request.cli_agents},
-            lambda _base, agent: self._cli_def_yaml(agent),
-            files,
-        )
+                files,
+            )
+        if request.cli_agents is not None:
+            self._reconcile_member_defs(
+                request.config_dir,
+                target_dir,
+                "cli_agents",
+                [self._cli_agent_rel_path(agent) for agent in request.cli_agents],
+                {
+                    self._cli_agent_rel_path(agent): agent
+                    for agent in request.cli_agents
+                },
+                lambda _base, agent: self._cli_def_yaml(agent),
+                files,
+            )
 
         if target_dir.exists() and not any(target_dir.iterdir()):
             target_dir.rmdir()

@@ -62,7 +62,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import {
   type CommandOption,
@@ -112,7 +112,11 @@ import {
   updateMemberConfig,
   updateIntelligenceConfig,
   getAgentEnvironmentStatus,
+  type AgentEnvironmentDeclaration,
+  type AgentEnvironmentStatusResponse,
   type EnvironmentToolStatus,
+  type LocalGrants,
+  type SharedGrants,
   updateProjectConfig,
   memberAvatarUrl,
   uploadMemberAvatar,
@@ -140,7 +144,7 @@ import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
-import { GrantsCards } from "./GrantsCards";
+import { DeviceAccessCard, DocumentsCard } from "./GrantsCards";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -218,6 +222,7 @@ const CORE_SETUP_SECTIONS_INITIAL = [
 const CORE_SETUP_SECTIONS_CONFIGURED = [
   "project",
   "intelligence",
+  "environment",
   "members",
   "github",
   // Hotkeys are an everyday convenience rather than part of getting running,
@@ -235,6 +240,7 @@ const MACHINE_SECTIONS: ReadonlySet<CoreSection> = new Set(["device"]);
 const CORE_SECTION_LABEL_KEYS = {
   project: "setup.nav.project",
   intelligence: "setup.nav.intelligence",
+  environment: "setup.nav.environment",
   members: "setup.nav.members",
   github: "setup.nav.github",
   shortcuts: "setup.nav.shortcuts",
@@ -792,8 +798,6 @@ export function SetupPage() {
             <IntelligenceSection
               form={form}
               openAdvanced={openAdvanced}
-              focusElement={focusElement}
-              focusGrant={focusGrant}
               saveState={saveState}
               persisted={canSaveProject && !workspaceSwitching}
               saving={saveMutation.isPending}
@@ -801,6 +805,13 @@ export function SetupPage() {
               tools={cliTools}
               storedProviderKeys={storedProviderKeys}
               providers={llmProviders.data ?? []}
+            />
+          ) : null}
+          {activeSection === "environment" ? (
+            <AgentEnvironmentSection
+              focusElement={focusElement}
+              focusGrant={focusGrant}
+              status={environmentStatus.data}
             />
           ) : null}
           {activeSection === "github" ? <GitHubIntegrationSection form={form} /> : null}
@@ -1123,8 +1134,6 @@ function ProjectSection({
 function IntelligenceSection({
   form,
   openAdvanced,
-  focusElement,
-  focusGrant,
   saveState,
   persisted,
   saving,
@@ -1134,11 +1143,7 @@ function IntelligenceSection({
   providers,
 }: {
   form: ProjectForm;
-  /** A system alert asked for the advanced settings, and for one card in them. */
   openAdvanced: boolean;
-  focusElement?: string;
-  /** A directory to start the focused grants card's path field with. */
-  focusGrant?: string;
   saveState: "idle" | "saving" | "saved" | "error";
   persisted: boolean;
   saving: boolean;
@@ -1149,6 +1154,7 @@ function IntelligenceSection({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const selectedTool = tools.find((tool) => tool.name === form.values.cliAgent);
   // The advanced editor writes different files from the basic settings above
   // it, but they are one screen to the user, so one button saves both.
   const saveAdvanced = useRef<AdvancedSave | null>(null);
@@ -1389,10 +1395,18 @@ function IntelligenceSection({
                 );
               }}
             />
+            {persisted && selectedTool ? (
+              <Group justify="space-between" mt="xs">
+                <Badge color={cliToolStatusColor(selectedTool)} variant="light">
+                  {t(`setup.intelligence.environment.${cliToolStatusKey(selectedTool)}`)}
+                </Badge>
+                <Anchor component={Link} to="/setup?section=environment" size="sm">
+                  {t("setup.intelligence.openEnvironment")}
+                </Anchor>
+              </Group>
+            ) : null}
           </Stack>
         </Card>
-
-        {persisted ? <AgentEnvironmentCard focusElement={focusElement} /> : null}
 
         {persisted ? (
           <Accordion
@@ -1408,8 +1422,6 @@ function IntelligenceSection({
                 <IntelligenceEditor
                   enabled={persisted}
                   openAdvanced={openAdvanced}
-                  focusElement={focusElement}
-                  focusGrant={focusGrant}
                   onRegisterSave={(save) => {
                     saveAdvanced.current = save;
                   }}
@@ -1426,6 +1438,209 @@ function IntelligenceSection({
         ) : null}
       </Stack>
     </Card>
+  );
+}
+
+type AgentEnvironmentSettings = {
+  declaration: AgentEnvironmentDeclaration;
+  shared: SharedGrants;
+  local: LocalGrants;
+};
+
+function settingsFromIntelligence(config: IntelligenceConfig): AgentEnvironmentSettings | null {
+  if (!config.agent_environment) {
+    return null;
+  }
+  return {
+    declaration: config.agent_environment,
+    shared: config.filesystem_grants ?? { documents: [] },
+    local: config.local_grants ?? { paths: [], deny: [] },
+  };
+}
+
+function AgentEnvironmentSection({
+  focusElement,
+  focusGrant,
+  status,
+}: {
+  focusElement?: string;
+  focusGrant?: string;
+  status?: AgentEnvironmentStatusResponse;
+}) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: ["intelligence-config", "team"],
+    queryFn: () => getIntelligenceConfig(),
+  });
+  const source = query.data ? settingsFromIntelligence(query.data) : null;
+  const sourceKey = query.data ? JSON.stringify([query.data.revisions, source]) : "";
+  const [draftState, setDraftState] = useState<{
+    key: string;
+    settings: AgentEnvironmentSettings;
+  } | null>(null);
+  const draft = draftState?.key === sourceKey ? draftState.settings : source;
+  const [declarationValid, setDeclarationValid] = useState(true);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const mutation = useMutation({
+    mutationFn: updateIntelligenceConfig,
+    onSuccess: (written, submitted) => {
+      queryClient.setQueryData<IntelligenceConfig>(["intelligence-config", "team"], (current) =>
+        current
+          ? {
+              ...current,
+              revisions: written.revisions,
+              agent_environment: submitted.agent_environment ?? current.agent_environment,
+              filesystem_grants: submitted.filesystem_grants ?? current.filesystem_grants,
+              local_grants: submitted.local_grants ?? current.local_grants,
+            }
+          : current,
+      );
+      queryClient.invalidateQueries({ queryKey: ["intelligence-config", "team"] });
+      queryClient.invalidateQueries({ queryKey: ["project-config"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-environment-status"] });
+      queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
+      setSaveState("saved");
+    },
+    onError: () => setSaveState("error"),
+  });
+  const updateDraft = (recipe: (current: AgentEnvironmentSettings) => AgentEnvironmentSettings) => {
+    setSaveState("idle");
+    setDraftState((current) => {
+      const currentSettings = current?.key === sourceKey ? current.settings : source;
+      return currentSettings ? { key: sourceKey, settings: recipe(currentSettings) } : current;
+    });
+  };
+  const save = async () => {
+    if (!query.data || !draft) {
+      return;
+    }
+    if (!declarationValid) {
+      notifyInvalidAdvancedSave(t);
+      return;
+    }
+    setSaveState("saving");
+    try {
+      await mutation.mutateAsync({
+        config_dir: query.data.config_dir,
+        expected_revisions: query.data.revisions,
+        agent_environment: draft.declaration,
+        filesystem_grants: draft.shared,
+        local_grants: draft.local,
+      });
+    } catch {
+      // The mutation renders the backend error and keeps the draft in place.
+    }
+  };
+
+  useEffect(() => {
+    if (focusElement && (status || draft)) {
+      scrollToElement(focusElement);
+    }
+  }, [draft, focusElement, status]);
+
+  return (
+    <Card withBorder radius="md" p="lg">
+      <PanelHeader
+        title={t("setup.agentEnvironment.title")}
+        subtitle={t("setup.agentEnvironment.subtitle")}
+        save={
+          draft
+            ? {
+                state: saveState,
+                saving: mutation.isPending,
+                onSave: () => void save(),
+              }
+            : undefined
+        }
+      />
+      <Stack mt="lg" gap="lg">
+        <EnvironmentScopeHeader
+          title={t("setup.agentEnvironment.currentDevice.title")}
+          description={t("setup.agentEnvironment.currentDevice.description")}
+          badge={t("setup.agentEnvironment.scope.device")}
+        />
+        <AgentEnvironmentCard focusElement={focusElement} />
+
+        <Divider />
+        <EnvironmentScopeHeader
+          title={t("setup.agentEnvironment.workspace.title")}
+          description={t("setup.agentEnvironment.workspace.description")}
+          badge={t("setup.agentEnvironment.scope.workspace")}
+        />
+        {query.isLoading ? (
+          <Text size="sm" c="dimmed">
+            {t("setup.agentEnvironment.loading")}
+          </Text>
+        ) : query.error ? (
+          <Alert color="danger" title={t("setup.agentEnvironment.loadError")}>
+            {query.error.message}
+          </Alert>
+        ) : draft ? (
+          <>
+            <AgentEnvironmentDeclarationCard
+              value={draft.declaration}
+              defaultImage={status?.image.default ?? ""}
+              onChange={(declaration) => updateDraft((current) => ({ ...current, declaration }))}
+              onValidityChange={setDeclarationValid}
+            />
+            <DocumentsCard
+              documents={draft.shared.documents}
+              status={status?.access}
+              initialPath={focusElement === "grants-documents" ? focusGrant : undefined}
+              onChange={(documents) =>
+                updateDraft((current) => ({
+                  ...current,
+                  shared: { ...current.shared, documents },
+                }))
+              }
+            />
+
+            <Divider />
+            <EnvironmentScopeHeader
+              title={t("setup.agentEnvironment.device.title")}
+              description={t("setup.agentEnvironment.device.description")}
+              badge={t("setup.agentEnvironment.scope.device")}
+            />
+            <DeviceAccessCard
+              local={draft.local}
+              status={status?.access}
+              initialPath={focusElement === "grants-device" ? focusGrant : undefined}
+              onChange={(local) => updateDraft((current) => ({ ...current, local }))}
+            />
+          </>
+        ) : (
+          <Alert color="danger" title={t("setup.agentEnvironment.declarationMissing")} />
+        )}
+        {mutation.error ? (
+          <Alert color="danger" title={t("setup.agentEnvironment.saveError")}>
+            {mutation.error.message}
+          </Alert>
+        ) : null}
+      </Stack>
+    </Card>
+  );
+}
+
+function EnvironmentScopeHeader({
+  title,
+  description,
+  badge,
+}: {
+  title: string;
+  description: string;
+  badge: string;
+}) {
+  return (
+    <div>
+      <Group gap="xs">
+        <Title order={4}>{title}</Title>
+        <Badge variant="light">{badge}</Badge>
+      </Group>
+      <Text size="sm" c="dimmed">
+        {description}
+      </Text>
+    </div>
   );
 }
 
@@ -1719,8 +1934,6 @@ function IntelligenceEditor({
   enabled,
   focusSlot,
   openAdvanced = false,
-  focusElement,
-  focusGrant,
   tools,
   llmProviderAvailability,
   providers,
@@ -1737,9 +1950,6 @@ function IntelligenceEditor({
   focusSlot?: string;
   /** A system alert asked for the advanced settings, and for one card in them. */
   openAdvanced?: boolean;
-  focusElement?: string;
-  /** A directory to start the focused grants card's path field with. */
-  focusGrant?: string;
   tools: EnvironmentToolStatus[];
   llmProviderAvailability?: LlmProviderAvailability;
   providers: LlmProviderInfo[];
@@ -1800,12 +2010,6 @@ function IntelligenceEditor({
       await queryClient.invalidateQueries({ queryKey: ["decision-options"] });
     },
   });
-  const environmentRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
-  const environmentStatus = useQuery({
-    queryKey: ["agent-environment-status", environmentRefreshKey],
-    queryFn: getAgentEnvironmentStatus,
-    enabled: enabled && Boolean(query.data),
-  });
   const querySerializedPayload = query.data
     ? JSON.stringify(toIntelligenceUpdatePayload(query.data, savePersonId))
     : "";
@@ -1814,9 +2018,6 @@ function IntelligenceEditor({
   const draft = activeDraftState?.config ?? query.data ?? null;
   // A focused slot lives inside the advanced settings too.
   const openAdvancedPanel = openAdvanced || Boolean(focusSlot);
-  useEffect(() => {
-    if (openAdvanced && focusElement && draft) scrollToElement(focusElement);
-  }, [openAdvanced, focusElement, draft]);
   const payload = draft ? toIntelligenceUpdatePayload(draft, savePersonId) : null;
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
@@ -2652,36 +2853,6 @@ function IntelligenceEditor({
             </Card>
 
             {decisionSettings}
-
-            {/* Section 4: the environment every turn runs in (the workspace's
-                declaration) and what agents may reach beyond their working
-                directory (the workspace's and this device's), so team scope only */}
-            {!personId && draft.agent_environment ? (
-              <AgentEnvironmentDeclarationCard
-                value={draft.agent_environment}
-                defaultImage={environmentStatus.data?.image.default ?? ""}
-                onChange={(agent_environment) =>
-                  updateDraft((current) => ({ ...current, agent_environment }))
-                }
-                onValidityChange={(valid) => setJsonValidity("agent-environment", valid)}
-              />
-            ) : null}
-            {!personId ? (
-              <GrantsCards
-                shared={draft.filesystem_grants ?? { documents: [] }}
-                local={draft.local_grants ?? { paths: [], deny: [] }}
-                status={environmentStatus.data?.access}
-                prefill={
-                  focusElement && focusGrant ? { card: focusElement, path: focusGrant } : undefined
-                }
-                onSharedChange={(filesystem_grants) =>
-                  updateDraft((current) => ({ ...current, filesystem_grants }))
-                }
-                onLocalChange={(local_grants) =>
-                  updateDraft((current) => ({ ...current, local_grants }))
-                }
-              />
-            ) : null}
           </Stack>
         );
         if (!personId) {
@@ -5660,8 +5831,8 @@ function PanelHeader({
   save?: SectionSave;
 }) {
   return (
-    <Group justify="space-between" align="flex-start">
-      <Box>
+    <Group justify="space-between" align="flex-start" wrap="nowrap">
+      <Box flex={1} miw={0}>
         <Group gap="xs">
           <Title order={3}>{title}</Title>
           {badge ? <Badge>{badge}</Badge> : null}
@@ -5670,7 +5841,11 @@ function PanelHeader({
           {subtitle}
         </Text>
       </Box>
-      {save ? <SectionSaveControl {...save} /> : null}
+      {save ? (
+        <Box style={{ flexShrink: 0 }}>
+          <SectionSaveControl {...save} />
+        </Box>
+      ) : null}
     </Group>
   );
 }
@@ -6702,6 +6877,8 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
   // team file complete and reduces a member's payload to only what differs from
   // the team defaults, so members must send the full editor state (including
   // models, CLI agents, and feature assignments) for that diff to be computed.
+  // Environment settings have their own screen and save boundary, so this
+  // payload must not overwrite them with a stale copy.
   return {
     config_dir: config.config_dir,
     person_id: personId,
@@ -6711,15 +6888,6 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agent_mapping: config.cli_agent_mapping,
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
-    // The grants are the workspace's and this device's; a member payload
-    // carries neither.
-    ...(personId
-      ? {}
-      : {
-          filesystem_grants: config.filesystem_grants ?? { documents: [] },
-          local_grants: config.local_grants ?? { paths: [], deny: [] },
-          ...(config.agent_environment ? { agent_environment: config.agent_environment } : {}),
-        }),
   };
 }
 

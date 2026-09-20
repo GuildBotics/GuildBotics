@@ -1152,13 +1152,13 @@ export type IntelligenceConfigUpdateRequest = {
   expected_revisions?: ConfigRevisions;
   person_id?: string | null;
   inherit_team_defaults?: boolean;
+  // Every intelligence field replaces its own setting when given; omitted
+  // fields keep their current files so separate screens cannot overwrite one another.
   model_mapping?: Record<string, string>;
   models?: ModelDefinition[];
   cli_agent_mapping?: Record<string, string>;
   cli_agents?: CliAgentDefinition[];
   brain_mapping?: BrainAssignment[];
-  // Replace the shared grants / this device's paths / the declaration when
-  // given; omitted keeps them.
   filesystem_grants?: SharedGrants;
   local_grants?: LocalGrants;
   agent_environment?: AgentEnvironmentDeclaration;
