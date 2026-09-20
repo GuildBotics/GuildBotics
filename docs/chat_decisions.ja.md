@@ -1,22 +1,25 @@
 # チャット判定
 
-**設定 → LLM・AI CLIツール → 詳細設定 → チャット判断エンジン**で、認証情報を登録し、エンジンとモデルを選択します。接続を確認してから設定を保存してください。
+**設定 → LLM・AI CLIツール → 詳細設定 → 機能別の割り当て**の `chat_decision` で、チャット判断に使うエンジンと割り当て先を選びます。
 
-- **Jev**: API キーを入力して「Jev の認証情報を保存」を押します。Workspace の SecretStore に `TYPESAFE_API_KEY` として保存します。Jev を選択できない状態でも登録欄を使えます。固定モデルは `jev-1.13.0`、別名は `jev-latest` / `jev-preview` です。「接続確認・モデル候補を更新」は Noul（肯定の確率）と Choice（選択肢の判定）の両方を確認し、候補を再取得します。
-- **Agno**: 既存のプロバイダー API キー欄で認証情報を登録し、そのプロバイダーとモデル ID を選びます。接続確認ではツールを使わず、同じ2種類の問いを評価します。
-- **AI CLI**: 既存の AI CLI 設定で隔離環境を準備し、ログインします。チャット判定は現在 Claude Code に対応しています。Claude のモデル ID を入力して接続を確認します。判定専用の新しい環境で実行し、リポジトリ、member broker、ツール、MCP サーバー、過去の会話セッションを使いません。
+- **LLM**: 既存の LLM スロットを選びます。プロバイダー、モデル、パラメーター、認証情報はそのスロットの設定を使います。
+- **CLI**: 既存の AI CLI スロットを選びます。Codex・Claude・Grok・Copilot・Antigravity の共通実行基盤を使います。モデルと effort の設定もそのスロットから解決します。端末での環境準備とログインが必要です。
+- **Jev**: `jev-1.13.0`・`jev-latest`・`jev-preview` から選びます。「チャット判断エンジン」の API キー欄から登録すると、Workspace の SecretStore に `TYPESAFE_API_KEY` として保存します。
 
-キーは入力しただけでは登録されません。登録直後は「認証未確認」で、接続確認に成功したときだけ「接続確認済み」になります。認証エラーと通信エラーは区別して表示します。「利用可否を再取得」はこの端末の認証情報と環境を読み直します。キーを削除すると保存済みの選択は利用不可になりますが、エンジンとモデルは保持します。別エンジンには自動で切り替えません。
+設定を保存してから「保存済みのチャット判断設定を接続確認」を押すと、その割り当てで Noul と Choice の応答形式を確認し、実際に使われたモデルを表示します。キーの登録だけでは認証成功とは扱いません。認証情報の不足、実行失敗、不正な応答の場合は対応エージェントへ委ねます。
 
-チームの選択は `.guildbotics/config/intelligences/decision.yml` に保存します。
+たとえば Jev を使うチーム設定は、既存の `.guildbotics/config/intelligences/brain_mapping.yml` に次のように保存します。
 
 ```yaml
-engine: jev
-provider: ''
-model: jev-1.13.0
+chat_decision:
+  class: guildbotics.intelligences.brains.jev.JevBrain
+  args:
+    model: jev-1.13.0
 ```
 
-`team/members/<person_id>/intelligences/` 内の同名ファイルは、チーム設定を上書きします。メンバーの Intelligence 設定で「チーム既定を継承」を解除すると編集でき、継承に戻すと上書きを削除します。キーはこの設定ファイルに含めず SecretStore に保存します。端末ごとに認証情報が必要です。複数端末で Workspace を使う場合は、既存の Secret 転送操作で取得してください。
+LLM は `AgnoAgentDefaultBrain` の `model`、CLI は `CliAgentBrain` の `cli_agent` に既存のスロット名を指定します。初期値は LLM の `default` スロットです。メンバーの同名マッピングは通常の機能別設定と同様にチーム設定を上書きし、上書きしない機能・スロットは継承します。旧 `decision.yml` は読み取りません。既に試行設定がある場合は、この割り当てで選び直してください。API キーは引き続き SecretStore に保存されます。
+
+判断処理は共通の BrainFactory で Brain を作り、`Brain.run()` を一度呼びます。AI CLI の判断用実行は新しい会話を使い、作業ファイル・共有文書・過去のセッション・キャッシュを環境へ渡しません。member capability の呼び出しは拒否し、通信はプロバイダー API と拒否専用の member broker に制限します。認証情報の更新だけを保存し、判断用の環境は終了時に破棄します。実際の対応エージェントの会話には干渉しません。
 
 ## 返信までの流れ
 
@@ -55,17 +58,17 @@ Jev の Noul は肯定の確率が `0.6` 以上なら true、`0.4` 以下なら 
 
 ## 記録と再評価
 
-各判定は、任意の transcript 設定にかかわらず、Workspace の端末ローカルな `run/required-io/` に JSON を保存します。診断イベント `decision.evaluated` と run の `chat_decision` 証跡が判定 ID を持ちます。完了記録は `<evaluation_id>.json`、呼び出し前の記録は `<evaluation_id>0.json` です。秘密値を伏せた完全な入力、質問、版、入力ハッシュ、指定エンジン・モデル、実際の返却モデル、生の回答と正規化した回答、採用理由、所要時間、取得可能な usage・cost・retry 数を含みます。取得不能な数値は `null` のままです。Workspace Sync では共有しません。記録に失敗した場合は、リアクション・行動なしでの完了を禁止します。
+各判定は、任意の transcript 設定にかかわらず、Workspace の端末ローカルな `run/required-io/` に JSON を保存します。診断イベント `decision.evaluated` と run の `chat_decision` 証跡が判定 ID を持ちます。完了記録は `<evaluation_id>.json`、呼び出し前の記録は `<evaluation_id>0.json` です。秘密値を伏せた完全な入力、質問、版、入力ハッシュ、指定した Brain 機能名、実際の返却モデル、生の回答と正規化した回答、採用理由、所要時間、取得可能な usage・cost・retry 数を含みます。取得不能な数値は `null` のままです。Workspace Sync では共有しません。記録に失敗した場合は、リアクション・行動なしでの完了を禁止します。
 
 保存した入力を別モデルと比較するには、次を実行します。チャット送信や処理済み状態の変更は行いません。
 
 ```bash
 uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.json \
   --workspace /path/to/workspace --person aiko \
-  --engine jev --model jev-1.13.0
+  --brain chat_decision
 ```
 
-Agno は `--engine agno --provider openai --model <model-id>`、Claude は `--engine cli --provider claude --model <model-id>` を指定します。保存済みの質問をそのまま使い、新しい判定記録を保存して、元と新しい判定の ID・採用結果を出力します。指定 Workspace の認証情報で実際のモデルを呼び出します。伏せた秘密値は復元できません。
+比較用の機能（例: `comparison`）を既存の機能別設定へ追加し、モデルまたは CLI スロットを割り当てて `--brain comparison` で指定できます。保存済みの質問をそのまま使い、新しい判定記録を保存して、元と新しい判定の ID・採用結果を出力します。指定 Workspace の認証情報で実際のモデルを呼び出します。伏せた秘密値は復元できません。
 
 確率の形式とモデルの別名は Jev の [API](https://docs.typesafe.ai/api)・[モデル説明](https://docs.typesafe.ai/models)を参照してください。接続確認は応答形式の確認です。会話判断の正しさは、日本語の代表例で別途評価してください。
 
@@ -75,7 +78,7 @@ Agno は `--engine agno --provider openai --model <model-id>`、Claude は `--en
 
 ```bash
 uv run --no-sync python scripts/evaluate-chat-decision.py tests/fixtures/chat_decisions.ja.json \
-  --workspace /path/to/workspace --person aiko --engine jev --model jev-1.13.0 \
+  --workspace /path/to/workspace --person aiko --brain chat_decision \
   --report /path/to/jev-report.json
 ```
 
@@ -93,7 +96,7 @@ uv run --no-sync python scripts/evaluate-chat-decision.py tests/fixtures/chat_de
 
 Jev の文脈充足の確率は 0.57〜0.78 で採用閾値に達せず、全例でエージェントへ委ねました。effort も6例で不明となり、全体で7例が high になりました。保守的に動作することは確認できましたが、**この標本では Jev による起動削減は確認できていません**。Agno は感謝と取消にリアクション、引き継ぎ済みと雑談に行動なし、残り4例にエージェントを選びました。文脈不足の例では文脈が足りると誤判定しましたが、未対応依頼と不明な effort により high のエージェントへ委ねています。
 
-少数例の単発実測であり、精度の推定ではありません。費用は返却されず不明、再試行は Jev が0回、Agno 内部は取得不能です。チャットへの実送信は行っていません。返信完了までの時間、対応エージェントの実使用量の削減、長い履歴、継続運用での精度は未評価です。Claude の呼び出し条件と環境の後片付けは模擬環境でテストしています。実 CLI の比較は、既存の環境チェックが要求する書類フォルダへのアクセスをプレビューの起動元が持たないため、実施していません。
+少数例の単発実測であり、精度の推定ではありません。費用は返却されず不明、再試行は Jev が0回、Agno 内部は取得不能です。チャットへの実送信は行っていません。返信完了までの時間、対応エージェントの実使用量の削減、長い履歴、継続運用での精度は未評価です。この初期測定は共通 Brain への統合前の実装によるものです。実 CLI の比較は、既存の環境チェックが要求する書類フォルダへのアクセスをプレビューの起動元が持たないため、実施していません。
 
 ### 閾値と比較結果の限界
 

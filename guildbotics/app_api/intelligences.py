@@ -34,15 +34,11 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     parse_toolchain,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
+from guildbotics.intelligences.brains.jev import JEV_MODELS
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
     require_cli_agent_path,
-)
-from guildbotics.intelligences.decisions.settings import (
-    CONFIG_FILE,
-    availability,
-    read_config,
 )
 from guildbotics.intelligences.effort import (
     describe_overlay_problems,
@@ -53,6 +49,7 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yam
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
+JEV_BRAIN_CLASS = "guildbotics.intelligences.brains.jev.JevBrain"
 MODEL_PATH_PROVIDER_INDEX = 1
 
 
@@ -109,7 +106,6 @@ class IntelligenceConfigService:
             config_dir=config_dir,
             person_id=person_id,
             inherited=inherited,
-            decision=read_config(config_dir, person_id),
             model_mapping=model_mapping,
             models=self._read_models(config_dir, person_id, model_mapping),
             cli_agent_mapping=cli_agent_mapping,
@@ -127,6 +123,8 @@ class IntelligenceConfigService:
     def update_config(
         self, request: IntelligenceConfigUpdateRequest
     ) -> IntelligenceConfigResult:
+        for assignment in request.brain_mapping:
+            self._to_brain_config(assignment)
         base_dir = self._scope_dir(request.config_dir, request.person_id)
         target_dir = base_dir / "intelligences"
         if request.person_id and request.inherit_team_defaults:
@@ -140,7 +138,6 @@ class IntelligenceConfigService:
             return self._update_member_overrides(request, target_dir)
 
         files: list[CreatedFile] = []
-        self._write_decision(request, target_dir, files)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         model_mapping_file = target_dir / "model_mapping.yml"
@@ -224,8 +221,6 @@ class IntelligenceConfigService:
 
         files: list[CreatedFile] = []
 
-        self._write_decision(request, target_dir, files)
-
         self._reconcile_mapping_file(
             target_dir / "model_mapping.yml", model_override, files
         )
@@ -272,27 +267,6 @@ class IntelligenceConfigService:
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
-
-    def _write_decision(
-        self,
-        request: IntelligenceConfigUpdateRequest,
-        target_dir: Path,
-        files: list[CreatedFile],
-    ) -> None:
-        if request.decision is None:
-            return
-        if request.decision == read_config(request.config_dir, request.person_id):
-            return
-        ready = availability(request.decision, request.config_dir, request.person_id)
-        if not ready.available:
-            raise SetupServiceError("invalid_decision", ready.reason)
-        inherited = read_config(request.config_dir)
-        data = request.decision.model_dump()
-        self._reconcile_mapping_file(
-            target_dir / CONFIG_FILE,
-            {} if request.person_id and request.decision == inherited else data,
-            files,
-        )
 
     def _reconcile_mapping_file(
         self, path: Path, data: dict[str, Any], files: list[CreatedFile]
@@ -815,20 +789,24 @@ class IntelligenceConfigService:
                     BrainAssignment(
                         name=str(name),
                         brain_class=brain_class or AGNO_BRAIN_CLASS,
-                        engine="llm",
+                        engine="jev" if brain_class == JEV_BRAIN_CLASS else "llm",
                         target=str(args.get("model", "default")),
                     )
                 )
         return assignments
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
+        if assignment.engine == "jev" and assignment.target not in JEV_MODELS:
+            raise SetupServiceError("invalid_decision", "Unsupported Jev model")
         if assignment.engine == "cli":
             return {
                 "class": CLI_BRAIN_CLASS,
                 "args": {"cli_agent": assignment.target},
             }
         return {
-            "class": AGNO_BRAIN_CLASS,
+            "class": JEV_BRAIN_CLASS
+            if assignment.engine == "jev"
+            else AGNO_BRAIN_CLASS,
             "args": {"model": assignment.target},
         }
 

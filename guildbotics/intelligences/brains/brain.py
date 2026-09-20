@@ -1,10 +1,24 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from logging import Logger
+from typing import Any
 
 from pydantic import BaseModel
 
 
+@dataclass(frozen=True)
+class ExecutionMetadata:
+    """Provider-reported facts about the last completed invocation."""
+
+    model: str = ""
+    usage: dict[str, Any] | None = None
+    cost: float | None = None
+    retries: int | None = None
+
+
 class Brain(ABC):
+    probabilistic_answers = False
+
     def __init__(
         self,
         person_id: str,
@@ -33,6 +47,7 @@ class Brain(ABC):
         self.template_engine = template_engine
         self.response_class = response_class
         self.effort = effort
+        self.execution = ExecutionMetadata()
 
     @abstractmethod
     async def run(self, message: str, **kwargs):

@@ -1,22 +1,25 @@
 # Chat judgment
 
-In **Settings → LLM / AI CLI tools → Advanced settings → Chat judgment engine**, register credentials, choose an engine and model, check the connection, and save the settings.
+In **Setup → LLM / AI CLI tools → Advanced → Feature assignments**, select the engine and target for `chat_decision`.
 
-- **Jev**: enter the API key and press **Save Jev credentials**. This stores `TYPESAFE_API_KEY` in the workspace SecretStore. Registration stays accessible when Jev cannot be selected. Choose `jev-1.13.0` for a fixed model or `jev-latest` / `jev-preview` for an alias. **Check connection / refresh models** checks both Noul (a probability of yes) and Choice (one criterion), and refreshes the model candidates.
-- **Agno**: register the provider key in the existing provider API credential controls, then choose that provider and enter its model ID. Connection checking evaluates the same two question types without tools.
-- **AI CLI**: prepare the agent environment and sign in from the existing AI CLI controls. Chat judgment currently supports Claude Code. Enter a Claude model ID and check the connection. Judgment runs in a fresh probe environment without repository, member broker, tools, MCP servers, or conversation reuse.
+- **LLM** uses an existing model slot, including its provider, model, parameters, and credentials.
+- **CLI** uses an existing AI CLI slot and its model/effort settings through the shared Codex, Claude, Grok, Copilot, or Antigravity adapter. Prepare the device environment and log in first.
+- **Jev** selects `jev-1.13.0`, `jev-latest`, or `jev-preview`. Register its key in the **Chat judgment engine** card; it is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
 
-Typing a key does not register it. A registered key is initially **authentication unchecked**; only a successful check shows **Connection verified**. Authentication and connection errors are distinct. **Refresh availability** rereads local credentials and environment readiness. Removing credentials makes a saved choice unavailable but keeps its engine and model. Another engine is never selected automatically.
+Save the assignment, then **Check saved chat judgment assignment** to exercise both Noul and Choice and display the effective model. Key registration does not establish authentication success. Missing credentials, execution failures, and malformed responses delegate to the response agent.
 
-The team selection is stored as `.guildbotics/config/intelligences/decision.yml`:
+For example, a team using Jev stores this entry in the existing `.guildbotics/config/intelligences/brain_mapping.yml`:
 
 ```yaml
-engine: jev
-provider: ''
-model: jev-1.13.0
+chat_decision:
+  class: guildbotics.intelligences.brains.jev.JevBrain
+  args:
+    model: jev-1.13.0
 ```
 
-The corresponding file under `team/members/<person_id>/intelligences/` overrides the team selection. Turn off **Inherit team defaults** in the member's intelligence settings to edit it; restoring inheritance removes the override. Keys remain in SecretStore, outside this configuration. Each device needs credentials; use the existing Secret transfer controls when sharing a workspace between devices.
+For LLM, `AgnoAgentDefaultBrain.model` names an existing model slot; for CLI, `CliAgentBrain.cli_agent` names an existing CLI slot. The initial assignment uses the LLM `default` slot. Member feature overrides use the normal mapping inheritance, preserving team values for untouched features and slots. The old `decision.yml` is not read; reselect any trial configuration using this assignment. Stored API keys remain in SecretStore.
+
+Judgment creates a Brain through the common BrainFactory and calls `Brain.run()` once. CLI evaluations use fresh conversations without workspace files, shared documents, past sessions, or cache mounts. Member capability calls are rejected, and network access is limited to the provider API and the rejecting member broker. Only credential refreshes are persisted; the evaluation environment is destroyed at the end. The member's work conversation is unaffected.
 
 ## What happens before a reply
 
@@ -55,17 +58,17 @@ The agent remains responsible for the final reply, reaction, question, handoff, 
 
 ## Inspect and replay
 
-Each evaluation writes mandatory device-local JSON records below the workspace's local `run/required-io/` directory, even when optional transcripts are off. The `decision.evaluated` diagnostics event and `chat_decision` run evidence identify the evaluation. The completed record is `<evaluation_id>.json`; `<evaluation_id>0.json` records the attempt before the call. Records contain full masked input, questions, versions, input hash, requested engine/model, actual returned model, raw and normalized answers, adoption reasons, elapsed time, and available usage, cost, and retry counts. Unknown measurements stay `null`. These records are not shared by Workspace Sync. A recording failure forbids reaction/no-op completion.
+Each evaluation writes mandatory device-local JSON records below the workspace's local `run/required-io/` directory, even when optional transcripts are off. The `decision.evaluated` diagnostics event and `chat_decision` run evidence identify the evaluation. The completed record is `<evaluation_id>.json`; `<evaluation_id>0.json` records the attempt before the call. Records contain full masked input, questions, versions, input hash, requested Brain feature, actual returned model, raw and normalized answers, adoption reasons, elapsed time, and available usage, cost, and retry counts. Unknown measurements stay `null`. These records are not shared by Workspace Sync. A recording failure forbids reaction/no-op completion.
 
 To compare another model on a saved input without posting to chat or changing receipt state:
 
 ```bash
 uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.json \
   --workspace /path/to/workspace --person aiko \
-  --engine jev --model jev-1.13.0
+  --brain chat_decision
 ```
 
-For Agno add `--engine agno --provider openai --model <model-id>`; for Claude use `--engine cli --provider claude --model <model-id>`. Each replay preserves the saved questions, writes a new evaluation record, and prints the old and new selections and IDs. It makes a real model request using that workspace's credentials. Masked secret text cannot be reconstructed by replay.
+To compare a different model, add another feature assignment (for example `comparison`) targeting its model or CLI slot, then pass `--brain comparison`. Each replay preserves the saved questions, writes a new evaluation record, and prints the old and new selections and IDs. It makes a real request using that workspace's credentials. Masked secret text cannot be reconstructed.
 
 Jev's [API](https://docs.typesafe.ai/api) and [model documentation](https://docs.typesafe.ai/models) describe the probability contract and model aliases. Validate Japanese conversations with representative examples before relying on a particular model's fast-path choices; a passing connection check verifies the response contract, not conversation accuracy.
 
@@ -75,7 +78,7 @@ The [eight synthetic cases](../tests/fixtures/chat_decisions.ja.json) define exp
 
 ```bash
 uv run --no-sync python scripts/evaluate-chat-decision.py tests/fixtures/chat_decisions.ja.json \
-  --workspace /path/to/workspace --person aiko --engine jev --model jev-1.13.0 \
+  --workspace /path/to/workspace --person aiko --brain chat_decision \
   --report /path/to/jev-report.json
 ```
 
@@ -93,7 +96,7 @@ The report includes answers, probabilities, usage, elapsed time, versions, input
 
 Jev's context probabilities were 0.57–0.78, below the adoption threshold, so every case went to the agent. It also returned uncertain effort for six cases; seven routes used high effort overall. This sample demonstrates conservative operation but **does not demonstrate a startup reduction for Jev**. Agno used reactions for acknowledgment and cancellation, no-op for completed handoff and unrelated chatter, and the agent for the remaining four cases. Its missing-context case incorrectly asserted sufficient context, but the pending-request and uncertain-effort answers still selected the agent with high effort.
 
-These are individual observations, not an accuracy estimate. Costs were not returned and remain unknown; Jev made zero retries, while Agno's internal retry count was unavailable. No live chat action was performed. End-to-end reply latency, actual saved response-agent usage, long histories, and sustained production accuracy remain unmeasured. Claude's invocation and cleanup are covered by a stubbed environment test; a live CLI comparison was not run because the preview host lacked Documents access required by the existing environment readiness check.
+These are individual observations, not an accuracy estimate. Costs were not returned and remain unknown; Jev made zero retries, while Agno's internal retry count was unavailable. No live chat action was performed. End-to-end reply latency, actual saved response-agent usage, long histories, and sustained production accuracy remain unmeasured. This initial measurement predates the common Brain integration. A live CLI comparison was not run because the preview host lacked Documents access required by the existing environment readiness check.
 ### Thresholds and limits of the comparison
 
 The 0.1/0.9 cutoffs were the initial values specified in Issue #543; they were not calibrated for this use case. That evaluation applied thresholds to the Noul probability of yes and the probability of the selected Choice option. Choice's distribution-derived `confidence` was recorded but was not the adoption threshold. Agno and AI CLI answers are structured assertions, with no numeric threshold. The shared questions and downstream rules therefore do **not** constitute a comparison at matched error rates. An Agno `true` assertion does not provide the same guarantee as a Jev probability above 0.9.

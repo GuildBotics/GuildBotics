@@ -202,3 +202,59 @@ def test_agent_runtime_has_one_subprocess_creation_boundary() -> None:
     assert direct_calls == {
         name: (2 if name == "environment.py" else 0) for name in direct_calls
     }
+
+
+@pytest.mark.asyncio
+async def test_input_only_environment_does_not_mount_the_workspace(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
+    tool = environment.cli_agent_info("codex")
+    monkeypatch.setattr(
+        environment, "_ready", lambda _: (tool, None, ("1.1.1.1",), None)
+    )
+    state = SimpleNamespace(
+        mounts=(EnvironmentMount("/auth", tmp_path / "credentials", False),),
+        release=lambda: None,
+    )
+
+    def bind(selected, *, input_only):
+        assert input_only and selected == tool
+        return state
+
+    monkeypatch.setattr(environment, "bind_state", bind)
+
+    async def start(spec, *args, **kwargs):
+        return spec
+
+    monkeypatch.setattr(environment, "_start", start)
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="judge",
+        cwd=tmp_path / "repository",
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "codex", "manual", "judge"),
+        contract=AccessContract(input_only=True),
+    )
+    spec = await environment.start_turn_environment(
+        context, "codex", host_ports=(1234,), env={}
+    )
+    assert spec.mounts == (
+        EnvironmentMount(guest_path(context.cwd), None, True),
+        *state.mounts,
+    )
+    assert not spec.network.unrestricted and not spec.network.local_network
+    assert spec.network.domains == tool.provision.api_domains
+    assert spec.network.host_ports == (1234,)

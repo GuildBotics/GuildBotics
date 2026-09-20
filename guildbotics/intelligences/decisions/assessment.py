@@ -22,11 +22,11 @@ from guildbotics.intelligences.decisions.models import (
     Question,
     Selection,
 )
-from guildbotics.intelligences.decisions.settings import read_config
 from guildbotics.observability.diagnostics_events import (
     record_correlated_event,
     record_required_io,
 )
+from guildbotics.runtime.brain_factory import BrainFactory
 
 
 async def assess(
@@ -37,18 +37,13 @@ async def assess(
     person_id: str,
     logger: Logger,
     questions: dict[str, Question] | None = None,
+    brain_factory: BrainFactory | None = None,
 ) -> tuple[Selection, str]:
     """Return a fast path only after both the input and decision were stored."""
     questions = QUESTIONS if questions is None else questions
     evaluation_id = uuid4().hex
     started = time.monotonic()
-    config_error = False
-    if config is None:
-        try:
-            config = read_config(config_dir, person_id)
-        except Exception:
-            config = DecisionConfig()
-            config_error = True
+    config = config or DecisionConfig()
     request = {
         "state": state,
         "questions": {key: q.model_dump() for key, q in questions.items()},
@@ -70,8 +65,6 @@ async def assess(
         error = (
             "recording_failed"
             if recording_failed
-            else "invalid_configuration"
-            if config_error
             else "incomplete_input"
             if state.get("thread_context_complete") is not True
             else ""
@@ -86,6 +79,7 @@ async def assess(
                 config_dir=config_dir,
                 person_id=person_id,
                 logger=logger,
+                brain_factory=brain_factory,
             )
         )
     except Exception:
@@ -125,7 +119,7 @@ async def assess(
         person_id=person_id,
         payload={
             "evaluation_id": evaluation_id,
-            "engine": config.engine,
+            "brain": config.brain,
             "model": result.model,
             "route": selection.route,
             "effort": selection.effort,

@@ -170,6 +170,8 @@ class MemberCapabilityBroker:
 
     def prompt(self, prompt: str) -> str:
         """Prepend the common member-tool contract for the active turn."""
+        if self._context is not None and self._context.input_only:
+            return prompt
         instruction = _MEMBER_TOOL_INSTRUCTION.format(turn_grant=self.turn_grant)
         return f"{instruction}\n\n{prompt}"
 
@@ -233,6 +235,8 @@ class MemberCapabilityBroker:
             context = self._context
             if context is None:
                 return _rejected("No GuildBotics turn is active.")
+            if context.input_only:
+                return _rejected("This turn evaluates supplied input only.")
             if not secrets.compare_digest(turn_grant, self._turn_grant):
                 return _rejected("The GuildBotics turn grant is invalid or expired.")
             if reason := _rejection_reason(arguments, context.person_id):

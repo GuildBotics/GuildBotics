@@ -1,6 +1,5 @@
 import time
 from copy import deepcopy
-from dataclasses import dataclass
 from logging import Logger
 from pathlib import Path
 from typing import Any, cast
@@ -9,7 +8,7 @@ from agno.agent import Agent
 from agno.models.base import Model
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
 from guildbotics.intelligences.brains.util import (
     summary_log_line,
     to_plain_text,
@@ -133,13 +132,6 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
     return model_mapping
 
 
-@dataclass(frozen=True)
-class AgnoExecutionResult:
-    content: Any
-    model: str
-    usage: dict[str, Any]
-
-
 class AgnoAgentDefaultBrain(Brain):
     def __init__(
         self,
@@ -151,7 +143,6 @@ class AgnoAgentDefaultBrain(Brain):
         response_class: type[BaseModel] | None = None,
         model: str = "default",
         effort: str = "",
-        model_config: ModelConfig | None = None,
     ):
         super().__init__(
             person_id=person_id,
@@ -162,14 +153,12 @@ class AgnoAgentDefaultBrain(Brain):
             response_class=response_class,
             effort=effort,
         )
-        self.model_config = model_config or get_model_mapping(person_id)[model]
+        self.model_config = get_model_mapping(person_id)[model]
 
     async def run(self, message: str, **kwargs):
-        return (await self.run_with_execution_details(message, **kwargs)).content
-
-    async def run_with_execution_details(
-        self, message: str, **kwargs
-    ) -> AgnoExecutionResult:
+        if kwargs.pop("input_only", False):
+            kwargs["tools"] = []
+            kwargs["tool_call_limit"] = 0
         kwargs["name"] = kwargs.get("name", self.name)
 
         description = kwargs.pop("description", self.description)
@@ -247,7 +236,10 @@ class AgnoAgentDefaultBrain(Brain):
         ):
             content = to_response_class(str(content), self.response_class)
 
-        return AgnoExecutionResult(content, model_id, _response_usage(response))
+        self.execution = ExecutionMetadata(
+            model=model_id, usage=_response_usage(response)
+        )
+        return content
 
     def _record_summary(
         self,

@@ -71,6 +71,7 @@ import {
   type EffortOverlay,
   type ConfigRevisions,
   type ConfigStatus,
+  getDecisionOptions,
   type BrainAssignment,
   type IntelligenceConfig,
   type ModelDefinition,
@@ -1770,7 +1771,7 @@ function IntelligenceEditor({
     });
   }, []);
   const hasJsonError = Object.keys(jsonErrors).length > 0;
-  const [decisionValid, setDecisionValid] = useState(true);
+  const decisionOptions = useQuery({ queryKey: ["decision-options"], queryFn: getDecisionOptions });
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
     onSuccess: (written) => {
@@ -1810,13 +1811,11 @@ function IntelligenceEditor({
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
-  const decisionChanged = JSON.stringify(draft?.decision) !== JSON.stringify(query.data?.decision);
-  const validDecision = !decisionChanged || decisionValid;
-  const canSave = Boolean(payload && dirty && !hasJsonError && validDecision);
+  const canSave = Boolean(payload && dirty && !hasJsonError);
 
   const saveDraft = useCallback(
     async (written?: ConfigRevisions) => {
-      if (!payload || !serializedPayload || hasJsonError || !validDecision) {
+      if (!payload || !serializedPayload || hasJsonError) {
         return;
       }
       await mutation.mutateAsync({
@@ -1829,7 +1828,7 @@ function IntelligenceEditor({
         current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
       );
     },
-    [draftKey, hasJsonError, validDecision, mutation, payload, query.data, serializedPayload],
+    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
   );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
@@ -1851,9 +1850,9 @@ function IntelligenceEditor({
     if (!enabled || !onRegisterSave) {
       return;
     }
-    onRegisterSave({ save: canSave ? saveDraft : null, valid: !hasJsonError && validDecision });
+    onRegisterSave({ save: canSave ? saveDraft : null, valid: !hasJsonError });
     return () => onRegisterSave(null);
-  }, [canSave, enabled, hasJsonError, validDecision, onRegisterSave, saveDraft]);
+  }, [canSave, enabled, hasJsonError, onRegisterSave, saveDraft]);
 
   // Sync basic settings (props) -> advanced settings (draftState)
   useEffect(() => {
@@ -2235,6 +2234,9 @@ function IntelligenceEditor({
           nextClass = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain";
           const firstCliSlot = Object.keys(current.cli_agent_mapping)[0] ?? "default";
           nextTarget = firstCliSlot;
+        } else if (updates.engine === "jev") {
+          nextClass = "guildbotics.intelligences.brains.jev.JevBrain";
+          nextTarget = "jev-latest";
         } else {
           nextClass = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain";
           const firstLlmSlot = Object.keys(current.model_mapping)[0] ?? "default";
@@ -2290,11 +2292,9 @@ function IntelligenceEditor({
         />
       ) : null}
       <DecisionSettings
-        value={draft.decision}
+        key={`${personId ?? "team"}:${JSON.stringify(query.data?.revisions)}`}
         personId={personId}
-        disabled={draft.inherited}
-        onChange={(decision) => updateDraft((current) => ({ ...current, decision }))}
-        onValidity={setDecisionValid}
+        unsaved={dirty}
       />
       {(() => {
         if (draft.inherited) {
@@ -2329,9 +2329,11 @@ function IntelligenceEditor({
 
                 {draft.brain_mapping.map((assignment, index) => {
                   const targetOptions =
-                    assignment.engine === "cli"
-                      ? cliSlots.map((s) => ({ value: s, label: s }))
-                      : modelSlots.map((s) => ({ value: s, label: s }));
+                    assignment.engine === "jev"
+                      ? (decisionOptions.data?.models ?? [])
+                      : assignment.engine === "cli"
+                        ? cliSlots.map((s) => ({ value: s, label: s }))
+                        : modelSlots.map((s) => ({ value: s, label: s }));
 
                   return (
                     <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
@@ -2347,10 +2349,13 @@ function IntelligenceEditor({
                         data={[
                           { value: "llm", label: "LLM" },
                           { value: "cli", label: "CLI" },
+                          { value: "jev", label: "Jev" },
                         ]}
                         value={assignment.engine}
                         onChange={(value) =>
-                          handleUpdateBrain(index, { engine: (value as "llm" | "cli") ?? "llm" })
+                          handleUpdateBrain(index, {
+                            engine: (value as BrainAssignment["engine"]) ?? "llm",
+                          })
                         }
                         flex={1}
                       />
@@ -6655,7 +6660,6 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agent_mapping: config.cli_agent_mapping,
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
-    ...(config.decision ? { decision: config.decision } : {}),
     // The grants are the workspace's and this device's; a member payload
     // carries neither.
     ...(personId

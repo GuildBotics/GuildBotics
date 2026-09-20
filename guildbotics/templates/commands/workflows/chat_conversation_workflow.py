@@ -373,6 +373,7 @@ async def _handle_event(
                 config_dir=config_dir,
                 person_id=person_id,
                 logger=context.logger,
+                brain_factory=context.brain_factory,
             )
             RunStore(task_run_root).append_evidence(
                 run_id,

@@ -454,3 +454,26 @@ def test_member_environment_preserves_unrelated_host_values(
 
     assert env["GUILDBOTICS_TEST_HOST_VALUE"] == "kept"
     assert env is not os.environ
+
+
+@pytest.mark.asyncio
+async def test_input_only_turn_cannot_invoke_even_read_capabilities(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+
+    broker = MemberCapabilityBroker()
+    broker._context = replace(
+        _context(tmp_path), contract=AccessContract(input_only=True)
+    )
+    broker._turn_grant = "grant"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Input-only evaluation must not invoke a member command")
+
+    monkeypatch.setattr(member_broker, "create_agent_subprocess", forbidden)
+    assert broker.prompt("evaluate this") == "evaluate this"
+    result = await broker.execute("grant", ["context", "--person", "aiko"])
+    assert result.exit_code != 0

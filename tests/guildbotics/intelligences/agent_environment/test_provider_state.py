@@ -522,3 +522,26 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     assert provider_state.authentication_failed(codex)
     provider_state.record_authentication_outcome(codex, failed=False)
     assert not provider_state.authentication_failed(codex)
+
+
+@pytest.mark.parametrize("name", ["codex", "claude", "grok", "copilot", "antigravity"])
+def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, name):
+    tool = cli_agent_info(name)
+    store = provider_state_dir(tool)
+    auth = store / tool.provision.auth
+    auth.parent.mkdir(parents=True, exist_ok=True)
+    auth.write_text("credential")
+    for entry in tool.provision.persisted:
+        if entry.endswith("/"):
+            (store / entry).mkdir(parents=True, exist_ok=True)
+            (store / entry / "prior-conversation").write_text("old input")
+    state = bind_state(tool, input_only=True)
+    assert state.turn_dir is not None
+    assert len(state.mounts) == 1
+    assert state.mounts[0].host == state.turn_dir
+    assert (state.turn_dir / tool.provision.auth).read_text() == "credential"
+    assert not list(state.turn_dir.rglob("prior-conversation"))
+    (state.turn_dir / tool.provision.auth).write_text("refreshed")
+    state.release()
+    assert auth.read_text() == "refreshed"
+    assert not state.turn_dir.exists()

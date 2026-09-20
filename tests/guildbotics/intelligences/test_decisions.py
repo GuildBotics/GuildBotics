@@ -4,11 +4,12 @@ import itertools
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
-from guildbotics.intelligences.decisions import assessment, engines, settings
+from guildbotics.intelligences.brains import jev
+from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
+from guildbotics.intelligences.decisions import assessment, engines
 from guildbotics.intelligences.decisions.chat_policy import (
     QUESTIONS,
     conjunction,
@@ -301,19 +302,6 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
     assert result.effort == "high"
 
 
-def test_credentials_are_local_and_deletion_is_observed(tmp_path, monkeypatch):
-    monkeypatch.delenv(settings.JEV_KEY, raising=False)
-    config = DecisionConfig(engine="jev", model="jev-1.13.0")
-    assert settings.availability(config, tmp_path).state == "missing"
-    store = KeyringSecretStore(tmp_path)
-    store.set(settings.JEV_KEY, "test-credential")
-    ready = settings.availability(config, tmp_path)
-    assert ready.available and ready.state == "unverified"
-    store.delete(settings.JEV_KEY)
-    monkeypatch.setenv(settings.JEV_KEY, "stale-key-loaded-at-startup")
-    assert not settings.availability(config, tmp_path).available
-
-
 def test_generic_choice_is_not_restricted_to_chat_reactions():
     result = normalize(
         {
@@ -336,33 +324,25 @@ def test_generic_choice_is_not_restricted_to_chat_reactions():
     assert result["q"].value == "check"
 
 
-def test_failed_model_check_does_not_poison_another_model(tmp_path):
-    KeyringSecretStore(tmp_path).set(settings.JEV_KEY, "test-credential")
-    failed = DecisionConfig(engine="jev", model="jev-preview")
-    settings.record_connection(failed, tmp_path, "invalid")
-    assert not settings.availability(failed, tmp_path).available
-    assert settings.availability(
-        DecisionConfig(engine="jev", model="jev-latest"), tmp_path
-    ).available
-
-
 @pytest.mark.asyncio
 async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
-    KeyringSecretStore(tmp_path).set(settings.JEV_KEY, "private-test-key")
     calls = []
 
     async def request(*args):
         calls.append(args)
         raise RuntimeError("private-test-key")
 
-    monkeypatch.setattr(engines, "jev_request", request)
+    monkeypatch.setattr(jev, "request", request)
+    brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
+    factory = SimpleNamespace(create_brain=lambda *args, **kwargs: brain)
     result = await engines.evaluate(
-        DecisionConfig(engine="jev", model="jev-latest"),
+        DecisionConfig(),
         {"text": "依頼"},
         QUESTIONS,
         config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
+        brain_factory=factory,
     )
     assert len(calls) == 1
     assert set(calls[0][-1]["questions"]) == set(QUESTIONS)
@@ -371,83 +351,61 @@ async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("engine", ["agno", "cli"])
-async def test_structured_engines_use_same_questions_without_external_tools(
-    tmp_path, monkeypatch, engine
-):
+async def test_common_factory_run_and_execution_metadata(tmp_path):
     state = {"text": "この対応は取り消します"}
-    raw = {
-        "answers": {
-            key: {"type": q.type, "value": "none" if q.type == "choice" else "false"}
-            for key, q in QUESTIONS.items()
-        }
-    }
-    monkeypatch.setattr(
-        engines, "availability", lambda *args: SimpleNamespace(available=True)
-    )
     calls = []
-    environment = None
-    if engine == "agno":
 
-        class Brain:
-            def __init__(self, *args, **kwargs):
-                assert kwargs["model_config"].parameters["id"] == "test-model"
-
-            async def run_with_execution_details(self, prompt, **kwargs):
-                assert kwargs == {"tools": [], "tool_call_limit": 0}
-                calls.append(json.loads(prompt))
-                return SimpleNamespace(
-                    content=json.dumps(raw),
-                    model="actual-model",
-                    usage={"input_tokens": 12},
-                )
-
-        monkeypatch.setattr(engines, "AgnoAgentDefaultBrain", Brain)
-        provider = "openai"
-    else:
-        stdin = SimpleNamespace(
-            write=lambda data: calls.append(json.loads(data)),
-            drain=AsyncMock(),
-            close=lambda: None,
-        )
-        process = SimpleNamespace(
-            stdin=stdin,
-            communicate=AsyncMock(
-                return_value=(
-                    json.dumps(
-                        {
-                            "result": json.dumps(raw),
-                            "modelUsage": {"actual-model": {}},
-                            "usage": {"input_tokens": 12},
+    class TestBrain(Brain):
+        async def run(self, message, **kwargs):
+            calls.append((json.loads(message), kwargs))
+            self.execution = ExecutionMetadata(
+                model="resolved-model", usage={"input_tokens": 12}
+            )
+            return json.dumps(
+                {
+                    "answers": {
+                        key: {
+                            "type": q.type,
+                            "value": "none" if q.type == "choice" else "false",
                         }
-                    ).encode(),
-                    b"",
-                )
-            ),
-            wait=AsyncMock(return_value=0),
-        )
-        environment = SimpleNamespace(
-            run=AsyncMock(return_value=process), close=AsyncMock()
-        )
-        monkeypatch.setattr(
-            engines, "start_probe_environment", AsyncMock(return_value=environment)
-        )
-        provider = "claude"
+                        for key, q in QUESTIONS.items()
+                    }
+                }
+            )
+
+    def create(person_id, name, language, logger, config):
+        assert person_id == "alice"
+        assert config["brain"] == "custom_judgment"
+        assert "only the supplied state" in config["body"]
+        return TestBrain(person_id, name, logger)
+
     result = await engines.evaluate(
-        DecisionConfig(engine=engine, provider=provider, model="test-model"),
+        DecisionConfig(brain="custom_judgment"),
         state,
         QUESTIONS,
         config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
+        brain_factory=SimpleNamespace(create_brain=create),
     )
     assert not result.error
-    assert len(calls) == 1 and calls[0]["state"] == state
-    assert set(calls[0]["questions"]) == set(QUESTIONS)
-    assert result.model == "actual-model" and result.usage == {"input_tokens": 12}
+    assert len(calls) == 1
+    request, kwargs = calls[0]
+    assert request["state"] == state and set(request["questions"]) == set(QUESTIONS)
+    assert kwargs["input_only"] is True
+    assert result.model == "resolved-model" and result.usage == {"input_tokens": 12}
     assert result.retries is None
-    if environment:
-        args = environment.run.call_args.args
-        assert args[args.index("--tools") + 1] == ""
-        assert "--no-session-persistence" in args and "--strict-mcp-config" in args
-        environment.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_jev_credentials_are_fresh_and_never_fall_back_to_environment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(jev.JEV_KEY, "stale-secret")
+    assert not jev.credential(tmp_path)
+    store = KeyringSecretStore(tmp_path)
+    store.set(jev.JEV_KEY, "current-secret")
+    assert jev.credential(tmp_path) == "current-secret"
+    store.delete(jev.JEV_KEY)
+    with pytest.raises(ValueError, match="credentials_missing"):
+        await jev.request(tmp_path, "POST", "/systemone", {})

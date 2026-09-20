@@ -21,7 +21,12 @@ const resources = {
         providerCredentials: "Provider API credentials",
         cliEnvironment: "AI CLI environment and login",
         register: "Save Jev credentials",
-        check: "Check connection / refresh models",
+        check: "Check saved chat judgment assignment",
+        assignmentHint:
+          "Select the engine and target for chat_decision in Feature assignments. LLM and CLI use the existing slots.",
+        saveBeforeCheck: "Save your changes before checking the assignment.",
+        keyPresent: "Jev key registered. Registration alone does not verify authentication.",
+        keyMissing: "Jev key not registered.",
         retry: "Refresh availability",
         failed: "Could not load or save. Retry; the current selection is preserved.",
         recovery:
@@ -35,6 +40,8 @@ const resources = {
           authentication_error: "Authentication error",
           connection_error: "Connection error",
           invalid: "Invalid model or configuration",
+          invalid_response: "Invalid response or configuration",
+          evaluation_failed: "Evaluation failed",
         },
       },
       app: {
@@ -2085,7 +2092,12 @@ const resources = {
         providerCredentials: "プロバイダーの API 認証情報",
         cliEnvironment: "AI CLI の環境準備・ログイン",
         register: "Jev の認証情報を保存",
-        check: "接続確認・モデル候補を更新",
+        check: "保存済みのチャット判断設定を接続確認",
+        assignmentHint:
+          "「機能別の割り当て」の chat_decision でエンジンと割り当て先を選びます。LLM／CLI は既存のスロットを使います。",
+        saveBeforeCheck: "変更を保存してから接続確認してください。",
+        keyPresent: "Jev のキーは登録済みです。登録だけでは認証成功は確認していません。",
+        keyMissing: "Jev のキーは未登録です。",
         retry: "利用可否を再取得",
         failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
         recovery:
@@ -2099,6 +2111,8 @@ const resources = {
           authentication_error: "認証エラー",
           connection_error: "通信エラー",
           invalid: "モデル・設定が不正",
+          invalid_response: "応答または設定が不正",
+          evaluation_failed: "判定に失敗しました",
         },
       },
       app: {

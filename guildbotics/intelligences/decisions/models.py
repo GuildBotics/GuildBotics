@@ -8,12 +8,10 @@ Truth = Literal["true", "false", "unknown"]
 
 
 class DecisionConfig(BaseModel):
-    """A provider and concrete model, inherited as a unit from team to member."""
+    """The existing brain feature to use, including for offline replay."""
 
     model_config = ConfigDict(extra="forbid")
-    engine: Literal["jev", "agno", "cli"] = "agno"
-    provider: str = ""
-    model: str = ""
+    brain: str = "chat_decision"
 
 
 class Question(BaseModel):

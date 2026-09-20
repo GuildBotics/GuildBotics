@@ -35,7 +35,6 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     EnvironmentResources,
     ToolchainDeclaration,
 )
-from guildbotics.intelligences.decisions.models import DecisionConfig
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -1353,7 +1352,7 @@ class AgentEnvironmentStatusResponse(BaseModel):
 class BrainAssignment(BaseModel):
     name: str
     brain_class: str
-    engine: Literal["llm", "cli"]
+    engine: Literal["llm", "cli", "jev"]
     target: str
 
 
@@ -1366,7 +1365,6 @@ class IntelligenceConfigResponse(BaseModel):
     revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherited: bool = False
-    decision: DecisionConfig = Field(default_factory=DecisionConfig)
     model_mapping: dict[str, str] = Field(default_factory=dict)
     models: list[ModelDefinition] = Field(default_factory=list)
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
@@ -1394,7 +1392,6 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     expected_revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherit_team_defaults: bool = False
-    decision: DecisionConfig | None = None
     model_mapping: dict[str, str] = Field(default_factory=dict)
     models: list[ModelDefinition] = Field(default_factory=list)
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)

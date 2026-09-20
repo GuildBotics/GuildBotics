@@ -26,9 +26,9 @@ async def main() -> None:
     )
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--person", required=True)
-    parser.add_argument("--engine", choices=["jev", "agno", "cli"], required=True)
-    parser.add_argument("--provider", default="")
-    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--brain", default="chat_decision", help="Configured brain feature"
+    )
     args = parser.parse_args()
     apply_workspace_for_cli(args.workspace)
     source = json.loads(args.input.read_text(encoding="utf-8"))
@@ -55,9 +55,7 @@ async def main() -> None:
     for case in cases:
         selection, evaluation_id = await assess(
             case["state"],
-            DecisionConfig(
-                engine=args.engine, provider=args.provider, model=args.model
-            ),
+            DecisionConfig(brain=args.brain),
             config_dir=get_workspace_config_dir(),
             person_id=args.person,
             logger=logging.getLogger("decision-replay"),

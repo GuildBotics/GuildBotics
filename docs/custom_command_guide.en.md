@@ -831,7 +831,7 @@ The provider-neutral label is never passed through to the provider as a fallback
 
 The thread's existing `high` is preserved. Judgment still runs for participation and reaction, even at `high`. A reaction-only or no-op result does not promote effort. State is stored per person_id, representing that member's view of the thread.
 
-Choose Jev, an Agno provider, or Claude Code in the desktop's chat judgment settings. Missing credentials or invalid configuration defer to the response agent with `high`; another judgment engine is not selected automatically. See [Chat judgment](chat_decisions.en.md) for the rules, setup, and evaluation records.
+Assign Jev or an existing LLM / AI CLI slot to `chat_decision` in the desktop's feature assignments. Missing credentials or invalid configuration defer to the response agent with `high`; another judgment engine is not selected automatically. See [Chat judgment](chat_decisions.en.md) for the rules, setup, and evaluation records.
 
 ### 9.7. Reading it in diagnostics
 

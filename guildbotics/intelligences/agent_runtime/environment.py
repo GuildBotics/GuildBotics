@@ -88,7 +88,9 @@ async def start_turn_environment(
     """
     tool, status, nameservers, resources = _ready(tool_name)
     home = guest_home()
-    state = bind_state(tool)
+    state = (
+        bind_state(tool, input_only=True) if context.input_only else bind_state(tool)
+    )
     spec = build_environment_spec(
         context.contract,
         context.cwd,

@@ -20,11 +20,11 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -115,6 +115,8 @@ def _agent_invocations(ctx) -> list[tuple[str, dict]]:
 
 
 class FakeInvokeContext(types.SimpleNamespace):
+    brain_factory = None
+
     def __init__(self, action: str) -> None:
         person = types.SimpleNamespace(
             person_id="alice",

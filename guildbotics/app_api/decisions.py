@@ -9,7 +9,6 @@ from pydantic import BaseModel, SecretStr
 from guildbotics.app_api.errors import AppApiError
 from guildbotics.intelligences.decisions import preparation
 from guildbotics.intelligences.decisions.models import DecisionConfig
-from guildbotics.intelligences.decisions.settings import availability
 
 
 class DecisionCheck(BaseModel):
@@ -24,12 +23,8 @@ class DecisionCredential(BaseModel):
 def register(app: FastAPI, config_dir: Callable[[], Path], authorize: Callable) -> None:
 
     @app.get("/intelligences/decisions/options", dependencies=[Depends(authorize)])
-    def options(person_id: str | None = None):
-        return preparation.options(config_dir(), person_id)
-
-    @app.post("/intelligences/decisions/status", dependencies=[Depends(authorize)])
-    def status(request: DecisionCheck):
-        return availability(request.config, config_dir(), request.person_id)
+    def options():
+        return preparation.options(config_dir())
 
     @app.post("/intelligences/decisions/check", dependencies=[Depends(authorize)])
     async def check(request: DecisionCheck):
