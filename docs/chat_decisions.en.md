@@ -21,7 +21,7 @@ chat_decision:
     model: jev-latest
 ```
 
-For LLM, `AgnoAgentDefaultBrain.model` names an existing model slot; for CLI, `CliAgentBrain.cli_agent` names an existing CLI slot. The initial assignment uses the LLM `default` slot. Member feature overrides use the normal mapping inheritance, preserving team values for untouched features and slots. The old `decision.yml` is not read; reselect any trial configuration using this assignment. Stored API keys remain in SecretStore.
+For LLM, `AgnoAgentDefaultBrain.model` names an existing model slot; for CLI, `CliAgentBrain.cli_agent` names an existing CLI slot. Newly generated workspace configuration assigns the LLM `default` slot. Existing `brain_mapping.yml` files are not merged with new template features, so select and save a chat judgment engine after upgrading. Member feature overrides use the normal mapping inheritance, preserving team values for untouched features and slots. The old `decision.yml` is not read; reselect any trial configuration using this assignment. Stored API keys remain in SecretStore.
 
 Judgment creates a Brain through the common BrainFactory and calls `Brain.run()` once. CLI evaluations use fresh conversations without workspace files, shared documents, past sessions, or cache mounts. Member capability calls are rejected, and network access is limited to the provider API and the rejecting member broker. Only credential refreshes are persisted; the evaluation environment is destroyed at the end. The member's work conversation is unaffected.
 

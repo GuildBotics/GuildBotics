@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -26,6 +26,7 @@ from guildbotics.capabilities.member_activity_events import (
     record_member_issue_create_event,
     record_member_pr_create_event,
     record_member_push_event,
+    record_member_work_target,
 )
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
@@ -60,7 +61,7 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
-from guildbotics.observability import trace_scope
+from guildbotics.observability import TRACE_ID_ENV, join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveTraceSession,
@@ -1505,6 +1506,37 @@ def github() -> None:
     """GitHub issue, pull request, Actions, and reaction capabilities."""
 
 
+async def _github(
+    person: str,
+    action: Callable[[MemberGitHubCapabilityService], Awaitable[dict[str, Any]]],
+    *,
+    evidence: str = "",
+    then: Callable[[Any, dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Run one GitHub capability and record the PR / issue it worked on.
+
+    Every issue and pull request command declares its target here, in one
+    place, so the trace the command runs inside is titled by whichever item
+    a command touched (or read) first.
+    """
+    context, member_person = _resolve(person)
+    service = MemberGitHubCapabilityService(member_person, context.team)
+    try:
+        result = await action(service)
+    finally:
+        await service.aclose()
+    if evidence:
+        TaskRunStore().append_evidence(current_task_run_id(), evidence, result)
+    target = result.get("target")
+    if isinstance(target, dict):
+        record_member_work_target(
+            member_person, target, read_only=not _member_command_needs_lease()
+        )
+    if then is not None:
+        then(member_person, result)
+    return result
+
+
 @github.group()
 def issue() -> None:
     """GitHub issue operations."""
@@ -1516,16 +1548,10 @@ def issue() -> None:
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
 @_markdown_format_option
 def issue_inspect(person: str, issue_url: str, output_format: str) -> None:
-    _run(_issue_inspect(person, issue_url), output_format=output_format)
-
-
-async def _issue_inspect(person: str, issue_url: str) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        return await service.issue_inspect(issue_url)
-    finally:
-        await service.aclose()
+    _run(
+        _github(person, lambda service: service.issue_inspect(issue_url)),
+        output_format=output_format,
+    )
 
 
 @issue.command(name="comment")
@@ -1540,21 +1566,14 @@ def issue_comment(
 ) -> None:
     body = _read_stdin("issue comment body")
     _run(
-        _issue_comment(person, issue_url, body),
+        _github(
+            person,
+            lambda service: service.issue_comment(issue_url, body),
+            evidence="issue_comment",
+            then=record_member_issue_comment_event,
+        ),
         output_format=output_format,
     )
-
-
-async def _issue_comment(person: str, issue_url: str, body: str) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.issue_comment(issue_url, body)
-        TaskRunStore().append_evidence(current_task_run_id(), "issue_comment", result)
-        record_member_issue_comment_event(member_person, result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @issue.command(name="create")
@@ -1587,33 +1606,16 @@ def issue_create(
     title = _validate_title(title)
     body = _read_stdin("issue body")
     _run(
-        _issue_create(
-            person, repo, title, body, add_to_project, list(labels), human_approved
+        _github(
+            person,
+            lambda service: service.issue_create(
+                repo, title, body, add_to_project, list(labels), human_approved
+            ),
+            evidence="issue_create",
+            then=record_member_issue_create_event,
         ),
         output_format=output_format,
     )
-
-
-async def _issue_create(
-    person: str,
-    repo: str,
-    title: str,
-    body: str,
-    add_to_project: bool,
-    labels: list[str],
-    human_approved: bool,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.issue_create(
-            repo, title, body, add_to_project, labels, human_approved
-        )
-        TaskRunStore().append_evidence(current_task_run_id(), "issue_create", result)
-        record_member_issue_create_event(member_person, result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @issue.command(name="update")
@@ -1665,51 +1667,25 @@ def issue_update(
             "--remove-label, or --state."
         )
     body = _read_stdin("issue body", allow_empty=True) if content_stdin else None
+    new_title = _validate_title(title) if title is not None else None
     _run(
-        _issue_update(
-            person=person,
-            issue_url=issue_url,
-            body=body,
-            title=_validate_title(title) if title is not None else None,
-            add_labels=list(add_labels),
-            remove_labels=list(remove_labels),
-            state=state,
-            state_reason=state_reason,
-            human_approved=human_approved,
+        _github(
+            person,
+            lambda service: service.issue_update(
+                issue_url,
+                body=body,
+                title=new_title,
+                add_labels=list(add_labels),
+                remove_labels=list(remove_labels),
+                state=state,
+                state_reason=state_reason,
+                human_approved=human_approved,
+            ),
+            evidence="issue_update",
+            then=record_member_issue_close_event,
         ),
         output_format=output_format,
     )
-
-
-async def _issue_update(
-    person: str,
-    issue_url: str,
-    body: str | None,
-    title: str | None,
-    add_labels: list[str],
-    remove_labels: list[str],
-    state: str | None,
-    state_reason: str | None,
-    human_approved: bool,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.issue_update(
-            issue_url,
-            body=body,
-            title=title,
-            add_labels=add_labels,
-            remove_labels=remove_labels,
-            state=state,
-            state_reason=state_reason,
-            human_approved=human_approved,
-        )
-        TaskRunStore().append_evidence(current_task_run_id(), "issue_update", result)
-        record_member_issue_close_event(member_person, result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @github.group()
@@ -1740,20 +1716,12 @@ def pr_inspect(
     output_format: str,
 ) -> None:
     _run(
-        _pr_inspect(person, pr_url, include_comments, include_diff),
+        _github(
+            person,
+            lambda service: service.pr_inspect(pr_url, include_comments, include_diff),
+        ),
         output_format=output_format,
     )
-
-
-async def _pr_inspect(
-    person: str, pr_url: str, include_comments: bool, include_diff: bool
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        return await service.pr_inspect(pr_url, include_comments, include_diff)
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="checks")
@@ -1781,24 +1749,14 @@ def pr_checks(
     output_format: str,
 ) -> None:
     _run(
-        _pr_checks(person, pr_url, failed_logs, log_tail_bytes),
+        _github(
+            person,
+            lambda service: service.pr_checks(
+                pr_url, failed_logs=failed_logs, log_tail_bytes=log_tail_bytes
+            ),
+        ),
         output_format=output_format,
     )
-
-
-async def _pr_checks(
-    person: str, pr_url: str, failed_logs: bool, log_tail_bytes: int
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        return await service.pr_checks(
-            pr_url,
-            failed_logs=failed_logs,
-            log_tail_bytes=log_tail_bytes,
-        )
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="create")
@@ -1849,35 +1807,18 @@ def pr_create(
         raise click.UsageError("--closes-issue requires --issue-url.")
     body = _read_stdin("pull request body")
     _run(
-        _pr_create(
-            person, repo, head, base, title, body, issue_url, draft, closes_issue
+        _github(
+            person,
+            lambda service: service.pr_create(
+                repo, head, base, title, body, issue_url, draft, closes_issue
+            ),
+            evidence="pr_create",
+            then=lambda member, result: record_member_pr_create_event(
+                member, repo, title, result
+            ),
         ),
         output_format=output_format,
     )
-
-
-async def _pr_create(
-    person: str,
-    repo: str,
-    head: str,
-    base: str,
-    title: str,
-    body: str,
-    issue_url: str,
-    draft: str,
-    closes_issue: bool,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_create(
-            repo, head, base, title, body, issue_url, draft, closes_issue
-        )
-        TaskRunStore().append_evidence(current_task_run_id(), "pr_create", result)
-        record_member_pr_create_event(member_person, repo, title, result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="update")
@@ -1898,25 +1839,15 @@ def pr_update(
             "pr update needs --content-stdin/--content-file or --title."
         )
     body = _read_stdin("pull request body", allow_empty=True) if content_stdin else None
+    new_title = _validate_title(title) if title is not None else None
     _run(
-        _pr_update(
-            person, pr_url, body, _validate_title(title) if title is not None else None
+        _github(
+            person,
+            lambda service: service.pr_update(pr_url, body=body, title=new_title),
+            evidence="pr_update",
         ),
         output_format=output_format,
     )
-
-
-async def _pr_update(
-    person: str, pr_url: str, body: str | None, title: str | None
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_update(pr_url, body=body, title=title)
-        TaskRunStore().append_evidence(current_task_run_id(), "pr_update", result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="comment")
@@ -1927,20 +1858,13 @@ async def _pr_update(
 def pr_comment(person: str, pr_url: str, output_format: str) -> None:
     body = _read_stdin("pull request comment body")
     _run(
-        _pr_comment(person, pr_url, body),
+        _github(
+            person,
+            lambda service: service.pr_comment(pr_url, body),
+            evidence="pr_comment",
+        ),
         output_format=output_format,
     )
-
-
-async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_comment(pr_url, body)
-        TaskRunStore().append_evidence(current_task_run_id(), "pr_comment", result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="review")
@@ -1957,20 +1881,13 @@ async def _pr_comment(person: str, pr_url: str, body: str) -> dict[str, Any]:
 def pr_review(person: str, pr_url: str, event: str, output_format: str) -> None:
     body = _read_stdin("pull request review body")
     _run(
-        _pr_review(person, pr_url, event, body),
+        _github(
+            person,
+            lambda service: service.pr_review(pr_url, body, event),
+            evidence="pr_review",
+        ),
         output_format=output_format,
     )
-
-
-async def _pr_review(person: str, pr_url: str, event: str, body: str) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_review(pr_url, body, event)
-        TaskRunStore().append_evidence(current_task_run_id(), "pr_review", result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="review-comment")
@@ -2019,35 +1936,15 @@ def pr_review_comment(
         )
     body = _read_stdin("pull request review comment body")
     _run(
-        _pr_review_comment(
-            person, pr_url, body, file_path, line, side, start_line, start_side
+        _github(
+            person,
+            lambda service: service.pr_review_comment(
+                pr_url, body, file_path, line, side, start_line, start_side
+            ),
+            evidence="pr_review_comment",
         ),
         output_format=output_format,
     )
-
-
-async def _pr_review_comment(
-    person: str,
-    pr_url: str,
-    body: str,
-    file_path: str,
-    line: int,
-    side: str,
-    start_line: int | None,
-    start_side: str | None,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_review_comment(
-            pr_url, body, file_path, line, side, start_line, start_side
-        )
-        TaskRunStore().append_evidence(
-            current_task_run_id(), "pr_review_comment", result
-        )
-        return result
-    finally:
-        await service.aclose()
 
 
 @pr.command(name="reply")
@@ -2069,25 +1966,13 @@ def pr_reply(
 ) -> None:
     body = _read_stdin("pull request reply body")
     _run(
-        _pr_reply(person, pr_url, reply_target_id, body),
+        _github(
+            person,
+            lambda service: service.pr_reply(pr_url, reply_target_id, body),
+            evidence="pr_reply",
+        ),
         output_format=output_format,
     )
-
-
-async def _pr_reply(
-    person: str,
-    pr_url: str,
-    reply_target_id: int,
-    body: str,
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        result = await service.pr_reply(pr_url, reply_target_id, body)
-        TaskRunStore().append_evidence(current_task_run_id(), "pr_reply", result)
-        return result
-    finally:
-        await service.aclose()
 
 
 @github.group()
@@ -2128,20 +2013,12 @@ def artifact_download(
     output_format: str,
 ) -> None:
     _run(
-        _artifact_download(person, target_url, name, dest),
+        _github(
+            person,
+            lambda service: service.artifact_download(target_url, name, dest),
+        ),
         output_format=output_format,
     )
-
-
-async def _artifact_download(
-    person: str, target_url: str, name: str, dest: Path
-) -> dict[str, Any]:
-    context, member_person = _resolve(person)
-    service = MemberGitHubCapabilityService(member_person, context.team)
-    try:
-        return await service.artifact_download(target_url, name, dest)
-    finally:
-        await service.aclose()
 
 
 @github.group()
@@ -2441,7 +2318,7 @@ def _run(coro, *, output_format: str) -> Any:
                 prepared_sync = _prepare_member_sync()
             started = True
             if interactive_session is None:
-                result = asyncio.run(coro)
+                result = _run_in_owner_trace(coro, command)
             else:
                 result = _run_interactive(coro, interactive_session, command)
     except (
@@ -2577,6 +2454,21 @@ def _run_interactive(
             return cast(dict[str, Any], result)
     finally:
         store.touch(session)
+
+
+def _run_in_owner_trace(coro, command: str) -> Any:
+    """Run a command spawned by an agent turn inside that turn's trace.
+
+    The broker hands the trace over in the environment; without it (a plain
+    workflow-less invocation) the command records on its own.
+    """
+    trace_id = os.getenv(TRACE_ID_ENV, "")
+    if not trace_id:
+        return asyncio.run(coro)
+    person = _current_person()
+    person_id = _resolve(person)[1].person_id if person else ""
+    with join_trace(trace_id, person_id=person_id, command=command):
+        return asyncio.run(coro)
 
 
 def _interactive_session_for_current_command() -> InteractiveTraceSession | None:

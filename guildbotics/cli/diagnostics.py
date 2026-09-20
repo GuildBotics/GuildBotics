@@ -75,7 +75,7 @@ def traces_cmd(
     output_format: str,
 ) -> None:
     """List recorded executions, newest first."""
-    filters = {
+    filters: dict[str, Any] = {
         "source": source,
         "person_id": person_id,
         "query": query,

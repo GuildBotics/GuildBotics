@@ -264,7 +264,17 @@ async def test_snapshot_is_full_and_replayable_even_without_transcripts(
     async def evaluate(*args, **kwargs):
         return answers(reaction="ack")
 
+    redaction_loads = 0
+
+    def load_redaction_values():
+        nonlocal redaction_loads
+        redaction_loads += 1
+        return ()
+
     monkeypatch.setattr(assessment, "evaluate", evaluate)
+    monkeypatch.setattr(
+        assessment, "load_required_io_redaction_values", load_redaction_values
+    )
     result, record_id = await assessment.assess(
         state,
         DecisionConfig(),
@@ -278,6 +288,7 @@ async def test_snapshot_is_full_and_replayable_even_without_transcripts(
     assert payload["input"]["state"] == state
     assert set(payload["input"]["questions"]) == set(QUESTIONS)
     assert result.route == "reaction-only"
+    assert redaction_loads == 1
     assert not list(tmp_path.glob(".guildbotics/state/**/required-io/*"))
 
 
@@ -541,7 +552,7 @@ async def test_failed_configuration_record_does_not_call_model(tmp_path, monkeyp
         nonlocal called
         called = True
 
-    def record(_id, payload):
+    def record(_id, payload, **_kwargs):
         if payload.get("phase") == "resolved":
             raise OSError("disk full")
 

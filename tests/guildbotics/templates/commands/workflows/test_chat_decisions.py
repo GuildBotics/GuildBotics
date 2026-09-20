@@ -193,7 +193,7 @@ async def test_reaction_recovers_without_duplicate_visible_action(
 
 
 @pytest.mark.asyncio
-async def test_failed_judgment_and_failed_agent_remain_pending_on_final_attempt(
+async def test_failed_judgment_agent_fallback_escalates_on_final_attempt(
     chat, monkeypatch
 ):
     context, store, service = chat
@@ -212,6 +212,8 @@ async def test_failed_judgment_and_failed_agent_remain_pending_on_final_attempt(
         ), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)
-    with pytest.raises(ThreadContextUnavailableError):
-        await workflow.main(context, chat_service=service, state_store=store)
-    assert not store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
+    await workflow.main(context, chat_service=service, state_store=store)
+    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
+        "E1"
+    ]
+    assert len(service.posts) == 1

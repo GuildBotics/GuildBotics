@@ -24,7 +24,21 @@ _STORE: DiagnosticsStore | None = None
 _STORE_LOCK = threading.Lock()
 
 
-def record_required_io(record_id: str, payload: dict[str, Any]) -> Path:
+def load_required_io_redaction_values() -> tuple[str, ...]:
+    """Load the secrets used to redact one group of required IO records."""
+    store = KeyringSecretStore(get_workspace_config_dir())
+    secrets = set(workspace_secret_values())
+    keys = store.keys()
+    secrets.update(value for key in keys if (value := store.get(key)))
+    return tuple(sorted(secrets, key=len, reverse=True))
+
+
+def record_required_io(
+    record_id: str,
+    payload: dict[str, Any],
+    *,
+    redaction_values: tuple[str, ...] | None = None,
+) -> Path:
     """Persist a replayable local IO artifact, propagating every storage failure.
 
     Unlike optional session transcripts this is an execution prerequisite.
@@ -43,11 +57,11 @@ def record_required_io(record_id: str, payload: dict[str, Any]) -> Path:
         ensure_ascii=False,
         default=str,
     )
-    store = KeyringSecretStore(get_workspace_config_dir())
-    secrets = set(workspace_secret_values())
-    keys = store.keys()
-    secrets.update(value for key in keys if (value := store.get(key)))
-    ordered_secrets = sorted(secrets, key=len, reverse=True)
+    ordered_secrets = (
+        load_required_io_redaction_values()
+        if redaction_values is None
+        else redaction_values
+    )
 
     def mask(value: Any) -> Any:
         if isinstance(value, str):

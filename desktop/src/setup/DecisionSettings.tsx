@@ -32,6 +32,7 @@ export function DecisionSettings({
         <Text fw={700}>{t("decision.title")}</Text>
         <Text size="sm">{t("decision.assignmentHint")}</Text>
         <Text size="sm">{t(personId ? "decision.member" : "decision.team")}</Text>
+        {!engine && <Alert color="yellow">{t("decision.unconfigured")}</Alert>}
         {children}
         {engine === "jev" && (
           <>

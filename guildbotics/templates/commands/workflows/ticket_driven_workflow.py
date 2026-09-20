@@ -82,6 +82,8 @@ def _ticket_trace_attributes(task: Task) -> dict[str, str]:
     attributes: dict[str, str] = {}
     if task.repository:
         attributes["github.repo"] = task.repository
+    if task.title:
+        attributes["github.title"] = task.title
     if task.pull_request_url:
         attributes["github.kind"] = "pull_request"
         attributes["github.url"] = task.pull_request_url

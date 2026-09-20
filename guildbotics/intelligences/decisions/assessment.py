@@ -23,6 +23,7 @@ from guildbotics.intelligences.decisions.models import (
     Selection,
 )
 from guildbotics.observability.diagnostics_events import (
+    load_required_io_redaction_values,
     record_correlated_event,
     record_required_io,
 )
@@ -49,8 +50,11 @@ async def assess(
         "questions": {key: q.model_dump() for key, q in questions.items()},
     }
     recording_failed = False
+    redaction_values: tuple[str, ...] | None = None
 
     def record_configuration(configuration: dict[str, Any]) -> None:
+        if redaction_values is None:
+            raise RuntimeError("Required IO redaction values are unavailable")
         record_required_io(
             evaluation_id + "1",
             {
@@ -60,9 +64,11 @@ async def assess(
                 "configuration": configuration,
                 "instructions": INSTRUCTIONS,
             },
+            redaction_values=redaction_values,
         )
 
     try:
+        redaction_values = load_required_io_redaction_values()
         record_required_io(
             evaluation_id + "0",
             {
@@ -71,6 +77,7 @@ async def assess(
                 "input": request,
                 "config": config.model_dump(),
             },
+            redaction_values=redaction_values,
         )
     except Exception:
         recording_failed = True
@@ -119,13 +126,12 @@ async def assess(
         "duration_ms": (time.monotonic() - started) * 1000,
     }
     try:
-        record_required_io(evaluation_id, payload)
+        if redaction_values is None:
+            raise RuntimeError("Required IO redaction values are unavailable")
+        record_required_io(evaluation_id, payload, redaction_values=redaction_values)
     except Exception:
         recording_failed = True
-        selection = select(
-            Evaluation(error="recording_failed"),
-            participation="strict",
-        )
+        selection = Selection(route="agent", reason="1.invalid")
     record_correlated_event(
         event_type="decision.evaluated",
         person_id=person_id,

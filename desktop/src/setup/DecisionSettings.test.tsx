@@ -13,7 +13,7 @@ vi.mock("../api/client", async (original) => ({
   getDecisionOptions: vi.fn(),
 }));
 const t = i18n.getFixedT("en");
-function mount(engine: "llm" | "cli" | "jev" = "llm") {
+function mount(engine: "llm" | "cli" | "jev" | null = "llm") {
   const onApiKeyChange = vi.fn();
   const view = render(
     <QueryClientProvider
@@ -23,7 +23,7 @@ function mount(engine: "llm" | "cli" | "jev" = "llm") {
         <MemoryRouter>
           <DecisionSettings
             personId="aiko"
-            engine={engine}
+            engine={engine ?? undefined}
             apiKey=""
             onApiKeyChange={onApiKeyChange}
             credentialError={false}
@@ -59,4 +59,9 @@ it.each(["llm", "cli"] as const)("hides Jev credentials for the draft %s engine"
   expect(screen.queryByLabelText(t("decision.key"))).not.toBeInTheDocument();
   expect(screen.queryByText(t("decision.keyMissing"))).not.toBeInTheDocument();
   expect(getDecisionOptions).not.toHaveBeenCalled();
+});
+
+it("explains the conservative fallback when no engine is configured", () => {
+  mount(null);
+  expect(screen.getByText(t("decision.unconfigured"))).toBeInTheDocument();
 });

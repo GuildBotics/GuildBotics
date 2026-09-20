@@ -21,7 +21,7 @@ chat_decision:
     model: jev-latest
 ```
 
-LLM は `AgnoAgentDefaultBrain` の `model`、CLI は `CliAgentBrain` の `cli_agent` に既存のスロット名を指定します。初期値は LLM の `default` スロットです。メンバーの同名マッピングは通常の機能別設定と同様にチーム設定を上書きし、上書きしない機能・スロットは継承します。旧 `decision.yml` は読み取りません。既に試行設定がある場合は、この割り当てで選び直してください。API キーは引き続き SecretStore に保存されます。
+LLM は `AgnoAgentDefaultBrain` の `model`、CLI は `CliAgentBrain` の `cli_agent` に既存のスロット名を指定します。新しく生成する Workspace 設定では LLM の `default` スロットを割り当てます。既存の `brain_mapping.yml` にはテンプレートの新しい機能を追加しないため、更新後にチャット判断エンジンを選んで保存してください。メンバーの同名マッピングは通常の機能別設定と同様にチーム設定を上書きし、上書きしない機能・スロットは継承します。旧 `decision.yml` は読み取りません。既に試行設定がある場合は、この割り当てで選び直してください。API キーは引き続き SecretStore に保存されます。
 
 判断処理は共通の BrainFactory で Brain を作り、`Brain.run()` を一度呼びます。AI CLI の判断用実行は新しい会話を使い、作業ファイル・共有文書・過去のセッション・キャッシュを環境へ渡しません。member capability の呼び出しは拒否し、通信はプロバイダー API と拒否専用の member broker に制限します。認証情報の更新だけを保存し、判断用の環境は終了時に破棄します。実際の対応エージェントの会話には干渉しません。
 

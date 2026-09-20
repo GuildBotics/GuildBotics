@@ -884,7 +884,7 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 
 **LLM / AI CLI ツール設定**:
 
-- `intelligences/decision.yml`: 対応エージェントの起動前に行う、一括チャット判定のエンジンとモデル。「設定 → LLM・AI CLIツール → 詳細設定」で認証情報を登録し、Jev・Agno・AI CLI を選びます。設定、失敗時の動作、ローカル記録、再評価は[チャット判定](docs/chat_decisions.ja.md)を参照してください。
+- `intelligences/brain_mapping.yml`（`chat_decision`）: 対応エージェントの起動前に行う、一括チャット判定のエンジンとモデル。「設定 → LLM・AI CLIツール → 詳細設定」で認証情報を登録し、Jev・Agno・AI CLI を選びます。設定、失敗時の動作、ローカル記録、再評価は[チャット判定](docs/chat_decisions.ja.md)を参照してください。
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、デスクトップから渡したファイルとエージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します

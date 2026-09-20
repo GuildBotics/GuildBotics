@@ -23,6 +23,8 @@ import {
   parseTicketQuery,
   recordAttributeRows,
   ticketChipInfo,
+  traceSubtitle,
+  traceTitle,
   splitCommandLine,
   isTerminalTraceStatus,
   traceStatusColor,
@@ -989,3 +991,33 @@ function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
 function runtimeEvent(overrides: Partial<RuntimeEvent>): RuntimeEvent {
   return makeRuntimeEvent({ trace_id: "req-1", ...overrides });
 }
+
+describe("traceTitle / traceSubtitle", () => {
+  const base = {
+    trace_id: "trace-1",
+    source: "routine",
+    person_id: "alice",
+    workflow: "",
+    started_at: "",
+    updated_at: "",
+    status: "running",
+    event_count: 0,
+    log_count: 0,
+    error_count: 0,
+    span_count: 0,
+    attributes: {},
+  };
+
+  it("shows the backend title and drops the command to a subtitle", () => {
+    const trace = { ...base, title: "Show the work target", command: "workflows/demo" };
+    expect(traceTitle(trace)).toBe("Show the work target");
+    expect(traceSubtitle(trace)).toBe("workflows/demo");
+  });
+
+  it("falls back to the command, then the trace id, without a subtitle", () => {
+    expect(traceTitle({ ...base, title: "", command: "workflows/demo" })).toBe("workflows/demo");
+    expect(traceSubtitle({ ...base, title: "", command: "workflows/demo" })).toBe("");
+    expect(traceTitle({ ...base, title: "", command: "" })).toBe("trace-1");
+    expect(traceSubtitle({ ...base, title: "workflows/demo", command: "workflows/demo" })).toBe("");
+  });
+});

@@ -21,6 +21,8 @@ const resources = {
         assignmentHint:
           "Select the engine and target below, then save at the top of this section. LLM and CLI use the existing slots.",
         keyMissing: "Jev key not registered.",
+        unconfigured:
+          "No chat judgment engine is configured. Select and save one; until then, the response agent handles every eligible chat.",
         failed: "Could not load or save. Retry; the current selection is preserved.",
         fallback:
           "If judgment fails, the response agent decides. No other judgment engine is selected automatically.",
@@ -612,6 +614,7 @@ const resources = {
             githubRepo: "GitHub repository",
             githubNumber: "Ticket / PR number",
             githubKind: "GitHub item type",
+            githubTitle: "Ticket / PR title",
             githubUrl: "GitHub URL",
             serviceRun: "Service run",
             slackChannel: "Slack channel",
@@ -684,6 +687,7 @@ const resources = {
             github_pull_request: "Pull request",
             github_issue: "Issue",
             github_issue_comment: "Issue comment",
+            github_work_target: "Work target",
             workflow_completed: "Workflow completed",
             decision_evaluated: "Chat judgment",
             workflow_completion_missing: "Completion missing",
@@ -2073,6 +2077,8 @@ const resources = {
         assignmentHint:
           "エンジンと割り当て先を選び、このセクション上部の保存ボタンで保存します。LLM／CLI は既存のスロットを使います。",
         keyMissing: "Jev のキーは未登録です。",
+        unconfigured:
+          "チャット判断エンジンが未設定です。選択して保存するまでは、対象のチャットをすべて対応エージェントが処理します。",
         failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
         fallback:
           "判定に失敗した場合は、対応エージェントに判断を委ねます。別の判断エンジンへ自動で切り替えません。",
@@ -3394,6 +3400,7 @@ const resources = {
             githubRepo: "GitHub リポジトリ",
             githubNumber: "チケット / PR 番号",
             githubKind: "GitHub 種別",
+            githubTitle: "チケット / PR タイトル",
             githubUrl: "GitHub URL",
             serviceRun: "サービス実行",
             slackChannel: "Slack チャンネル",
@@ -3466,6 +3473,7 @@ const resources = {
             github_pull_request: "Pull Request",
             github_issue: "Issue",
             github_issue_comment: "Issue コメント",
+            github_work_target: "作業対象",
             workflow_completed: "ワークフロー完了",
             decision_evaluated: "チャット事前判定",
             workflow_completion_missing: "完了証跡なし",

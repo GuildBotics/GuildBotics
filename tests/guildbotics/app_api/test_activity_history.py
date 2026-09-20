@@ -2,21 +2,39 @@
 
 Chat-triggered workflows carry the agent's system prompt as payload, so the
 title must never fall through to that prompt (every chat session shares the
-same prompt head). It should prefer the completion summary, then a
-provider-neutral trigger label while the run is still in progress.
+same prompt head). It should prefer the title of the PR / issue the session
+worked on, then the completion summary, then a provider-neutral trigger label
+while the run is still in progress.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
+
+import pytest
 
 from guildbotics.app_api.activity_history import (
-    _OWNER_TRACE_KEY,
     build_activity_history,
+    run_subject_id,
 )
 from guildbotics.entities.team import Person
+from guildbotics.observability.diagnostics_store import CompletionSummary
 from guildbotics.utils.i18n_tool import set_language, t
+
+CHAT_TRIGGER_KEY = "observability.trace_title.chat_trigger"
+
+
+def _no_summary(_attributes: dict[str, Any], _person_id: str) -> str:
+    return ""
+
+
+def _summary_for(subject_id: str, summary: str) -> CompletionSummary:
+    """A run completion summary recorded for ``subject_id`` only."""
+    return lambda attributes, _person_id: (
+        summary if run_subject_id(attributes) == subject_id else ""
+    )
+
 
 START = datetime(2026, 7, 1, tzinfo=UTC)
 END = datetime(2026, 7, 2, tzinfo=UTC)
@@ -74,17 +92,9 @@ def _chat_records() -> list[dict[str, Any]]:
     ]
 
 
-def _members_pair() -> list[Person]:
-    return [
-        Person(person_id="alice", name="Alice", person_type="agent", is_active=True),
-        Person(person_id="kenji", name="Kenji", person_type="agent", is_active=True),
-    ]
-
-
 def _session(
     records: list[dict[str, Any]],
-    run_summary: Callable[[str, str], str],
-    run_subject: Callable[[str], str] = lambda _run_id: "",
+    completion_summary: CompletionSummary = _no_summary,
     members: list[Person] | None = None,
 ) -> Any:
     history = build_activity_history(
@@ -92,35 +102,30 @@ def _session(
         end=END,
         members=members or _members(),
         records=records,
-        run_summary=run_summary,
-        run_subject=run_subject,
+        completion_summary=completion_summary,
     )
     assert len(history.sessions) == 1
     return history.sessions[0]
 
 
 def _title(
-    records: list[dict[str, Any]], run_summary: Callable[[str, str], str]
+    records: list[dict[str, Any]], completion_summary: CompletionSummary = _no_summary
 ) -> str:
-    return str(_session(records, run_summary).title)
+    return str(_session(records, completion_summary).title)
 
 
 def test_completed_chat_session_titled_by_summary_first_line() -> None:
     title = _title(
         _chat_records(),
-        lambda subject_id, person_id: (
-            "請求プランの質問に回答\n詳細は省略"
-            if subject_id == CHAT_SUBJECT_ID
-            else ""
-        ),
+        _summary_for(CHAT_SUBJECT_ID, "請求プランの質問に回答\n詳細は省略"),
     )
     assert title == "請求プランの質問に回答"
 
 
 def test_in_progress_chat_session_uses_neutral_trigger_label() -> None:
     set_language("ja")
-    title = _title(_chat_records(), lambda _subject_id, _person_id: "")
-    assert title == t("app_api.activity_history.chat_trigger", provider="Slack")
+    title = _title(_chat_records())
+    assert title == t(CHAT_TRIGGER_KEY, provider="Slack")
     assert LONG_PROMPT not in title
 
 
@@ -264,8 +269,10 @@ def test_ticket_session_without_summary_falls_back_to_issue_link() -> None:
 
 
 def test_workflow_memory_write_links_back_to_owning_session() -> None:
+    # The member CLI records into the workflow's trace (``join_trace``), so a
+    # memory write it makes is the session's own record.
     memory_record = {
-        "trace_id": None,
+        "trace_id": "t-chat",
         "person_id": "alice",
         "timestamp": "2026-07-01T10:01:00+00:00",
         "kind": "memory",
@@ -278,76 +285,17 @@ def test_workflow_memory_write_links_back_to_owning_session() -> None:
         },
         "payload": {"title": "PR #244 の作業記録"},
     }
-    session = _session(
-        _chat_records() + [memory_record],
-        run_summary=lambda _subject_id, _person_id: "",
-        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "task-run-1" else "",
-    )
+    session = _session(_chat_records() + [memory_record])
     doc_links = [link for link in session.links if link.kind == "doc"]
     assert [link.label for link in doc_links] == ["PR #244 の作業記録"]
-    # The memory link must keep the memory event's own identity (doc_id), not
-    # the owning chat trace, or the diagnostics memory tab filters to nothing.
     assert "doc_id=doc-xyz" in doc_links[0].url
-    assert "t-chat" not in doc_links[0].url
 
 
-def test_ticket_workflow_memory_write_uses_task_run_id() -> None:
-    # Ticket workflows tag memory records with ``task_run_id`` (not ``run_id``);
-    # the record must still be adopted into the owning ticket session.
-    memory_record = {
-        "trace_id": None,
-        "person_id": "alice",
-        "timestamp": "2026-07-01T11:01:00+00:00",
-        "kind": "memory",
-        "type": "memory.update",
-        "attributes": {
-            "task_run_id": "ticket-run",
-            "memory.action": "update",
-            "memory.doc_id": "ticket-doc",
-            "memory.path": "documents/personal/alice/ticket-doc",
-        },
-        "payload": {"title": "Issue #42 の作業記録"},
-    }
-    session = _session(
-        _ticket_records() + [memory_record],
-        run_summary=lambda _subject_id, _person_id: "",
-        run_subject=lambda run_id: TICKET_SUBJECT_ID if run_id == "ticket-run" else "",
-    )
-    assert any(
-        link.kind == "doc" and link.label == "Issue #42 の作業記録"
-        for link in session.links
-    )
-
-
-def test_build_activity_history_does_not_mutate_input_records() -> None:
-    memory_record = {
-        "trace_id": None,
-        "person_id": "alice",
-        "timestamp": "2026-07-01T10:01:00+00:00",
-        "kind": "memory",
-        "type": "memory.update",
-        "attributes": {"run_id": "task-run-1", "memory.doc_id": "doc-xyz"},
-        "payload": {"title": "PR #244 の作業記録"},
-    }
-    records = _chat_records() + [memory_record]
-    build_activity_history(
-        start=START,
-        end=END,
-        members=_members(),
-        records=records,
-        run_summary=lambda _subject_id, _person_id: "",
-        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "task-run-1" else "",
-    )
-    # The adopted record was copied, so the caller's dicts stay clean and reusing
-    # the same array under different conditions cannot leak a stale owner trace.
-    assert all(_OWNER_TRACE_KEY not in record for record in records)
-
-
-def test_read_only_memory_record_is_not_adopted_into_session() -> None:
+def test_read_only_memory_record_adds_no_link_and_no_title() -> None:
     # A `get`/`recall`/`touch` does not change a document, so it must not add a
     # link nor become the session title (its payload title is just what was read).
     read_record = {
-        "trace_id": None,
+        "trace_id": "t-chat",
         "person_id": "alice",
         "timestamp": "2026-07-01T10:01:00+00:00",
         "kind": "memory",
@@ -361,13 +309,79 @@ def test_read_only_memory_record_is_not_adopted_into_session() -> None:
         "payload": {"title": "読んだだけのメモ"},
     }
     set_language("ja")
-    session = _session(
-        _chat_records() + [read_record],
-        run_summary=lambda _subject_id, _person_id: "",
-        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "task-run-1" else "",
-    )
+    session = _session(_chat_records() + [read_record])
     assert all(link.kind != "doc" for link in session.links)
-    assert session.title == t("app_api.activity_history.chat_trigger", provider="Slack")
+    assert session.title == t(CHAT_TRIGGER_KEY, provider="Slack")
+
+
+def _work_target_record(action: str) -> dict[str, Any]:
+    return {
+        "trace_id": "t-chat",
+        "person_id": "alice",
+        "timestamp": "2026-07-01T10:01:00+00:00",
+        "kind": "event",
+        "type": "github.work_target",
+        "attributes": {
+            "github.action": action,
+            "github.kind": "pull_request",
+            "github.number": "528",
+            "github.repo": "o/r",
+            "github.url": "https://github.com/o/r/pull/528",
+            "github.title": "Copilot の利用枠を表示する",
+        },
+        "payload": {"pull_request": {"number": 528}},
+    }
+
+
+def test_inspected_pull_request_titles_the_session_but_is_not_its_work() -> None:
+    session = _session(_chat_records() + [_work_target_record("inspected")])
+    assert session.title == "Copilot の利用枠を表示する"
+    assert session.links == []
+
+
+def test_worked_pull_request_titles_and_links_the_session() -> None:
+    session = _session(_chat_records() + [_work_target_record("")])
+    assert session.title == "Copilot の利用枠を表示する"
+    assert [(link.kind, link.label) for link in session.links] == [
+        ("pull_request", "PR #528")
+    ]
+
+
+@pytest.mark.parametrize("append_order", ["chronological", "reversed"])
+def test_the_first_recorded_target_names_the_session_like_the_execution_list(
+    append_order: str,
+) -> None:
+    # Both screens read attributes from the records in timestamp order: a
+    # later, different target must not overtake the one the trace started on,
+    # however the records were appended (they come from several processes).
+    second = _work_target_record("")
+    second["timestamp"] = "2026-07-01T10:02:00+00:00"
+    second["attributes"] = {
+        **second["attributes"],
+        "github.kind": "issue",
+        "github.number": "9",
+        "github.url": "https://github.com/o/r/issues/9",
+        "github.title": "A later, different item",
+    }
+    targets = [_work_target_record(""), second]
+    if append_order == "reversed":
+        targets.reverse()
+    session = _session(_chat_records() + targets)
+    assert session.title == "Copilot の利用枠を表示する"
+    assert [(link.kind, link.label) for link in session.links] == [
+        ("pull_request", "PR #528"),
+        ("issue", "Issue #9"),
+    ]
+
+
+def test_target_title_precedes_the_completion_summary() -> None:
+    # The execution list and the activity timeline agree: the item worked on
+    # names the trace, the member's summary only fills in when there is none.
+    title = _title(
+        _chat_records() + [_work_target_record("")],
+        _summary_for(CHAT_SUBJECT_ID, "PR #528 をレビュー"),
+    )
+    assert title == "Copilot の利用枠を表示する"
 
 
 def test_read_only_memory_title_is_skipped_for_session_title() -> None:
@@ -404,34 +418,6 @@ def test_read_only_memory_title_is_skipped_for_session_title() -> None:
     base_with_ts = {**base, "timestamp": "2026-07-01T10:00:00+00:00"}
     title = _title([base_with_ts, recall, wrote], lambda _subject_id, _person_id: "")
     assert title == "PR #247: レビュー対応"
-
-
-def test_memory_write_does_not_cross_to_another_members_session() -> None:
-    # Alice owns the chat session for the shared Slack subject; Kenji ran his
-    # own workflow against the same subject and recalled memory. Kenji's memory
-    # record must not be adopted into Alice's session.
-    kenji_memory = {
-        "trace_id": None,
-        "person_id": "kenji",
-        "timestamp": "2026-07-01T10:01:00+00:00",
-        "kind": "memory",
-        "type": "memory.recall",
-        "attributes": {
-            "run_id": "kenji-run",
-            "memory.action": "recall",
-            "memory.doc_id": "kenji-doc",
-            "memory.path": "documents/personal/kenji/kenji-doc",
-        },
-        "payload": {"title": "Kenji recall"},
-    }
-    session = _session(
-        _chat_records() + [kenji_memory],
-        run_summary=lambda _subject_id, _person_id: "",
-        run_subject=lambda run_id: CHAT_SUBJECT_ID if run_id == "kenji-run" else "",
-        members=_members_pair(),
-    )
-    assert session.person_id == "alice"
-    assert all(link.label != "Kenji recall" for link in session.links)
 
 
 def test_interactive_session_still_uses_prompt() -> None:

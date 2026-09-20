@@ -97,6 +97,10 @@ class AgentExecutionContext:
     attempt: int = 1
     continuation_input: str = ""
     participant_labels: str = ""
+    #: The diagnostics trace the turn runs inside. The member CLI the broker
+    #: spawns records into it, so what the agent read or changed shows up on
+    #: the execution that asked for it.
+    trace_id: str = ""
     # A read-only turn only inspects recorded state, so it holds no execution
     # lease and may run while the member is busy. It is not a weaker
     # confinement: every turn reads untrusted material, and every turn runs

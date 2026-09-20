@@ -27,6 +27,7 @@ _GITHUB_LABELS = {
     "github.pull_request": "github_pull_request",
     "github.issue": "github_issue",
     "github.issue_comment": "github_issue_comment",
+    "github.work_target": "github_work_target",
 }
 _EXACT_EVENT_LABELS = {
     "decision.evaluated": "decision_evaluated",
@@ -105,7 +106,7 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
             label=event_type,
             message=" · ".join(
                 str(payload[key])
-                for key in ("engine", "model", "route", "effort", "reason", "error")
+                for key in ("brain", "model", "route", "reason", "error")
                 if payload.get(key)
             ),
             tone="warning" if payload.get("error") else "info",
@@ -312,6 +313,7 @@ def _github_presentation(
         _nested(payload, "pull_request", "title")
         or _nested(payload, "issue", "title")
         or payload.get("title")
+        or attributes.get("github.title")
         or ""
     )
     target = (

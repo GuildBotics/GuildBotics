@@ -160,9 +160,9 @@ def test_judgment_failure_shows_the_actual_conservative_route() -> None:
         _event(
             "decision.evaluated",
             payload={
-                "engine": "jev",
+                "brain": "chat_decision",
+                "model": "jev-1.13.0",
                 "route": "agent",
-                "effort": "high",
                 "reason": "1.invalid",
                 "error": "authentication_error",
             },
@@ -170,7 +170,8 @@ def test_judgment_failure_shows_the_actual_conservative_route() -> None:
     )
     assert presentation.label_key.endswith("decision_evaluated")
     assert (
-        presentation.message == "jev · agent · high · 1.invalid · authentication_error"
+        presentation.message
+        == "chat_decision · jev-1.13.0 · agent · 1.invalid · authentication_error"
     )
     assert presentation.tone == "warning"
 
@@ -251,12 +252,33 @@ def test_literal_diagnostics_emitters_have_intentional_presentations() -> None:
     assert unsupported == []
 
 
+def test_github_work_target_shows_the_title_it_declares() -> None:
+    presentation = normalize_trace_presentation(
+        _event(
+            "github.work_target",
+            payload={"pull_request": {"number": 544}},
+            attributes={
+                "github.repo": "GuildBotics/GuildBotics",
+                "github.number": 544,
+                "github.title": "診断ログの実行タイトル",
+                "github.action": "inspected",
+            },
+        )
+    )
+
+    assert presentation.label_key.endswith("github_work_target")
+    assert (
+        presentation.message == "GuildBotics/GuildBotics#544 · 診断ログの実行タイトル"
+    )
+
+
 @pytest.mark.parametrize(
     "event_type",
     [
         "github.push",
         "github.pull_request",
         "github.issue",
+        "github.work_target",
         "github.issue_comment",
         "credential.failed",
         "agent_runtime.process",

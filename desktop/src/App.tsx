@@ -1216,8 +1216,9 @@ function compositeTraceSummary(
     trace_id: traceIds.join(","),
     source: "",
     person_id: "",
-    command: t("diagnostics.executions.compositeTitle"),
+    command: "",
     workflow: "",
+    title: t("diagnostics.executions.compositeTitle"),
     started_at: startedAt,
     updated_at: updatedAt,
     status: compositeTraceStatus(summaries),
@@ -1672,8 +1673,10 @@ function TraceExplorer({
   });
   const traceItems = useMemo(() => traces.data?.traces ?? [], [traces.data]);
   const traceLabel = useCallback(
-    (traceId: string) =>
-      traceItems.find((trace) => trace.trace_id === traceId)?.command || shortTraceId(traceId),
+    (traceId: string) => {
+      const trace = traceItems.find((item) => item.trace_id === traceId);
+      return trace ? traceTitle(trace) : shortTraceId(traceId);
+    },
     [traceItems],
   );
   const compositeSummary = useMemo(
@@ -1939,9 +1942,14 @@ function TraceExplorer({
                   multiline
                 >
                   <Text className="exec-row-command" fw={600} size="sm" lineClamp={1}>
-                    {trace.command || trace.trace_id}
+                    {traceTitle(trace)}
                   </Text>
                 </Tooltip>
+                {traceSubtitle(trace) ? (
+                  <Text className="exec-row-command" c="dimmed" size="xs" lineClamp={1}>
+                    {traceSubtitle(trace)}
+                  </Text>
+                ) : null}
                 <div className="exec-row-meta">
                   <Group gap={4} align="center" style={{ display: "inline-flex" }}>
                     <Avatar
@@ -2097,9 +2105,14 @@ function TraceExplorer({
                     multiline
                   >
                     <Text fw={700} size="sm" lineClamp={1}>
-                      {selectedSummary.command || selectedSummary.trace_id}
+                      {traceTitle(selectedSummary)}
                     </Text>
                   </Tooltip>
+                  {traceSubtitle(selectedSummary) ? (
+                    <Text c="dimmed" size="xs" lineClamp={1}>
+                      {traceSubtitle(selectedSummary)}
+                    </Text>
+                  ) : null}
                   <div className="exec-summary-meta">
                     <span className="exec-summary-id">
                       {t("diagnostics.executions.meta.trace")}:{" "}
@@ -2555,6 +2568,7 @@ export function recordAttributeRows(
     ["github.repo", t("diagnostics.executions.attributeLabels.githubRepo")],
     ["github.number", t("diagnostics.executions.attributeLabels.githubNumber")],
     ["github.kind", t("diagnostics.executions.attributeLabels.githubKind")],
+    ["github.title", t("diagnostics.executions.attributeLabels.githubTitle")],
     ["github.url", t("diagnostics.executions.attributeLabels.githubUrl")],
     ["service_run_id", t("diagnostics.executions.attributeLabels.serviceRun")],
     ["slack.channel", t("diagnostics.executions.attributeLabels.slackChannel")],
@@ -2668,6 +2682,16 @@ function memorySourceSummary(source: Array<Record<string, unknown>>): string {
 export type AttrFilter = { key: string; value: string; label: string };
 
 type TraceSearch = { query: string; attrFilter: AttrFilter | null };
+
+// The backend resolves one title per trace (its work target first); the
+// command it ran drops to a subtitle when the title says something else.
+export function traceTitle(trace: TraceSummary): string {
+  return trace.title || trace.command || trace.trace_id;
+}
+
+export function traceSubtitle(trace: TraceSummary): string {
+  return trace.title && trace.command && trace.command !== trace.title ? trace.command : "";
+}
 
 // Derive the GitHub ticket/PR chip from a trace's attributes. Prefers the URL
 // (globally unique) for exact filtering; falls back to the bare number.

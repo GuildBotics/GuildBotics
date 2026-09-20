@@ -520,11 +520,7 @@ async def _handle_event(
             service_name=service_name,
             channel_id=channel_id,
             event_id=event.event_id,
-            message_ts=next(
-                item.message_ts
-                for item in reversed(batch_events)
-                if not item.is_from_user(identity_user_id)
-            ),
+            message_ts=reaction_target,
             thread_ts=event.thread_ts,
             previous_attempt_evidence=json.dumps(
                 [
@@ -594,11 +590,10 @@ async def _handle_event(
     except ThreadContextUnavailableError:
         raise
     except Exception as exc:
-        if decision is not None and (
-            decision.route != "agent" or decision.reason == "1.invalid"
-        ):
-            # Neither an unconfirmed fast path nor a failed fallback response
-            # consumes this input, including on the dispatcher's final attempt.
+        if decision is not None and decision.route != "agent":
+            # An unconfirmed fast path does not consume this input, including
+            # on the dispatcher's final attempt. Once judgment delegates to the
+            # agent, normal bounded retries and escalation apply.
             raise ThreadContextUnavailableError(
                 "Chat judgment could not be completed; the batch remains pending."
             ) from exc

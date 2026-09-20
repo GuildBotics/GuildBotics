@@ -3681,3 +3681,130 @@ def test_chat_updates_reads_queue_without_constructing_chat_service(monkeypatch)
     assert payload["messages"][0]["text"] == "訂正です"
     assert len(store.load_pending_events("slack", "aiko", "C1")) == 1
     assert RunStore().evidence("run-1")[-1]["evidence_type"] == "chat_updates"
+
+
+def _fake_github_service(monkeypatch, person, **results):
+    """Install a GitHub capability fake whose methods return ``results``."""
+    monkeypatch.setattr(
+        member_module,
+        "resolve_member_context",
+        lambda _id: (FakeContext(person), person),
+    )
+
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        async def aclose(self):
+            pass
+
+    for name, result in results.items():
+
+        async def method(self, *_args, _result=result, **_kwargs):
+            return _result
+
+        setattr(FakeService, name, method)
+    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
+
+
+def _work_target_records():
+    return [
+        (record["attributes"].get("github.action", ""), record["attributes"])
+        for record in DiagnosticsStore().records_between(includes=lambda _: True)
+        if record.get("type") == "github.work_target"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "read_only"),
+    [
+        (["pr", "inspect", "--url", "https://github.com/owner/repo/pull/544"], True),
+        (
+            [
+                "pr",
+                "comment",
+                "--url",
+                "https://github.com/owner/repo/pull/544",
+                "--content-stdin",
+            ],
+            False,
+        ),
+    ],
+)
+def test_member_github_commands_declare_their_work_target(
+    monkeypatch, arguments, read_only
+):
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    target = {
+        "kind": "pull_request",
+        "repo": "owner/repo",
+        "number": 544,
+        "title": "Show the work target",
+        "html_url": "https://github.com/owner/repo/pull/544",
+    }
+    _fake_github_service(
+        monkeypatch,
+        person,
+        pr_inspect={"repo": "owner/repo", "number": 544, "target": target},
+        pr_comment={"comment_id": 1, "target": target},
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        ["github", *arguments, "--person", "aiko", "--format", "json"],
+        input="Looks good.\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    [(action, attributes)] = _work_target_records()
+    assert action == ("inspected" if read_only else "")
+    assert attributes["github.title"] == "Show the work target"
+    assert attributes["github.number"] == "544"
+    # A read is diagnostics only: it never becomes shared activity.
+    assert _domain_event_records("type") == []
+
+
+def test_workflow_member_command_records_into_the_turns_trace(monkeypatch):
+    # The broker hands the workflow's trace over; the command's records then
+    # belong to that execution instead of to a trace of their own.
+    from guildbotics.observability import TRACE_ID_ENV
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    monkeypatch.setenv(TRACE_ID_ENV, "trace-parent")
+    _fake_github_service(
+        monkeypatch,
+        person,
+        pr_inspect={
+            "target": {
+                "kind": "pull_request",
+                "repo": "owner/repo",
+                "number": 544,
+                "title": "Show the work target",
+                "html_url": "https://github.com/owner/repo/pull/544",
+            }
+        },
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "inspect",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/544",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    summary = DiagnosticsStore().get_summary("trace-parent")
+    assert summary is not None
+    assert summary["title"] == "Show the work target"
+    assert summary["person_id"] == "aiko"
+    # The turn's owner records the boundary; the member command must not.
+    assert [
+        item["type"] for item in DiagnosticsStore().get_records("trace-parent")
+    ] == ["github.work_target"]
