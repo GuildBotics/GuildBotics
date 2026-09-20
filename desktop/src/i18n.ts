@@ -964,7 +964,7 @@ const resources = {
             allowLocalNetwork: "Allow localhost and LAN",
           },
           environment: {
-            title: "Agent execution environment",
+            title: "Status on this device",
             description:
               "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it here; logging in to a tool is done from a terminal.",
             runtime: "Runtime",
@@ -2736,7 +2736,7 @@ const resources = {
             allowLocalNetwork: "localhost と LAN への接続を許可",
           },
           environment: {
-            title: "エージェント実行環境",
+            title: "この端末の状態",
             description:
               "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドはここから行い、ツールへのログインはターミナルで行います。",
             runtime: "ランタイム",

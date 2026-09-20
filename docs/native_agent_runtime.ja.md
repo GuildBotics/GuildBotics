@@ -59,8 +59,8 @@ bindします）。
 
 環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLI）はsnapshotとして
 端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
-ベースイメージに入れます。Desktopの **LLM・AI CLIツール** の
-「エージェント隔離環境」カードがruntime、ベースイメージ、snapshotの状態（ビルドボタンつき）、
+ベースイメージに入れます。Desktopの **エージェント実行環境** 画面がruntime、ベースイメージ、
+snapshotの状態（ビルドボタンつき）、
 割り当てリソース、network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
 `login`が同じ状態と操作です。サービス稼働中は宣言の変更（他端末からの同期で届いたものを含む）を
 受け取り、ベースイメージが変われば自動で再ビルドします。リソース・network・DNSの変更は次の
@@ -71,7 +71,7 @@ snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状
 ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
 ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
 ワークスペースは、自分でbuildしたimageを宣言できます。imageの中身は共有しません: `docker save`した
-アーカイブを各端末で`guildbotics environment image load`で読み込み、**LLM・AI CLIツール → 詳細設定**
+アーカイブを各端末で`guildbotics environment image load`で読み込み、**エージェント実行環境**
 の「環境の宣言」でこの端末に読み込み済みのimageから選ぶか、`guildbotics environment image declare`で
 宣言します。imageはCPUアーキテクチャごとに別物（環境は端末のCPUをそのまま使う）なので、宣言には
 参照名と、アーキテクチャごとのimage configのdigest（save / loadを跨いで同じになる識別子。
@@ -139,7 +139,7 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   ```
 
   値は次にmicroVMを起動するときから効きます。変更してもdisk snapshotの再ビルドは不要です。
-  `guildbotics environment status`とDesktopの**エージェント隔離環境**カードに割り当て値を
+  `guildbotics environment status`とDesktopの**エージェント実行環境**画面に割り当て値を
   表示します。
 
 - **ネットワーク**: `intelligences/agent_environment.yml`のworkspace共通`network:`ブロックで、
@@ -170,7 +170,7 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
     allow_local_network: false
   ```
 
-これらはDesktopの **LLM・AI CLIツール → 詳細設定** から編集できます。「ワークスペース共通の
+これらはDesktopの **エージェント実行環境** から編集できます。「ワークスペース共通の
 ディレクトリ」カードがdocumentsを、「この端末のディレクトリ」カードがここで足した追加パスと
 禁止を持ち、どちらも入力または選択したパスを保存前に判定します（存在有無、認証情報を含む
 場所の警告）。各メンバーのスロットはターン開始時と同じ解決処理で判定され、この端末で
