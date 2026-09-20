@@ -17,8 +17,6 @@ from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
-from guildbotics.intelligences.decisions import preparation
-from guildbotics.intelligences.decisions.models import DecisionConfig, Evaluation
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 HEADERS = {"X-GuildBotics-Session-Token": "test"}
@@ -182,20 +180,6 @@ def test_cli_assignment_uses_existing_slot(configured, tool):
     assert summary.engine == "cli" and summary.slot == "judge"
     assert summary.provider == tool and summary.resolved
     assert summary.model == brain.executable_info.parameters.get("model", "")
-
-
-@pytest.mark.asyncio
-async def test_check_uses_saved_brain_and_both_answer_types(configured, monkeypatch):
-    root, _ = configured
-
-    async def evaluated(config, state, questions, **kwargs):
-        assert config.brain == "chat_decision"
-        assert {q.type for q in questions.values()} == {"noul", "choice"}
-        return Evaluation(model="effective-model")
-
-    monkeypatch.setattr(preparation, "evaluate", evaluated)
-    result = await preparation.check(DecisionConfig(), root)
-    assert result == {"state": "verified", "model": "effective-model"}
 
 
 def test_saved_summary_resolves_member_model_even_when_assignment_is_inherited(

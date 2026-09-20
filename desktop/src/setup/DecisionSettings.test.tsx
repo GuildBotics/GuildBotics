@@ -1,23 +1,16 @@
 import { MemoryRouter } from "react-router";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
-import {
-  checkDecision,
-  getDecisionOptions,
-  saveDecisionCredential,
-  type ChatDecisionSelection,
-} from "../api/client";
+import { getDecisionOptions, type ChatDecisionSelection } from "../api/client";
 import i18n from "../i18n";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 import { DecisionSettings } from "./DecisionSettings";
 
 vi.mock("../api/client", async (original) => ({
   ...(await original<typeof import("../api/client")>()),
-  checkDecision: vi.fn(),
   getDecisionOptions: vi.fn(),
-  saveDecisionCredential: vi.fn(),
 }));
 const t = i18n.getFixedT("en");
 const saved: ChatDecisionSelection = {
@@ -28,18 +21,30 @@ const saved: ChatDecisionSelection = {
   assignment_inherited: true,
   resolved: true,
 };
-function mount(unsaved = false, selection: ChatDecisionSelection | null = saved) {
-  return render(
+function mount(
+  engine: "llm" | "cli" | "jev" = "llm",
+  selection: ChatDecisionSelection | null = saved,
+) {
+  const onApiKeyChange = vi.fn();
+  const view = render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <TestMantineProvider>
         <MemoryRouter>
-          <DecisionSettings personId="aiko" unsaved={unsaved} selection={selection} />
+          <DecisionSettings
+            personId="aiko"
+            engine={engine}
+            apiKey=""
+            onApiKeyChange={onApiKeyChange}
+            credentialError={false}
+            selection={selection}
+          />
         </MemoryRouter>
       </TestMantineProvider>
     </QueryClientProvider>,
   );
+  return { ...view, onApiKeyChange };
 }
 beforeEach(async () => {
   vi.resetAllMocks();
@@ -49,48 +54,35 @@ beforeEach(async () => {
   });
 });
 
-it("prepares Jev credentials without a second engine picker", async () => {
-  vi.mocked(saveDecisionCredential).mockResolvedValue({ state: "unverified" });
-  mount();
+it("shows credential input for the draft Jev selection without action buttons", async () => {
+  const { onApiKeyChange } = mount("jev");
   expect(await screen.findByText(t("decision.keyMissing"))).toBeInTheDocument();
   expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
-  await userEvent.type(screen.getByLabelText(t("decision.key")), "private-test-key");
-  await userEvent.click(screen.getByRole("button", { name: t("decision.register") }));
-  await waitFor(() =>
-    expect(saveDecisionCredential).toHaveBeenCalledWith("private-test-key", expect.anything()),
-  );
-  await waitFor(() => expect(screen.getByLabelText(t("decision.key"))).toHaveValue(""));
+  expect(screen.queryByRole("button", { name: /save|check/i })).not.toBeInTheDocument();
+  await userEvent.type(screen.getByLabelText(t("decision.key")), "x");
+  expect(onApiKeyChange).toHaveBeenCalledWith("x");
+  expect(screen.getByText(t("decision.keySaveHint"))).toBeInTheDocument();
 });
 
-it("checks the saved feature and displays the effective model", async () => {
-  vi.mocked(checkDecision).mockResolvedValue({ state: "verified", model: "actual-model" });
-  mount();
-  await userEvent.click(screen.getByRole("button", { name: t("decision.check") }));
-  await waitFor(() =>
-    expect(checkDecision).toHaveBeenCalledWith({ brain: "chat_decision" }, "aiko"),
-  );
-  expect(await screen.findByText(/actual-model/)).toBeInTheDocument();
-});
-
-it("does not test saved configuration as though it were an unsaved draft", () => {
-  mount(true);
-  expect(screen.getByRole("button", { name: t("decision.check") })).toBeDisabled();
-  expect(screen.getByText(t("decision.saveBeforeCheck"))).toBeInTheDocument();
+it.each(["llm", "cli"] as const)("hides Jev credentials for the draft %s engine", (engine) => {
+  mount(engine, { ...saved, engine: "jev", model: "jev-latest" });
+  expect(screen.queryByLabelText(t("decision.key"))).not.toBeInTheDocument();
+  expect(screen.queryByText(t("decision.keyMissing"))).not.toBeInTheDocument();
+  expect(getDecisionOptions).not.toHaveBeenCalled();
 });
 
 it("shows the saved assignment without calling a model, including while editing", () => {
-  mount(true);
+  mount("jev");
   expect(
     screen.getByText(t("decision.savedEngine", { value: "LLM / openai" })),
   ).toBeInTheDocument();
   expect(screen.getByText(t("decision.savedSlot", { value: "judge" }))).toBeInTheDocument();
   expect(screen.getByText(t("decision.savedModel", { value: "saved-model" }))).toBeInTheDocument();
   expect(screen.getByText(t("decision.inheritedAssignment"))).toBeInTheDocument();
-  expect(checkDecision).not.toHaveBeenCalled();
 });
 
 it("distinguishes CLI provider defaults from a missing slot", () => {
-  mount(false, {
+  mount("cli", {
     ...saved,
     engine: "cli",
     provider: "codex",
@@ -107,16 +99,15 @@ it("distinguishes CLI provider defaults from a missing slot", () => {
 });
 
 it("shows a direct Jev model without implying it uses a slot", () => {
-  mount(false, { ...saved, engine: "jev", provider: "", slot: "", model: "jev-latest" });
+  mount("cli", { ...saved, engine: "jev", provider: "", slot: "", model: "jev-latest" });
   expect(screen.getByText(t("decision.savedEngine", { value: "Jev" }))).toBeInTheDocument();
   expect(screen.getByText(t("decision.savedModel", { value: "jev-latest" }))).toBeInTheDocument();
   expect(screen.queryByText(t("decision.savedSlot", { value: "judge" }))).not.toBeInTheDocument();
 });
 
-it("identifies an unresolved slot and prevents checking it", () => {
-  mount(false, { ...saved, engine: "cli", provider: "", model: "", resolved: false });
+it("identifies an unresolved slot", () => {
+  mount("cli", { ...saved, engine: "cli", provider: "", model: "", resolved: false });
   expect(screen.getByText(t("decision.unresolvedSlot"))).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: t("decision.check") })).toBeDisabled();
   expect(
     screen.queryByText(t("decision.cliDefaultModel"), { exact: false }),
   ).not.toBeInTheDocument();

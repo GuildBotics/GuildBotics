@@ -4,7 +4,7 @@ import { readStackContext } from "./stack-context";
 import { expect, test } from "@playwright/test";
 
 // Credentials use the isolated stack's fake keychain. Assignment persistence
-// goes through the real API; only the paid model invocation is mocked.
+// and the section save go through the real API. No model call is needed.
 test("uses the common brain assignment for chat judgment and restores it after reload", async ({
   page,
 }) => {
@@ -46,9 +46,7 @@ test("uses the common brain assignment for chat judgment and restores it after r
           ),
       ),
   ).toBe(true);
-  await card.getByLabel("Jev API key", { exact: true }).fill("synthetic-e2e-jev-key");
-  await card.getByRole("button", { name: "Save Jev credentials", exact: true }).click();
-  await expect(card.getByLabel("Jev API key", { exact: true })).toHaveValue("");
+  await expect(card.getByLabel("Jev API key", { exact: true })).toHaveCount(0);
   const row = card;
   await row.getByRole("combobox").nth(0).click();
   await page.getByRole("option", { name: "Jev", exact: true }).click();
@@ -57,9 +55,13 @@ test("uses the common brain assignment for chat judgment and restores it after r
     card.getByText("Uses jev-latest (latest official release).", { exact: true }),
   ).toBeVisible();
   await expect(card.getByText("Not configured", { exact: true })).toBeVisible();
-  await expect(
-    card.getByRole("button", { name: "Check saved chat judgment assignment", exact: true }),
-  ).toBeDisabled();
+  await card.getByLabel("Jev API key", { exact: true }).fill("synthetic-e2e-jev-key");
+  await expect(card.getByRole("button", { name: /Save Jev|Check saved/ })).toHaveCount(0);
+  const inputWidth = await card
+    .getByLabel("Jev API key", { exact: true })
+    .evaluate((el) => el.getBoundingClientRect().width);
+  const cardWidth = await card.evaluate((el) => el.getBoundingClientRect().width);
+  expect(inputWidth).toBeGreaterThan(cardWidth * 0.8);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.reload();
@@ -67,12 +69,11 @@ test("uses the common brain assignment for chat judgment and restores it after r
   await expect(card.getByRole("combobox")).toHaveCount(1);
   await expect(card.getByText("Engine: Jev", { exact: true })).toBeVisible();
   await expect(card.getByText("Configured model: jev-latest", { exact: true })).toBeVisible();
-  await page.route("**/intelligences/decisions/check", (route) => {
-    expect(route.request().postDataJSON()).toEqual({ config: { brain: "chat_decision" } });
-    return route.fulfill({ json: { state: "verified", model: "jev-1.13.0" } });
-  });
-  await card
-    .getByRole("button", { name: "Check saved chat judgment assignment", exact: true })
-    .click();
-  await expect(card.getByRole("alert")).toContainText("Connection verified");
+  await expect(card.getByLabel("Jev API key", { exact: true })).toHaveValue("");
+  await expect(card.getByText("Jev key registered.", { exact: true })).toBeVisible();
+  // A save with a blank field must retain the stored credential.
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(card.getByText("Jev key registered.", { exact: true })).toBeVisible();
 });

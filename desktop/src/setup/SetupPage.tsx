@@ -71,6 +71,7 @@ import {
   type EffortOverlay,
   type ConfigRevisions,
   type ConfigStatus,
+  saveDecisionCredential,
   type BrainAssignment,
   type IntelligenceConfig,
   type ModelDefinition,
@@ -1152,12 +1153,14 @@ function IntelligenceSection({
   // it, but they are one screen to the user, so one button saves both.
   const saveAdvanced = useRef<AdvancedSave | null>(null);
   const [savingSection, setSavingSection] = useState(false);
+  const [sectionSaveFailed, setSectionSaveFailed] = useState(false);
   const saveSection = async () => {
     if (saveAdvanced.current && !saveAdvanced.current.valid) {
       notifyInvalidAdvancedSave(t);
       return;
     }
     setSavingSection(true);
+    setSectionSaveFailed(false);
     try {
       // The basic settings write two of the files the advanced editor guards,
       // so the advanced save is composed against what this one just left --
@@ -1171,6 +1174,7 @@ function IntelligenceSection({
       }
       await saveAdvanced.current?.save?.(written);
     } catch {
+      setSectionSaveFailed(true);
       // Both halves report their own failure: the basic settings through the
       // section's save state, the advanced editor through its own alert.
     } finally {
@@ -1215,7 +1219,7 @@ function IntelligenceSection({
         save={
           persisted
             ? {
-                state: saveState,
+                state: savingSection ? "saving" : sectionSaveFailed ? "error" : saveState,
                 saving: saving || savingSection,
                 onSave: () => void saveSection(),
               }
@@ -1788,6 +1792,14 @@ function IntelligenceEditor({
       queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
     },
   });
+  const [jevKey, setJevKey] = useState("");
+  const credential = useMutation({
+    mutationFn: saveDecisionCredential,
+    onSuccess: async (_result, submittedKey) => {
+      setJevKey((current) => (current.trim() === submittedKey ? "" : current));
+      await queryClient.invalidateQueries({ queryKey: ["decision-options"] });
+    },
+  });
   const environmentRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
   const environmentStatus = useQuery({
     queryKey: ["agent-environment-status", environmentRefreshKey],
@@ -1809,24 +1821,38 @@ function IntelligenceEditor({
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
-  const canSave = Boolean(payload && dirty && !hasJsonError);
+  const decisionEngine = draft?.brain_mapping.find((item) => item.name === "chat_decision")?.engine;
+  const pendingJevKey = decisionEngine === "jev" ? jevKey.trim() : "";
+  const canSave = Boolean(payload && (dirty || pendingJevKey) && !hasJsonError);
 
   const saveDraft = useCallback(
     async (written?: ConfigRevisions) => {
       if (!payload || !serializedPayload || hasJsonError) {
         return;
       }
-      await mutation.mutateAsync({
-        ...payload,
-        // `written` describes files a save that just ran left behind, and takes
-        // precedence over what this editor read before that save.
-        expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
-      });
+      if (dirty)
+        await mutation.mutateAsync({
+          ...payload,
+          // `written` describes files a save that just ran left behind, and takes
+          // precedence over what this editor read before that save.
+          expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
+        });
       setDraftState((current) =>
         current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
       );
+      if (pendingJevKey) await credential.mutateAsync(pendingJevKey);
     },
-    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
+    [
+      draftKey,
+      hasJsonError,
+      mutation,
+      payload,
+      query.data,
+      serializedPayload,
+      dirty,
+      pendingJevKey,
+      credential,
+    ],
   );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
@@ -2328,9 +2354,11 @@ function IntelligenceEditor({
 
   const decisionSettings = (
     <DecisionSettings
-      key={`${personId ?? "team"}:${JSON.stringify(query.data?.revisions)}`}
       personId={personId}
-      unsaved={dirty || query.isFetching}
+      engine={decisionEngine}
+      apiKey={jevKey}
+      onApiKeyChange={setJevKey}
+      credentialError={credential.isError}
       selection={query.data?.chat_decision}
     >
       {!draft.inherited &&
@@ -4261,6 +4289,7 @@ function MembersSection({
                 <Tabs.Panel value="intelligence" pt="md">
                   {formMode === "edit" && editingPersonId ? (
                     <IntelligenceEditor
+                      key={editingPersonId}
                       personId={editingPersonId}
                       savePersonId={personId.trim()}
                       enabled={Boolean(configDir)}

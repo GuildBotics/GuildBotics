@@ -23,36 +23,17 @@ const resources = {
         unresolvedSlot: "The assigned slot could not be resolved.",
         team: "Applies to all members unless overridden in member settings.",
         member: "Shows this member’s saved assignment and resolved slot settings.",
-        current: "Selected: {{engine}} / {{model}}",
-        engine: "Engine / provider",
-        model: "Model ID",
         key: "Jev API key",
-        providerCredentials: "Provider API credentials",
-        cliEnvironment: "AI CLI environment and login",
-        register: "Save Jev credentials",
-        check: "Check saved chat judgment assignment",
+        keySaveHint:
+          "Save with the button at the top of this section. Leave blank to keep the registered key.",
         jevLatest: "Uses jev-latest (latest official release).",
         assignmentHint:
           "Select the engine and target below, then save at the top of this section. LLM and CLI use the existing slots.",
-        saveBeforeCheck: "Save your changes before checking the assignment.",
-        keyPresent: "Jev key registered. Registration alone does not verify authentication.",
+        keyPresent: "Jev key registered.",
         keyMissing: "Jev key not registered.",
-        retry: "Refresh availability",
         failed: "Could not load or save. Retry; the current selection is preserved.",
-        recovery:
-          "Jev credentials can be registered below even while selection is disabled. For Agno, register the provider API key in Intelligence settings. For AI CLI, prepare the environment and sign in from the AI CLI settings above.",
         fallback:
           "If judgment fails, the response agent decides with high effort. No other judgment engine is selected automatically.",
-        states: {
-          missing: "Not registered / unavailable",
-          unverified: "Registered · authentication unchecked",
-          verified: "Connection verified",
-          authentication_error: "Authentication error",
-          connection_error: "Connection error",
-          invalid: "Invalid model or configuration",
-          invalid_response: "Invalid response or configuration",
-          evaluation_failed: "Evaluation failed",
-        },
       },
       app: {
         nav: {
@@ -2104,36 +2085,17 @@ const resources = {
         unresolvedSlot: "割り当て先のスロットを解決できません。",
         team: "メンバー設定で上書きしない限り、チーム全体に適用します。",
         member: "このメンバーの保存済みの割り当てと、そのスロット設定を表示します。",
-        current: "選択中: {{engine}} / {{model}}",
-        engine: "エンジン / プロバイダー",
-        model: "モデル ID",
         key: "Jev API キー",
-        providerCredentials: "プロバイダーの API 認証情報",
-        cliEnvironment: "AI CLI の環境準備・ログイン",
-        register: "Jev の認証情報を保存",
-        check: "保存済みのチャット判断設定を接続確認",
+        keySaveHint:
+          "セクション上部の保存ボタンで保存します。空欄の場合は登録済みのキーを維持します。",
         jevLatest: "jev-latest（最新の正式版）を使用します。",
         assignmentHint:
           "エンジンと割り当て先を選び、このセクション上部の保存ボタンで保存します。LLM／CLI は既存のスロットを使います。",
-        saveBeforeCheck: "変更を保存してから接続確認してください。",
-        keyPresent: "Jev のキーは登録済みです。登録だけでは認証成功は確認していません。",
+        keyPresent: "Jev のキーは登録済みです。",
         keyMissing: "Jev のキーは未登録です。",
-        retry: "利用可否を再取得",
         failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
-        recovery:
-          "Jev を選択できない状態でも、下の欄から認証情報を登録できます。Agno は Intelligence 設定の API キー欄、AI CLI は上の AI CLI 設定から環境準備とログインを行ってください。",
         fallback:
           "判定に失敗した場合は、対応エージェントに high effort で判断を委ねます。別の判断エンジンへ自動で切り替えません。",
-        states: {
-          missing: "未登録・この端末で利用不可",
-          unverified: "登録済み・認証未確認",
-          verified: "接続確認済み",
-          authentication_error: "認証エラー",
-          connection_error: "通信エラー",
-          invalid: "モデル・設定が不正",
-          invalid_response: "応答または設定が不正",
-          evaluation_failed: "判定に失敗しました",
-        },
       },
       app: {
         nav: {

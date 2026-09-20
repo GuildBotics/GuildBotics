@@ -1727,21 +1727,10 @@ export async function getIntelligenceConfig(personId?: string): Promise<Intellig
   return request(`/config/intelligences${query}`);
 }
 
-export type DecisionConfig = { brain: string };
-export type DecisionCheckResult = { state: string; model: string };
 export async function getDecisionOptions(): Promise<{
   credential_present: boolean;
 }> {
   return request("/intelligences/decisions/options");
-}
-export async function checkDecision(
-  config: DecisionConfig,
-  personId?: string,
-): Promise<DecisionCheckResult> {
-  return request("/intelligences/decisions/check", {
-    method: "POST",
-    body: { config, person_id: personId },
-  });
 }
 export async function saveDecisionCredential(value: string): Promise<{ state: string }> {
   return request("/intelligences/decisions/credential", { method: "POST", body: { value } });

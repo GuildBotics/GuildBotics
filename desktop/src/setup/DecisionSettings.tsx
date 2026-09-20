@@ -1,39 +1,31 @@
-import { useState, type ReactNode } from "react";
-import { Alert, Button, Card, Group, PasswordInput, Stack, Text } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type ReactNode } from "react";
+import { Alert, Card, PasswordInput, Stack, Text } from "@mantine/core";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import {
-  checkDecision,
-  getDecisionOptions,
-  saveDecisionCredential,
-  type ChatDecisionSelection,
-} from "../api/client";
+import { getDecisionOptions, type ChatDecisionSelection } from "../api/client";
 
 export function DecisionSettings({
   personId,
-  unsaved,
+  engine,
+  apiKey,
+  onApiKeyChange,
+  credentialError,
   selection,
   children,
 }: {
   personId?: string;
-  unsaved: boolean;
+  engine?: "llm" | "cli" | "jev";
+  apiKey: string;
+  onApiKeyChange: (value: string) => void;
+  credentialError: boolean;
   selection?: ChatDecisionSelection | null;
   children?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const client = useQueryClient();
-  const [key, setKey] = useState("");
-  const options = useQuery({ queryKey: ["decision-options"], queryFn: getDecisionOptions });
-  const check = useMutation({
-    mutationFn: () => checkDecision({ brain: "chat_decision" }, personId),
-  });
-  const credential = useMutation({
-    mutationFn: saveDecisionCredential,
-    onSuccess: async () => {
-      setKey("");
-      check.reset();
-      await client.invalidateQueries({ queryKey: ["decision-options"] });
-    },
+  const options = useQuery({
+    queryKey: ["decision-options"],
+    queryFn: getDecisionOptions,
+    enabled: engine === "jev",
   });
   return (
     <Card withBorder id="decision-settings">
@@ -89,41 +81,24 @@ export function DecisionSettings({
             <Text size="sm">{t("decision.notConfigured")}</Text>
           )}
         </Stack>
-        {unsaved && <Text size="sm">{t("decision.saveBeforeCheck")}</Text>}
-        {!unsaved && check.data && (
-          <Alert color={check.data.state === "verified" ? "blue" : "orange"}>
-            {t(`decision.states.${check.data.state}`)} {check.data.model}
-          </Alert>
+        {engine === "jev" && (
+          <>
+            {(options.isError || credentialError) && (
+              <Alert color="red">{t("decision.failed")}</Alert>
+            )}
+            <Text size="sm">
+              {t(options.data?.credential_present ? "decision.keyPresent" : "decision.keyMissing")}
+            </Text>
+            <PasswordInput
+              label={t("decision.key")}
+              description={t("decision.keySaveHint")}
+              value={apiKey}
+              onChange={(event) => onApiKeyChange(event.currentTarget.value)}
+              autoComplete="off"
+              w="100%"
+            />
+          </>
         )}
-        {(options.isError || check.isError || credential.isError) && (
-          <Alert color="red">{t("decision.failed")}</Alert>
-        )}
-        <Button
-          variant="light"
-          disabled={unsaved || !selection?.resolved}
-          loading={check.isPending}
-          onClick={() => check.mutate()}
-        >
-          {t("decision.check")}
-        </Button>
-        <Text size="sm">
-          {t(options.data?.credential_present ? "decision.keyPresent" : "decision.keyMissing")}
-        </Text>
-        <Group align="end">
-          <PasswordInput
-            label={t("decision.key")}
-            value={key}
-            onChange={(event) => setKey(event.currentTarget.value)}
-            autoComplete="off"
-          />
-          <Button
-            disabled={!key.trim()}
-            loading={credential.isPending}
-            onClick={() => credential.mutate(key)}
-          >
-            {t("decision.register")}
-          </Button>
-        </Group>
         <Text size="xs" c="dimmed">
           {t("decision.fallback")}
         </Text>
