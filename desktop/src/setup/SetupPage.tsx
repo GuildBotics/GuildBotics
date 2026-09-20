@@ -2267,6 +2267,77 @@ function IntelligenceEditor({
     });
   };
 
+  const renderBrainAssignment = (assignment: BrainAssignment, index: number) => {
+    const targetOptions =
+      assignment.engine === "jev"
+        ? (decisionOptions.data?.models ?? [])
+        : assignment.engine === "cli"
+          ? cliSlots.map((s) => ({ value: s, label: s }))
+          : modelSlots.map((s) => ({ value: s, label: s }));
+
+    return (
+      <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
+        {assignment.name !== "chat_decision" && (
+          <TextInput
+            label={t("setup.intelligence.feature")}
+            value={assignment.name}
+            disabled={isBrainFeatureLocked(assignment.name)}
+            onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
+            flex={2}
+          />
+        )}
+        <Select
+          label={t("setup.intelligence.engine")}
+          data={[
+            { value: "llm", label: "LLM" },
+            { value: "cli", label: "CLI" },
+            { value: "jev", label: "Jev" },
+          ]}
+          value={assignment.engine}
+          onChange={(value) =>
+            handleUpdateBrain(index, {
+              engine: (value as BrainAssignment["engine"]) ?? "llm",
+            })
+          }
+          flex={1}
+        />
+        <Select
+          label={t("setup.intelligence.target")}
+          data={targetOptions}
+          value={assignment.target}
+          onChange={(value) => handleUpdateBrain(index, { target: value ?? "default" })}
+          flex={1.5}
+        />
+        {!isBrainFeatureLocked(assignment.name) ? (
+          <ActionIcon
+            color="danger"
+            variant="subtle"
+            onClick={() => handleDeleteBrain(index)}
+            mb="xs"
+          >
+            <Trash2 size={16} />
+          </ActionIcon>
+        ) : (
+          <Box w={28} />
+        )}
+      </Group>
+    );
+  };
+
+  const decisionSettings = (
+    <DecisionSettings
+      key={`${personId ?? "team"}:${JSON.stringify(query.data?.revisions)}`}
+      personId={personId}
+      unsaved={dirty || query.isFetching}
+      selection={query.data?.chat_decision}
+    >
+      {!draft.inherited &&
+        draft.brain_mapping.map((assignment, index) =>
+          assignment.name === "chat_decision" ? renderBrainAssignment(assignment, index) : null,
+        )}
+    </DecisionSettings>
+  );
+
   // Team and member scopes share one advanced editor. A member only adds the
   // "inherit team defaults" toggle on top; when inheriting is off they get the
   // exact same full editor (feature assignments, model slots, CLI slots, native
@@ -2291,17 +2362,15 @@ function IntelligenceEditor({
           }}
         />
       ) : null}
-      <DecisionSettings
-        key={`${personId ?? "team"}:${JSON.stringify(query.data?.revisions)}`}
-        personId={personId}
-        unsaved={dirty}
-      />
       {(() => {
         if (draft.inherited) {
           return (
-            <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
-              {t("setup.intelligence.inheritingBody")}
-            </InfoCallout>
+            <>
+              <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
+                {t("setup.intelligence.inheritingBody")}
+              </InfoCallout>
+              {decisionSettings}
+            </>
           );
         }
         // The full editor (feature assignments, model/CLI slots, native policy)
@@ -2327,62 +2396,11 @@ function IntelligenceEditor({
                   </Button>
                 </Group>
 
-                {draft.brain_mapping.map((assignment, index) => {
-                  const targetOptions =
-                    assignment.engine === "jev"
-                      ? (decisionOptions.data?.models ?? [])
-                      : assignment.engine === "cli"
-                        ? cliSlots.map((s) => ({ value: s, label: s }))
-                        : modelSlots.map((s) => ({ value: s, label: s }));
-
-                  return (
-                    <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
-                      <TextInput
-                        label={t("setup.intelligence.feature")}
-                        value={assignment.name}
-                        disabled={isBrainFeatureLocked(assignment.name)}
-                        onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
-                        flex={2}
-                      />
-                      <Select
-                        label={t("setup.intelligence.engine")}
-                        data={[
-                          { value: "llm", label: "LLM" },
-                          { value: "cli", label: "CLI" },
-                          { value: "jev", label: "Jev" },
-                        ]}
-                        value={assignment.engine}
-                        onChange={(value) =>
-                          handleUpdateBrain(index, {
-                            engine: (value as BrainAssignment["engine"]) ?? "llm",
-                          })
-                        }
-                        flex={1}
-                      />
-                      <Select
-                        label={t("setup.intelligence.target")}
-                        data={targetOptions}
-                        value={assignment.target}
-                        onChange={(value) =>
-                          handleUpdateBrain(index, { target: value ?? "default" })
-                        }
-                        flex={1.5}
-                      />
-                      {!isBrainFeatureLocked(assignment.name) ? (
-                        <ActionIcon
-                          color="danger"
-                          variant="subtle"
-                          onClick={() => handleDeleteBrain(index)}
-                          mb="xs"
-                        >
-                          <Trash2 size={16} />
-                        </ActionIcon>
-                      ) : (
-                        <Box w={28} />
-                      )}
-                    </Group>
-                  );
-                })}
+                {draft.brain_mapping.map((assignment, index) =>
+                  assignment.name === "chat_decision"
+                    ? null
+                    : renderBrainAssignment(assignment, index),
+                )}
               </Stack>
             </Card>
 
@@ -2602,6 +2620,8 @@ function IntelligenceEditor({
                 </Accordion>
               </Stack>
             </Card>
+
+            {decisionSettings}
 
             {/* Section 4: the environment every turn runs in (the workspace's
                 declaration) and what agents may reach beyond their working

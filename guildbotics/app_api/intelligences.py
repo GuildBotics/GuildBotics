@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from guildbotics.app_api.models import (
     BrainAssignment,
+    ChatDecisionSelection,
     CliAgentDefinition,
     EffortFieldSpec,
     IntelligenceConfigResponse,
@@ -102,7 +103,7 @@ class IntelligenceConfigService:
                 self._read_merged_mapping(config_dir, None, "brain_mapping.yml")
             )
 
-        return IntelligenceConfigResponse(
+        result = IntelligenceConfigResponse(
             config_dir=config_dir,
             person_id=person_id,
             inherited=inherited,
@@ -119,6 +120,50 @@ class IntelligenceConfigService:
             inherited_cli_slots=inherited_cli_slots,
             inherited_brain_features=inherited_brain_features,
         )
+        member_brains = (
+            self._read_optional_yaml(base_dir / "intelligences/brain_mapping.yml")
+            if person_id
+            else {}
+        )
+        result.chat_decision = self._chat_decision_selection(result, member_brains)
+        return result
+
+    @staticmethod
+    def _chat_decision_selection(
+        config: IntelligenceConfigResponse, member_brains: dict[str, Any]
+    ) -> ChatDecisionSelection | None:
+        assignment = next(
+            (item for item in config.brain_mapping if item.name == "chat_decision"),
+            None,
+        )
+        if assignment is None:
+            return None
+        result = ChatDecisionSelection(
+            engine=assignment.engine,
+            assignment_inherited=bool(config.person_id)
+            and "chat_decision" not in member_brains,
+        )
+        if assignment.engine == "jev":
+            result.model = assignment.target
+        elif assignment.engine == "cli":
+            result.slot = assignment.target
+            path = config.cli_agent_mapping.get(assignment.target)
+            agent = next(
+                (item for item in config.cli_agents if item.path == path), None
+            )
+            result.resolved = agent is not None
+            if agent:
+                result.provider = agent.name
+                result.model = str(agent.parameters.get("model") or "")
+        else:
+            result.slot = assignment.target
+            path = config.model_mapping.get(assignment.target)
+            model = next((item for item in config.models if item.path == path), None)
+            result.resolved = model is not None
+            if model:
+                result.provider = model.provider
+                result.model = str(model.parameters.get("id") or "")
+        return result
 
     def update_config(
         self, request: IntelligenceConfigUpdateRequest

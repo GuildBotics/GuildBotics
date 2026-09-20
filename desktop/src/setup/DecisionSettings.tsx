@@ -1,10 +1,25 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Alert, Button, Card, Group, PasswordInput, Stack, Text } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { checkDecision, getDecisionOptions, saveDecisionCredential } from "../api/client";
+import {
+  checkDecision,
+  getDecisionOptions,
+  saveDecisionCredential,
+  type ChatDecisionSelection,
+} from "../api/client";
 
-export function DecisionSettings({ personId, unsaved }: { personId?: string; unsaved: boolean }) {
+export function DecisionSettings({
+  personId,
+  unsaved,
+  selection,
+  children,
+}: {
+  personId?: string;
+  unsaved: boolean;
+  selection?: ChatDecisionSelection | null;
+  children?: ReactNode;
+}) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const [key, setKey] = useState("");
@@ -26,6 +41,54 @@ export function DecisionSettings({ personId, unsaved }: { personId?: string; uns
         <Text fw={700}>{t("decision.title")}</Text>
         <Text size="sm">{t("decision.assignmentHint")}</Text>
         <Text size="sm">{t(personId ? "decision.member" : "decision.team")}</Text>
+        {children}
+        <Stack gap={4}>
+          <Text size="sm" fw={600}>
+            {t("decision.savedSelection")}
+          </Text>
+          {selection ? (
+            <>
+              <Text size="sm">
+                {t("decision.savedEngine", {
+                  value:
+                    selection.engine === "jev"
+                      ? "Jev"
+                      : `${selection.engine === "llm" ? "LLM" : "AI CLI"} / ${selection.provider || t("decision.notConfigured")}`,
+                })}
+              </Text>
+              {selection.slot && (
+                <Text size="sm">{t("decision.savedSlot", { value: selection.slot })}</Text>
+              )}
+              <Text size="sm">
+                {t("decision.savedModel", {
+                  value:
+                    selection.model ||
+                    t(
+                      selection.engine === "cli" && selection.resolved
+                        ? "decision.cliDefaultModel"
+                        : "decision.notConfigured",
+                    ),
+                })}
+              </Text>
+              {personId && (
+                <Text size="sm">
+                  {t(
+                    selection.assignment_inherited
+                      ? "decision.inheritedAssignment"
+                      : "decision.memberAssignment",
+                  )}
+                </Text>
+              )}
+              {!selection.resolved && (
+                <Text size="sm" c="orange">
+                  {t("decision.unresolvedSlot")}
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text size="sm">{t("decision.notConfigured")}</Text>
+          )}
+        </Stack>
         {unsaved && <Text size="sm">{t("decision.saveBeforeCheck")}</Text>}
         {!unsaved && check.data && (
           <Alert color={check.data.state === "verified" ? "blue" : "orange"}>
@@ -37,7 +100,7 @@ export function DecisionSettings({ personId, unsaved }: { personId?: string; uns
         )}
         <Button
           variant="light"
-          disabled={unsaved}
+          disabled={unsaved || !selection?.resolved}
           loading={check.isPending}
           onClick={() => check.mutate()}
         >

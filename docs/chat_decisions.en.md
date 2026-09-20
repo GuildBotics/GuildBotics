@@ -1,10 +1,12 @@
 # Chat judgment
 
-In **Setup → LLM / AI CLI tools → Advanced → Feature assignments**, select the engine and target for `chat_decision`.
+In **Setup → LLM / AI CLI tools → Advanced → Chat judgment engine**, select the engine and target, then save at the top of the section.
 
 - **LLM** uses an existing model slot, including its provider, model, parameters, and credentials.
 - **CLI** uses an existing AI CLI slot and its model/effort settings through the shared Codex, Claude, Grok, Copilot, or Antigravity adapter. Prepare the device environment and log in first.
 - **Jev** selects `jev-1.13.0`, `jev-latest`, or `jev-preview`. Register its key in the **Chat judgment engine** card; it is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
+
+The **Chat judgment engine** card sits between the AI CLI tool definitions and the environment declaration. It shows the saved engine, slot, and configured model, plus whether a member's assignment is inherited or overridden. A CLI slot without an explicit model shows **CLI default (determined at execution)**. Unsaved edits do not replace this saved summary.
 
 Save the assignment, then **Check saved chat judgment assignment** to exercise both Noul and Choice and display the effective model. Key registration does not establish authentication success. Missing credentials, execution failures, and malformed responses delegate to the response agent.
 
