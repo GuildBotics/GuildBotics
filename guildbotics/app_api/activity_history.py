@@ -27,6 +27,7 @@ from guildbotics.entities.team import Person
 from guildbotics.observability.diagnostics_store import CompletionSummary
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.observability.trace_title import (
+    first_seen_attributes,
     is_read_only_record,
     resolve_trace_title,
 )
@@ -115,7 +116,7 @@ def _summarize_trace(
     if source == MANUAL_SESSION_SOURCE:
         return None
     first = records[0]
-    attributes = _merged_attributes(records)
+    attributes = first_seen_attributes(records)
     command = _first_text(records, "command")
     workflow = _first_text(records, "workflow")
     status = resolve_trace_status(records)
@@ -124,7 +125,7 @@ def _summarize_trace(
     # A read (PR / issue inspect, memory recall) names what the session looked
     # at, which titles it, but is not its work, so it yields no link.
     worked = [item for item in records if not is_read_only_record(item)]
-    links = links_from_records(worked, _merged_attributes(worked))
+    links = links_from_records(worked, first_seen_attributes(worked))
     rate_limit = _rate_limit_from_records(records)
     mode: ActivitySessionMode = "interactive" if source == "interactive" else "workflow"
     if (
@@ -349,15 +350,6 @@ def _first_text(records: list[dict[str, Any]], key: str) -> str:
         if value:
             return str(value)
     return ""
-
-
-def _merged_attributes(records: list[dict[str, Any]]) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    for item in records:
-        attributes = item.get("attributes")
-        if isinstance(attributes, dict):
-            merged.update(attributes)
-    return merged
 
 
 def run_subject_id(attributes: dict[str, Any]) -> str:

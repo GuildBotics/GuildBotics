@@ -17,7 +17,10 @@ from guildbotics.observability.session_transcripts import (
     SessionTranscriptStore,
 )
 from guildbotics.observability.trace_status import TraceStatus
-from guildbotics.observability.trace_title import resolve_trace_title
+from guildbotics.observability.trace_title import (
+    merge_first_seen,
+    resolve_trace_title,
+)
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
@@ -602,10 +605,7 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     for key in ("source", "person_id", "command", "workflow"):
         if not summary[key] and item.get(key):
             summary[key] = str(item.get(key))
-    attributes = item.get("attributes")
-    if isinstance(attributes, dict):
-        for attr_key, attr_value in attributes.items():
-            summary["attributes"].setdefault(attr_key, attr_value)
+    merge_first_seen(summary["attributes"], item)
     span_id = item.get("span_id")
     if span_id:
         summary["_spans"].add(span_id)

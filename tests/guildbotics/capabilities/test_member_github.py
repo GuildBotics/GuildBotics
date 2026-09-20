@@ -217,6 +217,86 @@ async def test_pr_inspect_reports_the_uniform_work_target():
     assert result["target"] == _pull_target(7, "Show the work target")
 
 
+def _pull_with_head(number: int, title: str) -> dict:
+    return {
+        **_pull_request_payload(number, title),
+        "head": {
+            "sha": "abc123",
+            "ref": "feature",
+            "repo": {"full_name": "owner/repo"},
+        },
+    }
+
+
+def _issue_comment_call(service):
+    return service.issue_comment("https://github.com/owner/repo/issues/42", "Hi")
+
+
+def _pr_comment_call(service):
+    return service.pr_comment("https://github.com/owner/repo/pull/7", "Hi")
+
+
+def _pr_reply_call(service):
+    return service.pr_reply(
+        "https://github.com/owner/repo/pull/7", ROOT_REVIEW_COMMENT_ID, "Fixed."
+    )
+
+
+def _pr_review_call(service):
+    return service.pr_review("https://github.com/owner/repo/pull/7", "LGTM", "approve")
+
+
+def _pr_review_comment_call(service):
+    return service.pr_review_comment(
+        "https://github.com/owner/repo/pull/7", "Hmm", "a.py", 12, "RIGHT", None, None
+    )
+
+
+def _issue_create_call(service):
+    return service.issue_create("owner/repo", "T", "B", False, human_approved=True)
+
+
+def _pr_create_call(service):
+    return service.pr_create("owner/repo", "feature", "main", "T", "B", "", "false")
+
+
+#: Every command whose write is not idempotent: a comment, review, reply, or
+#: creation posted twice is two of them.
+_NON_IDEMPOTENT_WRITERS = [
+    ("issue_comment", _issue_comment_call),
+    ("pr_comment", _pr_comment_call),
+    ("pr_reply", _pr_reply_call),
+    ("pr_review", _pr_review_call),
+    ("pr_review_comment", _pr_review_comment_call),
+    ("issue_create", _issue_create_call),
+    ("pr_create", _pr_create_call),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("name", "call"), _NON_IDEMPOTENT_WRITERS)
+async def test_non_idempotent_writers_never_read_after_the_write(name, call):
+    # A read that fails after the write landed makes the CLI report failure
+    # for a comment that exists, and a retry posts it again. So the target
+    # (and everything else) is read before the first write, never after.
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {"number": 42, "title": "T"}
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "T")
+    fake.get_payloads["/repos/owner/repo/pulls"] = []
+    fake.post_payloads["/repos/owner/repo/issues"] = {"number": 43, "html_url": "u"}
+    fake.post_payloads["/repos/owner/repo/pulls"] = {"number": 8, "html_url": "u"}
+    fake.graphql_payloads.append(_review_threads_payload())
+    service._client = fake
+
+    result = await call(service)
+
+    methods = [method for method, _endpoint in fake.history]
+    assert "post" in methods, name
+    assert "get" not in methods[methods.index("post") :], (name, fake.history)
+    assert result["target"]["number"]
+
+
 @pytest.mark.asyncio
 async def test_pr_comment_reports_the_pull_request_it_commented_on():
     service = _service(person_type="agent")

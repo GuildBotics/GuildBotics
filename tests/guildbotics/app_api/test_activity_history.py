@@ -345,6 +345,26 @@ def test_worked_pull_request_titles_and_links_the_session() -> None:
     ]
 
 
+def test_the_first_recorded_target_names_the_session_like_the_execution_list() -> None:
+    # Both screens fold attributes first-seen: a later, different target must
+    # not overtake the one the trace started on.
+    second = _work_target_record("")
+    second["timestamp"] = "2026-07-01T10:02:00+00:00"
+    second["attributes"] = {
+        **second["attributes"],
+        "github.kind": "issue",
+        "github.number": "9",
+        "github.url": "https://github.com/o/r/issues/9",
+        "github.title": "A later, different item",
+    }
+    session = _session(_chat_records() + [_work_target_record(""), second])
+    assert session.title == "Copilot の利用枠を表示する"
+    assert [(link.kind, link.label) for link in session.links] == [
+        ("pull_request", "PR #528"),
+        ("issue", "Issue #9"),
+    ]
+
+
 def test_target_title_precedes_the_completion_summary() -> None:
     # The execution list and the activity timeline agree: the item worked on
     # names the trace, the member's summary only fills in when there is none.

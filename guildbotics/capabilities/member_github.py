@@ -186,13 +186,15 @@ class MemberGitHubCapabilityService:
 
     async def issue_comment(self, url: str, body: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
+        # The target is read before the write, never after it: a read that
+        # fails after the comment landed would make a retry post it twice. The
+        # freshness check runs first so a refused write costs no read either.
+        ensure_chat_current(self.person.person_id)
+        issue = await self._issue(resource)
         comment = await self._post_comment(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments",
             body,
         )
-        # Read the item after the write: a refused write (stale chat) costs no
-        # GitHub read, and the target is only reported for a comment that landed.
-        issue = await self._issue(resource)
         result = _comment_result(comment)
         result.update(
             {
@@ -900,11 +902,12 @@ class MemberGitHubCapabilityService:
 
     async def pr_comment(self, url: str, body: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        ensure_chat_current(self.person.person_id)
+        pr = await self._pull_request(resource)
         comment = await self._post_comment(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments",
             body,
         )
-        pr = await self._pull_request(resource)
         return {**_comment_result(comment), "target": _work_target(resource, pr, url)}
 
     async def pr_review(self, url: str, body: str, event: str) -> dict[str, Any]:
@@ -987,6 +990,8 @@ class MemberGitHubCapabilityService:
         self, url: str, reply_target_id: int, body: str
     ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        ensure_chat_current(self.person.person_id)
+        pr = await self._pull_request(resource)
         threads = await self._review_threads(resource)
         allowed = {
             int(thread["reply_target_id"])
@@ -1005,7 +1010,6 @@ class MemberGitHubCapabilityService:
         )
         _raise_for_status(resp)
         reply = resp.json()
-        pr = await self._pull_request(resource)
         return {
             "reply_comment_id": reply.get("id"),
             "html_url": reply.get("html_url"),
