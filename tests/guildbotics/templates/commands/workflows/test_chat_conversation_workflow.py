@@ -96,7 +96,11 @@ def _judgment_engine(monkeypatch):
     async def assess(state, config, *, logger, **kwargs):
         ctx = logger.context
         ctx.assessments.append(state)
-        return Selection(route="agent", reason=ctx.decision_reason), "a" * 32
+        return Selection(
+            route="agent",
+            reason=ctx.decision_reason,
+            response_effort=ctx.response_effort,
+        ), "a" * 32
 
     monkeypatch.setattr(chat_conversation_workflow, "assess", assess)
 
@@ -132,6 +136,7 @@ class FakeInvokeContext(types.SimpleNamespace):
         self.complete_on_attempt: int | None = None
         self._handle_calls = 0
         self.decision_reason = "request"
+        self.response_effort = None
         # Stand-ins for Context.pipe and what each invoked command received as
         # its user message.
         self.pipe = ""
@@ -400,11 +405,13 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     first = FakeInvokeContext("reply")
+    first.response_effort = "high"
     _set_incoming_event(first, event_id="E1", message_ts="100.1")
     await chat_conversation_workflow.main(
         first, chat_service=service, state_store=state_store
     )
     second = FakeInvokeContext("reply")
+    second.response_effort = "default"
     _set_incoming_event(second, event_id="E2", message_ts="101.1")
     await chat_conversation_workflow.main(
         second, chat_service=service, state_store=state_store
@@ -412,6 +419,8 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
 
     first_context = _agent_invocations(first)[0][1]["agent_execution_context"]
     second_context = _agent_invocations(second)[0][1]["agent_execution_context"]
+    assert _agent_invocations(first)[0][1]["effort"] == "high"
+    assert _agent_invocations(second)[0][1]["effort"] == "high"
     assert first_context["work_identity"] == second_context["work_identity"]
     assert first_context["context_cursor"] == "100.1"
     assert second_context["context_cursor"] == "101.1"
@@ -1474,7 +1483,7 @@ async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatSe
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reason", ["invalid", "context", "request", "work"])
-async def test_judgment_never_overrides_response_settings(
+async def test_judgment_without_effort_preserves_response_settings(
     tmp_path, monkeypatch, reason
 ):
     state_store = FileConversationStateStore(base_dir=tmp_path)
@@ -1486,6 +1495,42 @@ async def test_judgment_never_overrides_response_settings(
     assert "model" not in invocation
     assert "brain" not in invocation
     assert "previous_effort" not in ctx.assessments[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored,candidate,expected",
+    [
+        ("", "default", "default"),
+        ("", "high", "high"),
+        ("default", "high", "high"),
+        ("high", "default", "high"),
+        ("high", None, "high"),
+        ("default", None, "default"),
+        ("", None, ""),
+    ],
+)
+async def test_response_effort_is_promoted_and_persisted(
+    tmp_path, monkeypatch, stored, candidate, expected
+):
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    state = ThreadConversationState(channel_id="C1", thread_ts="100.1", effort=stored)
+    state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
+    ctx = FakeInvokeContext("reply")
+    ctx.response_effort = candidate
+    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
+    invocation = _agent_invocations(ctx)[0][1]
+    assert invocation.get("effort", "") == expected
+    assert "model" not in invocation and "brain" not in invocation
+    assert (
+        state_store.load_thread_state("slack", "alice", "C1", "100.1").effort
+        == expected
+    )
+    evidence = RunStore().evidence(ctx.assessments[0]["run_id"])
+    decision = next(
+        item["payload"] for item in evidence if item["evidence_type"] == "chat_decision"
+    )
+    assert decision["response_effort"] == candidate
 
 
 @pytest.mark.asyncio
@@ -1513,6 +1558,7 @@ async def test_no_invoked_command_inherits_another_command_output_as_input(
 async def test_judgment_runs_once_per_event_not_per_retry(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
+    ctx.response_effort = "high"
     # The first agent attempt records no completion, so the workflow retries.
     ctx.complete_on_attempt = 2
 
@@ -1521,7 +1567,7 @@ async def test_judgment_runs_once_per_event_not_per_retry(tmp_path, monkeypatch)
     assessments = ctx.assessments
     assert len(assessments) == 1
     assert len(_agent_invocations(ctx)) == 2
-    assert all("effort" not in call[1] for call in _agent_invocations(ctx))
+    assert all(call[1]["effort"] == "high" for call in _agent_invocations(ctx))
 
 
 class SnapshotChatService(FakeChatService):

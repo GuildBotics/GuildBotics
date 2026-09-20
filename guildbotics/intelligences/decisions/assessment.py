@@ -141,6 +141,7 @@ async def assess(
             "model": result.model,
             "route": selection.route,
             "reason": selection.reason,
+            "response_effort": selection.response_effort,
             "error": "recording_failed" if recording_failed else result.error,
             "duration_ms": payload["duration_ms"],
         },

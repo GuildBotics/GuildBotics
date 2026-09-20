@@ -47,3 +47,5 @@ class Selection(BaseModel):
     route: Literal["agent", "reaction-only", "no-op"]
     reason: str
     reaction: str = ""
+    # No decision preserves the response workflow's existing effort.
+    response_effort: Literal["default", "high"] | None = None

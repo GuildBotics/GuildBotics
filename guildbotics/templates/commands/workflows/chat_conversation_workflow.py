@@ -48,6 +48,7 @@ from guildbotics.integrations.chat_workflow_status import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.models import Selection
+from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import (
     get_member_clone_path,
@@ -474,6 +475,13 @@ async def _handle_event(
                 person_id=person_id,
             )
             return
+        # The response slot, not the judgment slot, interprets this effort label.
+        effort = promote_effort(thread_state.effort, decision.response_effort)
+        if effort != thread_state.effort:
+            thread_state.effort = effort
+            state_store.save_thread_state(
+                service_name, person_id, channel_id, event.thread_ts, thread_state
+            )
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
@@ -509,6 +517,7 @@ async def _handle_event(
         await invoke(
             "functions/handle_chat_event",
             person_id=person_id,
+            **({"effort": effort} if effort else {}),
             # The thread content is passed as named parameters below, so the
             # prompt must not also inherit `Context.pipe` as the user's message.
             message="",

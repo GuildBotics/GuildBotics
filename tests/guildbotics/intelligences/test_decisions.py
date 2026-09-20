@@ -93,7 +93,12 @@ def answers(**overrides):
 def test_adoption(changes, participation, route):
     result = select(answers(**changes), participation=participation)
     assert result.route == route
-    assert set(result.model_dump()) == {"route", "reason", "reaction"}
+    assert set(result.model_dump()) == {
+        "route",
+        "reason",
+        "reaction",
+        "response_effort",
+    }
 
 
 @pytest.mark.parametrize(
@@ -165,6 +170,25 @@ def test_unrelated_unknowns_do_not_prevent_safe_reaction():
         participation="strict",
     )
     assert (result.route, result.reaction) == ("reaction-only", "ack")
+    assert result.response_effort is None
+
+
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        ({}, "default"),
+        ({"work_files": "true"}, "high"),
+        ({"work_repo_research": "true"}, "high"),
+        ({"work_repo_decision": "true"}, "high"),
+        ({"work_files": "unknown"}, None),
+        ({"work_files": "unknown", "work_repo_research": "true"}, "high"),
+        ({"context_sufficient": "unknown", "work_repo_decision": "true"}, "high"),
+    ],
+)
+def test_response_effort_depends_on_required_work_not_route_reason(changes, expected):
+    result = select(answers(pending_request="true", **changes), participation="strict")
+    assert result.reason == "request"
+    assert result.response_effort == expected
 
 
 @pytest.mark.parametrize(
@@ -321,6 +345,7 @@ def test_failed_judgment_delegates_without_execution_settings(failure):
         "route": "agent",
         "reason": "invalid",
         "reaction": "",
+        "response_effort": None,
     }
 
 
@@ -407,6 +432,49 @@ def test_generic_choice_is_not_restricted_to_chat_reactions():
         probabilistic=True,
     )
     assert result["q"].value == "check"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recording_fails", [False, True])
+async def test_recorded_response_effort_is_separate_from_judgment_settings(
+    tmp_path, monkeypatch, recording_fails
+):
+    records = []
+    events = []
+    calls = 0
+
+    async def evaluate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = answers(pending_request="true", work_files="true")
+        result.configuration = {"model": "judge-model", "parameters": {"effort": "low"}}
+        return result
+
+    def record(_record_id, payload, **kwargs):
+        if "selection" in payload:
+            records.append(payload)
+            if recording_fails:
+                raise OSError("disk full")
+
+    monkeypatch.setattr(assessment, "evaluate", evaluate)
+    monkeypatch.setattr(assessment, "record_required_io", record)
+    monkeypatch.setattr(
+        assessment, "record_correlated_event", lambda **event: events.append(event)
+    )
+    monkeypatch.setattr(assessment, "load_required_io_redaction_values", lambda: ())
+    selection, _ = await assessment.assess(
+        {"thread_context_complete": True},
+        None,
+        config_dir=tmp_path,
+        person_id="alice",
+        logger=logging.getLogger(),
+    )
+    assert calls == 1
+    assert records[0]["selection"]["response_effort"] == "high"
+    assert records[0]["result"]["configuration"]["parameters"]["effort"] == "low"
+    assert selection.route == "agent"
+    assert selection.response_effort == (None if recording_fails else "high")
+    assert events[0]["payload"]["response_effort"] == selection.response_effort
 
 
 @pytest.mark.parametrize(

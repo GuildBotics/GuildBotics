@@ -10,7 +10,7 @@ from guildbotics.intelligences.decisions.models import (
 )
 
 QUESTION_VERSION = "chat-3"
-RULE_VERSION = "chat-4"
+RULE_VERSION = "chat-5"
 ADOPTION_VERSION = "jev-noul-0.4-0.6-choice-top-3/structured-1"
 
 _GUIDANCE = (
@@ -79,13 +79,21 @@ def select(
     )
     failed = bool(evaluation.error or malformed or not input_complete)
 
-    def agent(reason: str) -> Selection:
-        return Selection(route="agent", reason=reason)
-
     if failed:
-        return agent("invalid")
+        return Selection(route="agent", reason="invalid")
     # Each value was checked above before entering the three-valued algebra.
     truth = {key: cast(Truth, evaluation.answers[key].value) for key in _NOULS}
+    work = disjunction(*(truth[key] for key in WORK_QUESTIONS))
+
+    def agent(reason: str) -> Selection:
+        return Selection(
+            route="agent",
+            reason=reason,
+            response_effort=(
+                "high" if work == "true" else "default" if work == "false" else None
+            ),
+        )
+
     handoff = conjunction(
         truth["other_role_needed"],
         disjunction(negate(truth["handoff_done"]), truth["handoff_reopen"]),
@@ -98,7 +106,7 @@ def select(
     )
     reasons = (
         ("request", truth["pending_request"]),
-        ("work", disjunction(*(truth[key] for key in WORK_QUESTIONS))),
+        ("work", work),
         ("handoff", handoff),
         ("reply", reply),
     )

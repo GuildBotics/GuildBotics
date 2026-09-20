@@ -70,6 +70,7 @@ def test_thread_state_roundtrip(tmp_path):
         participants={"alice", "bob"},
         thread_topic="weekly AI news",
         latest_focus="business angle grounded in current-week items",
+        effort="high",
         backfill_disabled_reason="thread_not_found",
         backfill_error_count=EXPECTED_BACKFILL_ERROR_COUNT,
         last_backfill_error="thread_not_found",
@@ -93,6 +94,7 @@ def test_thread_state_roundtrip(tmp_path):
     assert loaded.participants == {"alice", "bob"}
     assert loaded.thread_topic == "weekly AI news"
     assert loaded.latest_focus == "business angle grounded in current-week items"
+    assert loaded.effort == "high"
     assert loaded.backfill_disabled_reason == "thread_not_found"
     assert loaded.backfill_error_count == EXPECTED_BACKFILL_ERROR_COUNT
     assert loaded.last_backfill_error == "thread_not_found"

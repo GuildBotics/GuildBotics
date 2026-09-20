@@ -33,13 +33,17 @@ def chat(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_effort", ["", "high"])
 @pytest.mark.parametrize(
     "route,reaction,visible", [("no-op", "", False), ("reaction-only", "support", True)]
 )
 async def test_fast_path_records_evidence_before_completing(
-    chat, monkeypatch, route, reaction, visible
+    chat, monkeypatch, route, reaction, visible, stored_effort
 ):
     context, store, service = chat
+    state = store.load_thread_state("slack", "alice", "C1", "100.1")
+    state.effort = stored_effort
+    store.save_thread_state("slack", "alice", "C1", "100.1", state)
     seen = []
 
     async def assess(state, *args, **kwargs):
@@ -58,6 +62,7 @@ async def test_fast_path_records_evidence_before_completing(
     assert ("chat_reaction" if visible else "chat_noop") in types
     state = store.load_thread_state("slack", "alice", "C1", "100.1")
     assert ("alice" in state.participants) == visible
+    assert state.effort == stored_effort
     assert "E1" in store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
     assert service.reactions == ([("C1", "100.1", reaction)] if visible else [])
 

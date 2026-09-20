@@ -52,6 +52,7 @@ class ThreadConversationState:
     backfill_disabled_reason: str = ""
     backfill_error_count: int = 0
     last_backfill_error: str = ""
+    effort: str = ""
 
 
 @dataclass(slots=True)
