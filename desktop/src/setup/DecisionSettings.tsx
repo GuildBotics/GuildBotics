@@ -3,6 +3,7 @@ import { Alert, Card, PasswordInput, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { getDecisionOptions, type ChatDecisionSelection } from "../api/client";
+import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
 
 export function DecisionSettings({
   personId,
@@ -92,6 +93,7 @@ export function DecisionSettings({
             <PasswordInput
               label={t("decision.key")}
               description={t("decision.keySaveHint")}
+              placeholder={options.data?.credential_present ? MASKED_SECRET_PLACEHOLDER : undefined}
               value={apiKey}
               onChange={(event) => onApiKeyChange(event.currentTarget.value)}
               autoComplete="off"

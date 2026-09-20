@@ -55,8 +55,11 @@ beforeEach(async () => {
 });
 
 it("shows credential input for the draft Jev selection without action buttons", async () => {
+  vi.mocked(getDecisionOptions).mockResolvedValue({ credential_present: true });
   const { onApiKeyChange } = mount("jev");
-  expect(await screen.findByText(t("decision.keyMissing"))).toBeInTheDocument();
+  expect(await screen.findByText(t("decision.keyPresent"))).toBeInTheDocument();
+  expect(screen.getByLabelText(t("decision.key"))).toHaveAttribute("placeholder", "••••••••••••");
+  expect(screen.getByLabelText(t("decision.key"))).toHaveValue("");
   expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /save|check/i })).not.toBeInTheDocument();
   await userEvent.type(screen.getByLabelText(t("decision.key")), "x");

@@ -1,5 +1,6 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
+import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
 import {
   Avatar,
   FileButton,
@@ -295,7 +296,6 @@ function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabl
 }
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "energetic"] as const;
 type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
-const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
