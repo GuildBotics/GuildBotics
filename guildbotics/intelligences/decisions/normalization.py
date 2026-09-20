@@ -7,7 +7,6 @@ from guildbotics.intelligences.decisions.models import Answer, Question
 
 NOUL_YES_THRESHOLD = 0.6
 NOUL_NO_THRESHOLD = 0.4
-CHOICE_THRESHOLD = 0.9
 
 
 def probability(value: Any) -> float:
@@ -58,9 +57,7 @@ def normalize(
                 if probabilities[choice] != max(probabilities.values()):
                     raise ValueError("contradictory_choice")
                 confidence = probability(item.get("confidence"))
-                value = (
-                    choice if probabilities[choice] >= CHOICE_THRESHOLD else "unknown"
-                )
+                value = choice
         else:
             value = item.get("value")
             permitted = (

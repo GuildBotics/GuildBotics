@@ -22,9 +22,9 @@ The corresponding file under `team/members/<person_id>/intelligences/` overrides
 
 After the existing mention and participation gates, the workflow evaluates the entire unread batch once, together with thread history, standing roles, character, handoffs, and recorded actions. Corrections and cancellations apply across the batch. Twelve independent yes/no questions cover context, unanswered requests, useful contribution, acknowledgment, repetition, social fit, handoffs, and effort. One Choice question selects `ack`, `agree`, `celebrate`, `support`, or `none` for the last non-self message in the batch.
 
-Jev Noul probabilities at or above `0.6` become true and at or below `0.4` become false. Values between those bounds remain unknown. A Choice is adopted only when the selected criterion's probability is at least `0.9`. Agno and AI CLI return explicit true, false, or unknown; their optional confidence is preserved as reported, without treating it as a Jev probability.
+Jev Noul probabilities at or above `0.6` become true and at or below `0.4` become false. Values between those bounds remain unknown. For Choice, the returned option with the highest probability is adopted without a probability or confidence threshold. The probabilities and confidence remain in the evaluation record. Agno and AI CLI return explicit true, false, or unknown; their optional confidence is preserved as reported, without treating it as a Jev probability.
 
-The current adoption version is `jev-noul-0.4-0.6-choice-0.9-2/structured-1`. After evaluating 48 new synthetic Japanese conversations beyond the initial eight cases, the Noul range was adopted provisionally for operational validation. Preventing missed obligations takes priority over avoiding unnecessary agent starts. If an unknown prevents establishing that no substantive response is needed, the agent runs. The Choice threshold is unchanged.
+The current adoption version is `jev-noul-0.4-0.6-choice-top-3/structured-1`. After evaluating 48 new synthetic Japanese conversations beyond the initial eight cases, the Noul range was adopted provisionally for operational validation. Preventing missed obligations takes priority over avoiding unnecessary agent starts. If a Noul unknown prevents establishing that no substantive response is needed, the agent runs. Choice only selects a reaction after the Noul rules allow it; it cannot cancel a required agent start.
 
 The shared questions preserve the response prompt's responsibilities:
 
@@ -45,7 +45,9 @@ The ordered rules are:
 2. An unresolved request or required work starts the response agent; unknown also does so.
 3. A missing role that still needs a handoff starts the response agent. Handoffs are considered per topic across the batch, including reasons to reopen them.
 4. A useful, non-repetitive substantive contribution starts the response agent. Social participation also requires character or role fit.
-5. Otherwise, a confident reaction is sent or a definite `none` completes without a visible action. An uncertain Choice starts the response agent.
+5. Otherwise, send the selected reaction, or complete without a visible action when `none` is selected. Jev uses the highest-probability option even when that probability is low. An explicit `unknown` from Agno or AI CLI still starts the response agent.
+
+For example, when Noul excludes any outstanding work or substantive response, an `ack` selected at probability `0.53` produces only an acknowledgment reaction. A document request still starts the agent even if Choice selects `celebrate` at `0.87`.
 
 Unknown values that cannot change a rule's result do not force escalation. Before a reaction or no-op completes, the workflow checks reception and rereads the thread for new messages or edits. Changed or unavailable input remains pending. Reactions record evidence and join the thread; a no-op does not join it. Repeated completion attempts reuse evidence, and an already-present Slack reaction counts as success.
 
@@ -94,7 +96,7 @@ Jev's context probabilities were 0.57–0.78, below the adoption threshold, so e
 These are individual observations, not an accuracy estimate. Costs were not returned and remain unknown; Jev made zero retries, while Agno's internal retry count was unavailable. No live chat action was performed. End-to-end reply latency, actual saved response-agent usage, long histories, and sustained production accuracy remain unmeasured. Claude's invocation and cleanup are covered by a stubbed environment test; a live CLI comparison was not run because the preview host lacked Documents access required by the existing environment readiness check.
 ### Thresholds and limits of the comparison
 
-The 0.1/0.9 cutoffs are the initial values specified in Issue #543; they were not calibrated for this use case. Jev thresholds the Noul probability of yes and the probability of the selected Choice option. Choice's distribution-derived `confidence` is recorded but is not the adoption threshold. Agno and AI CLI answers are structured assertions, with no numeric threshold. The shared questions and downstream rules therefore do **not** constitute a comparison at matched error rates. An Agno `true` assertion does not provide the same guarantee as a Jev probability above 0.9.
+The 0.1/0.9 cutoffs were the initial values specified in Issue #543; they were not calibrated for this use case. That evaluation applied thresholds to the Noul probability of yes and the probability of the selected Choice option. Choice's distribution-derived `confidence` was recorded but was not the adoption threshold. Agno and AI CLI answers are structured assertions, with no numeric threshold. The shared questions and downstream rules therefore do **not** constitute a comparison at matched error rates. An Agno `true` assertion does not provide the same guarantee as a Jev probability above 0.9.
 
 For the acknowledgment case, Jev returned context sufficiency 0.78, pending request 0.07, repository research 0.14, and a `support` reaction probability of 0.62. At the initial cutoffs, context became unknown and started the agent; relaxing that gate alone still left research and reaction uncertainty. Since Jev skipped no starts, its zero unsafe skips do not validate the safety of skipping.
 

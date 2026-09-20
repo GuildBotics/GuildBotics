@@ -25,7 +25,7 @@ from guildbotics.utils.secret_store import KeyringSecretStore
 
 
 def answers(**overrides):
-    values = {key: "false" for key in QUESTIONS}
+    values = dict.fromkeys(QUESTIONS, "false")
     values.update(context_sufficient="true", reaction="none")
     values.update(overrides)
     return Evaluation(
@@ -135,27 +135,80 @@ def test_jev_noul_thresholds(prob, value):
     assert answer.confidence is None
 
 
-@pytest.mark.parametrize(
-    "p,value", [(0.6, "unknown"), (0.899999, "unknown"), (0.9, "ack")]
-)
-def test_choice_uses_probability_not_confidence(p, value):
+@pytest.mark.parametrize("p", [0.2, 0.34, 0.6, 0.9])
+@pytest.mark.parametrize("choice", ["ack", "none"])
+def test_choice_adopts_top_option_without_a_confidence_threshold(p, choice):
     item = {
         "type": "choice",
-        "choice": "ack",
-        "confidence": 0.2,
+        "choice": choice,
+        "confidence": 0.0,
         "probabilities": {
-            "ack": p,
-            "agree": 1 - p,
-            "celebrate": 0,
-            "support": 0,
-            "none": 0,
+            key: p if key == choice else (1 - p) / 4
+            for key in QUESTIONS["reaction"].criteria
         },
     }
     answer = normalize(
         {"reaction": item}, {"reaction": QUESTIONS["reaction"]}, probabilistic=True
     )["reaction"]
-    assert answer.value == value
-    assert answer.confidence == 0.2
+    assert answer.value == choice
+    assert answer.probabilities == item["probabilities"]
+    assert answer.confidence == 0.0
+
+
+@pytest.mark.parametrize("choice", ["ack", "none"])
+@pytest.mark.parametrize(
+    "pending_request,needs_agent", [(0.1, False), (0.5, True), (0.9, True)]
+)
+def test_top_reaction_only_applies_after_noul_obligations_are_excluded(
+    choice, pending_request, needs_agent
+):
+    raw = {
+        key: {"type": "noul", "noul": 1.0 if key == "context_sufficient" else 0.0}
+        for key, question in QUESTIONS.items()
+        if question.type == "noul"
+    }
+    raw["pending_request"]["noul"] = pending_request
+    raw["reaction"] = {
+        "type": "choice",
+        "choice": choice,
+        "confidence": 0.1,
+        "probabilities": {
+            key: 0.34 if key == choice else 0.165
+            for key in QUESTIONS["reaction"].criteria
+        },
+    }
+    result = select(
+        Evaluation(answers=normalize(raw, QUESTIONS, probabilistic=True)),
+        participation="strict",
+    )
+    if needs_agent:
+        assert (result.route, result.reason) == ("agent", "2.request")
+    elif choice == "none":
+        assert result.route == "no-op"
+    else:
+        assert (result.route, result.reaction) == ("reaction-only", choice)
+
+
+def test_choice_rejects_an_option_below_the_maximum_probability():
+    with pytest.raises(ValueError, match="contradictory_choice"):
+        normalize(
+            {
+                "q": {
+                    "type": "choice",
+                    "choice": "ack",
+                    "confidence": 0.1,
+                    "probabilities": {"ack": 0.4, "none": 0.6},
+                }
+            },
+            {
+                "q": Question(
+                    type="choice",
+                    instructions="reaction",
+                    criteria={"ack": "Receipt", "none": "No reaction"},
+                )
+            },
+            probabilistic=True,
+        )
 
 
 @pytest.mark.parametrize(

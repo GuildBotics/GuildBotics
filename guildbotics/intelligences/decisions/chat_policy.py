@@ -11,7 +11,7 @@ from guildbotics.intelligences.decisions.models import (
 
 QUESTION_VERSION = "chat-1"
 RULE_VERSION = "chat-1"
-ADOPTION_VERSION = "jev-noul-0.4-0.6-choice-0.9-2/structured-1"
+ADOPTION_VERSION = "jev-noul-0.4-0.6-choice-top-3/structured-1"
 
 _GUIDANCE = (
     "Evaluate the entire unprocessed batch and conversation history independently, "
