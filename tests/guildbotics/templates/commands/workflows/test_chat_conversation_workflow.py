@@ -98,8 +98,9 @@ def _judgment_engine(monkeypatch):
         ctx.assessments.append(state)
         effort = (
             "high"
+            if state.get("previous_effort") == "high"
+            else "default"
             if isinstance(ctx.assessed_effort, Exception)
-            or state.get("previous_effort") == "high"
             else ctx.assessed_effort
         )
         return Selection(route="agent", effort=effort, reason="2.request"), "a" * 32
@@ -1565,14 +1566,15 @@ async def test_a_corrupted_stored_effort_is_ignored_not_fatal(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_a_failed_assessment_uses_high_effort(tmp_path, monkeypatch):
+async def test_a_failed_assessment_uses_default_effort(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.assessed_effort = RuntimeError("no API key")
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
-    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
+    assert _agent_invocations(ctx)[0][1]["effort"] == "default"
+    assert _stored_effort(state_store) == "default"
 
 
 @pytest.mark.asyncio

@@ -201,7 +201,7 @@ async def test_failed_judgment_and_failed_agent_remain_pending_on_final_attempt(
     async def assess(*args, **kwargs):
         return Selection(
             route="agent",
-            effort="high",
+            effort="default",
             reason="1.invalid",
             effort_reason="effort.failure",
         ), "f" * 32

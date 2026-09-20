@@ -10,7 +10,7 @@ from guildbotics.intelligences.decisions.models import (
 )
 
 QUESTION_VERSION = "chat-1"
-RULE_VERSION = "chat-1"
+RULE_VERSION = "chat-2"
 ADOPTION_VERSION = "jev-noul-0.4-0.6-choice-top-3/structured-1"
 
 _GUIDANCE = (
@@ -91,7 +91,11 @@ def select(
         if "unknown" in high
         else "effort.default"
     )
-    effort = "default" if effort_reason == "effort.default" else "high"
+    effort = (
+        "high"
+        if effort_reason in {"effort.preserved", "effort.required"}
+        else "default"
+    )
 
     def agent(reason: str) -> Selection:
         return Selection(

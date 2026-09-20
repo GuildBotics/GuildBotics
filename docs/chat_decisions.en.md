@@ -56,7 +56,7 @@ For example, when Noul excludes any outstanding work or substantive response, an
 
 Unknown values that cannot change a rule's result do not force escalation. Before a reaction or no-op completes, the workflow checks reception and rereads the thread for new messages or edits. Changed or unavailable input remains pending. Reactions record evidence and join the thread; a no-op does not join it. Repeated completion attempts reuse evidence, and an already-present Slack reaction counts as success.
 
-The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. File changes, repository investigation, or a repository-guideline-dependent decision require high effort. All three false values use default effort; an unknown or failed effort judgment uses high. An existing high effort is preserved. A reaction or no-op does not promote effort. Unconfigured, unavailable, malformed, or failed judgment falls back to the response agent with high effort; if that response cannot run, the batch remains pending.
+The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. A valid judgment uses high effort when any of the conditions for file changes, repository investigation, or a repository-guideline-dependent decision is true. Otherwise, including unknown or failed judgment, it uses default effort. An existing high effort is preserved. A reaction or no-op does not promote effort. Unconfigured, unavailable, malformed, or failed judgment still falls back to the response agent; if that response cannot run, the batch remains pending.
 
 ## Inspect and replay
 

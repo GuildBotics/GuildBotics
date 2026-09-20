@@ -91,7 +91,13 @@ def answers(**overrides):
         ({"reaction": "unknown"}, "strict", "agent", "default"),
         ({"role_contribution": "unknown", "ack_only": "true"}, "strict", "no-op", ""),
         ({"role_contribution": "unknown"}, "strict", "agent", "default"),
-        ({"effort_repo_decision": "unknown"}, "strict", "agent", "high"),
+        ({"effort_repo_decision": "unknown"}, "strict", "agent", "default"),
+        (
+            {"effort_files": "true", "effort_repo_decision": "unknown"},
+            "strict",
+            "agent",
+            "high",
+        ),
     ],
 )
 def test_adoption(changes, participation, route, effort):
@@ -234,11 +240,30 @@ def test_self_reported_confidence_does_not_change_assertion():
     assert answer.provenance == "structured_assertion"
 
 
-def test_failure_and_existing_high():
-    assert (
-        select(Evaluation(error="failed"), participation="strict").effort_reason
-        == "effort.failure"
+@pytest.mark.parametrize("previous_effort", ["", "high"])
+@pytest.mark.parametrize("failure", ["error", "malformed", "incomplete"])
+def test_failed_judgment_delegates_without_promoting_effort(previous_effort, failure):
+    evaluation = (
+        Evaluation(error="failed")
+        if failure == "error"
+        else Evaluation()
+        if failure == "malformed"
+        else answers(effort_files="true")
     )
+    result = select(
+        evaluation,
+        participation="strict",
+        previous_effort=previous_effort,
+        input_complete=failure != "incomplete",
+    )
+    assert result.route == "agent"
+    assert result.effort == ("high" if previous_effort == "high" else "default")
+    assert result.effort_reason == (
+        "effort.preserved" if previous_effort == "high" else "effort.failure"
+    )
+
+
+def test_existing_high_is_preserved_only_for_agent_routes():
     result = select(
         answers(pending_request="true"), participation="strict", previous_effort="high"
     )
@@ -299,7 +324,7 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
         logger=logging.getLogger(),
     )
     assert result.route == "agent"
-    assert result.effort == "high"
+    assert result.effort == "default"
 
 
 def test_generic_choice_is_not_restricted_to_chat_reactions():

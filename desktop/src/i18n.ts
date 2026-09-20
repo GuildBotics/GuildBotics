@@ -23,7 +23,7 @@ const resources = {
         keyMissing: "Jev key not registered.",
         failed: "Could not load or save. Retry; the current selection is preserved.",
         fallback:
-          "If judgment fails, the response agent decides with high effort. No other judgment engine is selected automatically.",
+          "If judgment fails, the response agent decides. No other judgment engine is selected automatically.",
       },
       app: {
         nav: {
@@ -2075,7 +2075,7 @@ const resources = {
         keyMissing: "Jev のキーは未登録です。",
         failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
         fallback:
-          "判定に失敗した場合は、対応エージェントに high effort で判断を委ねます。別の判断エンジンへ自動で切り替えません。",
+          "判定に失敗した場合は、対応エージェントに判断を委ねます。別の判断エンジンへ自動で切り替えません。",
       },
       app: {
         nav: {
