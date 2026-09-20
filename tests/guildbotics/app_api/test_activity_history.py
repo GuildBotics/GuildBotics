@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from guildbotics.app_api.activity_history import (
     build_activity_history,
     run_subject_id,
@@ -345,9 +347,13 @@ def test_worked_pull_request_titles_and_links_the_session() -> None:
     ]
 
 
-def test_the_first_recorded_target_names_the_session_like_the_execution_list() -> None:
-    # Both screens fold attributes first-seen: a later, different target must
-    # not overtake the one the trace started on.
+@pytest.mark.parametrize("append_order", ["chronological", "reversed"])
+def test_the_first_recorded_target_names_the_session_like_the_execution_list(
+    append_order: str,
+) -> None:
+    # Both screens read attributes from the records in timestamp order: a
+    # later, different target must not overtake the one the trace started on,
+    # however the records were appended (they come from several processes).
     second = _work_target_record("")
     second["timestamp"] = "2026-07-01T10:02:00+00:00"
     second["attributes"] = {
@@ -357,7 +363,10 @@ def test_the_first_recorded_target_names_the_session_like_the_execution_list() -
         "github.url": "https://github.com/o/r/issues/9",
         "github.title": "A later, different item",
     }
-    session = _session(_chat_records() + [_work_target_record(""), second])
+    targets = [_work_target_record(""), second]
+    if append_order == "reversed":
+        targets.reverse()
+    session = _session(_chat_records() + targets)
     assert session.title == "Copilot の利用枠を表示する"
     assert [(link.kind, link.label) for link in session.links] == [
         ("pull_request", "PR #528"),

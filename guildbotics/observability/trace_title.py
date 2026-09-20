@@ -41,24 +41,20 @@ def is_read_only_record(item: Mapping[str, Any]) -> bool:
     return isinstance(attributes, Mapping) and is_read_only_action(attributes)
 
 
-def merge_first_seen(merged: dict[str, Any], item: Mapping[str, Any]) -> None:
-    """Fold ``item``'s attributes into ``merged``; the first recorded value wins.
-
-    This is the one merge rule behind "a trace names its first target": the
-    execution list folds records one at a time and the activity timeline holds
-    a whole trace, so both call this rather than each choosing an order.
-    """
-    attributes = item.get("attributes")
-    if isinstance(attributes, Mapping):
-        for key, value in attributes.items():
-            merged.setdefault(key, value)
-
-
 def first_seen_attributes(records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Return the first-seen merge of every record's attributes, in order."""
+    """Return the trace's attributes: for each key, the earliest recorded value.
+
+    This is the one merge behind "a trace names its first target". Both
+    screens call it on the trace's records in timestamp order -- never on the
+    order records happened to be appended, which differs across the processes
+    (workflow, member CLI) that write into one trace.
+    """
     merged: dict[str, Any] = {}
     for item in records:
-        merge_first_seen(merged, item)
+        attributes = item.get("attributes")
+        if isinstance(attributes, Mapping):
+            for key, value in attributes.items():
+                merged.setdefault(key, value)
     return merged
 
 

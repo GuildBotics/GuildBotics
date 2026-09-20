@@ -18,7 +18,7 @@ from guildbotics.observability.session_transcripts import (
 )
 from guildbotics.observability.trace_status import TraceStatus
 from guildbotics.observability.trace_title import (
-    merge_first_seen,
+    first_seen_attributes,
     resolve_trace_title,
 )
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
@@ -223,22 +223,22 @@ class DiagnosticsStore:
                 continue
             summary = summaries.setdefault(trace_id, _new_summary(trace_id))
             _accumulate(summary, item)
-        result = [
-            _finalize_summary(summary, completion_summary)
-            for summary in summaries.values()
-            if _summary_matches(summary, source, person_id, query, attr_key, attr_value)
-            or (
+        result = []
+        for summary in summaries.values():
+            finalized, text = _finalize_summary(summary, completion_summary)
+            if _summary_matches(
+                finalized, text, source, person_id, query, attr_key, attr_value
+            ) or (
                 include_transcripts
                 and query
                 and _summary_matches(
-                    summary, source, person_id, None, attr_key, attr_value
+                    finalized, text, source, person_id, None, attr_key, attr_value
                 )
-                and self._transcript_contains(summary["trace_id"], query)
-            )
-        ]
+                and self._transcript_contains(finalized["trace_id"], query)
+            ):
+                result.append(finalized)
         if source is None and person_id is None and attr_key is None:
             result.extend(_system_summaries(records, query=query, include_latest=False))
-        # _summary_matches reads "_text" before _finalize_summary drops it.
         result.sort(
             key=lambda summary: _timestamp_sort_key(summary["started_at"]), reverse=True
         )
@@ -310,7 +310,7 @@ class DiagnosticsStore:
         for item in records:
             found = True
             _accumulate(summary, item)
-        return _finalize_summary(summary, completion_summary) if found else None
+        return _finalize_summary(summary, completion_summary)[0] if found else None
 
     def global_records(self, *, limit: int = 200) -> list[dict[str, Any]]:
         """Return records from the most recent system session."""
@@ -605,7 +605,6 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     for key in ("source", "person_id", "command", "workflow"):
         if not summary[key] and item.get(key):
             summary[key] = str(item.get(key))
-    merge_first_seen(summary["attributes"], item)
     span_id = item.get("span_id")
     if span_id:
         summary["_spans"].add(span_id)
@@ -644,16 +643,24 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
 
 def _finalize_summary(
     summary: dict[str, Any], completion_summary: CompletionSummary | None = None
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[str]]:
+    """Return the public summary and the text a free-text query searches.
+
+    Attributes and title are derived here from the records in timestamp
+    order, the same input the activity timeline uses, rather than folded in
+    append order: records of one trace arrive from several processes, so
+    append order is not the order things happened.
+    """
     summary = dict(summary)
     summary["span_count"] = max(summary["span_count"], len(summary.pop("_spans")))
-    summary.pop("_text", None)
+    text = summary.pop("_text")
     summary.pop("_started_at_key", None)
     summary.pop("_updated_at_key", None)
     summary["status"] = summary.pop("_status").resolve()
     if not summary["started_at"]:
         summary["started_at"] = summary["updated_at"]
     records = sorted(summary.pop("_records"), key=_record_timestamp_sort_key)
+    summary["attributes"] = first_seen_attributes(records)
     summary["title"] = resolve_trace_title(
         records,
         summary["attributes"],
@@ -666,7 +673,7 @@ def _finalize_summary(
         ),
         fallback=summary["trace_id"],
     )
-    return summary
+    return summary, text
 
 
 def _record_timestamp_sort_key(item: dict[str, Any]) -> tuple[float, str]:
@@ -682,6 +689,7 @@ def _timestamp_sort_key(timestamp: str) -> tuple[float, str]:
 
 def _summary_matches(
     summary: dict[str, Any],
+    text: list[str],
     source: str | None,
     person_id: str | None,
     query: str | None,
@@ -710,7 +718,7 @@ def _summary_matches(
                 summary["command"],
                 summary["workflow"],
                 json.dumps(summary["attributes"], ensure_ascii=False, default=str),
-                " ".join(str(text) for text in summary.get("_text", [])),
+                " ".join(str(item) for item in text),
             ]
         ).lower()
         if needle not in haystack:
@@ -746,9 +754,9 @@ def _system_summaries(
     for session_id, summary in summaries.items():
         if session_id == latest and not include_latest:
             continue
-        if query and not _summary_matches(summary, None, None, query, None, None):
+        finalized, text = _finalize_summary(summary)
+        if query and not _summary_matches(finalized, text, None, None, query):
             continue
-        finalized = _finalize_summary(summary)
         if session_id not in finished and session_id != latest:
             # The process died before it could record ``system.finished``.
             finalized["status"] = "interrupted"
