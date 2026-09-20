@@ -383,10 +383,8 @@ export function systemAlertMessage(t: TFunction, alert: SystemAlert) {
 
 export function systemAlertSetupTarget(alert: SystemAlert): string {
   if (alert.code === "agent_environment_unavailable" && alert.setting === "declaration") {
-    // The shared declaration is edited in the advanced intelligence settings.
     const search = new URLSearchParams({
-      section: "intelligence",
-      advanced: "intelligence",
+      section: "environment",
       focus: "agent-environment-declaration",
     });
     return `/setup?${search.toString()}`;
@@ -395,11 +393,8 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
     alert.code === "agent_environment_slot_blocked" ||
     (alert.code === "agent_environment_unavailable" && alert.setting === "filesystem")
   ) {
-    // A grant problem sits in the workspace's directory cards under the
-    // advanced intelligence settings.
     const search = new URLSearchParams({
-      section: "intelligence",
-      advanced: "intelligence",
+      section: "environment",
       focus: "grants-device",
     });
     return `/setup?${search.toString()}`;
@@ -420,7 +415,7 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
             alert.setting === "image"
           ? `agent-environment-${alert.code === "agent_environment_image_differs" ? "image" : alert.setting}`
           : "agent-environment-snapshot";
-    return `/setup?${new URLSearchParams({ section: "intelligence", focus }).toString()}`;
+    return `/setup?${new URLSearchParams({ section: "environment", focus }).toString()}`;
   }
   if (alert.code !== "credential_github" || !alert.person_id) {
     return "/setup";

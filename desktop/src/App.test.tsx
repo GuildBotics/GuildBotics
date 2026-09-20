@@ -297,8 +297,7 @@ describe("App", () => {
       reason: "x",
       actions: ["setup" as const],
     };
-    // The device: the row of the environment card that is the problem, or
-    // the declaration card in the advanced settings.
+    // Every environment repair target lives on the dedicated environment page.
     const device = (
       setting: "runtime" | "declaration" | "image" | "snapshot" | "building" | "filesystem",
     ) =>
@@ -310,15 +309,13 @@ describe("App", () => {
         command: "",
         setting,
       });
-    expect(device("runtime")).toBe("/setup?section=intelligence&focus=agent-environment-runtime");
-    expect(device("image")).toBe("/setup?section=intelligence&focus=agent-environment-image");
-    expect(device("snapshot")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
-    expect(device("building")).toBe("/setup?section=intelligence&focus=agent-environment-snapshot");
-    expect(device("filesystem")).toBe(
-      "/setup?section=intelligence&advanced=intelligence&focus=grants-device",
-    );
+    expect(device("runtime")).toBe("/setup?section=environment&focus=agent-environment-runtime");
+    expect(device("image")).toBe("/setup?section=environment&focus=agent-environment-image");
+    expect(device("snapshot")).toBe("/setup?section=environment&focus=agent-environment-snapshot");
+    expect(device("building")).toBe("/setup?section=environment&focus=agent-environment-snapshot");
+    expect(device("filesystem")).toBe("/setup?section=environment&focus=grants-device");
     expect(device("declaration")).toBe(
-      "/setup?section=intelligence&advanced=intelligence&focus=agent-environment-declaration",
+      "/setup?section=environment&focus=agent-environment-declaration",
     );
     // Turns run on an image the declaration did not name: the image row.
     expect(
@@ -330,7 +327,7 @@ describe("App", () => {
         command: "",
         setting: "image_differs",
       }),
-    ).toBe("/setup?section=intelligence&focus=agent-environment-image");
+    ).toBe("/setup?section=environment&focus=agent-environment-image");
     // One tool: its own row in the card.
     expect(
       systemAlertSetupTarget({
@@ -341,7 +338,7 @@ describe("App", () => {
         command: "codex",
         setting: "tool",
       }),
-    ).toBe("/setup?section=intelligence&focus=agent-environment-tool-codex");
+    ).toBe("/setup?section=environment&focus=agent-environment-tool-codex");
     // A member's slot over a grant: the directory cards in the advanced settings.
     expect(
       systemAlertSetupTarget({
@@ -352,7 +349,7 @@ describe("App", () => {
         command: "default",
         setting: "grants",
       }),
-    ).toBe("/setup?section=intelligence&advanced=intelligence&focus=grants-device");
+    ).toBe("/setup?section=environment&focus=grants-device");
   });
 
   it("tells the person what to do about a device alert, by the part that is wrong", () => {

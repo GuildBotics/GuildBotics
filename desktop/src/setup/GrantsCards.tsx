@@ -62,19 +62,56 @@ export function GrantsCards({
   const prefillFor = (card: string) => (prefill?.card === card ? prefill.path : undefined);
   return (
     <>
-      <DocumentsCard
-        documents={shared.documents}
+      <WorkspaceDirectoriesCard
+        shared={shared}
         status={status}
-        initialPath={prefillFor("grants-documents")}
-        onChange={(documents) => onSharedChange({ ...shared, documents })}
+        prefill={prefillFor("grants-documents")}
+        onChange={onSharedChange}
       />
-      <DeviceAccessCard
+      <DeviceDirectoriesCard
         local={local}
         status={status}
-        initialPath={prefillFor("grants-device")}
+        prefill={prefillFor("grants-device")}
         onChange={onLocalChange}
       />
     </>
+  );
+}
+
+export function WorkspaceDirectoriesCard({
+  shared,
+  status,
+  prefill,
+  onChange,
+}: {
+  shared: SharedGrants;
+  status?: EnvironmentAccessStatus;
+  prefill?: string;
+  onChange: (shared: SharedGrants) => void;
+}) {
+  return (
+    <DocumentsCard
+      documents={shared.documents}
+      status={status}
+      initialPath={prefill}
+      onChange={(documents) => onChange({ ...shared, documents })}
+    />
+  );
+}
+
+export function DeviceDirectoriesCard({
+  local,
+  status,
+  prefill,
+  onChange,
+}: {
+  local: LocalGrants;
+  status?: EnvironmentAccessStatus;
+  prefill?: string;
+  onChange: (local: LocalGrants) => void;
+}) {
+  return (
+    <DeviceAccessCard local={local} status={status} initialPath={prefill} onChange={onChange} />
   );
 }
 

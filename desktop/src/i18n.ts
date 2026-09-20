@@ -417,10 +417,10 @@ const resources = {
           runtime:
             'This device cannot host the isolated agent environment; see "What You Need" in the README.',
           declaration:
-            'Fix the "Environment declaration" in the advanced settings, then build again.',
+            'Fix the "Environment declaration" under "Agent execution environment", then build again.',
           image:
-            'Load the declared base image on this device with the command on the "Isolated agent environment" card in the settings.',
-          snapshot: 'Press "Build" on the "Isolated agent environment" card in the settings.',
+            'Load the declared base image on this device with the command under "Agent execution environment".',
+          snapshot: 'Press "Build" under "Agent execution environment".',
         },
         actions: {
           diagnostics: "Run diagnostics",
@@ -852,6 +852,7 @@ const resources = {
           groupMachine: "This machine",
           project: "Project",
           intelligence: "LLM / AI CLI tools",
+          environment: "Agent execution environment",
           members: "Members",
           github: "GitHub",
           shortcuts: "Shortcuts",
@@ -914,6 +915,7 @@ const resources = {
             "This tool is not available in the isolated agent environment yet.",
           cliHint:
             "AI CLI tools run inside the isolated agent environment. Log in to the selected tool on every device that runs turns.",
+          openEnvironment: "Check in Agent execution environment",
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
             "Shows whether each AI CLI tool has the bundled GuildBotics skill installed.",
@@ -1125,6 +1127,34 @@ const resources = {
           effortJsonDescription:
             'One block per effort level, e.g. {"high": {"reasoning_effort": "high"}}. Only low and high can be mapped: "default" means no intervention, so a mapping for it is rejected.',
           effortJsonError: "Enter a JSON object keyed by effort level.",
+        },
+        agentEnvironment: {
+          title: "Agent execution environment",
+          subtitle:
+            "See the effective environment formed by workspace-wide declarations and this device's state and access settings.",
+          scope: {
+            workspace: "Workspace-wide",
+            device: "This device",
+          },
+          currentDevice: {
+            title: "Current device readiness",
+            description:
+              "Runtime, base image, snapshot, and tool login state on this device. Refresh, Build, and terminal login commands take effect immediately and are not part of Save.",
+          },
+          workspace: {
+            title: "Workspace-wide settings",
+            description:
+              "The environment declaration and shared directory access apply to every device after you save them.",
+          },
+          device: {
+            title: "Settings for this device only",
+            description:
+              "Additional and denied directory access stays on this device and is never synchronized.",
+          },
+          loading: "Loading environment settings...",
+          loadError: "Failed to load environment settings",
+          saveError: "Failed to save environment settings",
+          declarationMissing: "The environment declaration is unavailable",
         },
         members: {
           avatar: {
@@ -2471,10 +2501,11 @@ const resources = {
         environmentFix: {
           runtime:
             "この端末ではエージェント隔離環境を用意できません。README の「必要なもの」を確認してください。",
-          declaration: "詳細設定の「環境の宣言」を直してから、もう一度ビルドしてください。",
+          declaration:
+            "「エージェント実行環境」の「環境の宣言」を直してから、もう一度ビルドしてください。",
           image:
-            "設定の「エージェント隔離環境」カードに表示されるコマンドで、宣言されたベースイメージをこの端末に読み込んでください。",
-          snapshot: "設定の「エージェント隔離環境」カードで「ビルド」を押してください。",
+            "「エージェント実行環境」に表示されるコマンドで、宣言されたベースイメージをこの端末に読み込んでください。",
+          snapshot: "「エージェント実行環境」で「ビルド」を押してください。",
         },
         actions: {
           diagnostics: "診断を実行",
@@ -2594,6 +2625,7 @@ const resources = {
           groupMachine: "このマシン",
           project: "プロジェクト",
           intelligence: "LLM・AI CLIツール",
+          environment: "エージェント実行環境",
           members: "メンバー",
           github: "GitHub",
           shortcuts: "ショートカット",
@@ -2654,6 +2686,7 @@ const resources = {
           toolNotProvisionedTooltip: "このツールはまだエージェント隔離環境に導入できません。",
           cliHint:
             "AI CLIツールはエージェント隔離環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
+          openEnvironment: "エージェント実行環境で確認",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
             "各AI CLIツールに同梱版のGuildBoticsスキルが適用されているかを表示します。",
@@ -2867,6 +2900,33 @@ const resources = {
           effortJsonDescription:
             'エフォートレベルごとに1ブロックを記述します（例: {"high": {"reasoning_effort": "high"}}）。指定できるのは low と high のみです。"default" は介入しないという意味なので、記述するとエラーになります。',
           effortJsonError: "エフォートレベルをキーとするJSONオブジェクトを入力してください。",
+        },
+        agentEnvironment: {
+          title: "エージェント実行環境",
+          subtitle:
+            "ワークスペース共通の宣言と、この端末の状態・アクセス設定を合成した実際の実行環境を確認します。",
+          scope: {
+            workspace: "ワークスペース共通",
+            device: "この端末",
+          },
+          currentDevice: {
+            title: "現在の端末の準備状態",
+            description:
+              "この端末のランタイム、ベースイメージ、snapshot、ツールのログイン状態です。更新、ビルド、ターミナルでのログインは即時に反映され、「保存」には含まれません。",
+          },
+          workspace: {
+            title: "ワークスペース共通設定",
+            description:
+              "環境の宣言と共通ディレクトリアクセスは、保存後にすべての端末へ適用されます。",
+          },
+          device: {
+            title: "この端末だけの設定",
+            description: "追加・禁止ディレクトリアクセスはこの端末だけに保存され、同期されません。",
+          },
+          loading: "実行環境の設定を読み込み中...",
+          loadError: "実行環境の設定を読み込めませんでした",
+          saveError: "実行環境の設定を保存できませんでした",
+          declarationMissing: "環境の宣言を取得できません",
         },
         members: {
           avatar: {
