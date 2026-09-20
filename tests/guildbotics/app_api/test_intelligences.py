@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.app_api import intelligences as intelligences_module
-from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.app_api.intelligences import (
     AGNO_BRAIN_CLASS,
     CLI_BRAIN_CLASS,
@@ -19,11 +18,7 @@ from guildbotics.app_api.models import (
     ModelDefinition,
 )
 from guildbotics.editions.simple import simple_brain_factory
-from guildbotics.intelligences.brains import agno_agent, cli_agent
-from guildbotics.intelligences.agent_environment.toolchain import (
-    DnsSettings,
-    ToolchainDeclaration,
-)
+from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.intelligences.agent_environment.contract import (
     DocumentGrant,
     LocalGrants,
@@ -31,6 +26,11 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     SharedGrants,
 )
+from guildbotics.intelligences.agent_environment.toolchain import (
+    DnsSettings,
+    ToolchainDeclaration,
+)
+from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yaml_file
 
 
@@ -402,6 +402,43 @@ def test_team_update_writes_all_files(tmp_path: Path) -> None:
     assert brain_data["agent"] == {
         "class": CLI_BRAIN_CLASS,
         "args": {"cli_agent": "codex"},
+    }
+
+
+def test_team_environment_update_preserves_all_intelligence_settings(
+    tmp_path: Path,
+) -> None:
+    """A partial environment save leaves every omitted intelligence field intact."""
+    service = IntelligenceConfigService()
+    service.update_config(_team_update_request(tmp_path))
+    base = _team_intelligences(tmp_path)
+    intelligence_files = [
+        base / "model_mapping.yml",
+        base / "models/openai/gpt.yml",
+        base / "cli_agent_mapping.yml",
+        base / "cli_agents/codex/default.yml",
+        base / "brain_mapping.yml",
+    ]
+    before = {path: path.read_bytes() for path in intelligence_files}
+
+    result = service.update_config(
+        IntelligenceConfigUpdateRequest(
+            config_dir=tmp_path,
+            filesystem_grants=SharedGrants(
+                documents=[DocumentGrant(path="Projects/out", access="read_write")]
+            ),
+            local_grants=LocalGrants(
+                paths=[LocalPathGrant(path=".cache/uv", access="read_write")]
+            ),
+            agent_environment=ToolchainDeclaration(dns=DnsSettings(nameservers="host")),
+        )
+    )
+
+    assert {path: path.read_bytes() for path in intelligence_files} == before
+    assert {item.path for item in result.files} == {
+        tmp_path / "intelligences/cli_agent_filesystem_grants.yml",
+        tmp_path.parent / "local/cli_agent_filesystem_grants.yml",
+        tmp_path / "intelligences/agent_environment.yml",
     }
 
 
@@ -1144,11 +1181,16 @@ def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(
     does not mention it must carry it through instead of dropping it.
     """
     base = _team_intelligences(tmp_path)
+    temperature = 0.5
     _write_yaml(
         base / "models/openai/gpt.yml",
         {
             "model_class": "old.Class",
-            "parameters": {"id": "old", "temperature": 0.5, "reasoning_effort": "low"},
+            "parameters": {
+                "id": "old",
+                "temperature": temperature,
+                "reasoning_effort": "low",
+            },
         },
     )
 
@@ -1168,7 +1210,7 @@ def test_a_hand_tuned_setting_the_editor_never_shows_survives_a_save(
     )
 
     written = load_yaml_file(base / "models/openai/gpt.yml")["parameters"]
-    assert written["temperature"] == 0.5
+    assert written["temperature"] == temperature
     assert written["id"] == "new"
     # `reasoning_effort` is described, so its absence from the request clears it.
     assert "reasoning_effort" not in written
@@ -1256,14 +1298,16 @@ def test_read_config_returns_no_shared_grants_when_no_file_exists(
 
 def test_read_config_returns_the_declaration_or_the_template(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
+    expected_memory_mib = 4096
+    expected_cpus = 2
     _write_team_config(config_dir)
 
     response = IntelligenceConfigService().read_config(config_dir=config_dir)
     # Without a file of its own the workspace inherits the packaged declaration.
     assert response.agent_environment is not None
     assert response.agent_environment.dns.nameservers == ["1.1.1.1", "8.8.8.8"]
-    assert response.agent_environment.resources.memory_mib == 4096
-    assert response.agent_environment.resources.cpus == 2
+    assert response.agent_environment.resources.memory_mib == expected_memory_mib
+    assert response.agent_environment.resources.cpus == expected_cpus
     assert response.agent_environment.network.mode == "allowlist"
 
     _write_yaml(

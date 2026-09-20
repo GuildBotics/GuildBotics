@@ -415,7 +415,7 @@ const resources = {
         },
         environmentFix: {
           runtime:
-            'This device cannot host the isolated agent environment; see "What You Need" in the README.',
+            'This device cannot host the agent execution environment; see "What You Need" in the README.',
           declaration:
             'Fix the "Environment declaration" under "Agent execution environment", then build again.',
           image:
@@ -912,9 +912,9 @@ const resources = {
           apiKeyRequiredBody:
             "Set the API key of the selected LLM provider with its key button. This section stays incomplete until the key is set.",
           toolNotProvisionedTooltip:
-            "This tool is not available in the isolated agent environment yet.",
+            "This tool is not available in the agent execution environment yet.",
           cliHint:
-            "AI CLI tools run inside the isolated agent environment. Log in to the selected tool on every device that runs turns.",
+            "AI CLI tools run inside the agent execution environment. Log in to the selected tool on every device that runs turns.",
           openEnvironment: "Check in Agent execution environment",
           skillStatusTitle: "GuildBotics skill",
           skillStatusDescription:
@@ -964,7 +964,7 @@ const resources = {
             allowLocalNetwork: "Allow localhost and LAN",
           },
           environment: {
-            title: "Isolated agent environment",
+            title: "Agent execution environment",
             description:
               "Every AI CLI turn of this workspace runs inside an isolated environment built on this device from the shared declaration. Build it here; logging in to a tool is done from a terminal.",
             runtime: "Runtime",
@@ -1933,7 +1933,7 @@ const resources = {
         inputFileDropActive: "Drop to insert the file path",
         inputFileSaving: "Saving the file…",
         inputFileSaveError: "Could not save the file: {{message}}",
-        inputPathUnreachable: "The isolated agent environment cannot reach:",
+        inputPathUnreachable: "The agent execution environment cannot reach:",
         inputPathCopy: "Hand over a copy",
         inputPathGrant: "Allow this folder",
         inputPathDismiss: "Do not use this file",
@@ -2500,7 +2500,7 @@ const resources = {
         },
         environmentFix: {
           runtime:
-            "この端末ではエージェント隔離環境を用意できません。README の「必要なもの」を確認してください。",
+            "この端末ではエージェント実行環境を用意できません。README の「必要なもの」を確認してください。",
           declaration:
             "「エージェント実行環境」の「環境の宣言」を直してから、もう一度ビルドしてください。",
           image:
@@ -2683,9 +2683,9 @@ const resources = {
           apiKeyRequiredTitle: "APIキーが必要です",
           apiKeyRequiredBody:
             "選択中の LLM プロバイダのAPIキーを、キーのボタンから設定してください。設定するまでこのセクションは未完了のままです。",
-          toolNotProvisionedTooltip: "このツールはまだエージェント隔離環境に導入できません。",
+          toolNotProvisionedTooltip: "このツールはまだエージェント実行環境に導入できません。",
           cliHint:
-            "AI CLIツールはエージェント隔離環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
+            "AI CLIツールはエージェント実行環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
           openEnvironment: "エージェント実行環境で確認",
           skillStatusTitle: "GuildBoticsスキル",
           skillStatusDescription:
@@ -2736,7 +2736,7 @@ const resources = {
             allowLocalNetwork: "localhost と LAN への接続を許可",
           },
           environment: {
-            title: "エージェント隔離環境",
+            title: "エージェント実行環境",
             description:
               "このワークスペースの AI CLI の turn はすべて、共有の宣言からこの端末でビルドした隔離環境の中で実行します。ビルドはここから行い、ツールへのログインはターミナルで行います。",
             runtime: "ランタイム",
@@ -4028,7 +4028,7 @@ const resources = {
         inputFileDropActive: "ドロップしてファイルパスを挿入",
         inputFileSaving: "ファイルを保存しています…",
         inputFileSaveError: "ファイルを保存できませんでした: {{message}}",
-        inputPathUnreachable: "エージェント隔離環境から届きません:",
+        inputPathUnreachable: "エージェント実行環境から届きません:",
         inputPathCopy: "コピーを渡す",
         inputPathGrant: "このフォルダを許可する",
         inputPathDismiss: "このファイルは使わない",

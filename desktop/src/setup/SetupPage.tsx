@@ -144,7 +144,7 @@ import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
-import { DeviceDirectoriesCard, WorkspaceDirectoriesCard } from "./GrantsCards";
+import { DeviceAccessCard, DocumentsCard } from "./GrantsCards";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
@@ -1584,11 +1584,16 @@ function AgentEnvironmentSection({
               onChange={(declaration) => updateDraft((current) => ({ ...current, declaration }))}
               onValidityChange={setDeclarationValid}
             />
-            <WorkspaceDirectoriesCard
-              shared={draft.shared}
+            <DocumentsCard
+              documents={draft.shared.documents}
               status={status?.access}
-              prefill={focusElement === "grants-documents" ? focusGrant : undefined}
-              onChange={(shared) => updateDraft((current) => ({ ...current, shared }))}
+              initialPath={focusElement === "grants-documents" ? focusGrant : undefined}
+              onChange={(documents) =>
+                updateDraft((current) => ({
+                  ...current,
+                  shared: { ...current.shared, documents },
+                }))
+              }
             />
 
             <Divider />
@@ -1597,10 +1602,10 @@ function AgentEnvironmentSection({
               description={t("setup.agentEnvironment.device.description")}
               badge={t("setup.agentEnvironment.scope.device")}
             />
-            <DeviceDirectoriesCard
+            <DeviceAccessCard
               local={draft.local}
               status={status?.access}
-              prefill={focusElement === "grants-device" ? focusGrant : undefined}
+              initialPath={focusElement === "grants-device" ? focusGrant : undefined}
               onChange={(local) => updateDraft((current) => ({ ...current, local }))}
             />
           </>

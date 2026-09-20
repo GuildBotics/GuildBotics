@@ -1395,11 +1395,12 @@ class IntelligenceConfigUpdateRequest(BaseModel):
     expected_revisions: dict[str, str] = Field(default_factory=dict)
     person_id: str | None = None
     inherit_team_defaults: bool = False
-    model_mapping: dict[str, str] = Field(default_factory=dict)
-    models: list[ModelDefinition] = Field(default_factory=list)
-    cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
-    cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
-    brain_mapping: list[BrainAssignment] = Field(default_factory=list)
+    #: None keeps each intelligence setting as it is; a value replaces it.
+    model_mapping: dict[str, str] | None = None
+    models: list[ModelDefinition] | None = None
+    cli_agent_mapping: dict[str, str] | None = None
+    cli_agents: list[CliAgentDefinition] | None = None
+    brain_mapping: list[BrainAssignment] | None = None
     #: None keeps the shared grants as they are; a value replaces them. Ignored
     #: for a member scope, which has no grants of its own.
     filesystem_grants: SharedGrants | None = None

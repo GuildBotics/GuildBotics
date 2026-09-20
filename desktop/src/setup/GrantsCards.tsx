@@ -24,7 +24,6 @@ import {
   type GrantScope,
   type LocalGrants,
   type EnvironmentAccessStatus,
-  type SharedGrants,
 } from "../api/client";
 
 /** What a row or a new entry may be granted: the two accesses, or closed. */
@@ -34,86 +33,6 @@ const DEVICE_ACCESSES: Access[] = ["read", "read_write", "deny"];
 
 /** Keystrokes settle for this long before the device is asked about the text. */
 const LOOKUP_DEBOUNCE_MS = 300;
-
-/**
- * What an agent gets beyond its working directory, as two cards of the same
- * shape: the directories the workspace shares, and what this device opens or
- * closes. The lists are the setting; everything else only judges.
- */
-/** A directory another screen sent here to be granted, and which card it belongs in. */
-export type GrantPrefill = { card: string; path: string };
-
-export function GrantsCards({
-  shared,
-  local,
-  status,
-  prefill,
-  onSharedChange,
-  onLocalChange,
-}: {
-  shared: SharedGrants;
-  local: LocalGrants;
-  /** How the saved grants resolve on this device, once the preview has them. */
-  status?: EnvironmentAccessStatus;
-  prefill?: GrantPrefill;
-  onSharedChange: (shared: SharedGrants) => void;
-  onLocalChange: (local: LocalGrants) => void;
-}) {
-  const prefillFor = (card: string) => (prefill?.card === card ? prefill.path : undefined);
-  return (
-    <>
-      <WorkspaceDirectoriesCard
-        shared={shared}
-        status={status}
-        prefill={prefillFor("grants-documents")}
-        onChange={onSharedChange}
-      />
-      <DeviceDirectoriesCard
-        local={local}
-        status={status}
-        prefill={prefillFor("grants-device")}
-        onChange={onLocalChange}
-      />
-    </>
-  );
-}
-
-export function WorkspaceDirectoriesCard({
-  shared,
-  status,
-  prefill,
-  onChange,
-}: {
-  shared: SharedGrants;
-  status?: EnvironmentAccessStatus;
-  prefill?: string;
-  onChange: (shared: SharedGrants) => void;
-}) {
-  return (
-    <DocumentsCard
-      documents={shared.documents}
-      status={status}
-      initialPath={prefill}
-      onChange={(documents) => onChange({ ...shared, documents })}
-    />
-  );
-}
-
-export function DeviceDirectoriesCard({
-  local,
-  status,
-  prefill,
-  onChange,
-}: {
-  local: LocalGrants;
-  status?: EnvironmentAccessStatus;
-  prefill?: string;
-  onChange: (local: LocalGrants) => void;
-}) {
-  return (
-    <DeviceAccessCard local={local} status={status} initialPath={prefill} onChange={onChange} />
-  );
-}
 
 /** A picked absolute path, relative to the home directory when under it. */
 function homeRelative(path: string, home: string): string {
@@ -126,7 +45,7 @@ function isTauriRuntime(): boolean {
 }
 
 /** The workspace's shared directories under the home. */
-function DocumentsCard({
+export function DocumentsCard({
   documents,
   status,
   initialPath,
@@ -223,7 +142,7 @@ function DocumentsCard({
  * them (`grant`), never by re-deriving it here: how a path is written
  * relative to the home differs between OSes.
  */
-function DeviceAccessCard({
+export function DeviceAccessCard({
   local,
   status,
   initialPath,
