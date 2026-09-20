@@ -20,7 +20,7 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.common import EffortAssessmentResponse
+from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -87,13 +87,24 @@ class FakeChatService:
     def render_participant_text(self, text, participant_labels):
         return text
 
+    async def add_reaction(self, channel_id, message_ts, reaction):
+        self.reactions.append((channel_id, message_ts, reaction))
+
 
 @pytest.fixture(autouse=True)
-def _llm_model_configured(monkeypatch):
-    """Whether an LLM API key exists must not depend on the developer's env."""
-    monkeypatch.setattr(
-        chat_conversation_workflow, "_agno_model_is_configured", lambda _context: True
-    )
+def _judgment_engine(monkeypatch):
+    async def assess(state, config, *, logger, **kwargs):
+        ctx = logger.context
+        ctx.assessments.append(state)
+        effort = (
+            "high"
+            if isinstance(ctx.assessed_effort, Exception)
+            or state.get("previous_effort") == "high"
+            else ctx.assessed_effort
+        )
+        return Selection(route="agent", effort=effort, reason="2.request"), "a" * 32
+
+    monkeypatch.setattr(chat_conversation_workflow, "assess", assess)
 
 
 def _agent_invocations(ctx) -> list[tuple[str, dict]]:
@@ -117,6 +128,8 @@ class FakeInvokeContext(types.SimpleNamespace):
             shared_state={},
         )
         self.action = action
+        self.logger.context = self
+        self.assessments = []
         self.invocations: list[tuple[str, dict]] = []
         # When set, only the Nth handle_chat_event call records a completion, so
         # earlier attempts fail the gate and the workflow retries.
@@ -140,12 +153,6 @@ class FakeInvokeContext(types.SimpleNamespace):
         return result
 
     async def _invoke(self, name: str, /, **kwargs):
-        if name == "functions/assess_effort":
-            if isinstance(self.assessed_effort, Exception):
-                raise self.assessed_effort
-            return EffortAssessmentResponse(
-                effort=self.assessed_effort, reason="stubbed"
-            )
         if name != "functions/handle_chat_event":
             return {}
         self._handle_calls += 1
@@ -1461,15 +1468,6 @@ async def test_recovered_completion_records_workflow_completed_event(
 # --------------------------------------------------------------------------- #
 
 
-def _configure_llm_model(monkeypatch, *, configured: bool = True) -> None:
-    """Override the autouse default for the CLI-only case."""
-    monkeypatch.setattr(
-        chat_conversation_workflow,
-        "_agno_model_is_configured",
-        lambda _context: configured,
-    )
-
-
 async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatService:
     service = FakeChatService()
     _set_incoming_event(ctx)
@@ -1485,7 +1483,6 @@ def _stored_effort(state_store) -> str:
 
 @pytest.mark.asyncio
 async def test_assessed_effort_reaches_the_agent_invocation(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.assessed_effort = "high"
@@ -1507,7 +1504,6 @@ async def test_no_invoked_command_inherits_another_command_output_as_input(
     empty message the agent would receive the effort assessor's YAML as if the
     user had typed it.
     """
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.assessed_effort = "high"
@@ -1520,9 +1516,10 @@ async def test_no_invoked_command_inherits_another_command_output_as_input(
 
 
 @pytest.mark.asyncio
-async def test_a_thread_already_at_high_skips_the_assessment(tmp_path, monkeypatch):
-    """Effort only rises, so re-asking at `high` could only waste a model call."""
-    _configure_llm_model(monkeypatch)
+async def test_a_thread_already_at_high_still_assesses_participation(
+    tmp_path, monkeypatch
+):
+    """Participation is still assessed even when effort cannot rise further."""
     state_store = FileConversationStateStore(base_dir=tmp_path)
     stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     stored.effort = "high"
@@ -1532,15 +1529,12 @@ async def test_a_thread_already_at_high_skips_the_assessment(tmp_path, monkeypat
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
-    assert not [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
+    assert len(ctx.assessments) == 1
     assert _agent_invocations(ctx)[0][1]["effort"] == "high"
 
 
 @pytest.mark.asyncio
 async def test_a_lower_assessment_never_demotes_a_thread(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     stored.effort = "default"
@@ -1555,7 +1549,6 @@ async def test_a_lower_assessment_never_demotes_a_thread(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_corrupted_stored_effort_is_ignored_not_fatal(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     stored.effort = "extreme"
@@ -1570,37 +1563,20 @@ async def test_a_corrupted_stored_effort_is_ignored_not_fatal(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_a_failed_assessment_falls_back_to_default(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
+async def test_a_failed_assessment_uses_high_effort(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.assessed_effort = RuntimeError("no API key")
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
-    assert _agent_invocations(ctx)[0][1]["effort"] == "default"
-
-
-@pytest.mark.asyncio
-async def test_a_cli_only_workspace_skips_the_assessment(tmp_path, monkeypatch):
-    """Without an LLM API key the assessor cannot run, so it is not called."""
-    _configure_llm_model(monkeypatch, configured=False)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert not [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
-    assert _agent_invocations(ctx)[0][1]["effort"] == ""
+    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
 
 
 @pytest.mark.asyncio
 async def test_the_effort_is_assessed_once_per_event_not_per_retry(
     tmp_path, monkeypatch
 ):
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.assessed_effort = "high"
@@ -1609,9 +1585,7 @@ async def test_the_effort_is_assessed_once_per_event_not_per_retry(
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
-    assessments = [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
+    assessments = ctx.assessments
     assert len(assessments) == 1
     assert len(_agent_invocations(ctx)) == 2
     assert {call[1]["effort"] for call in _agent_invocations(ctx)} == {"high"}
@@ -1702,10 +1676,9 @@ async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals
     assert "message-2" in kwargs["agent_execution_context"]["rebuild_context"]
     assert "release notes" not in kwargs["unprocessed_messages"]
     # The effort decision sees the same requests and correction as the agent.
-    assessment = next(
-        kwargs for name, kwargs in ctx.invocations if name == "functions/assess_effort"
+    assert ctx.assessments[0]["unprocessed_messages"] == json.loads(
+        kwargs["unprocessed_messages"]
     )
-    assert assessment["unprocessed_messages"] == kwargs["unprocessed_messages"]
     assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
         "E3",
         "E4",

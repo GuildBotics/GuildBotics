@@ -1,0 +1,77 @@
+{
+  "state": {
+    "thread_context_complete": true,
+    "chat_participation": "strict",
+    "previous_effort": "",
+    "member": {
+      "person_id": "aiko",
+      "roles": ["software_engineer"],
+      "profile": {"character": "簡潔で論理的。ソフトウェア開発を担当し、雑談への無理な参加を控える。"}
+    },
+    "participant_labels": {"U_AIKO": "aiko", "U_USER": "user", "U_DESIGN": "designer"},
+    "handoff_candidates": [{"person_id": "designer", "roles": ["designer"]}],
+    "thread_context": [],
+    "previous_thread_context": {"handoffs": []},
+    "previous_outcomes": [],
+    "reaction_target": "2"
+  },
+  "cases": [
+    {
+      "id": "acknowledgment",
+      "expected_routes": ["reaction-only", "no-op"],
+      "state": {
+        "thread_context": [{"author": "aiko", "text": "依頼された修正を公開しました。テストも成功しています。"}],
+        "unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "確認しました。ありがとうございます！追加の対応は不要です。"}]
+      }
+    },
+    {
+      "id": "request-then-thanks",
+      "expected_routes": ["agent"],
+      "expected_effort": "high",
+      "state": {
+        "unprocessed_messages": [{"message_ts": "1", "author": "user", "text": "@aiko リポジトリのログイン不具合を調査して修正してください。まだ未対応です。"}, {"message_ts": "2", "author": "user", "text": "よろしくお願いします、ありがとう！"}]
+      }
+    },
+    {
+      "id": "cancelled-request",
+      "expected_routes": ["reaction-only", "no-op"],
+      "state": {
+        "unprocessed_messages": [{"message_ts": "1", "author": "user", "text": "@aiko ログイン機能を修正してください。"}, {"message_ts": "2", "author": "user", "text": "さっきの依頼は取り消します。こちらの設定ミスでした。修正も調査も不要です。"}]
+      }
+    },
+    {
+      "id": "missing-context",
+      "expected_routes": ["agent"],
+      "state": {"unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "@aiko 昨日の別チャンネルで決めた例の件、あの方針で進めてください。"}]}
+    },
+    {
+      "id": "new-handoff-topic",
+      "expected_routes": ["agent"],
+      "state": {
+        "thread_context": [{"author": "aiko", "text": "@designer ホーム画面の配色確認をお願いします。"}],
+        "previous_thread_context": {"handoffs": [{"person_id": "designer", "text": "ホーム画面の配色確認", "thread_topic": "ホーム画面"}]},
+        "unprocessed_messages": [{"message_ts": "1", "author": "user", "text": "ホーム画面の配色はデザイナーへ依頼済みです。"}, {"message_ts": "2", "author": "user", "text": "別件で、請求書画面の文字配置にデザイン判断が必要です。まだ誰にも依頼していません。"}]
+      }
+    },
+    {
+      "id": "completed-handoff",
+      "expected_routes": ["reaction-only", "no-op"],
+      "state": {
+        "thread_context": [{"author": "aiko", "text": "@designer ホーム画面の配色をお願いします。私は追加の作業はありません。"}, {"author": "designer", "text": "引き受けました。配色は私が対応します。"}],
+        "previous_thread_context": {"handoffs": [{"person_id": "designer", "text": "ホーム画面の配色をお願いします。", "thread_topic": "ホーム画面"}]},
+        "unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "了解です。配色はデザイナーさんにお任せします。追加の依頼はありません。"}]
+      }
+    },
+    {
+      "id": "irrelevant-social",
+      "expected_routes": ["reaction-only", "no-op"],
+      "state": {"chat_participation": "social", "unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "今日の昼はうどんでした。ひとりごとなので返事は不要です。"}]}
+    },
+    {
+      "id": "guideline-dependent-design",
+      "expected_routes": ["agent"],
+      "expected_effort": "high",
+      "state": {"unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "@aiko このリポジトリの責務境界と規約を読んで、認証処理をどの層に置くか設計方針を決めて Issue にまとめてください。"}]}
+    }
+  ]
+}

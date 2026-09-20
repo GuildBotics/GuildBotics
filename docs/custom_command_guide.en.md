@@ -827,13 +827,11 @@ The provider-neutral label is never passed through to the provider as a fallback
 ### 9.6. Workflow defaults
 
 - **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
-- **Chat workflow**: once per batch of unread messages in a thread, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files — or that asks for an issue to be drafted for a repository or for a design or implementation policy decision about one — is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
+- **Chat workflow**: the selected judgment engine evaluates participation, reaction, and effort together once per unread batch. File work, repository investigation, or a guideline-dependent issue/design decision requires `high`; all three false values use `default`, while an unknown or failed judgment uses `high`. `low` remains available for explicit configuration.
 
-The chat assessment only ever **promotes**. An assessment below the thread's stored level is not adopted, and a thread already at `high` skips the call entirely. This state is stored per person_id, so it is one member's view of the thread rather than a single value shared across it.
+The thread's existing `high` is preserved. Judgment still runs for participation and reaction, even at `high`. A reaction-only or no-op result does not promote effort. State is stored per person_id, representing that member's view of the thread.
 
-The assessment runs on `brain: default` (the LLM API path) and the assessing command declares `effort: low` for itself. Note that "the `default` slot is cheap" is not guaranteed — a costly model can be configured there.
-
-**In a CLI-only setup (no LLM API key) the automatic assessment does not work.** When no LLM model is configured the call is skipped, one warning is logged, and the stored value is used. To raise the effort in such a setup, state it explicitly in the frontmatter or as a runtime parameter.
+Choose Jev, an Agno provider, or Claude Code in the desktop's chat judgment settings. Missing credentials or invalid configuration defer to the response agent with `high`; another judgment engine is not selected automatically. See [Chat judgment](chat_decisions.en.md) for the rules, setup, and evaluation records.
 
 ### 9.7. Reading it in diagnostics
 

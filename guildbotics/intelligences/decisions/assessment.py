@@ -1,0 +1,137 @@
+"""Evaluate, adopt and durably record one immutable input snapshot."""
+
+import hashlib
+import json
+import time
+from logging import Logger
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+from guildbotics.intelligences.decisions.chat_policy import (
+    ADOPTION_VERSION,
+    QUESTION_VERSION,
+    QUESTIONS,
+    RULE_VERSION,
+    select,
+)
+from guildbotics.intelligences.decisions.engines import evaluate
+from guildbotics.intelligences.decisions.models import (
+    DecisionConfig,
+    Evaluation,
+    Question,
+    Selection,
+)
+from guildbotics.intelligences.decisions.settings import read_config
+from guildbotics.observability.diagnostics_events import (
+    record_correlated_event,
+    record_required_io,
+)
+
+
+async def assess(
+    state: dict[str, Any],
+    config: DecisionConfig | None,
+    *,
+    config_dir: Path,
+    person_id: str,
+    logger: Logger,
+    questions: dict[str, Question] | None = None,
+) -> tuple[Selection, str]:
+    """Return a fast path only after both the input and decision were stored."""
+    questions = QUESTIONS if questions is None else questions
+    evaluation_id = uuid4().hex
+    started = time.monotonic()
+    config_error = False
+    if config is None:
+        try:
+            config = read_config(config_dir, person_id)
+        except Exception:
+            config = DecisionConfig()
+            config_error = True
+    request = {
+        "state": state,
+        "questions": {key: q.model_dump() for key, q in questions.items()},
+    }
+    recording_failed = False
+    try:
+        record_required_io(
+            evaluation_id + "0",
+            {
+                "evaluation_id": evaluation_id,
+                "phase": "started",
+                "input": request,
+                "config": config.model_dump(),
+            },
+        )
+    except Exception:
+        recording_failed = True
+    try:
+        error = (
+            "recording_failed"
+            if recording_failed
+            else "invalid_configuration"
+            if config_error
+            else "incomplete_input"
+            if state.get("thread_context_complete") is not True
+            else ""
+        )
+        result = (
+            Evaluation(error=error)
+            if error
+            else await evaluate(
+                config,
+                state,
+                questions,
+                config_dir=config_dir,
+                person_id=person_id,
+                logger=logger,
+            )
+        )
+    except Exception:
+        result = Evaluation(error="evaluation_failed")
+    selection = select(
+        Evaluation(error="recording_failed") if recording_failed else result,
+        participation=state.get("chat_participation", "strict"),
+        previous_effort=state.get("previous_effort", ""),
+        input_complete=state.get("thread_context_complete") is True,
+    )
+    payload = {
+        "evaluation_id": evaluation_id,
+        "person_id": person_id,
+        "input": request,
+        "input_hash": hashlib.sha256(
+            json.dumps(request, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest(),
+        "question_version": QUESTION_VERSION,
+        "rule_version": RULE_VERSION,
+        "adoption_version": ADOPTION_VERSION,
+        "config": config.model_dump(),
+        "result": result.model_dump(),
+        "selection": selection.model_dump(),
+        "duration_ms": (time.monotonic() - started) * 1000,
+    }
+    try:
+        record_required_io(evaluation_id, payload)
+    except Exception:
+        recording_failed = True
+        selection = select(
+            Evaluation(error="recording_failed"),
+            participation="strict",
+            previous_effort=state.get("previous_effort", ""),
+        )
+    record_correlated_event(
+        event_type="decision.evaluated",
+        person_id=person_id,
+        payload={
+            "evaluation_id": evaluation_id,
+            "engine": config.engine,
+            "model": result.model,
+            "route": selection.route,
+            "effort": selection.effort,
+            "reason": selection.reason,
+            "error": "recording_failed" if recording_failed else result.error,
+            "duration_ms": payload["duration_ms"],
+        },
+    )
+    return selection, evaluation_id

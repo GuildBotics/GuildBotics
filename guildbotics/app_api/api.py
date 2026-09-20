@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from guildbotics.app_api import hub_secrets
+from guildbotics.app_api import decisions, hub_secrets
 from guildbotics.app_api.agent_environment_status import (
     agent_environment_images,
     evaluate_grant,
@@ -382,7 +382,20 @@ def create_app(
             422,
             "validation_error",
             api_error_message("validation_error", _request_language(request), {}),
-            {"errors": jsonable_encoder(exc.errors())},
+            # Request inputs can contain secret fields; validation locations and
+            # messages are sufficient for the editor to identify the problem.
+            {
+                "errors": jsonable_encoder(
+                    [
+                        {
+                            key: value
+                            for key, value in error.items()
+                            if key not in {"input", "ctx"}
+                        }
+                        for error in exc.errors()
+                    ]
+                )
+            },
         )
 
     def require_token(
@@ -1155,6 +1168,10 @@ def create_app(
         return LlmProvidersResponse(
             providers=discover_llm_providers(config_dir or get_template_path())
         )
+
+    decisions.register(
+        app, lambda: _resolve_existing_config_dir(app_runtime), require_token
+    )
 
     @app.get(
         "/config/intelligences",

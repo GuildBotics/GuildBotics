@@ -1122,6 +1122,7 @@ export type LlmProviderInfo = {
 };
 
 export type IntelligenceConfig = {
+  decision?: DecisionConfig;
   config_dir: string;
   revisions: ConfigRevisions;
   person_id: string | null;
@@ -1147,6 +1148,7 @@ export type IntelligenceConfig = {
 };
 
 export type IntelligenceConfigUpdateRequest = {
+  decision?: DecisionConfig;
   config_dir: string;
   expected_revisions?: ConfigRevisions;
   person_id?: string | null;
@@ -1715,6 +1717,44 @@ export async function getLlmProviders(): Promise<LlmProviderInfo[]> {
 export async function getIntelligenceConfig(personId?: string): Promise<IntelligenceConfig> {
   const query = personId ? `?person_id=${encodeURIComponent(personId)}` : "";
   return request(`/config/intelligences${query}`);
+}
+
+export type DecisionConfig = { engine: "jev" | "agno" | "cli"; provider: string; model: string };
+export type DecisionAvailability = {
+  available: boolean;
+  state: string;
+  reason: string;
+  recovery: "credentials" | "environment" | "model";
+};
+export type DecisionOption = DecisionAvailability &
+  Pick<DecisionConfig, "engine" | "provider"> & { models: string[] };
+export async function getDecisionOptions(
+  personId?: string,
+): Promise<{ selected: DecisionConfig; options: DecisionOption[] }> {
+  return request(
+    `/intelligences/decisions/options${personId ? `?person_id=${encodeURIComponent(personId)}` : ""}`,
+  );
+}
+export async function getDecisionStatus(
+  config: DecisionConfig,
+  personId?: string,
+): Promise<DecisionAvailability> {
+  return request("/intelligences/decisions/status", {
+    method: "POST",
+    body: { config, person_id: personId },
+  });
+}
+export async function checkDecision(
+  config: DecisionConfig,
+  personId?: string,
+): Promise<{ status: DecisionAvailability; models: string[] }> {
+  return request("/intelligences/decisions/check", {
+    method: "POST",
+    body: { config, person_id: personId },
+  });
+}
+export async function saveDecisionCredential(value: string): Promise<DecisionAvailability> {
+  return request("/intelligences/decisions/credential", { method: "POST", body: { value } });
 }
 
 export async function updateIntelligenceConfig(

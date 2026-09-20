@@ -1,5 +1,6 @@
 import time
 from copy import deepcopy
+from dataclasses import dataclass
 from logging import Logger
 from pathlib import Path
 from typing import Any, cast
@@ -132,6 +133,13 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
     return model_mapping
 
 
+@dataclass(frozen=True)
+class AgnoExecutionResult:
+    content: Any
+    model: str
+    usage: dict[str, Any]
+
+
 class AgnoAgentDefaultBrain(Brain):
     def __init__(
         self,
@@ -143,6 +151,7 @@ class AgnoAgentDefaultBrain(Brain):
         response_class: type[BaseModel] | None = None,
         model: str = "default",
         effort: str = "",
+        model_config: ModelConfig | None = None,
     ):
         super().__init__(
             person_id=person_id,
@@ -153,10 +162,14 @@ class AgnoAgentDefaultBrain(Brain):
             response_class=response_class,
             effort=effort,
         )
-        model_mapping = get_model_mapping(person_id)
-        self.model_config = model_mapping[model]
+        self.model_config = model_config or get_model_mapping(person_id)[model]
 
     async def run(self, message: str, **kwargs):
+        return (await self.run_with_execution_details(message, **kwargs)).content
+
+    async def run_with_execution_details(
+        self, message: str, **kwargs
+    ) -> AgnoExecutionResult:
         kwargs["name"] = kwargs.get("name", self.name)
 
         description = kwargs.pop("description", self.description)
@@ -234,7 +247,7 @@ class AgnoAgentDefaultBrain(Brain):
         ):
             content = to_response_class(str(content), self.response_class)
 
-        return content
+        return AgnoExecutionResult(content, model_id, _response_usage(response))
 
     def _record_summary(
         self,

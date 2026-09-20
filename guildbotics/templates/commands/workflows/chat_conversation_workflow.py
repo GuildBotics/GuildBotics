@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from guildbotics.capabilities.chat_batch import completed_chat_event_ids
+from guildbotics.capabilities.chat_updates import (
+    check_chat_updates,
+    ensure_chat_current,
+)
 from guildbotics.capabilities.completion_retry import run_with_completion_retry
+from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.workflow_completion_events import (
     record_chat_dispatch_abandoned,
@@ -40,15 +45,11 @@ from guildbotics.integrations.chat_workflow_status import (
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.effort import (
-    DEFAULT,
-    HIGH,
-    normalize_effort,
-    promote_effort,
-)
+from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import (
     get_member_clone_path,
+    get_workspace_config_dir,
     get_workspace_root,
     get_workspace_state_path,
 )
@@ -323,34 +324,16 @@ async def _handle_event(
         raise RuntimeError("Invoker function is not set.")
 
     current_run_id = retry_context.run_id
-    effort_assessed = False
-
-    async def _resolve_effort_once() -> str:
-        """Assess the thread's effort on the first agent turn only.
-
-        Later completion-retry attempts re-send the same request, so a second
-        assessment would spend a model call to reach the same answer.
-        """
-        nonlocal effort_assessed
-        if effort_assessed:
-            return thread_state.effort
-        effort_assessed = True
-        assessed = await _assess_thread_effort(
-            context=context, thread_state=thread_state, prompt_payload=prompt_payload
-        )
-        if assessed != thread_state.effort:
-            thread_state.effort = assessed
-            # Persisted right away: the assessment describes the thread whatever
-            # the turn ends up doing, including a noop that saves no other state.
-            state_store.save_thread_state(
-                service_name, person_id, channel_id, event.thread_ts, thread_state
-            )
-        return thread_state.effort
+    decision = None
+    reaction_target = next(
+        item.message_ts
+        for item in reversed(batch_events)
+        if not item.is_from_user(identity_user_id)
+    )
 
     async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
-        nonlocal current_run_id
+        nonlocal current_run_id, decision
         current_run_id = run_id
-        effort = await _resolve_effort_once()
         if _attempt == 1:
             # Persist membership before the agent can complete. Recovery uses
             # this exact input even if the thread advanced before restart.
@@ -367,6 +350,103 @@ async def _handle_event(
                     "self_user_id": identity_user_id,
                 },
             )
+        if decision is None:
+            config_dir = get_workspace_config_dir()
+            decision, evaluation_id = await assess(
+                {
+                    **prompt_payload,
+                    "member": {
+                        "person_id": person_id,
+                        "roles": _handoff_roles(context.person),
+                        "profile": getattr(context.person, "profile", {}),
+                    },
+                    "run_id": run_id,
+                    "service": service_name,
+                    "channel_id": channel_id,
+                    "thread_ts": event.thread_ts,
+                    "event_ids": [item.event_id for item in batch_events],
+                    "reaction_target": reaction_target,
+                    "previous_effort": thread_state.effort,
+                    "previous_outcomes": RunStore(task_run_root).evidence(run_id),
+                },
+                None,
+                config_dir=config_dir,
+                person_id=person_id,
+                logger=context.logger,
+            )
+            RunStore(task_run_root).append_evidence(
+                run_id,
+                "chat_decision",
+                {"evaluation_id": evaluation_id, **decision.model_dump()},
+            )
+        if decision.route != "agent":
+            updates = check_chat_updates(person_id, run_id)
+            # Check provider text as well as the receive queue: edits/cancellations
+            # can change the same message without introducing a new batch ID.
+            latest, complete = await _fetch_thread_events(
+                context=context, chat_service=chat_service, event=event
+            )
+            if (
+                updates["status"] != "up_to_date"
+                or not complete
+                or latest != snapshot_events
+            ):
+                raise ThreadContextUnavailableError(
+                    "Chat changed during evaluation or reception is unavailable; reconsider the pending batch."
+                )
+            ensure_chat_current(person_id, run_id)
+            store = RunStore(task_run_root)
+            if decision.route == "reaction-only":
+                existing = any(
+                    item["evidence_type"] == "chat_reaction"
+                    and item["payload"].get("message_ts") == reaction_target
+                    and item["payload"].get("reaction") == decision.reaction
+                    for item in store.evidence(run_id)
+                )
+                if not existing:
+                    service = MemberChatCapabilityService(
+                        context.person,
+                        context.team,
+                        context.logger,
+                        chat_service,
+                        service_name=service_name,
+                    )
+                    await service.add_reaction(
+                        channel_id=channel_id,
+                        channel_name=None,
+                        message_ts=reaction_target,
+                        reaction=decision.reaction,
+                        run_id=run_id,
+                    )
+            else:
+                store.append_evidence(
+                    run_id,
+                    "chat_noop",
+                    {
+                        "service": service_name,
+                        "channel_id": channel_id,
+                        "thread_ts": event.thread_ts,
+                        "event_id": event.event_id,
+                        "reason": decision.reason,
+                        "noop": True,
+                    },
+                )
+            ensure_chat_current(person_id, run_id)
+            store.complete_run(
+                run_id,
+                "done",
+                decision.reason,
+                subject_type="chat",
+                subject_id=f"{service_name}:{channel_id}:{event.thread_ts}:{event.event_id}",
+                person_id=person_id,
+            )
+            return
+        if decision.effort != thread_state.effort:
+            thread_state.effort = decision.effort
+            state_store.save_thread_state(
+                service_name, person_id, channel_id, event.thread_ts, thread_state
+            )
+        effort = thread_state.effort
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
@@ -486,7 +566,17 @@ async def _handle_event(
                 run_id=retry_context.run_id or None,
                 retry_invoke_exceptions=False,
             )
+    except ThreadContextUnavailableError:
+        raise
     except Exception as exc:
+        if decision is not None and (
+            decision.route != "agent" or decision.reason == "1.invalid"
+        ):
+            # Neither an unconfirmed fast path nor a failed fallback response
+            # consumes this input, including on the dispatcher's final attempt.
+            raise ThreadContextUnavailableError(
+                "Chat judgment could not be completed; the batch remains pending."
+            ) from exc
         rate_limit = workflow_rate_limit_from_exception(exc)
         if rate_limit is not None:
             run_id = current_run_id
@@ -681,73 +771,6 @@ def _workflow_status_notice_text(
             )
         )
     return t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
-
-
-async def _assess_thread_effort(
-    *,
-    context: Any,
-    thread_state: ThreadConversationState,
-    prompt_payload: dict[str, Any],
-) -> str:
-    """Decide the effort this thread now needs, promoting only.
-
-    Effort never drops inside a thread: a conversation that once needed file
-    work keeps its level, so a follow-up like "and the other file too" is not
-    downgraded to a chat-sized reply. That also makes the call skippable once
-    the thread is already at ``high``.
-    """
-    stored = normalize_effort(thread_state.effort, strict=False)
-    if stored == HIGH:
-        return stored
-    if not _agno_model_is_configured(context):
-        # A CLI-only workspace has no LLM API key for the assessor, so automatic
-        # promotion cannot work there. Warned once per event, not per attempt.
-        _log(
-            context,
-            "warning",
-            "Skipping chat effort assessment: no LLM model is configured "
-            "for this member. Set an effort explicitly to raise it.",
-        )
-        return stored
-    try:
-        assessment = await context.invoke(
-            "functions/assess_effort",
-            # Everything this command reads arrives as a named parameter. Without
-            # an explicit empty message it would inherit `Context.pipe`, feeding
-            # whatever the previous command emitted in as if it were user input.
-            message="",
-            unprocessed_messages=json.dumps(
-                prompt_payload["unprocessed_messages"],
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            previous_thread_context=json.dumps(
-                prompt_payload["previous_thread_context"],
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        )
-    except Exception as exc:  # pragma: no cover - defensive, provider dependent
-        _log(context, "warning", f"Chat effort assessment failed: {exc}")
-        return stored or DEFAULT
-    candidate = getattr(assessment, "effort", "")
-    return promote_effort(stored, candidate) or DEFAULT
-
-
-def _agno_model_is_configured(context: Any) -> bool:
-    """Whether the ``default`` (LLM API) brain has a usable API key."""
-    from guildbotics.intelligences.brains.agno_agent import get_model_mapping
-    from guildbotics.intelligences.llm_providers import provider_env_keys
-    from guildbotics.utils.fileio import get_config_path
-
-    person_id = context.person.person_id
-    try:
-        model_config = get_model_mapping(person_id)["default"]
-        provider = Path(model_config.name).parent.name
-        env_key = provider_env_keys(get_config_path(""), person_id).get(provider, "")
-    except Exception:  # pragma: no cover - a broken mapping is reported elsewhere
-        return False
-    return bool(env_key) and bool(os.environ.get(env_key, "").strip())
 
 
 def _collect_batch_events(

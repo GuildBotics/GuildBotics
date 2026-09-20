@@ -9,6 +9,7 @@ import httpx
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_github import MemberCapabilityError
+from guildbotics.capabilities.task_runs import RunStore, current_run_id
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.chat_profile import get_chat_slack_base_url
 from guildbotics.integrations.chat_service import (
@@ -230,25 +231,28 @@ class MemberChatCapabilityService:
         channel_name: str | None,
         message_ts: str,
         reaction: str,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         if reaction not in SEMANTIC_REACTIONS:
             raise MemberCapabilityError(f"Unsupported chat reaction: {reaction}")
         semantic_reaction = cast(SemanticReaction, reaction)
         resolved_channel_id = await self._resolve_channel(channel_id, channel_name)
-        ensure_chat_current(self.person.person_id)
+        ensure_chat_current(self.person.person_id, run_id)
         try:
             await self._chat().add_reaction(
                 resolved_channel_id, message_ts, semantic_reaction
             )
         except Exception as exc:
             raise MemberCapabilityError(_safe_chat_error(exc)) from exc
-        return {
+        payload = {
             "service": self.service_name,
             "channel_id": resolved_channel_id,
             "message_ts": message_ts,
             "reaction": semantic_reaction,
             "reacted": True,
         }
+        RunStore().append_evidence(run_id or current_run_id(), "chat_reaction", payload)
+        return payload
 
     async def _resolve_channel(
         self, channel_id: str | None, channel_name: str | None

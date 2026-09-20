@@ -39,6 +39,11 @@ from guildbotics.intelligences.cli_agents import (
     cli_agent_name_from_path,
     require_cli_agent_path,
 )
+from guildbotics.intelligences.decisions.settings import (
+    CONFIG_FILE,
+    availability,
+    read_config,
+)
 from guildbotics.intelligences.effort import (
     describe_overlay_problems,
     validate_effort_fields,
@@ -104,6 +109,7 @@ class IntelligenceConfigService:
             config_dir=config_dir,
             person_id=person_id,
             inherited=inherited,
+            decision=read_config(config_dir, person_id),
             model_mapping=model_mapping,
             models=self._read_models(config_dir, person_id, model_mapping),
             cli_agent_mapping=cli_agent_mapping,
@@ -134,6 +140,7 @@ class IntelligenceConfigService:
             return self._update_member_overrides(request, target_dir)
 
         files: list[CreatedFile] = []
+        self._write_decision(request, target_dir, files)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         model_mapping_file = target_dir / "model_mapping.yml"
@@ -217,6 +224,8 @@ class IntelligenceConfigService:
 
         files: list[CreatedFile] = []
 
+        self._write_decision(request, target_dir, files)
+
         self._reconcile_mapping_file(
             target_dir / "model_mapping.yml", model_override, files
         )
@@ -263,6 +272,27 @@ class IntelligenceConfigService:
 
         self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
+
+    def _write_decision(
+        self,
+        request: IntelligenceConfigUpdateRequest,
+        target_dir: Path,
+        files: list[CreatedFile],
+    ) -> None:
+        if request.decision is None:
+            return
+        if request.decision == read_config(request.config_dir, request.person_id):
+            return
+        ready = availability(request.decision, request.config_dir, request.person_id)
+        if not ready.available:
+            raise SetupServiceError("invalid_decision", ready.reason)
+        inherited = read_config(request.config_dir)
+        data = request.decision.model_dump()
+        self._reconcile_mapping_file(
+            target_dir / CONFIG_FILE,
+            {} if request.person_id and request.decision == inherited else data,
+            files,
+        )
 
     def _reconcile_mapping_file(
         self, path: Path, data: dict[str, Any], files: list[CreatedFile]

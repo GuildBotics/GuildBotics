@@ -78,7 +78,7 @@ export default defineConfig({
     },
     {
       name: "configured",
-      testMatch: /(service|commands)\.spec\.ts$/,
+      testMatch: /(service|commands|decisions)\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], baseURL: CONFIGURED_BASE_URL },
     },
     {

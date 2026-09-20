@@ -53,6 +53,15 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 #: is for is a route that saves over a revision a screen was holding, and this
 #: is not one.
 ELSEWHERE = {
+    ("POST", "/intelligences/decisions/status"): "reads current device availability",
+    (
+        "POST",
+        "/intelligences/decisions/check",
+    ): "probes the selected provider without chat side effects",
+    (
+        "POST",
+        "/intelligences/decisions/credential",
+    ): "OS secret store and atomic index update; no edited config snapshot",
     ("POST", "/chat/receive-state/reset"): "state/, settled by first-committer-wins",
     ("POST", "/commands/author"): "proposes a change set, writes nothing",
     ("POST", "/commands/input-files"): "a temporary file outside the workspace",

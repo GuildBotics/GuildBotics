@@ -92,9 +92,9 @@ def check_chat_updates(person_id: str, run_id: str) -> dict[str, Any]:
     }
 
 
-def ensure_chat_current(person_id: str) -> None:
+def ensure_chat_current(person_id: str, run_id: str | None = None) -> None:
     """Guard the source chat even when publishing to another destination."""
-    run_id = os.getenv(RUN_ENV)
+    run_id = run_id or os.getenv(RUN_ENV)
     if not run_id:
         return
     source, evidence = _source(person_id, run_id)

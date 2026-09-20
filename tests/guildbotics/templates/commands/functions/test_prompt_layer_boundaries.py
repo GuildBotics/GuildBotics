@@ -282,46 +282,13 @@ def test_chat_work_states_no_frontmatter_effort():
         assert "effort" not in _frontmatter("handle_chat_event", language)
 
 
-def test_the_effort_assessor_is_cheap_and_binary_across_languages():
-    for language in ("en", "ja"):
-        frontmatter = _frontmatter("assess_effort", language)
-        # The assessment itself must not be the expensive call it is deciding.
-        assert frontmatter["effort"] == "low"
-        assert frontmatter["brain"] == "default"
-        assert (
-            frontmatter["response_class"]
-            == "guildbotics.intelligences.common.EffortAssessmentResponse"
-        )
+def test_chat_judgment_owns_repository_effort_criteria():
+    from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 
-
-def test_the_effort_assessor_prompts_share_placeholders_across_languages():
-    english = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "en")))
-    japanese = set(_PLACEHOLDER_RE.findall(_prompt_body("assess_effort", "ja")))
-    assert english == japanese
-    assert english == {"unprocessed_messages", "previous_thread_context"}
-
-
-def test_the_effort_assessor_never_offers_low_as_an_automatic_answer():
-    """`low` has no defined automatic criterion, so it stays manual-only."""
-    for language in ("en", "ja"):
-        body = _prompt_body("assess_effort", language)
-        assert "`high`" in body
-        assert "`default`" in body
-        assert "`low`" not in body
-
-
-def test_the_effort_assessor_grades_repository_judgments_as_high():
-    """Issue drafting and design-policy decisions for a repository are `high`
-    (issue #381): they must be grounded in the repository's guidelines, which
-    is workspace work even without code changes."""
-    english = _prompt_body("assess_effort", "en")
-    japanese = _prompt_body("assess_effort", "ja")
-    assert "issue to be drafted or created" in english
-    assert "policy decision" in english
-    assert "guidelines" in english
-    assert "issue の起票・作成" in japanese
-    assert "方針の判断" in japanese
-    assert "ガイドライン" in japanese
+    assert "repository guidelines" in QUESTIONS["effort_repo_decision"].instructions
+    assert (
+        "Technical terminology alone" in QUESTIONS["effort_repo_decision"].instructions
+    )
 
 
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():

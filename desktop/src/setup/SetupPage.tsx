@@ -1,4 +1,5 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
+import { DecisionSettings } from "./DecisionSettings";
 import {
   Avatar,
   FileButton,
@@ -1224,7 +1225,7 @@ function IntelligenceSection({
       />
       <Stack mt="md" gap="md">
         {/* LLM Settings Section */}
-        <Card withBorder radius="sm" p="md">
+        <Card withBorder radius="sm" p="md" id="llm-api-settings">
           <Stack gap="xs">
             <Text size="sm" fw={700}>
               {t("setup.intelligence.defaultProvider")}
@@ -1769,6 +1770,7 @@ function IntelligenceEditor({
     });
   }, []);
   const hasJsonError = Object.keys(jsonErrors).length > 0;
+  const [decisionValid, setDecisionValid] = useState(true);
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
     onSuccess: (written) => {
@@ -1808,11 +1810,13 @@ function IntelligenceEditor({
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
-  const canSave = Boolean(payload && dirty && !hasJsonError);
+  const decisionChanged = JSON.stringify(draft?.decision) !== JSON.stringify(query.data?.decision);
+  const validDecision = !decisionChanged || decisionValid;
+  const canSave = Boolean(payload && dirty && !hasJsonError && validDecision);
 
   const saveDraft = useCallback(
     async (written?: ConfigRevisions) => {
-      if (!payload || !serializedPayload || hasJsonError) {
+      if (!payload || !serializedPayload || hasJsonError || !validDecision) {
         return;
       }
       await mutation.mutateAsync({
@@ -1825,7 +1829,7 @@ function IntelligenceEditor({
         current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
       );
     },
-    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
+    [draftKey, hasJsonError, validDecision, mutation, payload, query.data, serializedPayload],
   );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
@@ -1847,9 +1851,9 @@ function IntelligenceEditor({
     if (!enabled || !onRegisterSave) {
       return;
     }
-    onRegisterSave({ save: canSave ? saveDraft : null, valid: !hasJsonError });
+    onRegisterSave({ save: canSave ? saveDraft : null, valid: !hasJsonError && validDecision });
     return () => onRegisterSave(null);
-  }, [canSave, enabled, hasJsonError, onRegisterSave, saveDraft]);
+  }, [canSave, enabled, hasJsonError, validDecision, onRegisterSave, saveDraft]);
 
   // Sync basic settings (props) -> advanced settings (draftState)
   useEffect(() => {
@@ -2285,6 +2289,13 @@ function IntelligenceEditor({
           }}
         />
       ) : null}
+      <DecisionSettings
+        value={draft.decision}
+        personId={personId}
+        disabled={draft.inherited}
+        onChange={(decision) => updateDraft((current) => ({ ...current, decision }))}
+        onValidity={setDecisionValid}
+      />
       {(() => {
         if (draft.inherited) {
           return (
@@ -6644,6 +6655,7 @@ export function toIntelligenceUpdatePayload(config: IntelligenceConfig, savePers
     cli_agent_mapping: config.cli_agent_mapping,
     cli_agents: config.cli_agents,
     brain_mapping: config.brain_mapping,
+    ...(config.decision ? { decision: config.decision } : {}),
     // The grants are the workspace's and this device's; a member payload
     // carries neither.
     ...(personId

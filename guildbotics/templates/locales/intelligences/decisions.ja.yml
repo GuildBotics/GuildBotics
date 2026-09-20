@@ -1,0 +1,13 @@
+ja:
+  invalid: 選択したエンジン・モデルが判定の契約を満たしません。設定を確認して再試行してください。
+  model_required: 判断エンジンで使うモデルを選択してください。
+  model_incompatible: このモデルは、選択した判断エンジンの Noul・Choice 契約に対応していません。
+  provider_required: LLM API プロバイダーを選択してください。
+  unsupported_cli: ツールを使わない判定は現在 Claude Code に対応しています。AI CLI 設定で環境準備とログインを行ってください。
+  unverified: この端末で認証情報を利用できます。認証は未確認です。
+  verified: 接続を確認しました。
+  credentials_missing: この端末で認証情報を利用できません。API キーを登録するか、同期設定で現在の Secret を取得してください。
+  authentication_error: 認証に失敗しました。認証情報を更新して接続を再確認してください。
+  connection_error: 通信に失敗しました。認証情報は削除・再入力せずに再試行できます。
+  invalid_response: 判断エンジンの回答形式が不正です。
+  evaluation_failed: 判断エンジンを実行できません。モデルと環境を確認し、再試行してください。

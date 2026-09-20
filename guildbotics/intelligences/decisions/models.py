@@ -1,0 +1,51 @@
+"""The input and answer contract shared by every judgment engine."""
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+Truth = Literal["true", "false", "unknown"]
+
+
+class DecisionConfig(BaseModel):
+    """A provider and concrete model, inherited as a unit from team to member."""
+
+    model_config = ConfigDict(extra="forbid")
+    engine: Literal["jev", "agno", "cli"] = "agno"
+    provider: str = ""
+    model: str = ""
+
+
+class Question(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["noul", "choice"]
+    instructions: str
+    criteria: dict[str, str] = Field(default_factory=dict)
+
+
+class Answer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: str
+    raw: Any
+    probabilities: dict[str, float] | None = None
+    confidence: float | None = None
+    provenance: Literal["jev_distribution", "structured_assertion"]
+
+
+class Evaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = ""
+    answers: dict[str, Answer] = Field(default_factory=dict)
+    raw: Any = None
+    usage: dict[str, Any] | None = None
+    cost: float | None = None
+    retries: int | None = None
+    error: str = ""
+
+
+class Selection(BaseModel):
+    route: Literal["agent", "reaction-only", "no-op"]
+    effort: str = ""
+    reason: str
+    effort_reason: str = ""
+    reaction: str = ""
