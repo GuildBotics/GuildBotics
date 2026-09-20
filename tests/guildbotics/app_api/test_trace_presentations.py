@@ -155,6 +155,27 @@ def test_info_log_preserves_neutral_badge_tone() -> None:
     assert presentation.tone == "neutral"
 
 
+def test_judgment_failure_shows_the_actual_conservative_route() -> None:
+    presentation = normalize_trace_presentation(
+        _event(
+            "decision.evaluated",
+            payload={
+                "brain": "chat_decision",
+                "model": "jev-1.13.0",
+                "route": "agent",
+                "reason": "invalid",
+                "error": "authentication_error",
+            },
+        )
+    )
+    assert presentation.label_key.endswith("decision_evaluated")
+    assert (
+        presentation.message
+        == "chat_decision · jev-1.13.0 · agent · invalid · authentication_error"
+    )
+    assert presentation.tone == "warning"
+
+
 def test_invalid_record_uses_explicit_unknown_fallback() -> None:
     presentation = normalize_trace_presentation(
         {"kind": "event", "type": "plugin.custom", "payload": "invalid"}

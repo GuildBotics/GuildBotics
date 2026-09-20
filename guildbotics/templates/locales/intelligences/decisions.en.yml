@@ -1,0 +1,13 @@
+en:
+  invalid: The selected engine or model did not satisfy the judgment contract. Check the settings and retry.
+  model_required: Select a model for the judgment engine.
+  model_incompatible: This model does not support the selected judgment engine's Noul and Choice contract.
+  provider_required: Select an LLM API provider.
+  unsupported_cli: Tool-free judgment currently supports Claude Code. Prepare and sign in to Claude Code in AI CLI settings.
+  unverified: Credentials available on this device; authentication has not been checked.
+  verified: Connection verified.
+  credentials_missing: Credentials are missing or unavailable on this device. Register an API key or fetch the current secret in Sync settings.
+  authentication_error: Authentication failed. Update the credentials and check the connection again.
+  connection_error: Connection failed. Retry without deleting or re-entering your credentials.
+  invalid_response: The engine returned an invalid judgment response.
+  evaluation_failed: The judgment engine could not run. Check the model and environment, then retry.

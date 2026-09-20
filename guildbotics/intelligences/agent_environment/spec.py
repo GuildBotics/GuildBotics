@@ -127,9 +127,19 @@ def build_environment_spec(
     return AgentEnvironmentSpec(
         cwd=guest_path(cwd),
         home=guest_home(home),
-        mounts=(*_mounts(contract.access, cwd), *mounts),
+        mounts=(
+            *(
+                (EnvironmentMount(guest_path(cwd), None, True),)
+                if contract.input_only
+                else _mounts(contract.access, cwd)
+            ),
+            *mounts,
+        ),
         network=_network(
-            contract.network, tuple(host_ports), tuple(provider_domains), nameservers
+            NetworkPolicy() if contract.input_only else contract.network,
+            tuple(host_ports),
+            tuple(provider_domains),
+            nameservers,
         ),
         env=dict(env or {}),
     )

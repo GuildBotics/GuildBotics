@@ -8,6 +8,7 @@ description: Delegate an incoming chat event to an AI CLI tool.
 Read all unprocessed messages in order and decide one response to the current requests, incorporating corrections and cancellations. Preserve distinct requests. Use `previous_attempt_evidence` to identify actions already taken, even after a session restart; perform only the remaining work.
 
 Read the Slack thread and act as the assigned GuildBotics member by choosing a reply, reaction-only action, no-op, question, or blocked result.
+The workflow's one-shot preflight may have deferred uncertain or failed judgments to you. It does not establish that a substantive reply is required; make the final decision from the full conversation and current requests.
 The member's standing roles are defined by the `roles` field in the member context.
 
 <target>

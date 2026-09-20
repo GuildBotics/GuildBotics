@@ -18,6 +18,22 @@ def _client_for(handler):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", ["already_reacted", "invalid_auth"])
+async def test_reaction_retry_is_idempotent_only_for_the_same_existing_reaction(error):
+    async def handler(request):
+        assert request.url.path.endswith("/reactions.add")
+        return httpx.Response(200, json={"ok": False, "error": error})
+
+    async with _client_for(handler) as client:
+        service = SlackChatService(logging.getLogger("test"), client=client)
+        if error == "already_reacted":
+            await service.add_reaction("C1", "100.1", "ack")
+        else:
+            with pytest.raises(SlackApiError):
+                await service.add_reaction("C1", "100.1", "ack")
+
+
+@pytest.mark.asyncio
 async def test_get_bot_identity_uses_auth_test():
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/auth.test")

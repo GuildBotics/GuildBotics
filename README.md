@@ -909,6 +909,7 @@ discarding; the activity history record stays either way.
 
 **LLM / AI CLI tool settings**:
 
+- `intelligences/brain_mapping.yml`: per-function engine and LLM / AI CLI slot assignments. For `chat_decision`, which decides whether a chat needs a response agent, see the [Slack integration guide](docs/slack_integration.en.md#chat-judgment-engine).
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
 - `intelligences/cli_agent_filesystem_grants.yml`: the directories under the home directory AI CLI tools may use beyond their working directory (`documents`), shared by every device and member of the workspace. Apart from this file, `Documents/GuildBotics` (the exchange directory) is always granted read/write: files handed over from the desktop app and what agents make for you go there. Device-only extra paths and denies go in `local/cli_agent_filesystem_grants.yml` (see [Native agent runtime](docs/native_agent_runtime.en.md))
 - `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository

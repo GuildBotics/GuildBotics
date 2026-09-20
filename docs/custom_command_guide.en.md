@@ -827,13 +827,11 @@ The provider-neutral label is never passed through to the provider as a fallback
 ### 9.6. Workflow defaults
 
 - **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
-- **Chat workflow**: once per batch of unread messages in a thread, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files — or that asks for an issue to be drafted for a repository or for a design or implementation policy decision about one — is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
+- **Chat workflow**: in one evaluation per unread batch, the judgment engine determines routing, a reaction, and the response effort (`default` or `high`). Definite local file work, repository-wide investigation, or a decision requiring repository guidelines yields `high`; all three being unnecessary yields `default`. Uncertain work requirements, judgment failures, and recording failures leave effort unchanged.
 
-The chat assessment only ever **promotes**. An assessment below the thread's stored level is not adopted, and a thread already at `high` skips the call entirely. This state is stored per person_id, so it is one member's view of the thread rather than a single value shared across it.
+The workflow persists the result in the thread and never lowers it once it reaches `high`. When starting an agent, it passes that value as the runtime effort for `functions/handle_chat_event`. The response slot's existing mappings translate the label into model and reasoning parameters. Without either a saved value or an effort decision, the workflow adds no runtime effort and leaves normal configuration resolution in effect. Reaction and no-action routes do not change effort.
 
-The assessment runs on `brain: default` (the LLM API path) and the assessing command declares `effort: low` for itself. Note that "the `default` slot is cheap" is not guaranteed — a costly model can be configured there.
-
-**In a CLI-only setup (no LLM API key) the automatic assessment does not work.** When no LLM model is configured the call is skipped, one warning is logged, and the stored value is used. To raise the effort in such a setup, state it explicitly in the frontmatter or as a runtime parameter.
+The judgment engine's own model and reasoning settings come from its judgment slot; it does not apply the resulting response effort to itself. See the [Slack integration guide](slack_integration.en.md#chat-judgment-engine) for chat judgment setup and behavior.
 
 ### 9.7. Reading it in diagnostics
 

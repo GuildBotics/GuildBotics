@@ -1102,7 +1102,7 @@ export type AgentEnvironmentStatusResponse = {
 export type BrainAssignment = {
   name: string;
   brain_class: string;
-  engine: "llm" | "cli";
+  engine: "llm" | "cli" | "jev";
   target: string;
 };
 
@@ -1716,6 +1716,15 @@ export async function getLlmProviders(): Promise<LlmProviderInfo[]> {
 export async function getIntelligenceConfig(personId?: string): Promise<IntelligenceConfig> {
   const query = personId ? `?person_id=${encodeURIComponent(personId)}` : "";
   return request(`/config/intelligences${query}`);
+}
+
+export async function getDecisionOptions(): Promise<{
+  credential_present: boolean;
+}> {
+  return request("/intelligences/decisions/options");
+}
+export async function saveDecisionCredential(value: string): Promise<{ state: string }> {
+  return request("/intelligences/decisions/credential", { method: "POST", body: { value } });
 }
 
 export async function updateIntelligenceConfig(

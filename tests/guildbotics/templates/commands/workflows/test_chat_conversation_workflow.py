@@ -20,11 +20,11 @@ from guildbotics.integrations.chat_state_store import (
     ThreadSystemNoticeState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
-from guildbotics.intelligences.common import EffortAssessmentResponse
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -87,23 +87,34 @@ class FakeChatService:
     def render_participant_text(self, text, participant_labels):
         return text
 
+    async def add_reaction(self, channel_id, message_ts, reaction):
+        self.reactions.append((channel_id, message_ts, reaction))
+
 
 @pytest.fixture(autouse=True)
-def _llm_model_configured(monkeypatch):
-    """Whether an LLM API key exists must not depend on the developer's env."""
-    monkeypatch.setattr(
-        chat_conversation_workflow, "_agno_model_is_configured", lambda _context: True
-    )
+def _judgment_engine(monkeypatch):
+    async def assess(state, config, *, logger, **kwargs):
+        ctx = logger.context
+        ctx.assessments.append(state)
+        return Selection(
+            route="agent",
+            reason=ctx.decision_reason,
+            response_effort=ctx.response_effort,
+        ), "a" * 32
+
+    monkeypatch.setattr(chat_conversation_workflow, "assess", assess)
 
 
 def _agent_invocations(ctx) -> list[tuple[str, dict]]:
-    """Only the agent turns, skipping the per-event effort assessment."""
+    """Only the agent turns, skipping the per-event judgment."""
     return [
         item for item in ctx.invocations if item[0] == "functions/handle_chat_event"
     ]
 
 
 class FakeInvokeContext(types.SimpleNamespace):
+    brain_factory = None
+
     def __init__(self, action: str) -> None:
         person = types.SimpleNamespace(
             person_id="alice",
@@ -117,13 +128,15 @@ class FakeInvokeContext(types.SimpleNamespace):
             shared_state={},
         )
         self.action = action
+        self.logger.context = self
+        self.assessments = []
         self.invocations: list[tuple[str, dict]] = []
         # When set, only the Nth handle_chat_event call records a completion, so
         # earlier attempts fail the gate and the workflow retries.
         self.complete_on_attempt: int | None = None
         self._handle_calls = 0
-        # What the effort assessor answers, or an exception to raise instead.
-        self.assessed_effort: str | Exception = "default"
+        self.decision_reason = "request"
+        self.response_effort = None
         # Stand-ins for Context.pipe and what each invoked command received as
         # its user message.
         self.pipe = ""
@@ -140,12 +153,6 @@ class FakeInvokeContext(types.SimpleNamespace):
         return result
 
     async def _invoke(self, name: str, /, **kwargs):
-        if name == "functions/assess_effort":
-            if isinstance(self.assessed_effort, Exception):
-                raise self.assessed_effort
-            return EffortAssessmentResponse(
-                effort=self.assessed_effort, reason="stubbed"
-            )
         if name != "functions/handle_chat_event":
             return {}
         self._handle_calls += 1
@@ -398,11 +405,13 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     first = FakeInvokeContext("reply")
+    first.response_effort = "high"
     _set_incoming_event(first, event_id="E1", message_ts="100.1")
     await chat_conversation_workflow.main(
         first, chat_service=service, state_store=state_store
     )
     second = FakeInvokeContext("reply")
+    second.response_effort = "default"
     _set_incoming_event(second, event_id="E2", message_ts="101.1")
     await chat_conversation_workflow.main(
         second, chat_service=service, state_store=state_store
@@ -410,6 +419,8 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
 
     first_context = _agent_invocations(first)[0][1]["agent_execution_context"]
     second_context = _agent_invocations(second)[0][1]["agent_execution_context"]
+    assert _agent_invocations(first)[0][1]["effort"] == "high"
+    assert _agent_invocations(second)[0][1]["effort"] == "high"
     assert first_context["work_identity"] == second_context["work_identity"]
     assert first_context["context_cursor"] == "100.1"
     assert second_context["context_cursor"] == "101.1"
@@ -1457,17 +1468,8 @@ async def test_recovered_completion_records_workflow_completed_event(
 
 
 # --------------------------------------------------------------------------- #
-# Effort: per-event assessment, promote-only policy and fallbacks
+# Judgment: delegation and retries
 # --------------------------------------------------------------------------- #
-
-
-def _configure_llm_model(monkeypatch, *, configured: bool = True) -> None:
-    """Override the autouse default for the CLI-only case."""
-    monkeypatch.setattr(
-        chat_conversation_workflow,
-        "_agno_model_is_configured",
-        lambda _context: configured,
-    )
 
 
 async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatService:
@@ -1479,21 +1481,56 @@ async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatSe
     return service
 
 
-def _stored_effort(state_store) -> str:
-    return state_store.load_thread_state("slack", "alice", "C1", "100.1").effort
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["invalid", "context", "request", "work"])
+async def test_judgment_without_effort_preserves_response_settings(
+    tmp_path, monkeypatch, reason
+):
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    ctx.decision_reason = reason
+    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
+    invocation = _agent_invocations(ctx)[0][1]
+    assert "effort" not in invocation
+    assert "model" not in invocation
+    assert "brain" not in invocation
+    assert "previous_effort" not in ctx.assessments[0]
 
 
 @pytest.mark.asyncio
-async def test_assessed_effort_reaches_the_agent_invocation(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
+@pytest.mark.parametrize(
+    "stored,candidate,expected",
+    [
+        ("", "default", "default"),
+        ("", "high", "high"),
+        ("default", "high", "high"),
+        ("high", "default", "high"),
+        ("high", None, "high"),
+        ("default", None, "default"),
+        ("", None, ""),
+    ],
+)
+async def test_response_effort_is_promoted_and_persisted(
+    tmp_path, monkeypatch, stored, candidate, expected
+):
     state_store = FileConversationStateStore(base_dir=tmp_path)
+    state = ThreadConversationState(channel_id="C1", thread_ts="100.1", effort=stored)
+    state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
     ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "high"
-
+    ctx.response_effort = candidate
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
-    assert _stored_effort(state_store) == "high"
+    invocation = _agent_invocations(ctx)[0][1]
+    assert invocation.get("effort", "") == expected
+    assert "model" not in invocation and "brain" not in invocation
+    assert (
+        state_store.load_thread_state("slack", "alice", "C1", "100.1").effort
+        == expected
+    )
+    evidence = RunStore().evidence(ctx.assessments[0]["run_id"])
+    decision = next(
+        item["payload"] for item in evidence if item["evidence_type"] == "chat_decision"
+    )
+    assert decision["response_effort"] == candidate
 
 
 @pytest.mark.asyncio
@@ -1504,13 +1541,11 @@ async def test_no_invoked_command_inherits_another_command_output_as_input(
 
     `CommandRunner` writes each command's output to `Context.pipe` and feeds that
     pipe to the next command that does not pass `message`. Without an explicit
-    empty message the agent would receive the effort assessor's YAML as if the
+    empty message the agent would receive the previous command’s output as if the
     user had typed it.
     """
-    _configure_llm_model(monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "high"
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
@@ -1520,101 +1555,19 @@ async def test_no_invoked_command_inherits_another_command_output_as_input(
 
 
 @pytest.mark.asyncio
-async def test_a_thread_already_at_high_skips_the_assessment(tmp_path, monkeypatch):
-    """Effort only rises, so re-asking at `high` could only waste a model call."""
-    _configure_llm_model(monkeypatch)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
-    stored.effort = "high"
-    state_store.save_thread_state("slack", "alice", "C1", "100.1", stored)
-    ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "default"
-
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert not [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
-    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
-
-
-@pytest.mark.asyncio
-async def test_a_lower_assessment_never_demotes_a_thread(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
-    stored.effort = "default"
-    state_store.save_thread_state("slack", "alice", "C1", "100.1", stored)
-    ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "high"
-
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
-
-
-@pytest.mark.asyncio
-async def test_a_corrupted_stored_effort_is_ignored_not_fatal(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    stored = state_store.load_thread_state("slack", "alice", "C1", "100.1")
-    stored.effort = "extreme"
-    state_store.save_thread_state("slack", "alice", "C1", "100.1", stored)
-    assert _stored_effort(state_store) == ""
-
-    ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "high"
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert _agent_invocations(ctx)[0][1]["effort"] == "high"
-
-
-@pytest.mark.asyncio
-async def test_a_failed_assessment_falls_back_to_default(tmp_path, monkeypatch):
-    _configure_llm_model(monkeypatch)
+async def test_judgment_runs_once_per_event_not_per_retry(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = RuntimeError("no API key")
-
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert _agent_invocations(ctx)[0][1]["effort"] == "default"
-
-
-@pytest.mark.asyncio
-async def test_a_cli_only_workspace_skips_the_assessment(tmp_path, monkeypatch):
-    """Without an LLM API key the assessor cannot run, so it is not called."""
-    _configure_llm_model(monkeypatch, configured=False)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-
-    await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
-
-    assert not [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
-    assert _agent_invocations(ctx)[0][1]["effort"] == ""
-
-
-@pytest.mark.asyncio
-async def test_the_effort_is_assessed_once_per_event_not_per_retry(
-    tmp_path, monkeypatch
-):
-    _configure_llm_model(monkeypatch)
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-    ctx.assessed_effort = "high"
+    ctx.response_effort = "high"
     # The first agent attempt records no completion, so the workflow retries.
     ctx.complete_on_attempt = 2
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)
 
-    assessments = [
-        item for item in ctx.invocations if item[0] == "functions/assess_effort"
-    ]
+    assessments = ctx.assessments
     assert len(assessments) == 1
     assert len(_agent_invocations(ctx)) == 2
-    assert {call[1]["effort"] for call in _agent_invocations(ctx)} == {"high"}
+    assert all(call[1]["effort"] == "high" for call in _agent_invocations(ctx))
 
 
 class SnapshotChatService(FakeChatService):
@@ -1701,11 +1654,10 @@ async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals
     assert kwargs["agent_execution_context"]["context_cursor"] == "105.1"
     assert "message-2" in kwargs["agent_execution_context"]["rebuild_context"]
     assert "release notes" not in kwargs["unprocessed_messages"]
-    # The effort decision sees the same requests and correction as the agent.
-    assessment = next(
-        kwargs for name, kwargs in ctx.invocations if name == "functions/assess_effort"
+    # The judgment sees the same requests and correction as the agent.
+    assert ctx.assessments[0]["unprocessed_messages"] == json.loads(
+        kwargs["unprocessed_messages"]
     )
-    assert assessment["unprocessed_messages"] == kwargs["unprocessed_messages"]
     assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
         "E3",
         "E4",

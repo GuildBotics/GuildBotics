@@ -10,6 +10,23 @@ const STORAGE_KEY = "guildbotics.appLanguage";
 const resources = {
   en: {
     translation: {
+      decision: {
+        title: "Chat judgment engine",
+        team: "Applies to all members unless overridden in member settings.",
+        member: "Applies to this member’s chat judgment.",
+        key: "Jev API key",
+        keySaveHint:
+          "Enter a new key to register or replace it, then save with the button at the top of this section.",
+        jevLatest: "Uses jev-latest (latest official release).",
+        assignmentHint:
+          "Select the engine and target below, then save at the top of this section. LLM and CLI use the existing slots.",
+        keyMissing: "Jev key not registered.",
+        unconfigured:
+          "No chat judgment engine is configured. Select and save one; until then, the response agent handles every eligible chat.",
+        failed: "Could not load or save. Retry; the current selection is preserved.",
+        fallback:
+          "If judgment fails, the response agent decides. No other judgment engine is selected automatically.",
+      },
       app: {
         nav: {
           activity: "Activity",
@@ -672,6 +689,7 @@ const resources = {
             github_issue_comment: "Issue comment",
             github_work_target: "Work target",
             workflow_completed: "Workflow completed",
+            decision_evaluated: "Chat judgment",
             workflow_completion_missing: "Completion missing",
             workflow_rate_limited: "Rate limited",
             chat_dispatch_retry_scheduled: "Retry scheduled",
@@ -2048,6 +2066,23 @@ const resources = {
   },
   ja: {
     translation: {
+      decision: {
+        title: "チャット判断エンジン",
+        team: "メンバー設定で上書きしない限り、チーム全体に適用します。",
+        member: "このメンバーのチャット判断に適用します。",
+        key: "Jev API キー",
+        keySaveHint:
+          "キーを登録・変更する場合は新しいキーを入力してください。セクション上部の保存ボタンで保存します。",
+        jevLatest: "jev-latest（最新の正式版）を使用します。",
+        assignmentHint:
+          "エンジンと割り当て先を選び、このセクション上部の保存ボタンで保存します。LLM／CLI は既存のスロットを使います。",
+        keyMissing: "Jev のキーは未登録です。",
+        unconfigured:
+          "チャット判断エンジンが未設定です。選択して保存するまでは、対象のチャットをすべて対応エージェントが処理します。",
+        failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
+        fallback:
+          "判定に失敗した場合は、対応エージェントに判断を委ねます。別の判断エンジンへ自動で切り替えません。",
+      },
       app: {
         nav: {
           activity: "アクティビティ",
@@ -3440,6 +3475,7 @@ const resources = {
             github_issue_comment: "Issue コメント",
             github_work_target: "作業対象",
             workflow_completed: "ワークフロー完了",
+            decision_evaluated: "チャット事前判定",
             workflow_completion_missing: "完了証跡なし",
             workflow_rate_limited: "Rate limit",
             chat_dispatch_retry_scheduled: "再試行待ち",

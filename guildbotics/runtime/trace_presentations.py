@@ -30,6 +30,7 @@ _GITHUB_LABELS = {
     "github.work_target": "github_work_target",
 }
 _EXACT_EVENT_LABELS = {
+    "decision.evaluated": "decision_evaluated",
     "agent_environment.network_egress_candidate": "network_egress_candidate",
     "scheduler.worker.failed": "scheduler_worker_failed",
     "workflow.completed": "workflow_completed",
@@ -99,6 +100,17 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
         return _network_egress_candidate_presentation(payload, event_type)
     if event_type.startswith("span."):
         return _span_presentation(payload, event_type)
+    if event_type == "decision.evaluated":
+        return _presentation(
+            label_key=_event_key("decision_evaluated"),
+            label=event_type,
+            message=" · ".join(
+                str(payload[key])
+                for key in ("brain", "model", "route", "reason", "error")
+                if payload.get(key)
+            ),
+            tone="warning" if payload.get("error") else "info",
+        )
     if event_type in _GITHUB_LABELS:
         return _github_presentation(payload, attributes, event_type)
     if event_type.startswith("workflow."):

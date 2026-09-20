@@ -8,6 +8,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 - [Creating the Slack App Manually](#creating-the-slack-app-manually)
 - [Adding Multiple Agents](#adding-multiple-agents)
 - [Configuring in the Desktop App](#configuring-in-the-desktop-app)
+- [Chat Judgment Engine](#chat-judgment-engine)
 - [Scheduled Posts](#scheduled-posts)
 - [`person.yml` Reference](#personyml-reference)
 - [Posting and Reacting Manually](#posting-and-reacting-manually)
@@ -15,7 +16,7 @@ For an overview, see [“Ask for Work in Slack” in the README](../README.md#as
 
 ## Overview
 
-A member watches the channels you configure. When a message arrives, the configured AI CLI tool reads the thread context along with the member's own roles and participation policy, performs whatever work is needed, and then chooses how to respond in Slack.
+A member watches the channels you configure. When a message meets the mention and participation conditions, the chat judgment engine decides whether to start the response agent. It can complete with a reaction or no action; otherwise, the response agent reads the thread context and its own roles, performs the required work, and responds in Slack.
 
 **Doing the requested work**: when the message explicitly asks for an operation in another domain such as GitHub (for example, "please handle the review comments on this PR"), the member carries it out. The member's working directory has no repository checkout, so it identifies the target repository from the message and thread context and prepares a working branch with `guildbotics member git prepare` before working. If the target is ambiguous, it asks in the thread and completes with `asking`.
 
@@ -121,6 +122,32 @@ The member's persona, which influences both what it says and whether it joins (c
 Scheduled posts are configured as **Scheduled commands** on the **Patrol** tab (→ [Scheduled Posts](#scheduled-posts)).
 
 Tokens are stored in the OS keychain; everything else is stored in `team/members/<person_id>/person.yml`. For the stored format and the settings that are not available in the GUI, see the [`person.yml` Reference](#personyml-reference).
+
+## Chat Judgment Engine
+
+Choose an engine under **Setup → LLM / AI CLI tools → Advanced settings → Chat judgment engine**, then save at the top of the section.
+
+- **LLM / AI CLI**: assign an existing slot. Its settings supply the model, parameters, and authentication. AI CLI also requires environment preparation and login on the device.
+- **Jev**: uses `jev-latest`. Enter the API key in the field shown when Jev is selected and save it with the settings. A saved key appears masked and is kept unless changed. SecretStore stores it as `TYPESAFE_API_KEY`.
+
+The assignment is stored as `chat_decision` in `intelligences/brain_mapping.yml` and applies to the team unless overridden by member settings. Existing workspaces do not receive it automatically. Without an assignment, all eligible chats go to the response agent. Jev can only be assigned to chat judgment, not text generation.
+
+Judgment uses the thread history and the entire unread batch, including corrections and cancellations. Definite requests, necessary work, handoffs, and useful substantive participation take priority when starting an agent. Only when no response is needed does judgment complete with a reaction or no action. Insufficient information, uncertainty, and judgment failures also defer to the agent; they do not switch judgment engines automatically.
+
+The same evaluation determines the required response effort, which the workflow applies through the response configuration. Uncertain work requirements or judgment failures preserve existing settings rather than forcing `high`. This is separate from the judgment engine's own model and reasoning settings. See [Workflow defaults](custom_command_guide.en.md#96-workflow-defaults) for the application rules.
+
+For Jev yes/no judgments, an affirmative probability at or below 0.4 is false, at or above 0.6 is true, and the range between them is unknown. These provisional thresholds prioritize avoiding missed work; they do not guarantee accuracy. Reaction selection takes the highest-probability candidate. Jev probability thresholds do not apply to the true, false, and unknown answers returned by LLM / AI CLI engines.
+
+AI CLI judgment receives only the conversation input, without work files or previous CLI sessions. Its environment is discarded afterward, preserving only CLI authentication updates.
+
+Diagnostics show the judgment engine, model, route, and reason. Detailed inputs and raw answers are stored with secrets masked under the workspace's device-local `.guildbotics/local/run/required-io/` and are not shared through Workspace Sync. Recording failures also defer to the agent.
+
+The development script can compare a saved judgment from the current question version using another configuration. Here, `comparison` is a feature assignment prepared beforehand. The script calls the actual model API but does not post to Slack or change processed-message state.
+
+```bash
+uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.json \
+  --workspace /path/to/workspace --person alice --brain comparison
+```
 
 ## Scheduled Posts
 

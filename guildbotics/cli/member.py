@@ -1176,7 +1176,6 @@ async def _chat_reaction_add(
             message_ts=message_ts,
             reaction=reaction,
         )
-        RunStore().append_evidence(current_run_id(), "chat_reaction", payload)
         return payload
     finally:
         await service.aclose()

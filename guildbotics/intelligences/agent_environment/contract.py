@@ -458,6 +458,9 @@ class AccessContract:
     network: NetworkPolicy = field(default_factory=NetworkPolicy)
     access: ResolvedAccess = field(default_factory=ResolvedAccess)
 
+    #: Only supplied input is visible; no workspace or previous provider sessions.
+    input_only: bool = False
+
     def requested_policy(
         self, cwd: Path, *, home: Path | None = None, workspace_root: Path | None = None
     ) -> dict[str, Any]:
@@ -467,6 +470,7 @@ class AccessContract:
             return redact_path(path, home, workspace_root)
 
         return {
+            "input_only": self.input_only,
             "filesystem": {
                 "working_directory": mask(cwd),
                 "documents": [

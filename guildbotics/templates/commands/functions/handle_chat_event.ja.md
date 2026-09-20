@@ -5,6 +5,8 @@ response_class: guildbotics.intelligences.common.AgentResponse
 description: Incoming chat event の対応を AI CLIツールへ委譲します。
 ---
 
+起動前の一括判定が不確実、または失敗したために、この処理へ委ねられる場合があります。起動されたこと自体を実質的な返信が必要な根拠とせず、会話全体と現在の依頼から最終判断してください。
+
 未処理メッセージ全体を時系列で読み、途中の依頼・訂正・取消を反映した現時点の対応を1回で判断してください。異なる依頼を最後の発言だけで落とさないでください。セッションが再作成された場合も `previous_attempt_evidence` で実施済みの操作を確認し、残りの対応だけを行ってください。
 Slack thread の文脈を理解し、割り当てられた GuildBotics member として返信・reaction・no-op・質問・blocked を判断してください。
 その member に割り当てられた常設 role は、member context の `roles` を正とします。

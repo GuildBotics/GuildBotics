@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,9 +16,70 @@ from guildbotics.observability.activity_event_store import (
     is_domain_activity_event,
 )
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
+from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.utils.shared_redaction import workspace_secret_values
 
 _STORE: DiagnosticsStore | None = None
 _STORE_LOCK = threading.Lock()
+
+
+def load_required_io_redaction_values() -> tuple[str, ...]:
+    """Load the secrets used to redact one group of required IO records."""
+    store = KeyringSecretStore(get_workspace_config_dir())
+    secrets = set(workspace_secret_values())
+    keys = store.keys()
+    secrets.update(value for key in keys if (value := store.get(key)))
+    return tuple(sorted(secrets, key=len, reverse=True))
+
+
+def record_required_io(
+    record_id: str,
+    payload: dict[str, Any],
+    *,
+    redaction_values: tuple[str, ...] | None = None,
+) -> Path:
+    """Persist a replayable local IO artifact, propagating every storage failure.
+
+    Unlike optional session transcripts this is an execution prerequisite.
+    The caller supplies an opaque hex ID; no input becomes a filesystem path.
+    Secret values are masked without truncating the rest of the input.
+    """
+    if not record_id or any(ch not in "0123456789abcdef" for ch in record_id):
+        raise ValueError("Invalid IO record ID")
+    path = get_workspace_local_path("run", "required-io", f"{record_id}.json")
+    text = json.dumps(
+        {
+            **correlation_fields(),
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "payload": payload,
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    ordered_secrets = (
+        load_required_io_redaction_values()
+        if redaction_values is None
+        else redaction_values
+    )
+
+    def mask(value: Any) -> Any:
+        if isinstance(value, str):
+            for secret in ordered_secrets:
+                value = value.replace(secret, "***")
+        elif isinstance(value, dict):
+            return {mask(key): mask(item) for key, item in value.items()}
+        elif isinstance(value, list):
+            return [mask(item) for item in value]
+        return value
+
+    text = json.dumps(mask(json.loads(text)), ensure_ascii=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(text + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
 
 
 def _store() -> DiagnosticsStore:

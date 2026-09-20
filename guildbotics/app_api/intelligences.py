@@ -34,6 +34,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     parse_toolchain,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
+from guildbotics.intelligences.brains.jev import JEV_MODEL
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
@@ -48,6 +49,7 @@ from guildbotics.utils.fileio import get_template_path, load_yaml_file, save_yam
 
 AGNO_BRAIN_CLASS = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain"
 CLI_BRAIN_CLASS = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain"
+JEV_BRAIN_CLASS = "guildbotics.intelligences.brains.jev.JevBrain"
 MODEL_PATH_PROVIDER_INDEX = 1
 
 
@@ -121,6 +123,8 @@ class IntelligenceConfigService:
     def update_config(
         self, request: IntelligenceConfigUpdateRequest
     ) -> IntelligenceConfigResult:
+        for assignment in request.brain_mapping:
+            self._to_brain_config(assignment)
         base_dir = self._scope_dir(request.config_dir, request.person_id)
         target_dir = base_dir / "intelligences"
         if request.person_id and request.inherit_team_defaults:
@@ -785,20 +789,28 @@ class IntelligenceConfigService:
                     BrainAssignment(
                         name=str(name),
                         brain_class=brain_class or AGNO_BRAIN_CLASS,
-                        engine="llm",
+                        engine="jev" if brain_class == JEV_BRAIN_CLASS else "llm",
                         target=str(args.get("model", "default")),
                     )
                 )
         return assignments
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
+        if assignment.engine == "jev" and assignment.name != "chat_decision":
+            raise SetupServiceError(
+                "invalid_decision", "Jev is only supported for chat_decision"
+            )
+        if assignment.engine == "jev" and assignment.target != JEV_MODEL:
+            raise SetupServiceError("invalid_decision", "Unsupported Jev model")
         if assignment.engine == "cli":
             return {
                 "class": CLI_BRAIN_CLASS,
                 "args": {"cli_agent": assignment.target},
             }
         return {
-            "class": AGNO_BRAIN_CLASS,
+            "class": JEV_BRAIN_CLASS
+            if assignment.engine == "jev"
+            else AGNO_BRAIN_CLASS,
             "args": {"model": assignment.target},
         }
 

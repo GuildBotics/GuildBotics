@@ -1,4 +1,6 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
+import { DecisionSettings } from "./DecisionSettings";
+import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
 import {
   Avatar,
   FileButton,
@@ -70,6 +72,7 @@ import {
   type EffortOverlay,
   type ConfigRevisions,
   type ConfigStatus,
+  saveDecisionCredential,
   type BrainAssignment,
   type IntelligenceConfig,
   type ModelDefinition,
@@ -293,7 +296,6 @@ function MemberEnvironmentBadge({ personId, enabled }: { personId: string; enabl
 }
 const SPEAKING_STYLE_OPTIONS = ["friendly", "professional", "energetic"] as const;
 type SpeakingStylePreset = (typeof SPEAKING_STYLE_OPTIONS)[number];
-const MASKED_SECRET_PLACEHOLDER = "••••••••••••";
 
 const MEMBER_TYPE_OPTIONS = ["agent", "human"] as const;
 type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
@@ -1151,12 +1153,14 @@ function IntelligenceSection({
   // it, but they are one screen to the user, so one button saves both.
   const saveAdvanced = useRef<AdvancedSave | null>(null);
   const [savingSection, setSavingSection] = useState(false);
+  const [sectionSaveFailed, setSectionSaveFailed] = useState(false);
   const saveSection = async () => {
     if (saveAdvanced.current && !saveAdvanced.current.valid) {
       notifyInvalidAdvancedSave(t);
       return;
     }
     setSavingSection(true);
+    setSectionSaveFailed(false);
     try {
       // The basic settings write two of the files the advanced editor guards,
       // so the advanced save is composed against what this one just left --
@@ -1170,6 +1174,7 @@ function IntelligenceSection({
       }
       await saveAdvanced.current?.save?.(written);
     } catch {
+      setSectionSaveFailed(true);
       // Both halves report their own failure: the basic settings through the
       // section's save state, the advanced editor through its own alert.
     } finally {
@@ -1214,7 +1219,7 @@ function IntelligenceSection({
         save={
           persisted
             ? {
-                state: saveState,
+                state: savingSection ? "saving" : sectionSaveFailed ? "error" : saveState,
                 saving: saving || savingSection,
                 onSave: () => void saveSection(),
               }
@@ -1224,7 +1229,7 @@ function IntelligenceSection({
       />
       <Stack mt="md" gap="md">
         {/* LLM Settings Section */}
-        <Card withBorder radius="sm" p="md">
+        <Card withBorder radius="sm" p="md" id="llm-api-settings">
           <Stack gap="xs">
             <Text size="sm" fw={700}>
               {t("setup.intelligence.defaultProvider")}
@@ -1787,6 +1792,14 @@ function IntelligenceEditor({
       queryClient.invalidateQueries({ queryKey: ["system-alerts"] });
     },
   });
+  const [jevKey, setJevKey] = useState("");
+  const credential = useMutation({
+    mutationFn: saveDecisionCredential,
+    onSuccess: async (_result, submittedKey) => {
+      setJevKey((current) => (current.trim() === submittedKey ? "" : current));
+      await queryClient.invalidateQueries({ queryKey: ["decision-options"] });
+    },
+  });
   const environmentRefreshKey = query.data ? JSON.stringify(query.data.revisions) : "";
   const environmentStatus = useQuery({
     queryKey: ["agent-environment-status", environmentRefreshKey],
@@ -1808,24 +1821,38 @@ function IntelligenceEditor({
   const serializedPayload = payload ? JSON.stringify(payload) : "";
   const savedSerialized = activeDraftState?.savedSerialized ?? querySerializedPayload;
   const dirty = Boolean(serializedPayload && savedSerialized !== serializedPayload);
-  const canSave = Boolean(payload && dirty && !hasJsonError);
+  const decisionEngine = draft?.brain_mapping.find((item) => item.name === "chat_decision")?.engine;
+  const pendingJevKey = decisionEngine === "jev" ? jevKey.trim() : "";
+  const canSave = Boolean(payload && (dirty || pendingJevKey) && !hasJsonError);
 
   const saveDraft = useCallback(
     async (written?: ConfigRevisions) => {
       if (!payload || !serializedPayload || hasJsonError) {
         return;
       }
-      await mutation.mutateAsync({
-        ...payload,
-        // `written` describes files a save that just ran left behind, and takes
-        // precedence over what this editor read before that save.
-        expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
-      });
+      if (dirty)
+        await mutation.mutateAsync({
+          ...payload,
+          // `written` describes files a save that just ran left behind, and takes
+          // precedence over what this editor read before that save.
+          expected_revisions: { ...(query.data?.revisions ?? {}), ...(written ?? {}) },
+        });
       setDraftState((current) =>
         current?.key === draftKey ? { ...current, savedSerialized: serializedPayload } : current,
       );
+      if (pendingJevKey) await credential.mutateAsync(pendingJevKey);
     },
-    [draftKey, hasJsonError, mutation, payload, query.data, serializedPayload],
+    [
+      draftKey,
+      hasJsonError,
+      mutation,
+      payload,
+      query.data,
+      serializedPayload,
+      dirty,
+      pendingJevKey,
+      credential,
+    ],
   );
 
   const updateDraft = (recipe: (current: IntelligenceConfig) => IntelligenceConfig) => {
@@ -2217,20 +2244,24 @@ function IntelligenceEditor({
     });
   };
 
-  const handleUpdateBrain = (index: number, updates: Partial<BrainAssignment>) => {
+  const handleUpdateBrain = (name: string, updates: Partial<BrainAssignment>) => {
     updateDraft((current) => {
       const updated = [...current.brain_mapping];
+      const index = updated.findIndex((item) => item.name === name);
       const currentAssignment = updated[index];
-      if (!currentAssignment) return current;
+      const engine = updates.engine ?? currentAssignment?.engine;
+      if (!engine) return current;
+      let nextClass = currentAssignment?.brain_class ?? "";
+      let nextTarget = updates.target ?? currentAssignment?.target ?? "";
 
-      let nextClass = currentAssignment.brain_class;
-      let nextTarget = updates.target !== undefined ? updates.target : currentAssignment.target;
-
-      if (updates.engine !== undefined && updates.engine !== currentAssignment.engine) {
-        if (updates.engine === "cli") {
+      if (engine !== currentAssignment?.engine) {
+        if (engine === "cli") {
           nextClass = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain";
           const firstCliSlot = Object.keys(current.cli_agent_mapping)[0] ?? "default";
           nextTarget = firstCliSlot;
+        } else if (engine === "jev") {
+          nextClass = "guildbotics.intelligences.brains.jev.JevBrain";
+          nextTarget = "jev-latest";
         } else {
           nextClass = "guildbotics.intelligences.brains.agno_agent.AgnoAgentDefaultBrain";
           const firstLlmSlot = Object.keys(current.model_mapping)[0] ?? "default";
@@ -2238,12 +2269,9 @@ function IntelligenceEditor({
         }
       }
 
-      updated[index] = {
-        ...currentAssignment,
-        ...updates,
-        brain_class: nextClass,
-        target: nextTarget,
-      };
+      const assignment = { name, engine, brain_class: nextClass, target: nextTarget };
+      if (index < 0) updated.push(assignment);
+      else updated[index] = assignment;
       return { ...current, brain_mapping: updated };
     });
   };
@@ -2260,6 +2288,85 @@ function IntelligenceEditor({
       return { ...current, brain_mapping: updated };
     });
   };
+
+  const renderBrainAssignment = (name: string, index: number) => {
+    const assignment = draft.brain_mapping[index];
+    const targetOptions = (assignment?.engine === "cli" ? cliSlots : modelSlots).map((s) => ({
+      value: s,
+      label: s,
+    }));
+
+    return (
+      <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
+        {name !== "chat_decision" && (
+          <TextInput
+            label={t("setup.intelligence.feature")}
+            value={name}
+            disabled={isBrainFeatureLocked(name)}
+            onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
+            flex={2}
+          />
+        )}
+        <Select
+          label={t("setup.intelligence.engine")}
+          data={[
+            { value: "llm", label: "LLM" },
+            { value: "cli", label: "CLI" },
+            ...(name === "chat_decision" ? [{ value: "jev", label: "Jev" }] : []),
+          ]}
+          value={assignment?.engine ?? null}
+          onChange={(value) =>
+            handleUpdateBrain(name, {
+              engine: (value as BrainAssignment["engine"]) ?? "llm",
+            })
+          }
+          flex={1}
+        />
+        {assignment?.engine === "jev" ? (
+          <Text size="sm" flex={1.5}>
+            {t("decision.jevLatest")}
+          </Text>
+        ) : (
+          <Select
+            label={t("setup.intelligence.target")}
+            data={targetOptions}
+            value={assignment?.target ?? null}
+            disabled={!assignment}
+            onChange={(value) => handleUpdateBrain(name, { target: value ?? "default" })}
+            flex={1.5}
+          />
+        )}
+        {assignment && !isBrainFeatureLocked(name) ? (
+          <ActionIcon
+            color="danger"
+            variant="subtle"
+            onClick={() => handleDeleteBrain(index)}
+            mb="xs"
+          >
+            <Trash2 size={16} />
+          </ActionIcon>
+        ) : (
+          <Box w={28} />
+        )}
+      </Group>
+    );
+  };
+
+  const decisionSettings = (
+    <DecisionSettings
+      personId={personId}
+      engine={decisionEngine}
+      apiKey={jevKey}
+      onApiKeyChange={setJevKey}
+      credentialError={credential.isError}
+    >
+      {!draft.inherited &&
+        renderBrainAssignment(
+          "chat_decision",
+          draft.brain_mapping.findIndex((item) => item.name === "chat_decision"),
+        )}
+    </DecisionSettings>
+  );
 
   // Team and member scopes share one advanced editor. A member only adds the
   // "inherit team defaults" toggle on top; when inheriting is off they get the
@@ -2288,9 +2395,12 @@ function IntelligenceEditor({
       {(() => {
         if (draft.inherited) {
           return (
-            <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
-              {t("setup.intelligence.inheritingBody")}
-            </InfoCallout>
+            <>
+              <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
+                {t("setup.intelligence.inheritingBody")}
+              </InfoCallout>
+              {decisionSettings}
+            </>
           );
         }
         // The full editor (feature assignments, model/CLI slots, native policy)
@@ -2316,57 +2426,11 @@ function IntelligenceEditor({
                   </Button>
                 </Group>
 
-                {draft.brain_mapping.map((assignment, index) => {
-                  const targetOptions =
-                    assignment.engine === "cli"
-                      ? cliSlots.map((s) => ({ value: s, label: s }))
-                      : modelSlots.map((s) => ({ value: s, label: s }));
-
-                  return (
-                    <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
-                      <TextInput
-                        label={t("setup.intelligence.feature")}
-                        value={assignment.name}
-                        disabled={isBrainFeatureLocked(assignment.name)}
-                        onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
-                        flex={2}
-                      />
-                      <Select
-                        label={t("setup.intelligence.engine")}
-                        data={[
-                          { value: "llm", label: "LLM" },
-                          { value: "cli", label: "CLI" },
-                        ]}
-                        value={assignment.engine}
-                        onChange={(value) =>
-                          handleUpdateBrain(index, { engine: (value as "llm" | "cli") ?? "llm" })
-                        }
-                        flex={1}
-                      />
-                      <Select
-                        label={t("setup.intelligence.target")}
-                        data={targetOptions}
-                        value={assignment.target}
-                        onChange={(value) =>
-                          handleUpdateBrain(index, { target: value ?? "default" })
-                        }
-                        flex={1.5}
-                      />
-                      {!isBrainFeatureLocked(assignment.name) ? (
-                        <ActionIcon
-                          color="danger"
-                          variant="subtle"
-                          onClick={() => handleDeleteBrain(index)}
-                          mb="xs"
-                        >
-                          <Trash2 size={16} />
-                        </ActionIcon>
-                      ) : (
-                        <Box w={28} />
-                      )}
-                    </Group>
-                  );
-                })}
+                {draft.brain_mapping.map((assignment, index) =>
+                  assignment.name === "chat_decision"
+                    ? null
+                    : renderBrainAssignment(assignment.name, index),
+                )}
               </Stack>
             </Card>
 
@@ -2586,6 +2650,8 @@ function IntelligenceEditor({
                 </Accordion>
               </Stack>
             </Card>
+
+            {decisionSettings}
 
             {/* Section 4: the environment every turn runs in (the workspace's
                 declaration) and what agents may reach beyond their working
@@ -4222,6 +4288,7 @@ function MembersSection({
                 <Tabs.Panel value="intelligence" pt="md">
                   {formMode === "edit" && editingPersonId ? (
                     <IntelligenceEditor
+                      key={editingPersonId}
                       personId={editingPersonId}
                       savePersonId={personId.trim()}
                       enabled={Boolean(configDir)}

@@ -17,6 +17,7 @@ import {
   getRoutineCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
+  saveDecisionCredential,
   getMemberConfig,
   getAgentEnvironmentStatus,
   getProjectConfig,
@@ -93,6 +94,8 @@ vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
   return {
     ...actual,
+    getDecisionOptions: vi.fn(async () => ({ credential_present: true })),
+    saveDecisionCredential: vi.fn(async () => ({ state: "unverified" })),
     addMemberConfig: vi.fn(async () => configWriteResponse()),
     cloneWorkspaceFromHub: vi.fn(async () => configStatus()),
     inspectHub: vi.fn(async () => ({
@@ -4045,13 +4048,128 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
+  it("does not offer Jev for ordinary command assignments", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const engine = screen.getAllByRole("combobox", { name: t("setup.intelligence.engine") })[0];
+    await user.click(engine);
+    expect(screen.getByRole("option", { name: "LLM" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "CLI" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Jev" })).not.toBeInTheDocument();
+  });
+
+  it.each(["LLM", "CLI", "Jev"])(
+    "creates an absent chat assignment by selecting %s",
+    async (label) => {
+      const user = userEvent.setup();
+      await openTeamIntelligenceAdvanced(user);
+      const card = within(
+        screen.getByText(t("decision.title")).closest(".mantine-Card-root")! as HTMLElement,
+      );
+      const engine = card.getByRole("combobox", { name: t("setup.intelligence.engine") });
+      expect(engine).toHaveValue("");
+      expect(card.getByRole("combobox", { name: t("setup.intelligence.target") })).toBeDisabled();
+      await user.click(engine);
+      await user.click(await screen.findByRole("option", { name: label }));
+      if (label === "Jev") {
+        expect(
+          card.queryByRole("combobox", { name: t("setup.intelligence.target") }),
+        ).not.toBeInTheDocument();
+        expect(card.getByText(t("decision.jevLatest"))).toBeInTheDocument();
+      }
+      await saveSection(user);
+      await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].brain_mapping).toEqual([
+        teamIntelligenceConfig().brain_mapping[0],
+        expect.objectContaining({
+          name: "chat_decision",
+          engine: label.toLowerCase(),
+          target: label === "Jev" ? "jev-latest" : "default",
+        }),
+      ]);
+    },
+  );
+
+  it("saves a Jev key through the section save without including it in config", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const card = within(document.getElementById("decision-settings")!);
+    expect(card.queryByLabelText(t("decision.key"))).not.toBeInTheDocument();
+    await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
+    await user.click(screen.getByRole("option", { name: "Jev" }));
+    const key = card.getByLabelText(t("decision.key"));
+    await user.type(key, "synthetic-new-key");
+    expect(saveDecisionCredential).not.toHaveBeenCalled();
+    await saveSection(user);
+    await waitFor(() =>
+      expect(saveDecisionCredential).toHaveBeenCalledWith("synthetic-new-key", expect.anything()),
+    );
+    await waitFor(() => expect(key).toHaveValue(""));
+    expect(JSON.stringify(vi.mocked(updateIntelligenceConfig).mock.calls)).not.toContain(
+      "synthetic-new-key",
+    );
+    expect(JSON.stringify(vi.mocked(updateProjectConfig).mock.calls)).not.toContain(
+      "synthetic-new-key",
+    );
+  });
+
+  it.each(["blank", "hidden"])(
+    "keeps the registered Jev key when the input is %s",
+    async (kind) => {
+      const user = userEvent.setup();
+      await openTeamIntelligenceAdvanced(user);
+      const card = within(document.getElementById("decision-settings")!);
+      await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
+      await user.click(screen.getByRole("option", { name: "Jev" }));
+      if (kind === "hidden") {
+        await user.type(card.getByLabelText(t("decision.key")), "do-not-save-hidden-key");
+        await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
+        await user.click(screen.getByRole("option", { name: "LLM" }));
+        expect(card.queryByLabelText(t("decision.key"))).not.toBeInTheDocument();
+      }
+      await saveSection(user);
+      await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalled());
+      expect(saveDecisionCredential).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retries a key-only save after failure without losing the input", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({
+        brain_mapping: [
+          {
+            name: "chat_decision",
+            brain_class: "guildbotics.intelligences.brains.jev.JevBrain",
+            engine: "jev",
+            target: "jev-latest",
+          },
+        ],
+      }),
+    );
+    vi.mocked(saveDecisionCredential).mockRejectedValueOnce(new Error("save failed"));
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const card = within(document.getElementById("decision-settings")!);
+    const key = card.getByLabelText(t("decision.key"));
+    await user.type(key, "synthetic-retry-key");
+    await saveSection(user);
+    await screen.findByText(t("decision.failed"));
+    expect(key).toHaveValue("synthetic-retry-key");
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await saveSection(user);
+    await waitFor(() => expect(key).toHaveValue(""));
+    expect(saveDecisionCredential).toHaveBeenCalledTimes(2);
+  });
+
   it("edits the brain feature-to-engine mapping and sends the new assignment", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const engineSelect = await screen.findByRole("combobox", {
-      name: t("setup.intelligence.engine"),
-    });
+    const engineSelect = (
+      await screen.findAllByRole("combobox", {
+        name: t("setup.intelligence.engine"),
+      })
+    )[0];
     await user.click(engineSelect);
     await user.click(await screen.findByRole("option", { name: "CLI" }));
 
@@ -4247,6 +4365,38 @@ describe("IntelligenceEditor (member override)", () => {
     );
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
+  });
+
+  it("saves the workspace Jev key from an inheriting member's save button", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      memberIntelligenceConfig({
+        inherited: true,
+        brain_mapping: [
+          {
+            name: "chat_decision",
+            brain_class: "guildbotics.intelligences.brains.jev.JevBrain",
+            engine: "jev",
+            target: "jev-latest",
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceTab(user);
+    const key = await screen.findByLabelText(t("decision.key"));
+    await user.type(key, "synthetic-member-key");
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() =>
+      expect(saveDecisionCredential).toHaveBeenCalledWith(
+        "synthetic-member-key",
+        expect.anything(),
+      ),
+    );
+    await waitFor(() => expect(key).toHaveValue(""));
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(updateMemberConfig).mock.calls)).not.toContain(
+      "synthetic-member-key",
+    );
   });
 
   it("carries the revisions its own save reported into the next one", async () => {

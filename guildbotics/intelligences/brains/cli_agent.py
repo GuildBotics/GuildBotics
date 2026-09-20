@@ -38,7 +38,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     settings_fingerprint,
 )
-from guildbotics.intelligences.brains.brain import Brain
+from guildbotics.intelligences.brains.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.intelligences.brains.util import (
     summary_log_line,
     to_plain_text,
@@ -599,6 +603,16 @@ class CliAgentBrain(Brain):
         self.logger = logger
         self.cli_agent = cli_agent
 
+    @property
+    def configuration(self) -> dict[str, Any]:
+        return {
+            **super().configuration,
+            "slot": self.cli_agent,
+            "provider": self.executable_info.adapter,
+            "model": str(self.executable_info.parameters.get("model", "")),
+            "parameters": public_parameters(self.executable_info.parameters),
+        }
+
     async def run(self, message: str, **kwargs):
         """
         Run the AI CLI tool with the provided arguments.
@@ -630,6 +644,7 @@ class CliAgentBrain(Brain):
                 started=started,
                 result=result,
             )
+            self.execution = ExecutionMetadata(model=result.model, usage=result.usage)
             self._raise_if_execution_failed(result)
 
             if self.response_class:
@@ -739,7 +754,9 @@ class CliAgentBrain(Brain):
         )
         from guildbotics.utils.fileio import get_workspace_root
 
-        configured = _agent_execution_context(kwargs)
+        configured = (
+            {} if kwargs.get("input_only") else _agent_execution_context(kwargs)
+        )
         adapter_name = self.executable_info.adapter
         run_id = str(
             configured.get("run_id")
@@ -764,7 +781,8 @@ class CliAgentBrain(Brain):
         # A read-only turn takes no execution lease. It never touches the
         # member's workspace, chat or tickets, and holding the lease would make
         # it unusable exactly when it is most needed: while that member is busy.
-        read_only = bool(configured.get("read_only"))
+        input_only = bool(kwargs.get("input_only"))
+        read_only = input_only or bool(configured.get("read_only"))
         lease = None if read_only else current_person_lease()
         owned_lease: PersonExecutionLease | None = None
         if lease is None and not read_only:
@@ -786,9 +804,15 @@ class CliAgentBrain(Brain):
             lease = owned_lease
         try:
             try:
-                contract = AccessContract(
-                    network=load_toolchain().network,
-                    access=resolve_access(load_shared_grants(), load_local_grants()),
+                contract = (
+                    AccessContract(input_only=True)
+                    if input_only
+                    else AccessContract(
+                        network=load_toolchain().network,
+                        access=resolve_access(
+                            load_shared_grants(), load_local_grants()
+                        ),
+                    )
                 )
             except (AccessContractError, ToolchainError, PermissionError) as exc:
                 return CliAgentExecutionResult(
@@ -871,7 +895,16 @@ class CliAgentBrain(Brain):
         from guildbotics.intelligences.agent_runtime.store import ConversationStore
 
         store = ConversationStore(context.workspace_data_root)
-        adapter = await get_native_adapter(self.person_id, adapter_name, run_id)
+        # Evaluations must not evict the member's active work adapter.
+        from guildbotics.intelligences.agent_runtime.factory import (
+            create_native_adapter,
+        )
+
+        adapter = (
+            create_native_adapter(adapter_name)
+            if context.input_only
+            else await get_native_adapter(self.person_id, adapter_name, run_id)
+        )
         # A turn-scoped adapter re-sends its settings on every turn, so a change
         # never justifies discarding the session. For a session-scoped one the
         # fingerprint comes from what the adapter will really impose, so a
@@ -925,7 +958,13 @@ class CliAgentBrain(Brain):
                     details={"work_kind": context.conversation_key.work_kind},
                 )
             )
-            terminal = await adapter.run_turn(native_input, context, conversation, emit)
+            try:
+                terminal = await adapter.run_turn(
+                    native_input, context, conversation, emit
+                )
+            finally:
+                if context.input_only:
+                    await adapter.close()
         except asyncio.CancelledError:
             store.mark_unhealthy(conversation, "cancelled")
             raise

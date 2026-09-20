@@ -1355,7 +1355,7 @@ class AgentEnvironmentStatusResponse(BaseModel):
 class BrainAssignment(BaseModel):
     name: str
     brain_class: str
-    engine: Literal["llm", "cli"]
+    engine: Literal["llm", "cli", "jev"]
     target: str
 
 

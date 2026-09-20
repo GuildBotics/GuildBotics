@@ -109,6 +109,10 @@ class AgentExecutionContext:
     #: What the turn may reach beyond ``cwd``.
     contract: AccessContract = field(default_factory=AccessContract)
 
+    @property
+    def input_only(self) -> bool:
+        return self.contract.input_only
+
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:
             raise ValueError("Execution and conversation person_id must match.")

@@ -254,14 +254,16 @@ class SlackChatService(ChatService):
         if reaction not in _SLACK_REACTION_MAP:
             raise RuntimeError(f"Unsupported semantic reaction for Slack: {reaction}")
         reaction_name = _SLACK_REACTION_MAP[cast(SemanticReaction, reaction)]
-        await self._post_form(
-            "reactions.add",
-            {
-                "channel": channel_id,
-                "timestamp": message_ts,
-                "name": reaction_name,
-            },
-        )
+        try:
+            await self._post_form(
+                "reactions.add",
+                {"channel": channel_id, "timestamp": message_ts, "name": reaction_name},
+            )
+        except SlackApiError as exc:
+            # Repeating the same reaction after a crash between API success and
+            # evidence persistence must recover, not fail or add another action.
+            if exc.error != "already_reacted":
+                raise
 
     def normalize_participant_text(
         self, text: str, participant_labels: dict[str, str]

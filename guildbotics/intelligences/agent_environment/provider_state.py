@@ -135,6 +135,7 @@ class ProviderState:
     mounts: tuple[EnvironmentMount, ...]
     tool: CliAgentInfo
     turn_dir: Path | None = None
+    input_only: bool = False
 
     def release(self) -> None:
         """Copy the persisted files of a turn directory back and discard it.
@@ -147,7 +148,14 @@ class ProviderState:
             return
         try:
             store = provider_state_dir(self.tool)
-            for name in _persisted_files(self.tool):
+            entries = (
+                (self.tool.provision.auth,)
+                if self.input_only
+                else _persisted_files(self.tool)
+            )
+            for name in entries:
+                if not name:
+                    continue
                 source = _inside(self.turn_dir, name)
                 target = _inside(store, name)
                 if source is not None and source.is_file() and target is not None:
@@ -156,7 +164,9 @@ class ProviderState:
             shutil.rmtree(self.turn_dir, ignore_errors=True)
 
 
-def bind_state(tool: CliAgentInfo, home: Path | None = None) -> ProviderState:
+def bind_state(
+    tool: CliAgentInfo, home: Path | None = None, *, input_only: bool = False
+) -> ProviderState:
     """What a turn of ``tool`` binds of this device's store, and how it ends.
 
     A persisted directory is created in the store, so a first turn can fill
@@ -171,9 +181,11 @@ def bind_state(tool: CliAgentInfo, home: Path | None = None) -> ProviderState:
     provision = tool.provision
     store = provider_state_dir(tool)
     root = f"{guest_home(home)}/{provision.state_root}"
-    turn_dir = _turn_dir(tool) if provision.writable_root else None
+    turn_dir = _turn_dir(tool) if provision.writable_root or input_only else None
     mounts = [] if turn_dir is None else [EnvironmentMount(root, turn_dir, False)]
-    for entry in provision.persisted:
+    for entry in (provision.auth,) if input_only else provision.persisted:
+        if not entry:
+            continue
         name = entry.rstrip("/")
         host = _inside(store, name)
         if host is None:
@@ -188,6 +200,8 @@ def bind_state(tool: CliAgentInfo, home: Path | None = None) -> ProviderState:
             atomic_write_bytes(turn_dir / name, host.read_bytes())
             continue
         mounts.append(EnvironmentMount(f"{root}/{name}", host, False))
+    if input_only:
+        return ProviderState(tuple(mounts), tool, turn_dir, input_only=True)
     cache = cache_dir()
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))
