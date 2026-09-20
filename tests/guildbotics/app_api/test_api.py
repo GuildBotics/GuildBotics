@@ -1865,7 +1865,9 @@ def test_member_config_accepts_member_without_github_link(tmp_path: Path) -> Non
     assert not env_file.exists()
 
 
-def test_app_runtime_reports_missing_config(monkeypatch) -> None:
+def test_app_runtime_reports_missing_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     class MissingConfigEdition:
         def get_context(self, message: str = ""):
             raise FileNotFoundError(2, "No such file", "project.yml")
@@ -1874,6 +1876,11 @@ def test_app_runtime_reports_missing_config(monkeypatch) -> None:
         "guildbotics.app_api.runtime.get_edition",
         lambda: MissingConfigEdition(),
     )
+    config_dir = tmp_path / ".guildbotics/config"
+    project_file = config_dir / "team/project.yml"
+    project_file.parent.mkdir(parents=True)
+    project_file.write_text("language: en\n")
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(config_dir))
 
     runtime = AppRuntime(EventBus())
 
@@ -2768,13 +2775,15 @@ def test_config_project_update_maps_setup_service_error(
 # --- members -------------------------------------------------------------
 
 
-def test_member_config_get_reports_project_not_found(tmp_path: Path) -> None:
+def test_member_config_get_reports_missing_member_before_project_init(
+    tmp_path: Path,
+) -> None:
     client = _client(RuntimeStub(tmp_path))
 
     response = client.get("/config/members/alice", headers=AUTH_HEADERS)
 
     assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["code"] == "project_not_found"
+    assert response.json()["code"] == "person_not_found"
 
 
 def test_member_update_rejects_person_id_mismatch(tmp_path: Path) -> None:

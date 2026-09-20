@@ -1214,6 +1214,22 @@ describe("SetupPage", () => {
     vi.mocked(getTeam).mockRejectedValue(
       new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
     );
+    vi.mocked(addMemberConfig).mockImplementationOnce(async (request) => {
+      vi.mocked(getTeam).mockResolvedValue({
+        project: { name: "", language_code: "en", language_name: "English" },
+        default_person_id: "",
+        members: [
+          {
+            person_id: request.person_id,
+            name: request.person_name,
+            person_type: "agent",
+            is_active: request.is_active,
+            roles: request.roles ?? [],
+          },
+        ],
+      });
+      return configWriteResponse();
+    });
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
@@ -3089,22 +3105,73 @@ describe("MembersSection", () => {
     ]);
   });
 
-  it("keeps added members as drafts before the project is persisted", async () => {
+  it("reloads a saved member after leaving the members section during first setup", async () => {
     const user = userEvent.setup();
     vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
-    vi.mocked(getTeam).mockRejectedValue(
-      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
-    );
+    let members: Array<{
+      person_id: string;
+      name: string;
+      person_type: "agent";
+      is_active: boolean;
+      roles: string[];
+    }> = [];
+    vi.mocked(getTeam).mockImplementation(async () => ({
+      project: { name: "", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members,
+    }));
+    vi.mocked(addMemberConfig).mockImplementationOnce(async (request) => {
+      members = [
+        {
+          person_id: request.person_id,
+          name: request.person_name,
+          person_type: "agent",
+          is_active: request.is_active,
+          roles: request.roles ?? [],
+        },
+      ];
+      return configWriteResponse();
+    });
     renderSetupPage("/setup?section=members");
 
     await fillRequiredMemberBasics(user, { personId: "carol", personName: "Carol" });
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
-    // In draft (not yet persisted) mode the member appears in the list without a
-    // backend reload, and getMemberConfig is never queried.
     expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
-    expect(getMemberConfig).not.toHaveBeenCalled();
+    expect(screen.getByText("Input progress: 1 of 4 sections completed")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Project" }));
+    expect(screen.queryByText("Carol (carol)")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Members" }));
+
+    expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
+  });
+
+  it("loads saved members again after remounting first setup", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [
+        {
+          person_id: "carol",
+          name: "Carol",
+          person_type: "agent",
+          is_active: true,
+          roles: ["product"],
+        },
+      ],
+    });
+
+    const firstMount = renderSetupPage("/setup?section=members");
+    expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
+    firstMount.unmount();
+
+    renderSetupPage("/setup?section=members");
+
+    expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
+    expect(getTeam).toHaveBeenCalledTimes(2);
   });
 
   it("resolves a GitHub identity and fills username and email", async () => {

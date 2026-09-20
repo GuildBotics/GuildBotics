@@ -9,7 +9,7 @@ import shlex
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -136,6 +136,10 @@ from guildbotics.drivers.execution import (
     WorkSource,
 )
 from guildbotics.editions import get_edition
+from guildbotics.editions.simple.setup_service import (
+    PersonConfigSummary,
+    SimplePersonSetupService,
+)
 from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -414,8 +418,23 @@ class AppRuntime:
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
-        context = self._get_context()
-        project = context.team.project
+        status = self.get_config_status()
+        members: Sequence[Person | PersonConfigSummary]
+        if status.project_file_exists:
+            context = self._get_context()
+            project = context.team.project
+            members = context.team.members
+            default_person_id = context.team.get_default_person_id()
+        else:
+            project = Project()
+            members = (
+                SimplePersonSetupService().list_person_configs(
+                    config_dir=status.config_dir
+                )
+                if status.config_dir is not None
+                else []
+            )
+            default_person_id = ""
         return TeamSummary(
             project=ProjectSummary(
                 name=getattr(project, "name", ""),
@@ -426,13 +445,17 @@ class AppRuntime:
                 MemberSummary(
                     person_id=member.person_id,
                     name=member.name,
-                    person_type=getattr(member, "person_type", ""),
+                    person_type=member.person_type,
                     is_active=member.is_active,
-                    roles=sorted(member.roles.keys()),
+                    roles=sorted(
+                        member.roles.keys()
+                        if isinstance(member.roles, dict)
+                        else member.roles
+                    ),
                 )
-                for member in context.team.members
+                for member in members
             ],
-            default_person_id=context.team.get_default_person_id(),
+            default_person_id=default_person_id,
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:

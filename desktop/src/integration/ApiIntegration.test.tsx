@@ -468,12 +468,16 @@ describe("Service Runtime integration (real client + mock server)", () => {
 describe("Setup integration (real client + mock server)", () => {
   it("drives first-time setup to a member add and project init with real requests", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+    let members: Array<Record<string, unknown>> = [];
     const server = new MockServer()
       .json("GET", "/config/status", configStatus({ project_file_exists: false }))
       .json("POST", "/workspace", configStatus({ project_file_exists: false }))
       .on("GET", "/team", () => ({
-        status: 404,
-        body: { code: "not_found", message: "missing", context: {} },
+        body: {
+          project: { name: "", language_code: "en", language_name: "English" },
+          default_person_id: "",
+          members,
+        },
       }))
       .json("GET", "/config/project", projectConfig())
       .json("GET", "/commands/options", { options: [] })
@@ -512,7 +516,19 @@ describe("Setup integration (real client + mock server)", () => {
       .json("GET", "/config/roles", {
         roles: [{ role_id: "product", summary: "Product", description: "" }],
       })
-      .json("POST", "/config/members", configWriteResponse())
+      .on("POST", "/config/members", (request) => {
+        const body = request.body as Record<string, unknown>;
+        members = [
+          {
+            person_id: body.person_id,
+            name: body.person_name,
+            person_type: body.person_type,
+            is_active: body.is_active,
+            roles: body.roles,
+          },
+        ];
+        return { body: configWriteResponse() };
+      })
       .json("POST", "/config/init", configWriteResponse());
     const user = userEvent.setup();
     renderSetup(server, "/setup");

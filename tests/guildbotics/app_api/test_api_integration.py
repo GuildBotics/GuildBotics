@@ -67,6 +67,58 @@ def _init_project(
     assert response.status_code == HTTP_OK
 
 
+def test_temp_workspace_member_flow_before_project_init(
+    client: TestClient, workspace: Path
+) -> None:
+    config_dir = workspace / ".guildbotics/config"
+    member_request = {
+        "config_dir": str(config_dir),
+        "person_type": "agent",
+        "person_id": "local-agent",
+        "person_name": "Local Agent",
+        "is_active": True,
+        "github_username": "",
+        "git_email": "",
+        "roles": ["architect"],
+        "speaking_style": "concise",
+    }
+
+    with client:
+        created = client.post(
+            "/config/members", headers=AUTH_HEADERS, json=member_request
+        )
+        team = client.get("/team", headers=AUTH_HEADERS)
+        snapshot = client.get("/config/members/local-agent", headers=AUTH_HEADERS)
+        updated = client.put(
+            "/config/members/local-agent",
+            headers=AUTH_HEADERS,
+            json={
+                **member_request,
+                "original_person_id": "local-agent",
+                "person_name": "Renamed Agent",
+                "expected_revisions": snapshot.json()["revisions"],
+            },
+        )
+        refreshed_team = client.get("/team", headers=AUTH_HEADERS)
+
+    assert not (config_dir / "team/project.yml").exists()
+    assert created.status_code == HTTP_OK
+    assert team.status_code == HTTP_OK
+    assert team.json()["members"] == [
+        {
+            "person_id": "local-agent",
+            "name": "Local Agent",
+            "person_type": "agent",
+            "is_active": True,
+            "roles": ["architect"],
+        }
+    ]
+    assert snapshot.status_code == HTTP_OK
+    assert snapshot.json()["person_name"] == "Local Agent"
+    assert updated.status_code == HTTP_OK
+    assert refreshed_team.json()["members"][0]["name"] == "Renamed Agent"
+
+
 def test_temp_workspace_init_project_member_team_flow(
     client: TestClient, workspace: Path
 ) -> None:

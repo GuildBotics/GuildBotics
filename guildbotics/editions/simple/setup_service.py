@@ -312,6 +312,14 @@ class PersonSetupResult(BaseModel):
     files: list[CreatedFile]
 
 
+class PersonConfigSummary(BaseModel):
+    person_id: str
+    name: str
+    person_type: str = ""
+    is_active: bool
+    roles: list[str] = Field(default_factory=list)
+
+
 class PersonConfigSnapshot(BaseModel):
     person_id: str
     person_name: str
@@ -823,6 +831,37 @@ class SimplePersonSetupService:
             store.get(f"{prefix}_SLACK_BOT_TOKEN") or "",
             store.get(f"{prefix}_SLACK_APP_TOKEN") or "",
         )
+
+    def list_person_configs(self, *, config_dir: Path) -> list[PersonConfigSummary]:
+        """Read the member list without requiring a project config or secrets."""
+        members_dir = config_dir / "team/members"
+        if not members_dir.exists():
+            return []
+
+        members = []
+        for person_dir in sorted(members_dir.iterdir()):
+            person_file = person_dir / "person.yml"
+            if not person_dir.is_dir() or not person_file.exists():
+                continue
+            person_data = cast(dict, load_yaml_file(person_file))
+            profile = person_data.get("profile", {})
+            configured_roles = (
+                profile.get("roles", {}) if isinstance(profile, dict) else {}
+            )
+            members.append(
+                PersonConfigSummary(
+                    person_id=str(person_data.get("person_id", person_dir.name)),
+                    name=str(person_data.get("name", "")),
+                    person_type=str(person_data.get("person_type", "")),
+                    is_active=bool(person_data.get("is_active", False)),
+                    roles=(
+                        list(configured_roles.keys())
+                        if isinstance(configured_roles, dict)
+                        else []
+                    ),
+                )
+            )
+        return members
 
     def read_person_config(
         self, *, config_dir: Path, person_id: str

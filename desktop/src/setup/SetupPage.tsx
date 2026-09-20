@@ -433,9 +433,11 @@ export function SetupPage() {
   });
 
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
-  const persistedTeam = hasExistingProject ? team.data : undefined;
-  const projectLanguage = normalizeLanguage(persistedTeam?.project.language_code);
-  const activeMemberCount = (persistedTeam?.members ?? []).filter(
+  const teamSummary = team.data;
+  const projectLanguage = normalizeLanguage(
+    hasExistingProject ? teamSummary?.project.language_code : undefined,
+  );
+  const activeMemberCount = (teamSummary?.members ?? []).filter(
     (member) => member.is_active,
   ).length;
   const provisionedCliAgentNames = useMemo(
@@ -489,7 +491,6 @@ export function SetupPage() {
   const [focusGrant] = useState(searchParams.get("grant")?.trim() || undefined);
   const openAdvanced = searchParams.get("advanced") === "intelligence";
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [draftActiveMemberCount, setDraftActiveMemberCount] = useState(0);
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const [pendingWorkspaceSwitch, setPendingWorkspaceSwitch] = useState("");
   const [forceWorkspaceSwitching, setForceWorkspaceSwitching] = useState(false);
@@ -515,9 +516,6 @@ export function SetupPage() {
     }
     return result;
   }, [llmProviders.data, form.values, storedProviderKeys]);
-  const effectiveActiveMemberCount = hasExistingProject
-    ? activeMemberCount
-    : draftActiveMemberCount;
   const coreSections: readonly CoreSection[] = hasExistingProject
     ? CORE_SETUP_SECTIONS_CONFIGURED
     : CORE_SETUP_SECTIONS_INITIAL;
@@ -525,11 +523,11 @@ export function SetupPage() {
     () =>
       getInitialCoreStatus(
         form.values,
-        effectiveActiveMemberCount,
+        activeMemberCount,
         selectedCliAgentProvisioned,
         storedProviderKeys,
       ),
-    [effectiveActiveMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys],
+    [activeMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys],
   );
   const activeSection = coreSections.includes(section) ? section : coreSections[0];
   const currentCoreSectionIndex = coreSections.indexOf(activeSection);
@@ -560,7 +558,7 @@ export function SetupPage() {
     form.resetDirty(initialValues);
   }, [form, initialValues, serializedInitialValues]);
 
-  const setupStatus = useSetupStatus(config.data, effectiveActiveMemberCount, form.values);
+  const setupStatus = useSetupStatus(config.data, activeMemberCount, form.values);
   const visibleStatus = hasExistingProject ? setupStatus : initialProgress;
   const currentSectionReady = currentCoreSection
     ? isCoreSectionReady(currentCoreSection, visibleStatus)
@@ -647,7 +645,6 @@ export function SetupPage() {
     if (workspaceSwitchId.current !== switchId) {
       return;
     }
-    setDraftActiveMemberCount(0);
     // Drop the previous workspace's snapshots outright: `setQueryData(key,
     // undefined)` bails out instead of clearing, and a query disabled by the
     // new workspace state is never refetched, so stale data would survive and
@@ -822,14 +819,14 @@ export function SetupPage() {
             <VerificationSection
               config={config.data}
               projectConfig={projectConfig.data}
-              activeMemberCount={effectiveActiveMemberCount}
+              activeMemberCount={activeMemberCount}
             />
           ) : null}
           {activeSection === "members" ? (
             <MembersSection
-              activeMemberCount={effectiveActiveMemberCount}
-              members={persistedTeam?.members ?? []}
-              defaultPersonId={persistedTeam?.default_person_id ?? ""}
+              activeMemberCount={activeMemberCount}
+              members={teamSummary?.members ?? []}
+              defaultPersonId={teamSummary?.default_person_id ?? ""}
               config={config.data}
               workspaceDir={form.values.workspaceDir}
               projectGithubEnabled={form.values.githubDecision === "enabled"}
@@ -843,12 +840,6 @@ export function SetupPage() {
               initialTab={focusMemberTab}
               initialMemberId={focusMemberId}
               initialSlot={focusSlot}
-              onMemberActiveDelta={(delta) => {
-                if (!hasExistingProject && delta !== 0) {
-                  setDraftActiveMemberCount((count) => Math.max(0, count + delta));
-                }
-                queryClient.invalidateQueries({ queryKey: ["team"] });
-              }}
             />
           ) : null}
         </Stack>
@@ -2945,7 +2936,6 @@ function MembersSection({
   initialTab,
   initialMemberId,
   initialSlot,
-  onMemberActiveDelta,
 }: {
   activeMemberCount: number;
   members: Array<{
@@ -2968,7 +2958,6 @@ function MembersSection({
   initialMemberId?: string;
   /** An AI CLI slot to open in that member's intelligence tab. */
   initialSlot?: string;
-  onMemberActiveDelta: (delta: number) => void;
 }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -3034,7 +3023,6 @@ function MembersSection({
   const [identityResolveError, setIdentityResolveError] = useState("");
   const [savingMember, setSavingMember] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [draftMembers, setDraftMembers] = useState<MemberConfig[]>([]);
   const memberIntelligenceSaveRef = useRef<AdvancedSave | null>(null);
   const emptyAddDefaultsAppliedRef = useRef(false);
   const routineDefaultDismissedRef = useRef(false);
@@ -3191,23 +3179,12 @@ function MembersSection({
     () => getCharacterPresetExamples(appLanguage),
     [appLanguage],
   );
-  const displayedMembers = useMemo(() => {
-    const persistedIds = new Set(members.map((member) => member.person_id));
-    return [
-      ...members,
-      ...draftMembers
-        .filter((member) => !persistedIds.has(member.person_id))
-        .map((member) => ({
-          person_id: member.person_id,
-          name: member.person_name,
-          person_type: member.person_type,
-          is_active: member.is_active,
-          roles: member.roles,
-        })),
-    ].sort((a, b) => a.name.localeCompare(b.name));
-  }, [draftMembers, members]);
-  // Only saved agent members can execute commands, so drafts, humans and
-  // inactive members are never default-executor candidates. A member that was
+  const displayedMembers = useMemo(
+    () => [...members].sort((a, b) => a.name.localeCompare(b.name)),
+    [members],
+  );
+  // Only active agent members can execute commands, so humans and inactive
+  // members are never default-executor candidates. A member that was
   // deactivated while configured stays listed, otherwise the stored setting
   // would be unreachable from this screen.
   const defaultPersonOptions = useMemo(
@@ -3433,14 +3410,7 @@ function MembersSection({
   });
   const addMemberMutation = useMutation({
     mutationFn: addMemberConfig,
-    onSuccess: (written, request) => {
-      if (!hasPersistedProject) {
-        setDraftMembers((current) => [
-          ...current.filter((member) => member.person_id !== request.person_id),
-          memberRequestToConfig(request, written.revisions),
-        ]);
-      }
-      onMemberActiveDelta(effectiveIsActive ? 1 : 0);
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["command-options"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler"] });
@@ -3458,22 +3428,10 @@ function MembersSection({
       originalPersonId: string;
       body: MemberConfigUpdateRequest;
     }) => updateMemberConfig(originalPersonId, body),
-    onSuccess: (written, variables) => {
+    onSuccess: (written) => {
       // The screen stays open on the member that was just saved, so without
       // this its next save would be composed against the revision it replaced.
       setMemberRevisions(written.revisions);
-      const previous =
-        members.find((member) => member.person_id === variables.originalPersonId) ??
-        draftMembers.find((member) => member.person_id === variables.originalPersonId);
-      const previousActive = previous?.is_active ?? false;
-      const delta = Number(effectiveIsActive) - Number(previousActive);
-      if (!hasPersistedProject) {
-        setDraftMembers((current) => [
-          ...current.filter((member) => member.person_id !== variables.originalPersonId),
-          memberRequestToConfig(variables.body, written.revisions),
-        ]);
-      }
-      onMemberActiveDelta(delta);
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["command-options"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler"] });
@@ -3485,16 +3443,7 @@ function MembersSection({
       deleteMemberConfig(targetPersonId, {
         config_dir: configDir,
       }),
-    onSuccess: (_, variables) => {
-      const removed =
-        members.find((member) => member.person_id === variables.targetPersonId) ??
-        draftMembers.find((member) => member.person_id === variables.targetPersonId);
-      if (!hasPersistedProject) {
-        setDraftMembers((current) =>
-          current.filter((member) => member.person_id !== variables.targetPersonId),
-        );
-      }
-      onMemberActiveDelta(removed?.is_active ? -1 : 0);
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["team"] });
       memberDiagnosticsMutation.reset();
       clearForm();
@@ -3832,22 +3781,6 @@ function MembersSection({
     try {
       const request = buildMemberRequest();
       if (formMode === "edit" && editingPersonId) {
-        if (!hasPersistedProject) {
-          const previous =
-            draftMembers.find((member) => member.person_id === editingPersonId) ??
-            members.find((member) => member.person_id === editingPersonId);
-          const delta = Number(effectiveIsActive) - Number(previous?.is_active ?? false);
-          setDraftMembers((current) => [
-            ...current.filter((member) => member.person_id !== editingPersonId),
-            memberRequestToConfig(
-              { ...request, original_person_id: editingPersonId },
-              memberRevisions,
-            ),
-          ]);
-          onMemberActiveDelta(delta);
-          setEditingPersonId(personId.trim());
-          return;
-        }
         await updateMemberMutation.mutateAsync({
           originalPersonId: editingPersonId,
           body: {
@@ -3902,12 +3835,6 @@ function MembersSection({
     setMemberRevisions({});
     setEditingPersonId(memberId);
     setActiveTab(initialTab ?? "basic");
-    const draft = draftMembers.find((member) => member.person_id === memberId);
-    if (draft && !hasPersistedProject) {
-      fillFormFromMember(draft);
-      setMode("edit");
-      return;
-    }
     memberConfigMutation.mutate(memberId);
   };
 
@@ -6948,41 +6875,6 @@ export function parseGitHub(projectUrl: string) {
 
 function joinPath(base: string, suffix: string) {
   return `${base.replace(/\/$/, "")}/${suffix}`;
-}
-
-function memberRequestToConfig(
-  request: MemberSetupRequest | MemberConfigUpdateRequest,
-  revisions: ConfigRevisions,
-): MemberConfig {
-  return {
-    // Where the write left this member's files, read before the backend
-    // released the lock. The screen stays open, so its next save stands here.
-    revisions,
-    person_id: request.person_id,
-    person_name: request.person_name,
-    person_type: request.person_type,
-    github_account_type: request.github_account_type,
-    is_active: request.is_active,
-    github_username: request.github_username,
-    git_email: request.git_email,
-    roles: request.roles ?? [],
-    speaking_style: request.speaking_style ?? "",
-    relationships: request.relationships ?? "",
-    character: request.character ?? {},
-    github_installation_id: request.github_installation_id ?? null,
-    github_app_id: request.github_app_id ?? null,
-    has_github_installation_id: Boolean(request.github_installation_id),
-    has_github_app_id: Boolean(request.github_app_id),
-    has_github_private_key: Boolean(request.github_private_key_path),
-    has_github_access_token: Boolean(request.github_access_token),
-    slack_user_id: request.slack_user_id ?? "",
-    has_slack_bot_token: Boolean(request.slack_bot_token),
-    has_slack_app_token: Boolean(request.slack_app_token),
-    slack_channels: request.slack_channels ?? [],
-    slack_channel_participation: request.slack_channel_participation ?? {},
-    routine_commands: request.routine_commands ?? [],
-    task_schedules: request.task_schedules ?? [],
-  };
 }
 
 function flattenTaskSchedules(taskSchedules: MemberTaskSchedule[]) {

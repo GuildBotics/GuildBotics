@@ -56,11 +56,16 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("combobox", { name: "Roles", exact: true }).click();
   await page.getByRole("option", { name: "product" }).click();
   await page.getByRole("button", { name: "Add member" }).click();
+  const memberList = page.getByRole("list", { name: "Members" });
+  await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
 
-  // Enable GitHub after the member draft is complete, then provide the Project
+  // Enable GitHub after the member is saved, then provide the Project
   // URL. Both live in the Project section; the GitHub section derives its lane
   // fields from the URL typed here, and shows only a "not set" notice until it
   // parses.
+  await page.getByRole("button", { name: "Project", exact: true }).click();
+  await page.getByRole("button", { name: "Members", exact: true }).click();
+  await expect(memberList.getByText("Local Agent (local-agent)", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Project", exact: true }).click();
   await page.getByRole("combobox", { name: "GitHub integration", exact: true }).click();
   await page.getByRole("option", { name: "Use GitHub", exact: true }).click();
