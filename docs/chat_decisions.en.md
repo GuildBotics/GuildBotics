@@ -4,9 +4,9 @@ In **Setup → LLM / AI CLI tools → Advanced → Chat judgment engine**, selec
 
 - **LLM** uses an existing model slot, including its provider, model, parameters, and credentials.
 - **CLI** uses an existing AI CLI slot and its model/effort settings through the shared Codex, Claude, Grok, Copilot, or Antigravity adapter. Prepare the device environment and log in first.
-- **Jev** uses `jev-latest`, which follows the latest official release. No model selection is needed. Its API key field appears when Jev is selected. Enter a key and use the section’s **Save** button to save both settings and credentials. A blank field keeps the registered key. The key is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
+- **Jev** uses `jev-latest`, which follows the latest official release. No model selection is needed. Its API key field appears when Jev is selected. Enter a key and use the section’s **Save** button to save both settings and credentials. Registered keys appear masked. Leave the field unchanged to keep the registered key. The key is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
 
-The **Chat judgment engine** card sits between the AI CLI tool definitions and the environment declaration. It shows the saved engine, slot, and configured model, plus whether a member's assignment is inherited or overridden. A CLI slot without an explicit model shows **CLI default (determined at execution)**. Unsaved edits do not replace this saved summary.
+The **Chat judgment engine** card sits between the AI CLI tool definitions and the environment declaration. Select the engine and, for LLM or CLI, the slot to use. Model settings belong to the selected slot.
 
 Switching to LLM or CLI hides the Jev key field and retains the registered key. Saving does not invoke a model. Missing credentials, execution failures, and malformed responses delegate to the response agent.
 

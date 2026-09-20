@@ -12,24 +12,14 @@ const resources = {
     translation: {
       decision: {
         title: "Chat judgment engine",
-        savedSelection: "Saved configuration",
-        savedEngine: "Engine: {{value}}",
-        savedSlot: "Slot: {{value}}",
-        savedModel: "Configured model: {{value}}",
-        cliDefaultModel: "CLI default (determined at execution)",
-        notConfigured: "Not configured",
-        inheritedAssignment: "Assignment: inherited from the team",
-        memberAssignment: "Assignment: overridden for this member",
-        unresolvedSlot: "The assigned slot could not be resolved.",
         team: "Applies to all members unless overridden in member settings.",
-        member: "Shows this member’s saved assignment and resolved slot settings.",
+        member: "Applies to this member’s chat judgment.",
         key: "Jev API key",
         keySaveHint:
-          "Save with the button at the top of this section. Leave blank to keep the registered key.",
+          "Enter a new key to register or replace it, then save with the button at the top of this section.",
         jevLatest: "Uses jev-latest (latest official release).",
         assignmentHint:
           "Select the engine and target below, then save at the top of this section. LLM and CLI use the existing slots.",
-        keyPresent: "Jev key registered.",
         keyMissing: "Jev key not registered.",
         failed: "Could not load or save. Retry; the current selection is preserved.",
         fallback:
@@ -2074,24 +2064,14 @@ const resources = {
     translation: {
       decision: {
         title: "チャット判断エンジン",
-        savedSelection: "保存済みの設定",
-        savedEngine: "エンジン: {{value}}",
-        savedSlot: "割り当てスロット: {{value}}",
-        savedModel: "設定モデル: {{value}}",
-        cliDefaultModel: "CLI の既定（実行時に決定）",
-        notConfigured: "未設定",
-        inheritedAssignment: "割り当て: チーム設定を継承",
-        memberAssignment: "割り当て: このメンバーで上書き",
-        unresolvedSlot: "割り当て先のスロットを解決できません。",
         team: "メンバー設定で上書きしない限り、チーム全体に適用します。",
-        member: "このメンバーの保存済みの割り当てと、そのスロット設定を表示します。",
+        member: "このメンバーのチャット判断に適用します。",
         key: "Jev API キー",
         keySaveHint:
-          "セクション上部の保存ボタンで保存します。空欄の場合は登録済みのキーを維持します。",
+          "キーを登録・変更する場合は新しいキーを入力してください。セクション上部の保存ボタンで保存します。",
         jevLatest: "jev-latest（最新の正式版）を使用します。",
         assignmentHint:
           "エンジンと割り当て先を選び、このセクション上部の保存ボタンで保存します。LLM／CLI は既存のスロットを使います。",
-        keyPresent: "Jev のキーは登録済みです。",
         keyMissing: "Jev のキーは未登録です。",
         failed: "取得または保存に失敗しました。選択値を保持しています。再試行してください。",
         fallback:

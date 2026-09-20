@@ -2359,7 +2359,6 @@ function IntelligenceEditor({
       apiKey={jevKey}
       onApiKeyChange={setJevKey}
       credentialError={credential.isError}
-      selection={query.data?.chat_decision}
     >
       {!draft.inherited &&
         renderBrainAssignment(

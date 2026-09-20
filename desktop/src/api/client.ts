@@ -1131,7 +1131,6 @@ export type IntelligenceConfig = {
   cli_agent_mapping: Record<string, string>;
   cli_agents: CliAgentDefinition[];
   brain_mapping: BrainAssignment[];
-  chat_decision?: ChatDecisionSelection | null;
   // The workspace's shared grants (the team's, whichever scope is read) and
   // this device's own extra paths.
   filesystem_grants?: SharedGrants;
@@ -1145,15 +1144,6 @@ export type IntelligenceConfig = {
   inherited_model_slots?: string[];
   inherited_cli_slots?: string[];
   inherited_brain_features?: string[];
-};
-
-export type ChatDecisionSelection = {
-  engine: "llm" | "cli" | "jev";
-  provider: string;
-  slot: string;
-  model: string;
-  assignment_inherited: boolean;
-  resolved: boolean;
 };
 
 export type IntelligenceConfigUpdateRequest = {

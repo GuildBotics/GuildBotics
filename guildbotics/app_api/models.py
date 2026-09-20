@@ -1360,15 +1360,6 @@ class LlmProvidersResponse(BaseModel):
     providers: list[LlmProviderInfo] = Field(default_factory=list)
 
 
-class ChatDecisionSelection(BaseModel):
-    engine: Literal["llm", "cli", "jev"]
-    provider: str = ""
-    slot: str = ""
-    model: str = ""
-    assignment_inherited: bool = False
-    resolved: bool = True
-
-
 class IntelligenceConfigResponse(BaseModel):
     config_dir: Path
     revisions: dict[str, str] = Field(default_factory=dict)
@@ -1379,8 +1370,6 @@ class IntelligenceConfigResponse(BaseModel):
     cli_agent_mapping: dict[str, str] = Field(default_factory=dict)
     cli_agents: list[CliAgentDefinition] = Field(default_factory=list)
     brain_mapping: list[BrainAssignment] = Field(default_factory=list)
-    #: Read-only summary of the saved assignment, using this scope's slot definitions.
-    chat_decision: ChatDecisionSelection | None = None
     #: The workspace's shared grants (documents). They are the team's,
     #: whichever scope is read, and only the team scope writes them.
     filesystem_grants: SharedGrants = Field(default_factory=SharedGrants)
