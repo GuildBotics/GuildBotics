@@ -90,7 +90,7 @@ Jev's [API](https://docs.typesafe.ai/api) and [model documentation](https://docs
 
 The [evaluation data](evaluations/chat_decisions_2026-09-20.json) includes predefined agent-start labels and acceptable reactions, conversation inputs, questions, raw answers, timings, and evaluation IDs. Jev `jev-1.13.0` and Agno / OpenAI `gpt-5.6-luna` were each called once per case, with median times of 917 ms and 4,649 ms. Repeated identical Jev requests do not add independent samples. The earlier Noul study contained 48 distinct conversations; three calls each do not make 144 cases.
 
-The table applies Noul 0.4/0.6 and highest-probability Choice adoption to saved answers. Historical `effort_*` question names were mapped to `work_*` and routed with the then-current rule version `chat-3`. **The original question version was `chat-1`: these are not live evaluations of current questions `chat-3`.** Values are reaction names, `no-op`, or `agent`.
+The table applies Noul 0.4/0.6 and highest-probability Choice adoption to saved answers. Historical `effort_*` question names were mapped to `work_*` and routed with the then-current rule version `chat-3`. Applying the current rule version `chat-4` to the same answers preserves the routes and reactions, so the table values remain unchanged. Only the adoption reasons and their priority change. **The original question version was `chat-1`: these are not live evaluations of current questions `chat-3`.** Values are reaction names, `no-op`, or `agent`.
 
 | Case (case ID suffix in the dataset) | Expected agent start | Jev | Agno |
 | --- | --- | --- | --- |
