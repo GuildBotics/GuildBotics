@@ -22,7 +22,9 @@ The corresponding file under `team/members/<person_id>/intelligences/` overrides
 
 After the existing mention and participation gates, the workflow evaluates the entire unread batch once, together with thread history, standing roles, character, handoffs, and recorded actions. Corrections and cancellations apply across the batch. Twelve independent yes/no questions cover context, unanswered requests, useful contribution, acknowledgment, repetition, social fit, handoffs, and effort. One Choice question selects `ack`, `agree`, `celebrate`, `support`, or `none` for the last non-self message in the batch.
 
-Jev probabilities at or above `0.9` become true and at or below `0.1` become false. Values between those bounds remain unknown. A Choice is adopted only when the selected criterion's probability is at least `0.9`. Agno and AI CLI return explicit true, false, or unknown; their optional confidence is preserved as reported, without treating it as a Jev probability.
+Jev Noul probabilities at or above `0.6` become true and at or below `0.4` become false. Values between those bounds remain unknown. A Choice is adopted only when the selected criterion's probability is at least `0.9`. Agno and AI CLI return explicit true, false, or unknown; their optional confidence is preserved as reported, without treating it as a Jev probability.
+
+The current adoption version is `jev-noul-0.4-0.6-choice-0.9-2/structured-1`. After evaluating 48 new synthetic Japanese conversations beyond the initial eight cases, the Noul range was adopted provisionally for operational validation. Preventing missed obligations takes priority over avoiding unnecessary agent starts. If an unknown prevents establishing that no substantive response is needed, the agent runs. The Choice threshold is unchanged.
 
 The shared questions preserve the response prompt's responsibilities:
 
@@ -94,13 +96,13 @@ These are individual observations, not an accuracy estimate. Costs were not retu
 
 The 0.1/0.9 cutoffs are the initial values specified in Issue #543; they were not calibrated for this use case. Jev thresholds the Noul probability of yes and the probability of the selected Choice option. Choice's distribution-derived `confidence` is recorded but is not the adoption threshold. Agno and AI CLI answers are structured assertions, with no numeric threshold. The shared questions and downstream rules therefore do **not** constitute a comparison at matched error rates. An Agno `true` assertion does not provide the same guarantee as a Jev probability above 0.9.
 
-For the acknowledgment case, Jev returned context sufficiency 0.78, pending request 0.07, repository research 0.14, and a `support` reaction probability of 0.62. Context becomes unknown and starts the agent; relaxing that gate alone still leaves research and reaction uncertainty. Since Jev skipped no starts, its zero unsafe skips do not validate the safety of skipping.
+For the acknowledgment case, Jev returned context sufficiency 0.78, pending request 0.07, repository research 0.14, and a `support` reaction probability of 0.62. At the initial cutoffs, context became unknown and started the agent; relaxing that gate alone still left research and reaction uncertainty. Since Jev skipped no starts, its zero unsafe skips do not validate the safety of skipping.
 
 Applying alternative thresholds only to the saved answers gives the following sensitivity analysis. This does not rerun a model or change operational settings.
 
 | Noul false ceiling / true floor | Choice adoption floor | Skipped starts |
 | --- | --- | --- |
-| 0.1 / 0.9 (current) | 0.9 | 0 / 8 |
+| 0.1 / 0.9 (initial) | 0.9 | 0 / 8 |
 | 0.2 / 0.8 | 0.8 | 0 / 8 |
 | 0.3 / 0.7 | 0.7 | 0 / 8 |
 | 0.4 / 0.6 | 0.6 | 2 / 8 |

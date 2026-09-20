@@ -117,7 +117,13 @@ def test_three_valued_algebra(values):
 
 @pytest.mark.parametrize(
     "prob,value",
-    [(0.1, "false"), (0.100001, "unknown"), (0.899999, "unknown"), (0.9, "true")],
+    [
+        (0.4, "false"),
+        (0.400001, "unknown"),
+        (0.5, "unknown"),
+        (0.599999, "unknown"),
+        (0.6, "true"),
+    ],
 )
 def test_jev_noul_thresholds(prob, value):
     raw = {"context_sufficient": {"type": "noul", "noul": prob}}
@@ -129,7 +135,9 @@ def test_jev_noul_thresholds(prob, value):
     assert answer.confidence is None
 
 
-@pytest.mark.parametrize("p,value", [(0.899999, "unknown"), (0.9, "ack")])
+@pytest.mark.parametrize(
+    "p,value", [(0.6, "unknown"), (0.899999, "unknown"), (0.9, "ack")]
+)
 def test_choice_uses_probability_not_confidence(p, value):
     item = {
         "type": "choice",

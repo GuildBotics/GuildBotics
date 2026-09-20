@@ -5,8 +5,9 @@ from typing import Any
 
 from guildbotics.intelligences.decisions.models import Answer, Question
 
-YES_THRESHOLD = 0.9
-NO_THRESHOLD = 0.1
+NOUL_YES_THRESHOLD = 0.6
+NOUL_NO_THRESHOLD = 0.4
+CHOICE_THRESHOLD = 0.9
 
 
 def probability(value: Any) -> float:
@@ -35,9 +36,9 @@ def normalize(
                 probabilities = {"true": p, "false": 1 - p}
                 value: Any = (
                     "true"
-                    if p >= YES_THRESHOLD
+                    if p >= NOUL_YES_THRESHOLD
                     else "false"
-                    if p <= NO_THRESHOLD
+                    if p <= NOUL_NO_THRESHOLD
                     else "unknown"
                 )
             else:
@@ -57,7 +58,9 @@ def normalize(
                 if probabilities[choice] != max(probabilities.values()):
                     raise ValueError("contradictory_choice")
                 confidence = probability(item.get("confidence"))
-                value = choice if probabilities[choice] >= YES_THRESHOLD else "unknown"
+                value = (
+                    choice if probabilities[choice] >= CHOICE_THRESHOLD else "unknown"
+                )
         else:
             value = item.get("value")
             permitted = (
