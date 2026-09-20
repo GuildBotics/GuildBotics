@@ -18,6 +18,7 @@ from guildbotics.observability.session_transcripts import (
 )
 from guildbotics.observability.trace_status import TraceStatus
 from guildbotics.observability.trace_title import (
+    CompletionSummary,
     first_seen_attributes,
     resolve_trace_title,
 )
@@ -29,11 +30,6 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 DEFAULT_DIAGNOSTICS_MAX_BYTES = 8 * 1024 * 1024
-
-#: ``(trace attributes, person_id) -> the run's recorded completion summary``.
-#: The store knows nothing about runs; the caller that does supplies this so
-#: the execution list and the activity timeline title a trace the same way.
-CompletionSummary = Callable[[dict[str, Any], str], str]
 
 
 def default_store_path() -> Path:
@@ -664,13 +660,10 @@ def _finalize_summary(
     summary["title"] = resolve_trace_title(
         records,
         summary["attributes"],
+        person_id=summary["person_id"],
         command=summary["command"],
         workflow=summary["workflow"],
-        completion_summary=(
-            completion_summary(summary["attributes"], summary["person_id"])
-            if completion_summary is not None
-            else ""
-        ),
+        completion_summary=completion_summary,
         fallback=summary["trace_id"],
     )
     return summary, text

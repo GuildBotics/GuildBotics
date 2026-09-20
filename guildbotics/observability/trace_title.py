@@ -15,7 +15,7 @@ operations, they never become an activity link.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from guildbotics.utils.i18n_tool import t
@@ -69,45 +69,61 @@ def github_reference_label(kind: str, number: str) -> str:
     return f"GitHub #{number}"
 
 
+#: ``(trace attributes, person_id) -> the run's recorded completion summary``.
+#: The trace holds no run record; the caller that has them supplies this. It
+#: is asked only when the trace names no PR / issue, since reading run
+#: records costs a directory scan.
+CompletionSummary = Callable[[Mapping[str, Any], str], str]
+
+
 def resolve_trace_title(
     records: Iterable[Mapping[str, Any]],
     attributes: Mapping[str, Any],
     *,
+    person_id: str = "",
     command: str = "",
     workflow: str = "",
-    completion_summary: str = "",
+    completion_summary: CompletionSummary | None = None,
     fallback: str = "",
 ) -> str:
     """Return the title both screens show for one trace.
 
+    Candidates are evaluated in order and only as far as needed, so the
+    completion summary lookup never runs for a trace whose target is known.
+
     Args:
         records: The trace's records in timestamp order.
         attributes: The trace's merged attributes (first-seen wins).
+        person_id: The member the trace belongs to.
         command: The command that opened the trace.
         workflow: The workflow that opened the trace.
-        completion_summary: The member's recorded completion summary for the
-            run, when one exists.
+        completion_summary: Looks up the member's recorded completion summary
+            for the run, when the caller has run records.
         fallback: What to return when nothing names the trace (its id).
     """
     records = list(records)
-    for value in (
-        attributes.get("github.title"),
-        _first_line(completion_summary),
-        attributes.get("memory.title"),
-        _first_payload_text(records, "title"),
-        github_reference_label(
+    candidates: tuple[Callable[[], object], ...] = (
+        lambda: attributes.get("github.title"),
+        lambda: _first_line(
+            completion_summary(attributes, person_id) if completion_summary else ""
+        ),
+        lambda: attributes.get("memory.title"),
+        lambda: _first_payload_text(records, "title"),
+        lambda: github_reference_label(
             str(attributes.get("github.kind") or ""),
             str(attributes.get("github.number") or ""),
         ),
-        _trigger_label(attributes),
-        _first_payload_field(records, "prompt"),
-        workflow,
-        command,
-        attributes.get("memory.doc_id"),
-        _first_payload_field(records, "brain"),
-        _first_payload_field(records, "cli_agent"),
-        _first_record_text(records, "type", "event", "message"),
-    ):
+        lambda: _trigger_label(attributes),
+        lambda: _first_payload_field(records, "prompt"),
+        lambda: workflow,
+        lambda: command,
+        lambda: attributes.get("memory.doc_id"),
+        lambda: _first_payload_field(records, "brain"),
+        lambda: _first_payload_field(records, "cli_agent"),
+        lambda: _first_record_text(records, "type", "event", "message"),
+    )
+    for candidate in candidates:
+        value = candidate()
         if value:
             return str(value)
     return fallback

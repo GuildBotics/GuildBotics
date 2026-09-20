@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -24,9 +24,9 @@ from guildbotics.app_api.models import (
     ActivityHistorySession,
 )
 from guildbotics.entities.team import Person
-from guildbotics.observability.diagnostics_store import CompletionSummary
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.observability.trace_title import (
+    CompletionSummary,
     first_seen_attributes,
     is_read_only_record,
     resolve_trace_title,
@@ -145,9 +145,10 @@ def _summarize_trace(
         title=resolve_trace_title(
             records,
             attributes,
+            person_id=person_id,
             command=command,
             workflow=workflow,
-            completion_summary=completion_summary(attributes, person_id),
+            completion_summary=completion_summary,
             fallback=trace_id,
         ),
         mode=mode,
@@ -352,7 +353,7 @@ def _first_text(records: list[dict[str, Any]], key: str) -> str:
     return ""
 
 
-def run_subject_id(attributes: dict[str, Any]) -> str:
+def run_subject_id(attributes: Mapping[str, Any]) -> str:
     """Reconstruct the run subject id from trace attributes.
 
     Mirrors the ``subject_id`` a workflow records on completion so a trace can

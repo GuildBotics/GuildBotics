@@ -29,15 +29,46 @@ def test_target_title_wins_over_everything_else() -> None:
         [{"payload": {"title": "PR #544 の作業記録"}}],
         {"github.title": ISSUE_TITLE, "github.kind": "issue", "github.number": "544"},
         command="workflows/ticket_driven_workflow",
-        completion_summary="Issue #544 を修正\n詳細",
+        completion_summary=lambda _attributes, _person_id: "Issue #544 を修正\n詳細",
     )
     assert title == ISSUE_TITLE
 
 
 def test_completion_summary_first_line_titles_a_trace_without_a_target() -> None:
-    assert _title(completion_summary="請求プランの質問に回答\n詳細は省略") == (
-        "請求プランの質問に回答"
+    assert _title(
+        completion_summary=lambda _attributes, _person_id: (
+            "請求プランの質問に回答\n詳細は省略"
+        )
+    ) == ("請求プランの質問に回答")
+
+
+def test_completion_summary_is_looked_up_only_when_no_target_names_the_trace() -> None:
+    # Looking a run's summary up scans the run records, so a trace whose
+    # target is known must never trigger it; one without asks exactly once.
+    calls: list[tuple[str, str]] = []
+
+    def lookup(attributes: dict[str, Any], person_id: str) -> str:
+        calls.append((str(attributes.get("event.provider")), person_id))
+        return "summary"
+
+    assert (
+        _title(
+            attributes={"github.title": "Target"},
+            person_id="alice",
+            completion_summary=lookup,
+        )
+        == "Target"
     )
+    assert calls == []
+    assert (
+        _title(
+            attributes={"event.provider": "slack"},
+            person_id="alice",
+            completion_summary=lookup,
+        )
+        == "summary"
+    )
+    assert calls == [("slack", "alice")]
 
 
 def test_target_reference_is_used_when_the_title_is_unknown() -> None:

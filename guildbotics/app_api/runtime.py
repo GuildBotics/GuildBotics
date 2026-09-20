@@ -9,7 +9,7 @@ import shlex
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -165,13 +165,13 @@ from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
-    CompletionSummary,
     DiagnosticsStore,
 )
 from guildbotics.observability.session_transcripts import (
     transcript_detail,
     transcript_retention_days,
 )
+from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.local_command_executor import LocalCommandExecutor
@@ -2291,13 +2291,14 @@ def _apply_runtime_log_level(log_level: str) -> None:
 def _completion_summary_lookup() -> CompletionSummary:
     """Resolve a trace's recorded run completion summary from its attributes.
 
-    The run records are read once, on the first trace that needs them (one
-    that names no PR / issue), so listing traces stays cheap.
+    The run records are read once per request, and only if some trace asks
+    (``resolve_trace_title`` asks only for a trace that names no PR / issue),
+    so listing traces stays cheap.
     """
     store = RunStore()
     summaries: dict[tuple[str, str], str] | None = None
 
-    def lookup(attributes: dict[str, Any], person_id: str) -> str:
+    def lookup(attributes: Mapping[str, Any], person_id: str) -> str:
         nonlocal summaries
         if summaries is None:
             summaries = store.summaries_by_subject()
