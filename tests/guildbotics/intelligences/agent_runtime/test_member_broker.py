@@ -454,3 +454,37 @@ def test_member_environment_preserves_unrelated_host_values(
 
     assert env["GUILDBOTICS_TEST_HOST_VALUE"] == "kept"
     assert env is not os.environ
+
+
+@pytest.mark.asyncio
+async def test_execute_hands_the_turns_trace_to_the_member_cli(
+    monkeypatch, tmp_path
+) -> None:
+    from guildbotics.observability import TRACE_ID_ENV
+
+    launched: list[dict[str, Any]] = []
+
+    async def create_agent_subprocess(*_argv: str, **kwargs: Any) -> _Process:
+        launched.append(kwargs)
+        return _Process()
+
+    monkeypatch.setattr(
+        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
+        create_agent_subprocess,
+    )
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="run-1",
+        cwd=tmp_path,
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "grok", "chat", "slack:bot:C1:1"),
+        trace_id="trace-parent",
+    )
+    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker._context = context
+    broker._turn_grant = "turn-1"
+
+    await broker.execute("turn-1", ["context", "--person", "aiko"])
+
+    assert launched[0]["env"][TRACE_ID_ENV] == "trace-parent"

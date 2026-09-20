@@ -6,12 +6,12 @@ from urllib.parse import urlencode, urlparse
 
 from guildbotics.app_api.activity_events import commit_entries, commit_message
 from guildbotics.app_api.models import ActivityHistoryLink
+from guildbotics.observability.trace_title import (
+    github_reference_label,
+    is_read_only_action,
+)
 
 type ActivityLinkKind = Literal["doc", "issue", "pull_request", "commit", "external"]
-# Read-only / signal memory actions do not change a document, so they are noise
-# in activity history (they still appear in the dedicated Memory audit view).
-# Only content-changing actions (record, update, archive, promote) get a link.
-MEMORY_READ_ONLY_ACTIONS = frozenset({"recall", "get", "touch"})
 
 
 def links_from_records(
@@ -38,9 +38,9 @@ def links_from_record(
     attributes: dict[str, Any],
     record: dict[str, Any] | None = None,
 ) -> list[ActivityHistoryLink]:
-    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
-        # A read/signal memory op merely references documents (and their source
-        # PRs/issues); those are not this session's work, so it yields no links.
+    if is_read_only_action(attributes):
+        # A read (memory recall/get/touch, a PR / issue inspect) merely
+        # references the item; it is not this session's work, so no links.
         return []
     timestamp = record_timestamp(record)
     links = links_from_attributes(attributes, timestamp=timestamp)
@@ -79,11 +79,7 @@ def github_link_kind(kind: str) -> ActivityLinkKind:
 
 
 def github_link_label(kind: ActivityLinkKind, number: str, url: str) -> str:
-    if kind == "pull_request":
-        return f"PR #{number}" if number else url
-    if kind == "issue":
-        return f"Issue #{number}" if number else url
-    return f"GitHub #{number}" if number else url
+    return github_reference_label(kind, number) or url
 
 
 def doc_link_from_memory(
@@ -91,7 +87,7 @@ def doc_link_from_memory(
     attributes: dict[str, Any],
     record: dict[str, Any] | None = None,
 ) -> ActivityHistoryLink | None:
-    if str(attributes.get("memory.action") or "") in MEMORY_READ_ONLY_ACTIONS:
+    if is_read_only_action(attributes):
         return None
     path = str(attributes.get("memory.path") or "")
     doc_id = str(attributes.get("memory.doc_id") or "")

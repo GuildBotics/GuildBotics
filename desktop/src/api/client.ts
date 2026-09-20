@@ -312,6 +312,7 @@ export type TraceSummary = {
   person_id: string;
   command: string;
   workflow: string;
+  title: string;
   started_at: string;
   updated_at: string;
   status: string;

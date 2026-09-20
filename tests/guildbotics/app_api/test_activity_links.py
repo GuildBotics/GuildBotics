@@ -73,6 +73,35 @@ def test_read_only_memory_record_yields_no_links() -> None:
     assert links == []
 
 
+def test_inspected_github_work_target_yields_no_links() -> None:
+    # Reading a PR / issue declares the trace's work target for diagnostics
+    # but is not the session's work, like a memory read.
+    links = links_from_record(
+        {"pull_request": {"number": 544, "title": "Show the target"}},
+        {
+            "github.action": "inspected",
+            "github.kind": "pull_request",
+            "github.number": "544",
+            "github.url": "https://github.com/o/r/pull/544",
+        },
+    )
+
+    assert links == []
+
+
+def test_worked_github_target_yields_its_link() -> None:
+    links = links_from_record(
+        {"pull_request": {"number": 544, "title": "Show the target"}},
+        {
+            "github.kind": "pull_request",
+            "github.number": "544",
+            "github.url": "https://github.com/o/r/pull/544",
+        },
+    )
+
+    assert [(link.kind, link.label) for link in links] == [("pull_request", "PR #544")]
+
+
 def test_content_changing_memory_record_yields_links() -> None:
     links = links_from_record(
         {

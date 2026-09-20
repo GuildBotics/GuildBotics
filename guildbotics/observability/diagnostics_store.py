@@ -17,6 +17,7 @@ from guildbotics.observability.session_transcripts import (
     SessionTranscriptStore,
 )
 from guildbotics.observability.trace_status import TraceStatus
+from guildbotics.observability.trace_title import resolve_trace_title
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
@@ -25,6 +26,11 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 DEFAULT_DIAGNOSTICS_MAX_BYTES = 8 * 1024 * 1024
+
+#: ``(trace attributes, person_id) -> the run's recorded completion summary``.
+#: The store knows nothing about runs; the caller that does supplies this so
+#: the execution list and the activity timeline title a trace the same way.
+CompletionSummary = Callable[[dict[str, Any], str], str]
 
 
 def default_store_path() -> Path:
@@ -183,6 +189,7 @@ class DiagnosticsStore:
         attr_value: str | None = None,
         limit: int = 200,
         include_transcripts: bool = False,
+        completion_summary: CompletionSummary | None = None,
     ) -> list[dict[str, Any]]:
         """List execution summaries, newest first.
 
@@ -197,6 +204,8 @@ class DiagnosticsStore:
                 session transcript. The index holds only execution boundaries and
                 domain events, so log and I/O bodies — where failures actually
                 describe themselves — are invisible without this.
+            completion_summary: Looks up a run's recorded completion summary
+                for the title of a trace that names no PR / issue.
 
         Returns:
             Matching summaries, newest first.
@@ -212,7 +221,7 @@ class DiagnosticsStore:
             summary = summaries.setdefault(trace_id, _new_summary(trace_id))
             _accumulate(summary, item)
         result = [
-            _finalize_summary(summary)
+            _finalize_summary(summary, completion_summary)
             for summary in summaries.values()
             if _summary_matches(summary, source, person_id, query, attr_key, attr_value)
             or (
@@ -276,7 +285,9 @@ class DiagnosticsStore:
                 exists, _ = self._transcripts.trace_records(trace_id)
             return exists
 
-    def get_summary(self, trace_id: str) -> dict[str, Any] | None:
+    def get_summary(
+        self, trace_id: str, completion_summary: CompletionSummary | None = None
+    ) -> dict[str, Any] | None:
         if trace_id.startswith(SYSTEM_TRACE_PREFIX):
             with self._lock:
                 self._refresh_path_locked()
@@ -296,7 +307,7 @@ class DiagnosticsStore:
         for item in records:
             found = True
             _accumulate(summary, item)
-        return _finalize_summary(summary) if found else None
+        return _finalize_summary(summary, completion_summary) if found else None
 
     def global_records(self, *, limit: int = 200) -> list[dict[str, Any]]:
         """Return records from the most recent system session."""
@@ -554,6 +565,7 @@ def _new_summary(trace_id: str) -> dict[str, Any]:
         "person_id": "",
         "command": "",
         "workflow": "",
+        "title": "",
         "started_at": "",
         "updated_at": "",
         "status": "info",
@@ -564,6 +576,7 @@ def _new_summary(trace_id: str) -> dict[str, Any]:
         "attributes": {},
         "_spans": set(),
         "_text": [],
+        "_records": [],
         "_started_at_key": None,
         "_updated_at_key": None,
         "_status": TraceStatus(),
@@ -596,6 +609,7 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
     span_id = item.get("span_id")
     if span_id:
         summary["_spans"].add(span_id)
+    summary["_records"].append(item)
 
     summary["_status"].add(item)
     kind = item.get("kind")
@@ -628,7 +642,9 @@ def _accumulate(summary: dict[str, Any], item: dict[str, Any]) -> None:
             )
 
 
-def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _finalize_summary(
+    summary: dict[str, Any], completion_summary: CompletionSummary | None = None
+) -> dict[str, Any]:
     summary = dict(summary)
     summary["span_count"] = max(summary["span_count"], len(summary.pop("_spans")))
     summary.pop("_text", None)
@@ -637,6 +653,19 @@ def _finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary["status"] = summary.pop("_status").resolve()
     if not summary["started_at"]:
         summary["started_at"] = summary["updated_at"]
+    records = sorted(summary.pop("_records"), key=_record_timestamp_sort_key)
+    summary["title"] = resolve_trace_title(
+        records,
+        summary["attributes"],
+        command=summary["command"],
+        workflow=summary["workflow"],
+        completion_summary=(
+            completion_summary(summary["attributes"], summary["person_id"])
+            if completion_summary is not None
+            else ""
+        ),
+        fallback=summary["trace_id"],
+    )
     return summary
 
 

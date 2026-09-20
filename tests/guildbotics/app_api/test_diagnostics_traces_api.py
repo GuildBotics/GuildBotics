@@ -69,7 +69,36 @@ def test_traces_endpoint_lists_published_traces(tmp_path: Path) -> None:
     trace = next(item for item in traces if item["trace_id"] == "t1")
     assert trace["source"] == "manual"
     assert trace["command"] == "demo"
+    assert trace["title"] == "demo"
     assert trace["status"] == "success"
+
+
+def test_traces_endpoint_titles_a_trace_by_its_work_target(tmp_path: Path) -> None:
+    # The execution list and the activity timeline answer "what is this
+    # execution working on?" the same way: the first PR / issue recorded in
+    # the trace, by title.
+    client, bus = _app(tmp_path)
+    with trace_scope(
+        "routine",
+        trace_id="t-ticket",
+        command="workflows/ticket_driven_workflow",
+        person_id="alice",
+        attributes={
+            "github.kind": "issue",
+            "github.number": "544",
+            "github.url": "https://github.com/owner/repo/issues/544",
+            "github.title": "診断ログの実行タイトルに作業対象を表示する",
+        },
+    ):
+        bus.publish_event("command.started", {"command": "demo"})
+
+    with client:
+        traces = client.get("/diagnostics/traces", headers=HEADERS).json()["traces"]
+        detail = client.get("/diagnostics/traces/t-ticket", headers=HEADERS).json()
+
+    listed = next(item for item in traces if item["trace_id"] == "t-ticket")
+    assert listed["title"] == "診断ログの実行タイトルに作業対象を表示する"
+    assert detail["summary"]["title"] == listed["title"]
 
 
 def test_traces_endpoint_filters_by_source(tmp_path: Path) -> None:

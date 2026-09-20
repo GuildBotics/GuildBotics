@@ -739,6 +739,9 @@ class TraceSummary(BaseModel):
     person_id: str = ""
     command: str = ""
     workflow: str = ""
+    #: What the execution works on, resolved once for every screen
+    #: (``observability.trace_title``): the target PR / issue title first.
+    title: str = ""
     started_at: str = ""
     updated_at: str = ""
     status: str = "info"

@@ -383,14 +383,6 @@ class RunStore:
                 latest[key] = (completion.completed_at, completion.summary)
         return {key: summary for key, (_, summary) in latest.items()}
 
-    def subjects_by_run(self) -> dict[str, str]:
-        """Map each completed run to its domain subject identity."""
-        return {
-            completion.run_id: completion.subject_id
-            for completion in self._completions()
-            if completion.subject_id
-        }
-
     def _completions(self) -> list[_RunCompletion]:
         if self._completions_cache is None:
             self._completions_cache = list(self._read_completions())

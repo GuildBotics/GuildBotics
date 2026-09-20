@@ -331,6 +331,7 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
     )
     assert ticket_driven_workflow._ticket_trace_attributes(issue) == {
         "github.repo": "repo",
+        "github.title": "T",
         "github.kind": "issue",
         "github.url": "https://github.com/owner/repo/issues/42",
         "github.number": "42",
@@ -345,6 +346,7 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
     )
     assert ticket_driven_workflow._ticket_trace_attributes(pr) == {
         "github.repo": "repo",
+        "github.title": "T",
         "github.kind": "pull_request",
         "github.url": "https://github.com/owner/repo/pull/7",
         "github.number": "7",

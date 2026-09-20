@@ -795,9 +795,17 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   merge every device's journal in timestamp order.
 - **Consumption**: `app_api` reads the index, selected execution transcript, and memory
   audit, and converts provider payloads into provider-neutral activity
-  events/links/titles for the desktop Activity History (`activity_events.py`,
+  events/links for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives _only_ there — not in
-  observability, not in the frontend. Manual desktop command runs (`source: manual`)
+  observability, not in the frontend — with two exceptions resolved once next to the
+  records, because the execution list and the activity timeline ask the same question
+  of the same records: a trace's status (`trace_status.py`) and its title
+  (`trace_title.py`). A trace is titled by the first PR / issue recorded inside it
+  (`github.title`): the ticket workflow declares it when it starts, and a chat workflow
+  acquires it when the member CLI, running inside the same trace (`join_trace`, handed
+  over through `GUILDBOTICS_TRACE_ID`), records a `github.work_target`. A read
+  (`inspect`) declares the target too but, like a memory read, never becomes an
+  activity link. Manual desktop command runs (`source: manual`)
   are excluded from the session timeline because they fire constantly; anything they
   changed still appears as an activity event. Desktop AI assistant turns record under
   that same source for the same reason — the agent work kind scopes the provider

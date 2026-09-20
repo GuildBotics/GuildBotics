@@ -165,8 +165,69 @@ def _service(person_type="machine_user"):
     return MemberGitHubCapabilityService(person, team)
 
 
+def _pull_target(number: int, title: str = "") -> dict:
+    """The uniform work target every pull request command reports."""
+    return {
+        "kind": "pull_request",
+        "repo": "owner/repo",
+        "number": number,
+        "title": title,
+        "html_url": f"https://github.com/owner/repo/pull/{number}",
+    }
+
+
+def _issue_target(number: int, title: str = "") -> dict:
+    return {
+        "kind": "issue",
+        "repo": "owner/repo",
+        "number": number,
+        "title": title,
+        "html_url": f"https://github.com/owner/repo/issues/{number}",
+    }
+
+
+def _pull_request_payload(number: int, title: str) -> dict:
+    return {
+        "number": number,
+        "title": title,
+        "html_url": f"https://github.com/owner/repo/pull/{number}",
+    }
+
+
 async def _open_pull_request(_resource):
     return {"state": "open", "user": {"login": "bot"}}
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_reports_the_uniform_work_target():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        **_pull_request_payload(7, "Show the work target"),
+        "head": {
+            "sha": "abc123",
+            "ref": "feature",
+            "repo": {"full_name": "owner/repo"},
+        },
+    }
+    service._client = fake
+
+    result = await service.pr_inspect("https://github.com/owner/repo/pull/7", False)
+
+    assert result["target"] == _pull_target(7, "Show the work target")
+
+
+@pytest.mark.asyncio
+async def test_pr_comment_reports_the_pull_request_it_commented_on():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "Title")
+    service._client = fake
+
+    result = await service.pr_comment("https://github.com/owner/repo/pull/7", "Hi")
+
+    assert result["comment_id"] == REPLY_COMMENT_ID
+    assert result["target"] == _pull_target(7, "Title")
 
 
 async def _someone_elses_open_pull_request(_resource):
@@ -326,6 +387,7 @@ async def test_context_without_check_credentials_is_unchecked():
 async def test_pr_reply_uses_pull_replies_endpoint():
     service = _service()
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
     fake.graphql_payloads.append(_review_threads_payload())
     service._client = fake
 
@@ -376,6 +438,7 @@ async def test_pr_review_submits_a_review_on_the_current_head(event, github_even
         "state": github_event.replace("REQUEST_CHANGES", "CHANGES_REQUESTED"),
         "commit_id": "abc123",
         "submitted_at": "2026-01-01T00:00:00Z",
+        "target": _pull_target(7),
     }
     assert fake.posts == [
         (
@@ -420,6 +483,7 @@ async def test_pr_review_comment_posts_diff_coordinates():
         "path": "guildbotics/example.py",
         "line": 12,
         "side": "RIGHT",
+        "target": _pull_target(7),
     }
     assert fake.posts == [
         (
@@ -1359,6 +1423,7 @@ async def test_artifact_download_rejects_path_traversal(tmp_path):
 async def test_pr_reply_allows_outdated_thread():
     service = _service()
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
     fake.graphql_payloads.append(_review_threads_payload(outdated=True))
     service._client = fake
 
@@ -1380,6 +1445,7 @@ async def test_pr_reply_allows_outdated_thread():
 async def test_pr_reply_allows_resolved_thread():
     service = _service()
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
     fake.graphql_payloads.append(_review_threads_payload(resolved=True))
     service._client = fake
 
@@ -1706,6 +1772,7 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
         "issue_url": "https://github.com/owner/repo/issues/43",
         "labels": [],
         "project_item_id": "PROJECT_ITEM_node",
+        "target": _issue_target(43),
     }
     assert fake.posts[0] == (
         "/repos/owner/repo/issues",
@@ -1720,6 +1787,11 @@ async def test_issue_create_creates_real_issue_and_adds_project_item():
 async def test_issue_comment_returns_issue_and_comment_activity_fields():
     service = _service()
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "number": 42,
+        "title": "Original title",
+        "html_url": "https://github.com/owner/repo/issues/42",
+    }
     fake.post_payloads["/repos/owner/repo/issues/42/comments"] = {
         "id": 123,
         "html_url": "https://github.com/owner/repo/issues/42#issuecomment-123",
@@ -1741,6 +1813,7 @@ async def test_issue_comment_returns_issue_and_comment_activity_fields():
         "issue_number": 42,
         "repo": "owner/repo",
         "issue_url": "https://github.com/owner/repo/issues/42",
+        "target": _issue_target(42, "Original title"),
     }
 
 
@@ -1770,6 +1843,7 @@ async def test_issue_update_patches_only_body_and_returns_updated_issue():
         "state_changed": False,
         "labels": [],
         "body": "Updated body",
+        "target": _issue_target(42, "Original title"),
     }
     assert fake.patches == [
         ("/repos/owner/repo/issues/42", {"body": "Updated body"}, None)
@@ -2252,6 +2326,7 @@ async def test_pr_create_uses_explicit_base_branch():
         "draft": False,
         "head": "feature",
         "base": "ticket-driven-workflow",
+        "target": _pull_target(8),
     }
     assert fake.gets[0] == (
         "/repos/owner/repo/pulls",
@@ -2366,6 +2441,7 @@ async def test_pr_create_returns_matching_open_pr_without_updating_it():
         "draft": False,
         "head": "feature",
         "base": "main",
+        "target": _pull_target(7),
     }
     assert fake.gets == [
         (
@@ -2483,6 +2559,7 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
         "pr_url": "https://github.com/owner/repo/pull/7",
         "title": "Original title",
         "body": "Updated body",
+        "target": _pull_target(7, "Original title"),
     }
     assert fake.patches == [
         ("/repos/owner/repo/pulls/7", {"body": "Updated body"}, None)

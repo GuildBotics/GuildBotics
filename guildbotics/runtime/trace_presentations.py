@@ -27,6 +27,7 @@ _GITHUB_LABELS = {
     "github.pull_request": "github_pull_request",
     "github.issue": "github_issue",
     "github.issue_comment": "github_issue_comment",
+    "github.work_target": "github_work_target",
 }
 _EXACT_EVENT_LABELS = {
     "agent_environment.network_egress_candidate": "network_egress_candidate",
@@ -300,6 +301,7 @@ def _github_presentation(
         _nested(payload, "pull_request", "title")
         or _nested(payload, "issue", "title")
         or payload.get("title")
+        or attributes.get("github.title")
         or ""
     )
     target = (
