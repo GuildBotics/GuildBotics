@@ -97,6 +97,77 @@ def test_adoption(changes, participation, route):
 
 
 @pytest.mark.parametrize(
+    "changes,reason",
+    [
+        (
+            {
+                "context_sufficient": "unknown",
+                "pending_request": "true",
+                "work_repo_research": "true",
+            },
+            "request",
+        ),
+        ({"context_sufficient": "false", "pending_request": "true"}, "request"),
+        ({"pending_request": "unknown", "work_files": "true"}, "work"),
+        ({"work_files": "unknown", "work_repo_research": "true"}, "work"),
+        (
+            {
+                "context_sufficient": "unknown",
+                "work_files": "unknown",
+                "other_role_needed": "true",
+            },
+            "handoff",
+        ),
+        (
+            {
+                "pending_request": "unknown",
+                "other_role_needed": "unknown",
+                "role_contribution": "true",
+            },
+            "reply",
+        ),
+        ({"context_sufficient": "unknown", "pending_request": "unknown"}, "context"),
+        ({"pending_request": "unknown", "reaction": "ack"}, "request.unknown"),
+        ({"work_files": "unknown"}, "work.unknown"),
+        ({"other_role_needed": "true", "handoff_done": "unknown"}, "handoff.unknown"),
+        ({"role_contribution": "unknown"}, "reply.unknown"),
+    ],
+)
+def test_definite_obligations_precede_uncertainty(changes, reason):
+    result = select(answers(**changes), participation="strict")
+    assert (result.route, result.reason) == ("agent", reason)
+
+
+@pytest.mark.parametrize("failure", ["error", "missing_answer", "incomplete_input"])
+def test_invalid_evaluation_precedes_a_definite_request(failure):
+    evaluation = answers(pending_request="true")
+    if failure == "error":
+        evaluation.error = "connection_error"
+    if failure == "missing_answer":
+        evaluation.answers.pop("reaction")
+    selection = select(
+        evaluation, participation="strict", input_complete=failure != "incomplete_input"
+    )
+    assert (selection.route, selection.reason) == ("agent", "invalid")
+
+
+def test_unrelated_unknowns_do_not_prevent_safe_reaction():
+    result = select(
+        answers(
+            handoff_done="unknown",
+            handoff_reopen="unknown",
+            role_contribution="unknown",
+            ack_only="true",
+            repeated_supplement="unknown",
+            social_fit="unknown",
+            reaction="ack",
+        ),
+        participation="strict",
+    )
+    assert (result.route, result.reaction) == ("reaction-only", "ack")
+
+
+@pytest.mark.parametrize(
     "values", list(itertools.product(("true", "false", "unknown"), repeat=3))
 )
 def test_three_valued_algebra(values):
@@ -180,7 +251,10 @@ def test_top_reaction_only_applies_after_noul_obligations_are_excluded(
         participation="strict",
     )
     if needs_agent:
-        assert (result.route, result.reason) == ("agent", "2.request")
+        assert (result.route, result.reason) == (
+            "agent",
+            "request.unknown" if pending_request == 0.5 else "request",
+        )
     elif choice == "none":
         assert result.route == "no-op"
     else:
@@ -245,7 +319,7 @@ def test_failed_judgment_delegates_without_execution_settings(failure):
     )
     assert result.model_dump() == {
         "route": "agent",
-        "reason": "1.invalid",
+        "reason": "invalid",
         "reaction": "",
     }
 

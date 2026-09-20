@@ -163,7 +163,7 @@ def test_judgment_failure_shows_the_actual_conservative_route() -> None:
                 "brain": "chat_decision",
                 "model": "jev-1.13.0",
                 "route": "agent",
-                "reason": "1.invalid",
+                "reason": "invalid",
                 "error": "authentication_error",
             },
         )
@@ -171,7 +171,7 @@ def test_judgment_failure_shows_the_actual_conservative_route() -> None:
     assert presentation.label_key.endswith("decision_evaluated")
     assert (
         presentation.message
-        == "chat_decision · jev-1.13.0 · agent · 1.invalid · authentication_error"
+        == "chat_decision · jev-1.13.0 · agent · invalid · authentication_error"
     )
     assert presentation.tone == "warning"
 

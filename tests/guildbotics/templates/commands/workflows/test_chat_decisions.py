@@ -71,7 +71,7 @@ async def test_unavailable_receiver_never_confirms_a_fast_path(
 
     async def assess(*args, **kwargs):
         ChatReceiveStatus().save("slack", "alice", "C1", state=receive)
-        return Selection(route="no-op", reason="5.none"), "f" * 32
+        return Selection(route="no-op", reason="none"), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)
     with pytest.raises(ThreadContextUnavailableError):
@@ -88,7 +88,7 @@ async def test_new_input_during_evaluation_is_reconsidered(chat, monkeypatch):
         return Selection(
             route="reaction-only",
             reaction="ack",
-            reason="5.reaction",
+            reason="reaction",
         ), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)
@@ -109,7 +109,7 @@ async def test_reaction_failure_never_completes(chat, monkeypatch):
     async def assess(state, *args, **kwargs):
         seen.append(state)
         return Selection(
-            route="reaction-only", reaction="agree", reason="5.reaction"
+            route="reaction-only", reaction="agree", reason="reaction"
         ), "f" * 32
 
     async def fail(*args):
@@ -138,11 +138,11 @@ async def test_reaction_recovers_without_duplicate_visible_action(
     async def assess(state, *args, **kwargs):
         seen.append(state)
         if len(seen) > 1 and edited:
-            return Selection(route="agent", reason="2.request"), "e" * 32
+            return Selection(route="agent", reason="request"), "e" * 32
         return Selection(
             route="reaction-only",
             reaction="ack" if len(seen) == 1 else "support",
-            reason="5.reaction",
+            reason="reaction",
         ), "f" * 32
 
     async def idempotent_reaction(channel, ts, reaction):
@@ -208,7 +208,7 @@ async def test_failed_judgment_agent_fallback_escalates_on_final_attempt(
     async def assess(*args, **kwargs):
         return Selection(
             route="agent",
-            reason="1.invalid",
+            reason="invalid",
         ), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)

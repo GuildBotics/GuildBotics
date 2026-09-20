@@ -131,7 +131,7 @@ async def assess(
         record_required_io(evaluation_id, payload, redaction_values=redaction_values)
     except Exception:
         recording_failed = True
-        selection = Selection(route="agent", reason="1.invalid")
+        selection = Selection(route="agent", reason="invalid")
     record_correlated_event(
         event_type="decision.evaluated",
         person_id=person_id,

@@ -131,7 +131,7 @@ class FakeInvokeContext(types.SimpleNamespace):
         # earlier attempts fail the gate and the workflow retries.
         self.complete_on_attempt: int | None = None
         self._handle_calls = 0
-        self.decision_reason = "2.request"
+        self.decision_reason = "request"
         # Stand-ins for Context.pipe and what each invoked command received as
         # its user message.
         self.pipe = ""
@@ -1473,7 +1473,7 @@ async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatSe
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason", ["1.invalid", "1.context", "2.request", "2.work"])
+@pytest.mark.parametrize("reason", ["invalid", "context", "request", "work"])
 async def test_judgment_never_overrides_response_settings(
     tmp_path, monkeypatch, reason
 ):

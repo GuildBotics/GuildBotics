@@ -48,17 +48,23 @@ Noul is used where a condition's presence changes the route. Its intermediate pr
 
 The ordered rules are:
 
-1. Invalid output or insufficient context starts the response agent.
-2. An unresolved request or required work starts the response agent; unknown also does so.
-3. A missing role that still needs a handoff starts the response agent. Handoffs are considered per topic across the batch, including reasons to reopen them.
-4. A useful, non-repetitive substantive contribution starts the response agent. Social participation also requires character or role fit.
-5. Otherwise, send the selected reaction, or complete without a visible action when `none` is selected. Jev uses the highest-probability option even when that probability is low. An explicit `unknown` from Agno or AI CLI still starts the response agent.
+1. Connection failures, malformed or missing answers, and incomplete thread retrieval delegate to the response agent (`invalid`).
+2. A definite unresolved request or question starts the agent (`request`).
+3. Definitely required work starts the agent (`work`).
+4. A definitely required handoff starts the agent (`handoff`). Combine whether each topic across the batch has been handed off and whether a new circumstance warrants reopening it.
+5. A definite substantive contribution starts the agent (`reply`). Exclude acknowledgment-only responses and repeated supplementation; social participation also requires character or role fit.
+6. Without a definite reason to start, check whether skipping is safe. Insufficient or uncertain context starts the agent with `context`. Remaining uncertainty that affects the route starts it with `request.unknown`, `work.unknown`, `handoff.unknown`, or `reply.unknown`, in that order.
+7. Once skipping is established, send the selected reaction (`reaction`) or complete without a visible action for `none` (`none`). Jev adopts its top candidate without a threshold. An explicit Choice `unknown` from Agno or AI CLI starts the agent (`reaction.unknown`).
+
+`context_sufficient` asks whether the input is sufficient to decide that this member's response or work may safely be omitted. Distinguish that from information needed to perform the task. A PR review request establishes a need to act even without the diff in the input. A true pending request with unknown context therefore starts the agent for `request`. Missing research or memory needed to establish whether a useful contribution exists remains unknown, rather than becoming a false assertion that there is no contribution.
+
+The question version is `chat-3` and the rule version is `chat-4`. All definite reasons are considered before uncertainty, so an unknown cannot hide a definite obligation. Noul and Choice adoption thresholds are unchanged.
 
 For example, when Noul excludes any outstanding work or substantive response, an `ack` selected at probability `0.53` produces only an acknowledgment reaction. A document request still starts the agent even if Choice selects `celebrate` at `0.87`.
 
 Unknown values that cannot change a rule's result do not force escalation. Before a reaction or no-op completes, the workflow checks reception and rereads the thread for new messages or edits. Changed or unavailable input remains pending. Reactions record evidence and join the thread; a no-op does not join it. Repeated completion attempts reuse evidence, and an already-present Slack reaction counts as success.
 
-The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. Judgment selects only whether to start the agent, send a reaction, or take no action. It never specifies the response agent’s model or effort, and stores no thread effort. The response command uses its own configuration on success, uncertainty, and failure alike. If that response cannot run, the batch remains pending.
+The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. Judgment selects only whether to start the agent, send a reaction, or take no action. It never specifies the response agent’s model or effort, and stores no thread effort. The response command uses its own configuration on success, uncertainty, and failure alike. Agent execution failures follow the existing bounded retries, rate-limit notices, and final failure notification.
 
 ## Inspect and replay
 
@@ -84,7 +90,7 @@ Jev's [API](https://docs.typesafe.ai/api) and [model documentation](https://docs
 
 The [evaluation data](evaluations/chat_decisions_2026-09-20.json) includes predefined agent-start labels and acceptable reactions, conversation inputs, questions, raw answers, timings, and evaluation IDs. Jev `jev-1.13.0` and Agno / OpenAI `gpt-5.6-luna` were each called once per case, with median times of 917 ms and 4,649 ms. Repeated identical Jev requests do not add independent samples. The earlier Noul study contained 48 distinct conversations; three calls each do not make 144 cases.
 
-The table applies Noul 0.4/0.6 and highest-probability Choice adoption to saved answers. Historical `effort_*` question names were mapped to `work_*` and routed with current rule version `chat-3`. **The original question version was `chat-1`: these are not live evaluations of current questions `chat-2`.** Values are reaction names, `no-op`, or `agent`.
+The table applies Noul 0.4/0.6 and highest-probability Choice adoption to saved answers. Historical `effort_*` question names were mapped to `work_*` and routed with the then-current rule version `chat-3`. **The original question version was `chat-1`: these are not live evaluations of current questions `chat-3`.** Values are reaction names, `no-op`, or `agent`.
 
 | Case (case ID suffix in the dataset) | Expected agent start | Jev | Agno |
 | --- | --- | --- | --- |
@@ -107,7 +113,7 @@ Both produced four agent starts, seven reactions, and three no-ops. This sample 
 
 ## Initial Japanese evaluation (2026-09-20)
 
-These historical results include the former response-effort selection. Current rules (`chat-3`, questions `chat-2`) do not select response effort; the measurements below are not results of the current implementation.
+These historical results include the former response-effort selection. Current rules (`chat-4`, questions `chat-3`) do not select response effort; the measurements below are not results of the current implementation.
 
 The [eight synthetic cases](../tests/fixtures/chat_decisions.ja.json) define expected routes before execution. They cover acknowledgment, an unresolved request followed by thanks, cancellation, missing context, a new topic needing a handoff, a completed handoff, unrelated social chatter, and a guideline-dependent design request. Run the same cases with either engine:
 
