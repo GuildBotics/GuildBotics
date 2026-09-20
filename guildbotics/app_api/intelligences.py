@@ -796,6 +796,10 @@ class IntelligenceConfigService:
         return assignments
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
+        if assignment.engine == "jev" and assignment.name != "chat_decision":
+            raise SetupServiceError(
+                "invalid_decision", "Jev is only supported for chat_decision"
+            )
         if assignment.engine == "jev" and assignment.target != JEV_MODEL:
             raise SetupServiceError("invalid_decision", "Unsupported Jev model")
         if assignment.engine == "cli":

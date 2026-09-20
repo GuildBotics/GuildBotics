@@ -15,7 +15,7 @@ from guildbotics.intelligences.decisions.chat_policy import (
     RULE_VERSION,
     select,
 )
-from guildbotics.intelligences.decisions.engines import evaluate
+from guildbotics.intelligences.decisions.engines import INSTRUCTIONS, evaluate
 from guildbotics.intelligences.decisions.models import (
     DecisionConfig,
     Evaluation,
@@ -49,6 +49,19 @@ async def assess(
         "questions": {key: q.model_dump() for key, q in questions.items()},
     }
     recording_failed = False
+
+    def record_configuration(configuration: dict[str, Any]) -> None:
+        record_required_io(
+            evaluation_id + "1",
+            {
+                "evaluation_id": evaluation_id,
+                "phase": "resolved",
+                "config": config.model_dump(),
+                "configuration": configuration,
+                "instructions": INSTRUCTIONS,
+            },
+        )
+
     try:
         record_required_io(
             evaluation_id + "0",
@@ -80,6 +93,7 @@ async def assess(
                 person_id=person_id,
                 logger=logger,
                 brain_factory=brain_factory,
+                on_resolved=record_configuration,
             )
         )
     except Exception:

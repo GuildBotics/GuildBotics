@@ -86,7 +86,9 @@ async def test_new_input_during_evaluation_is_reconsidered(chat, monkeypatch):
 
     async def assess(*args, **kwargs):
         return Selection(
-            route="reaction-only", reaction="ack", reason="5.reaction"
+            route="reaction-only",
+            reaction="ack",
+            reason="5.reaction",
         ), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)
@@ -126,16 +128,21 @@ async def test_reaction_failure_never_completes(chat, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["evidence", "completion"])
+@pytest.mark.parametrize("edited", [False, True])
 async def test_reaction_recovers_without_duplicate_visible_action(
-    chat, monkeypatch, failure
+    chat, monkeypatch, failure, edited
 ):
     context, state_store, service = chat
     seen = []
 
     async def assess(state, *args, **kwargs):
         seen.append(state)
+        if len(seen) > 1 and edited:
+            return Selection(route="agent", reason="2.request"), "e" * 32
         return Selection(
-            route="reaction-only", reaction="ack", reason="5.reaction"
+            route="reaction-only",
+            reaction="ack" if len(seen) == 1 else "support",
+            reason="5.reaction",
         ), "f" * 32
 
     async def idempotent_reaction(channel, ts, reaction):
@@ -163,6 +170,8 @@ async def test_reaction_recovers_without_duplicate_visible_action(
         "slack", "alice", "C1"
     ).processed_event_ids
     run_id = seen[0]["run_id"]
+    if edited:
+        _set_incoming_event(context, text="@alice please investigate another issue")
     context.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
         "attempt_count": 2,
         "max_attempts": 2,
@@ -171,17 +180,16 @@ async def test_reaction_recovers_without_duplicate_visible_action(
     }
     await workflow.main(context, chat_service=service, state_store=state_store)
     assert service.reactions == [("C1", "100.1", "ack")]
+    assert len(seen) == (2 if edited else 1)
+    assert bool(context.invocations) == edited
     assert RunStore().status(run_id).status == "done"
-    assert (
-        len(
-            [
-                e
-                for e in RunStore().evidence(run_id)
-                if e["evidence_type"] == "chat_reaction"
-            ]
-        )
-        == 1
-    )
+    assert len(
+        [
+            e
+            for e in RunStore().evidence(run_id)
+            if e["evidence_type"] == "chat_reaction"
+        ]
+    ) == (0 if edited and failure == "evidence" else 1)
 
 
 @pytest.mark.asyncio

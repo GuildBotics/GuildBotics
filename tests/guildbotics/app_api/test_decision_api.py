@@ -90,6 +90,21 @@ def test_wrong_jev_model_is_rejected(configured, model):
     assert not (root / "intelligences/brain_mapping.yml").exists()
 
 
+@pytest.mark.parametrize("name", ["default", "agent", "translate"])
+def test_jev_cannot_be_assigned_to_text_commands(configured, name):
+    root, _ = configured
+    with pytest.raises(SetupServiceError, match="only supported for chat_decision"):
+        IntelligenceConfigService().update_config(
+            IntelligenceConfigUpdateRequest(
+                config_dir=root,
+                brain_mapping=[
+                    assignment("jev-latest").model_copy(update={"name": name})
+                ],
+            )
+        )
+    assert not (root / "intelligences/brain_mapping.yml").exists()
+
+
 def test_member_inherits_and_overrides_through_brain_factory(configured):
     root, _ = configured
     service = IntelligenceConfigService()

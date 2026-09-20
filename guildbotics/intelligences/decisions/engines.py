@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import asdict
 from logging import Logger
 from pathlib import Path
@@ -35,9 +36,11 @@ async def evaluate(
     person_id: str,
     logger: Logger,
     brain_factory: BrainFactory | None = None,
+    on_resolved: Callable[[dict[str, Any]], None] | None = None,
 ) -> Evaluation:
     """One invocation; any execution or answer failure delegates to the agent."""
     raw: Any = None
+    brain = None
     result = Evaluation()
     try:
         factory = brain_factory or get_edition().get_context().brain_factory
@@ -48,6 +51,14 @@ async def evaluate(
             logger,
             config={"brain": config.brain, "body": INSTRUCTIONS},
         )
+        result.configuration = brain.configuration
+        result.model = str(result.configuration.get("model", ""))
+        if on_resolved is not None:
+            try:
+                on_resolved(result.configuration)
+            except Exception:
+                result.error = "recording_failed"
+                return result
         request = {
             "state": state,
             "questions": {
@@ -60,7 +71,6 @@ async def evaluate(
                 cwd=config_dir.parent.parent,
                 input_only=True,
             )
-        result = Evaluation(**asdict(brain.execution))
         if isinstance(raw, str):
             raw = json.loads(raw)
         result.raw = raw
@@ -71,6 +81,13 @@ async def evaluate(
         # Provider exception messages may contain credentials.
         result.raw = raw
         result.error = error_code(exc)
+    if brain is not None:
+        result = result.model_copy(
+            update={
+                **asdict(brain.execution),
+                "model": brain.execution.model or result.model,
+            },
+        )
     return result
 
 

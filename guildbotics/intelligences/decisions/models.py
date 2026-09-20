@@ -32,6 +32,7 @@ class Answer(BaseModel):
 
 class Evaluation(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    configuration: dict[str, Any] = Field(default_factory=dict)
     model: str = ""
     answers: dict[str, Answer] = Field(default_factory=dict)
     raw: Any = None

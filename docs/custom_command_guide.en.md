@@ -827,11 +827,11 @@ The provider-neutral label is never passed through to the provider as a fallback
 ### 9.6. Workflow defaults
 
 - **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
-- **Chat workflow**: the selected judgment engine evaluates participation, reaction, and effort together once per unread batch. File work, repository investigation, or a guideline-dependent issue/design decision requires `high`; all three false values use `default`, while an unknown or failed judgment uses `high`. `low` remains available for explicit configuration.
+- **Chat workflow**: the judgment engine chooses whether to start the response agent, send a reaction, or take no action for each unread batch. It does not specify the response model or effort; `functions/handle_chat_event` uses its own command and slot settings.
 
-The thread's existing `high` is preserved. Judgment still runs for participation and reaction, even at `high`. A reaction-only or no-op result does not promote effort. State is stored per person_id, representing that member's view of the thread.
+The judgment engine also uses its existing LLM / AI CLI slot settings. There is no separate judgment effort setting or stored thread effort.
 
-Assign Jev or an existing LLM / AI CLI slot to `chat_decision` in the desktop's feature assignments. Missing credentials or invalid configuration defer to the response agent with `high`; another judgment engine is not selected automatically. See [Chat judgment](chat_decisions.en.md) for the rules, setup, and evaluation records.
+Assign Jev or an existing LLM / AI CLI slot to `chat_decision` in the desktop's Chat judgment engine card. Uncertainty, missing context, and evaluation failures defer to the response agent without changing its settings. See [Chat judgment](chat_decisions.en.md) for the rules, setup, and evaluation records.
 
 ### 9.7. Reading it in diagnostics
 

@@ -8,7 +8,11 @@ from agno.agent import Agent
 from agno.models.base import Model
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
+from guildbotics.intelligences.brains.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.intelligences.brains.util import (
     summary_log_line,
     to_plain_text,
@@ -154,6 +158,19 @@ class AgnoAgentDefaultBrain(Brain):
             effort=effort,
         )
         self.model_config = get_model_mapping(person_id)[model]
+        self.model_slot = model
+
+    @property
+    def configuration(self) -> dict[str, Any]:
+        return {
+            **super().configuration,
+            "slot": self.model_slot,
+            "definition": self.model_config.name,
+            "provider": self.model_config.model_class,
+            "restricted_model": self.model_config.is_restricted_model,
+            "model": str(self.model_config.parameters.get("id", "")),
+            "parameters": public_parameters(self.model_config.parameters),
+        }
 
     async def run(self, message: str, **kwargs):
         if kwargs.pop("input_only", False):

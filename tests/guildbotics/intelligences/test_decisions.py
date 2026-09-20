@@ -8,7 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.intelligences.brains import jev
-from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
+from guildbotics.intelligences.brains.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.intelligences.decisions import assessment, engines
 from guildbotics.intelligences.decisions.chat_policy import (
     QUESTIONS,
@@ -320,6 +324,23 @@ def test_generic_choice_is_not_restricted_to_chat_reactions():
     assert result["q"].value == "check"
 
 
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"thinking_budget": 8000},
+        {"thinking": {"type": "enabled", "budget_tokens": 8000}},
+    ],
+)
+def test_public_provider_thinking_settings_exclude_credentials(settings):
+    parameters = {**settings, "api_key": "private-inline-key"}
+    if "thinking" in parameters:
+        parameters["thinking"] = {
+            **parameters["thinking"],
+            "headers": {"Authorization": "private-inline-key"},
+        }
+    assert public_parameters(parameters) == settings
+
+
 @pytest.mark.asyncio
 async def test_jev_uses_latest_and_records_the_returned_version(monkeypatch):
     async def request(_root, _method, _path, payload):
@@ -416,6 +437,126 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
     assert not {"effort", "model", "session_state"} & kwargs.keys()
     assert result.model == "resolved-model" and result.usage == {"input_tokens": 12}
     assert result.retries is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["jev", "llm", "cli"])
+async def test_resolved_configuration_is_durable_before_failed_call(
+    tmp_path, monkeypatch, engine
+):
+    from guildbotics.intelligences.brains import agno_agent, cli_agent
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    logger = logging.getLogger()
+    if engine == "jev":
+        brain = jev.JevBrain("alice", "chat_decision", logger)
+        model = "jev-latest"
+    elif engine == "llm":
+        monkeypatch.setattr(
+            agno_agent,
+            "get_model_mapping",
+            lambda _: {
+                "judge": agno_agent.ModelConfig(
+                    name="models/openai/judge.yml",
+                    model_class="agno.models.openai.OpenAIChat",
+                    parameters={
+                        "id": "test-model",
+                        "temperature": 0.2,
+                        "api_key": "private-inline-key",
+                    },
+                )
+            },
+        )
+        brain = agno_agent.AgnoAgentDefaultBrain(
+            "alice", "chat_decision", logger, model="judge"
+        )
+        model = "test-model"
+    else:
+        monkeypatch.setattr(
+            cli_agent,
+            "get_cli_agent_mapping",
+            lambda _: {
+                "judge": cli_agent.ExecutableInfo(
+                    adapter="codex",
+                    parameters={
+                        "model": "test-cli",
+                        "effort": "high",
+                        "env": {"KEY": "private-inline-key"},
+                    },
+                )
+            },
+        )
+        brain = cli_agent.CliAgentBrain(
+            "alice", "chat_decision", logger, cli_agent="judge"
+        )
+        model = "test-cli"
+
+    observed = []
+
+    async def fail(*args, **kwargs):
+        records = [
+            json.loads(p.read_text())["payload"]
+            for p in tmp_path.rglob("*.json")
+            if "required-io" in p.parts
+        ]
+        resolved = next(p for p in records if p.get("phase") == "resolved")
+        observed.append(resolved)
+        raise RuntimeError("private-inline-key")
+
+    monkeypatch.setattr(brain, "run", fail)
+    selection, record_id = await assessment.assess(
+        {"thread_context_complete": True},
+        DecisionConfig(),
+        config_dir=tmp_path,
+        person_id="alice",
+        logger=logger,
+        brain_factory=SimpleNamespace(create_brain=lambda *args, **kwargs: brain),
+    )
+    path = next(tmp_path.rglob(f"{record_id}.json"))
+    payload = json.loads(path.read_text())["payload"]
+    assert len(observed) == 1
+    assert observed[0]["configuration"] == brain.configuration
+    assert observed[0]["instructions"] == engines.INSTRUCTIONS
+    assert "private-inline-key" not in path.read_text()
+    assert selection.route == "agent"
+    result = payload["result"]
+    assert result["error"] == "evaluation_failed"
+    assert result["model"] == model
+    assert result["configuration"]["provider"]
+    if engine != "jev":
+        assert result["configuration"]["slot"] == "judge"
+        assert result["configuration"]["parameters"] == (
+            {"id": "test-model", "temperature": 0.2}
+            if engine == "llm"
+            else {"model": "test-cli", "effort": "high"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_failed_configuration_record_does_not_call_model(tmp_path, monkeypatch):
+    brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
+    called = False
+
+    async def run(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    def record(_id, payload):
+        if payload.get("phase") == "resolved":
+            raise OSError("disk full")
+
+    monkeypatch.setattr(brain, "run", run)
+    monkeypatch.setattr(assessment, "record_required_io", record)
+    selection, _ = await assessment.assess(
+        {"thread_context_complete": True},
+        DecisionConfig(),
+        config_dir=tmp_path,
+        person_id="alice",
+        logger=logging.getLogger(),
+        brain_factory=SimpleNamespace(create_brain=lambda *args, **kwargs: brain),
+    )
+    assert not called
+    assert selection.route == "agent"
 
 
 @pytest.mark.asyncio

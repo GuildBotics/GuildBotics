@@ -8,6 +8,8 @@ In **Setup → LLM / AI CLI tools → Advanced → Chat judgment engine**, selec
 
 The **Chat judgment engine** card sits between the AI CLI tool definitions and the environment declaration. Select the engine and, for LLM or CLI, the slot to use. Model settings belong to the selected slot.
 
+The UI and save validation restrict Jev to `chat_decision`. Ordinary command assignments such as `agent` and `default` cannot select it: Jev consumes structured state and questions rather than generating free-text responses.
+
 Switching to LLM or CLI hides the Jev key field and retains the registered key. Saving does not invoke a model. Missing credentials, execution failures, and malformed responses delegate to the response agent.
 
 For example, a team using Jev stores this entry in the existing `.guildbotics/config/intelligences/brain_mapping.yml`:
@@ -60,6 +62,10 @@ The agent remains responsible for the final reply, reaction, question, handoff, 
 
 ## Inspect and replay
 
+After a reaction or completion recording failure, retries of the same input reuse the latest saved judgment. They do not choose a different reaction or repeat a recorded send. Changed conversation content, batch membership, or participation conditions require a new judgment.
+
+Before invoking the model, `<evaluation_id>1.json` records the resolved Brain class, provider, slot, requested model, and public inference settings. Parameters use an allowlist including model names, temperature, top_p, seed, token limits, and effort; arbitrary credentials and environment variables are excluded. The completed record retains resolved settings and the requested model even on failure. Values unknown before invocation, such as a CLI-selected default model, remain empty; the actual returned model is recorded when available. Failure to record the resolved configuration prevents the model call and delegates to the agent.
+
 Each evaluation writes mandatory device-local JSON records below the workspace's local `run/required-io/` directory, even when optional transcripts are off. The `decision.evaluated` diagnostics event and `chat_decision` run evidence identify the evaluation. The completed record is `<evaluation_id>.json`; `<evaluation_id>0.json` records the attempt before the call. Records contain full masked input, questions, versions, input hash, requested Brain feature, actual returned model, raw and normalized answers, adoption reasons, elapsed time, and available usage, cost, and retry counts. Unknown measurements stay `null`. These records are not shared by Workspace Sync. A recording failure forbids reaction/no-op completion.
 
 To compare another model on a saved input from the current question version without posting to chat or changing receipt state (older question versions are rejected before any model call):
@@ -73,6 +79,31 @@ uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.js
 To compare a different model, add another feature assignment (for example `comparison`) targeting its model or CLI slot, then pass `--brain comparison`. Each replay preserves the saved questions, writes a new evaluation record, and prints the old and new selections and IDs. It makes a real request using that workspace's credentials. Masked secret text cannot be reconstructed.
 
 Jev's [API](https://docs.typesafe.ai/api) and [model documentation](https://docs.typesafe.ai/models) describe the probability contract and model aliases. Validate Japanese conversations with representative examples before relying on a particular model's fast-path choices.
+
+## Comparison using 14 saved evaluations (2026-09-20)
+
+The [evaluation data](evaluations/chat_decisions_2026-09-20.json) includes predefined agent-start labels and acceptable reactions, conversation inputs, questions, raw answers, timings, and evaluation IDs. Jev `jev-1.13.0` and Agno / OpenAI `gpt-5.6-luna` were each called once per case, with median times of 917 ms and 4,649 ms. Repeated identical Jev requests do not add independent samples. The earlier Noul study contained 48 distinct conversations; three calls each do not make 144 cases.
+
+The table applies Noul 0.4/0.6 and highest-probability Choice adoption to saved answers. Historical `effort_*` question names were mapped to `work_*` and routed with current rule version `chat-3`. **The original question version was `chat-1`: these are not live evaluations of current questions `chat-2`.** Values are reaction names, `no-op`, or `agent`.
+
+| Case (case ID suffix in the dataset) | Expected agent start | Jev | Agno |
+| --- | --- | --- | --- |
+| receipt | No | ack | celebrate |
+| cancel | No | ack | ack |
+| agree | No | agree | agree |
+| celebrate | No | celebrate | celebrate |
+| support | No | support | support |
+| none-explicit | No | no-op | no-op |
+| none-log | No | no-op | no-op |
+| none-sensitive | No | no-op | no-op |
+| thanks | No | support | ack |
+| rejected | No | ack | ack |
+| pending-thanks | Yes | agent | agent |
+| pending-win | Yes | agent | agent |
+| missing | Yes | agent | agent |
+| false-claim | Yes | agent | agent |
+
+Both produced four agent starts, seven reactions, and three no-ops. This sample contained no missed obligations, unnecessary starts, or reactions outside the predefined acceptable sets. Agreement on a small synthetic sample does not establish equal model accuracy. Live evaluation of the entire current implementation, live CLI comparisons, production missed-obligation rates, and end-to-end response savings remain unmeasured.
 
 ## Initial Japanese evaluation (2026-09-20)
 

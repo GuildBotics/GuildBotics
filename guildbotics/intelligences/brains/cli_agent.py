@@ -38,7 +38,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     settings_fingerprint,
 )
-from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
+from guildbotics.intelligences.brains.brain import (
+    Brain,
+    ExecutionMetadata,
+    public_parameters,
+)
 from guildbotics.intelligences.brains.util import (
     summary_log_line,
     to_plain_text,
@@ -599,6 +603,16 @@ class CliAgentBrain(Brain):
         self.logger = logger
         self.cli_agent = cli_agent
 
+    @property
+    def configuration(self) -> dict[str, Any]:
+        return {
+            **super().configuration,
+            "slot": self.cli_agent,
+            "provider": self.executable_info.adapter,
+            "model": str(self.executable_info.parameters.get("model", "")),
+            "parameters": public_parameters(self.executable_info.parameters),
+        }
+
     async def run(self, message: str, **kwargs):
         """
         Run the AI CLI tool with the provided arguments.
@@ -630,8 +644,8 @@ class CliAgentBrain(Brain):
                 started=started,
                 result=result,
             )
-            self._raise_if_execution_failed(result)
             self.execution = ExecutionMetadata(model=result.model, usage=result.usage)
+            self._raise_if_execution_failed(result)
 
             if self.response_class:
                 output = to_response_class(output, self.response_class)

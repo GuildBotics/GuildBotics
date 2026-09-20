@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,7 @@ from guildbotics.integrations.chat_workflow_status import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.decisions.assessment import assess
+from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import (
     get_member_clone_path,
@@ -330,6 +332,23 @@ async def _handle_event(
         for item in reversed(batch_events)
         if not item.is_from_user(identity_user_id)
     )
+    decision_state = {
+        **prompt_payload,
+        "member": {
+            "person_id": person_id,
+            "roles": _handoff_roles(context.person),
+            "profile": getattr(context.person, "profile", {}),
+        },
+        "service": service_name,
+        "channel_id": channel_id,
+        "thread_ts": event.thread_ts,
+        "event_ids": [item.event_id for item in batch_events],
+        "reaction_target": reaction_target,
+    }
+    # Operational evidence changes during recovery; the conversation does not.
+    input_hash = hashlib.sha256(
+        json.dumps(decision_state, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
 
     async def _invoke_chat_turn(run_id: str, _attempt: int) -> None:
         nonlocal current_run_id, decision
@@ -351,21 +370,31 @@ async def _handle_event(
                 },
             )
         if decision is None:
+            evidence = RunStore(task_run_root).evidence(run_id)
+            saved = next(
+                (
+                    item["payload"]
+                    for item in reversed(evidence)
+                    if item["evidence_type"] == "chat_decision"
+                ),
+                None,
+            )
+            if (
+                saved is not None
+                and saved.get("input_hash") == input_hash
+                and saved.get("route") != "agent"
+            ):
+                decision = Selection(
+                    route=saved["route"],
+                    reason=saved["reason"],
+                    reaction=saved["reaction"],
+                )
+        if decision is None:
             config_dir = get_workspace_config_dir()
             decision, evaluation_id = await assess(
                 {
-                    **prompt_payload,
-                    "member": {
-                        "person_id": person_id,
-                        "roles": _handoff_roles(context.person),
-                        "profile": getattr(context.person, "profile", {}),
-                    },
+                    **decision_state,
                     "run_id": run_id,
-                    "service": service_name,
-                    "channel_id": channel_id,
-                    "thread_ts": event.thread_ts,
-                    "event_ids": [item.event_id for item in batch_events],
-                    "reaction_target": reaction_target,
                     "previous_outcomes": RunStore(task_run_root).evidence(run_id),
                 },
                 None,
@@ -377,7 +406,11 @@ async def _handle_event(
             RunStore(task_run_root).append_evidence(
                 run_id,
                 "chat_decision",
-                {"evaluation_id": evaluation_id, **decision.model_dump()},
+                {
+                    "evaluation_id": evaluation_id,
+                    "input_hash": input_hash,
+                    **decision.model_dump(),
+                },
             )
         if decision.route != "agent":
             updates = check_chat_updates(person_id, run_id)

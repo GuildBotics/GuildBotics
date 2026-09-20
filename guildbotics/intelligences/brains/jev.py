@@ -44,6 +44,10 @@ class JevBrain(Brain):
             raise ValueError("Unsupported Jev model")
         self.model = model
 
+    @property
+    def configuration(self) -> dict[str, Any]:
+        return {**super().configuration, "provider": "jev", "model": self.model}
+
     async def run(self, message: str, **kwargs):
         payload = json.loads(message)
         result = await request(

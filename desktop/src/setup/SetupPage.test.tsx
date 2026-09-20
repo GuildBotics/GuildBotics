@@ -4048,6 +4048,16 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
+  it("does not offer Jev for ordinary command assignments", async () => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const engine = screen.getAllByRole("combobox", { name: t("setup.intelligence.engine") })[0];
+    await user.click(engine);
+    expect(screen.getByRole("option", { name: "LLM" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "CLI" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Jev" })).not.toBeInTheDocument();
+  });
+
   it.each(["LLM", "CLI", "Jev"])(
     "creates an absent chat assignment by selecting %s",
     async (label) => {
