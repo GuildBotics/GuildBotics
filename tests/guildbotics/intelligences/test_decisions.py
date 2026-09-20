@@ -211,7 +211,7 @@ async def test_snapshot_is_full_and_replayable_even_without_transcripts(
     )
     paths = list(tmp_path.rglob(f"{record_id}.json"))
     assert len(paths) == 1
-    payload = json.loads(paths[0].read_text())["payload"]
+    payload = json.loads(paths[0].read_text(encoding="utf-8"))["payload"]
     assert payload["input"]["state"] == state
     assert set(payload["input"]["questions"]) == set(QUESTIONS)
     assert result.route == "reaction-only"

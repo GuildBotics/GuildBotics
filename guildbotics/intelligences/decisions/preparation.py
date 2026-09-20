@@ -16,6 +16,7 @@ from guildbotics.intelligences.decisions.settings import (
     connection_identity,
     read_config,
     record_connection,
+    status_message,
 )
 from guildbotics.intelligences.llm_providers import discover_llm_providers
 from guildbotics.utils.i18n_tool import t
@@ -98,7 +99,7 @@ async def check(
             update={
                 "state": state,
                 "available": state in {"verified", "connection_error"},
-                "reason": t("intelligences.decisions." + code),
+                "reason": status_message(code),
             }
         ),
         "models": models,

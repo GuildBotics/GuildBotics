@@ -90,3 +90,20 @@ The report includes answers, probabilities, usage, elapsed time, versions, input
 Jev's context probabilities were 0.57–0.78, below the adoption threshold, so every case went to the agent. It also returned uncertain effort for six cases; seven routes used high effort overall. This sample demonstrates conservative operation but **does not demonstrate a startup reduction for Jev**. Agno used reactions for acknowledgment and cancellation, no-op for completed handoff and unrelated chatter, and the agent for the remaining four cases. Its missing-context case incorrectly asserted sufficient context, but the pending-request and uncertain-effort answers still selected the agent with high effort.
 
 These are individual observations, not an accuracy estimate. Costs were not returned and remain unknown; Jev made zero retries, while Agno's internal retry count was unavailable. No live chat action was performed. End-to-end reply latency, actual saved response-agent usage, long histories, and sustained production accuracy remain unmeasured. Claude's invocation and cleanup are covered by a stubbed environment test; a live CLI comparison was not run because the preview host lacked Documents access required by the existing environment readiness check.
+### Thresholds and limits of the comparison
+
+The 0.1/0.9 cutoffs are the initial values specified in Issue #543; they were not calibrated for this use case. Jev thresholds the Noul probability of yes and the probability of the selected Choice option. Choice's distribution-derived `confidence` is recorded but is not the adoption threshold. Agno and AI CLI answers are structured assertions, with no numeric threshold. The shared questions and downstream rules therefore do **not** constitute a comparison at matched error rates. An Agno `true` assertion does not provide the same guarantee as a Jev probability above 0.9.
+
+For the acknowledgment case, Jev returned context sufficiency 0.78, pending request 0.07, repository research 0.14, and a `support` reaction probability of 0.62. Context becomes unknown and starts the agent; relaxing that gate alone still leaves research and reaction uncertainty. Since Jev skipped no starts, its zero unsafe skips do not validate the safety of skipping.
+
+Applying alternative thresholds only to the saved answers gives the following sensitivity analysis. This does not rerun a model or change operational settings.
+
+| Noul false ceiling / true floor | Choice adoption floor | Skipped starts |
+| --- | --- | --- |
+| 0.1 / 0.9 (current) | 0.9 | 0 / 8 |
+| 0.2 / 0.8 | 0.8 | 0 / 8 |
+| 0.3 / 0.7 | 0.7 | 0 / 8 |
+| 0.4 / 0.6 | 0.6 | 2 / 8 |
+| 0.5 / 0.5 (true wins at the boundary) | 0.5 | 3 / 8 |
+
+These results do not justify recommending 0.5 or 0.6. Further evaluation needs question-level labels and held-out cases, including whether the context question conflates information needed to choose a route with information needed to perform the task. Tune and validate on separate examples, comparing missed obligations, reaction types, unnecessary high effort, and skipped starts for both engines before treating the adoption policy as validated.

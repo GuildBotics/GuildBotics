@@ -29,6 +29,19 @@ AvailabilityState = Literal[
 ]
 
 
+def status_message(code: str) -> str:
+    return {
+        "missing": t("intelligences.decisions.credentials_missing"),
+        "unverified": t("intelligences.decisions.unverified"),
+        "verified": t("intelligences.decisions.verified"),
+        "authentication_error": t("intelligences.decisions.authentication_error"),
+        "connection_error": t("intelligences.decisions.connection_error"),
+        "invalid": t("intelligences.decisions.invalid"),
+        "invalid_response": t("intelligences.decisions.invalid_response"),
+        "evaluation_failed": t("intelligences.decisions.evaluation_failed"),
+    }[code]
+
+
 def _connection_key(config: DecisionConfig, config_dir: Path, value: str) -> str:
     return hashlib.sha256(
         f"{config_dir}\0{config.engine}\0{config.provider}\0{config.model}\0{value}".encode()
@@ -141,7 +154,7 @@ def availability(
         return Availability(
             available=not reason and checked not in {"invalid", "authentication_error"},
             state="missing" if reason else checked,
-            reason=reason or t("intelligences.decisions." + checked),
+            reason=reason or status_message(checked),
             recovery="environment",
         )
     if config.engine == "jev":
@@ -182,9 +195,5 @@ def availability(
     return Availability(
         available=usable and checked not in {"authentication_error", "invalid"},
         state=cast(AvailabilityState, checked),
-        reason=t(
-            "intelligences.decisions." + checked
-            if usable
-            else "intelligences.decisions.credentials_missing"
-        ),
+        reason=status_message(checked),
     )
