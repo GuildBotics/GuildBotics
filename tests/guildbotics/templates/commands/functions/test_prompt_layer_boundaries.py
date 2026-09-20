@@ -282,13 +282,11 @@ def test_chat_work_states_no_frontmatter_effort():
         assert "effort" not in _frontmatter("handle_chat_event", language)
 
 
-def test_chat_judgment_owns_repository_effort_criteria():
+def test_chat_judgment_owns_repository_work_criteria():
     from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
 
-    assert "repository guidelines" in QUESTIONS["effort_repo_decision"].instructions
-    assert (
-        "Technical terminology alone" in QUESTIONS["effort_repo_decision"].instructions
-    )
+    assert "repository guidelines" in QUESTIONS["work_repo_decision"].instructions
+    assert "Technical terminology alone" in QUESTIONS["work_repo_decision"].instructions
 
 
 def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
