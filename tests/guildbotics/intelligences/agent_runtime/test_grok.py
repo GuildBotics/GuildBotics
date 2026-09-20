@@ -1509,11 +1509,15 @@ async def test_a_long_turn_is_not_cut_off_by_the_request_timeout(
     monkeypatch, tmp_path
 ) -> None:
     """session/prompt answers at turn end, so it must not be request-bounded."""
-    peer = _Peer(updates=[text_chunk("finally done")], prompt_delay=0.2)
+    peer = _Peer(updates=[text_chunk("finally done")], prompt_delay=1.0)
     install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
     # Every other request stays bounded; only the turn itself is open-ended.
-    adapter._transport._request_timeout = 0.02
+    # The bound also applies to ``initialize`` and ``session/new`` on the way
+    # to the prompt, so it has to outlast the scheduling jitter of a loaded CI
+    # worker (4 vCPU, ``-n 8``): 20 ms did not, and the turn failed before the
+    # prompt was even sent. The prompt still takes twice as long as the bound.
+    adapter._transport._request_timeout = 0.5
 
     result, _events = await _run(adapter, tmp_path)
 
