@@ -12,6 +12,7 @@ import git
 import httpx
 from git import GitCommandError
 
+from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
     MemberGitHubCapabilityService,
@@ -223,6 +224,7 @@ class MemberGitWorkspaceService:
         token = await get_person_github_token(self.person, self.github.base_url)
         with git.Repo(repo_path) as repo:
             branch = repo.active_branch.name
+            ensure_chat_current(self.person.person_id)
             pushed, commits = self._push_if_needed(repo, branch, token)
             remote_url = repo.remotes.origin.url
         pull_requests: list[dict[str, Any]] = []

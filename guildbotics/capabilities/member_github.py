@@ -13,6 +13,7 @@ from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
 
+from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
@@ -220,6 +221,7 @@ class MemberGitHubCapabilityService:
         if labels:
             payload["labels"] = await self._defined_labels(owner, repo_name, labels)
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(f"/repos/{owner}/{repo_name}/issues", json=payload)
         _raise_for_status(resp)
         issue = resp.json()
@@ -281,6 +283,7 @@ class MemberGitHubCapabilityService:
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
         )
         if payload:
+            ensure_chat_current(self.person.person_id)
             resp = await client.patch(issue_endpoint, json=payload)
             _raise_for_status(resp)
         await self._apply_label_changes(resource, additions, remove_labels)
@@ -327,10 +330,12 @@ class MemberGitHubCapabilityService:
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/labels"
         )
         for name in remove_labels:
+            ensure_chat_current(self.person.person_id)
             resp = await client.delete(f"{labels_endpoint}/{quote(name, safe='')}")
             if resp.status_code != HTTPStatus.NOT_FOUND:
                 _raise_for_status(resp)
         if additions:
+            ensure_chat_current(self.person.person_id)
             resp = await client.post(labels_endpoint, json={"labels": list(additions)})
             _raise_for_status(resp)
 
@@ -838,6 +843,7 @@ class MemberGitHubCapabilityService:
             "body": body,
             "draft": draft == "true",
         }
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(endpoint, json=payload)
         _raise_for_status(resp)
         pr = resp.json()
@@ -862,6 +868,7 @@ class MemberGitHubCapabilityService:
         if not payload:
             raise MemberCapabilityError("pr update needs a body or a title.")
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.patch(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}",
             json=payload,
@@ -899,6 +906,7 @@ class MemberGitHubCapabilityService:
         pr = await self._pull_request(resource)
         head_sha = self._pull_request_head_sha(resource, pr)
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews",
             json={
@@ -941,6 +949,7 @@ class MemberGitHubCapabilityService:
             payload["start_line"] = start_line
             payload["start_side"] = start_side
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments",
             json=payload,
@@ -971,6 +980,7 @@ class MemberGitHubCapabilityService:
                 f"Review comment '{reply_target_id}' is not replyable for this PR."
             )
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/comments/{reply_target_id}/replies",
             json={"body": body.rstrip()},
@@ -998,6 +1008,7 @@ class MemberGitHubCapabilityService:
         else:
             raise MemberCapabilityError(f"Unsupported reaction target '{target}'.")
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(
             endpoint,
             json={"content": reaction},
@@ -1255,6 +1266,7 @@ class MemberGitHubCapabilityService:
           }
         }
         """
+        ensure_chat_current(self.person.person_id)
         data = await self._graphql(
             mutation, {"proj": project_node_id, "content": issue_node_id}
         )
@@ -1509,6 +1521,7 @@ class MemberGitHubCapabilityService:
 
     async def _post_comment(self, endpoint: str, body: str) -> dict[str, Any]:
         client = await self._get_client()
+        ensure_chat_current(self.person.person_id)
         resp = await client.post(endpoint, json={"body": body.rstrip()})
         _raise_for_status(resp)
         return resp.json()

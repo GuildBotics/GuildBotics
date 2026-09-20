@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import types
@@ -99,6 +100,12 @@ class _WorkflowChatService:
     def __init__(self) -> None:
         self.posts: list[tuple[str, str, str | None]] = []
         self.reactions: list[tuple[str, str, str]] = []
+        self.events: list[ChatEvent] = []
+
+    async def list_thread_events(
+        self, channel_id, *, thread_ts, cursor=None, limit=100
+    ):
+        return ChatEventPage(events=self.events)
 
     async def get_bot_identity(self) -> ChatIdentity:
         return ChatIdentity(user_id="U_ALICE", display_name="AliceBot")
@@ -267,9 +274,12 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
 
     # Fake the agent invocation at the CommandRunner boundary: record a reply
     # evidence + completion exactly as `guildbotics member chat ...` would.
+    agent_inputs = []
+
     async def fake_invoke(self, name, *args, **kwargs):
         if name != "functions/handle_chat_event":
             return None
+        agent_inputs.append(json.loads(kwargs["unprocessed_messages"]))
         run_id = kwargs["workflow_run_id"]
         store = RunStore()
         store.append_evidence(
@@ -319,10 +329,25 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
         ),
     )
 
+    followup = ChatEvent(
+        event_id=f"{event_id}_correction",
+        channel_id="C1",
+        thread_ts=thread_ts,
+        message_ts="101.1",
+        author_id="U_USER",
+        text="Correction: use the updated requirement",
+        mentions=["U_ALICE"],
+    )
+    chat_service.events = [followup]
+    state_store.upsert_pending_event("slack", "alice", "C1", followup)
     dispatcher = PendingChatDispatcher(context, state_store=state_store)
     processed = await dispatcher.process_person(person)
 
     assert processed == 1
+    assert len(agent_inputs) == 1
+    assert [item["timestamp"] for item in agent_inputs[0]] == [thread_ts, "101.1"]
+    assert state_store.is_processed_event("slack", "alice", "C1", followup.event_id)
+    assert state_store.load_pending_events("slack", "alice", "C1") == []
     # The workflow delegates instead of posting to Slack directly.
     assert chat_service.posts == []
     # Evidence drives the processed-event record and the appended bot reply.
@@ -359,7 +384,9 @@ def test_get_or_create_listener_reuses_same_connection_key(monkeypatch):
     created: list[tuple[str, str | None]] = []
 
     class _FakeSlackSocketEventListener:
-        def __init__(self, *, logger, app_token, base_url=None, person_ids=None):
+        def __init__(
+            self, *, logger, app_token, base_url=None, person_ids=None, on_activity=None
+        ):
             created.append((app_token, base_url))
 
         def start(self):
@@ -398,7 +425,9 @@ def test_get_or_create_listener_splits_when_base_url_differs(monkeypatch):
     created: list[tuple[str, str | None]] = []
 
     class _FakeSlackSocketEventListener:
-        def __init__(self, *, logger, app_token, base_url=None, person_ids=None):
+        def __init__(
+            self, *, logger, app_token, base_url=None, person_ids=None, on_activity=None
+        ):
             created.append((app_token, base_url))
 
         def start(self):
@@ -498,7 +527,11 @@ async def test_run_once_queues_drained_events(monkeypatch, tmp_path):
         ),
     )
     fake_listener = _FakeListener()
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: fake_listener)
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, fake_listener),
+    )
     monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
@@ -571,7 +604,11 @@ async def test_run_once_suppresses_workflow_status_metadata(monkeypatch, tmp_pat
             "xapp",
         ),
     )
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, _FakeListener()),
+    )
     monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
@@ -644,7 +681,11 @@ async def test_run_once_queues_event_for_multiple_people(monkeypatch, tmp_path):
             "xapp",
         ),
     )
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, _FakeListener()),
+    )
     monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
@@ -723,7 +764,11 @@ async def test_run_once_does_not_queue_already_processed(monkeypatch, tmp_path):
             "xapp",
         ),
     )
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, _FakeListener()),
+    )
     monkeypatch.setattr(runner, "_backfill_due_events", _no_backfill)
 
     await runner._run_once()
@@ -794,7 +839,11 @@ async def test_run_once_backfills_channel_and_known_thread_events(
             "xapp",
         ),
     )
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, _FakeListener()),
+    )
 
     await runner._run_once()
     await runner._run_once()
@@ -956,7 +1005,11 @@ async def test_run_once_uses_connection_service_for_backfill(monkeypatch):
             "xapp",
         ),
     )
-    monkeypatch.setattr(runner, "_get_or_create_listener", lambda key: _FakeListener())
+    monkeypatch.setattr(
+        runner,
+        "_get_or_create_listener",
+        lambda key: runner._listeners.setdefault(key, _FakeListener()),
+    )
     monkeypatch.setattr(runner, "_backfill_due_events", _fake_backfill)
 
     await runner._run_once()
@@ -1230,3 +1283,268 @@ async def test_stop_cancels_in_flight_cycle(monkeypatch):
     await asyncio.wait_for(loop_task, timeout=1.0)
     assert runner._stop_event.is_set()
     assert runner._cycle_failure_count == 0
+
+
+@pytest.mark.asyncio
+async def test_socket_notification_persists_while_backfill_is_waiting(monkeypatch):
+    import asyncio
+
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+
+    runner = EventListenerRunner(_FakeContext(), poll_interval_seconds=30)
+    key = SlackConnectionKey("slack", "socket_mode", "hash", "https://slack.com/api")
+    person = Person(person_id="alice", name="Alice")
+    grouped = {key: [(person, {"C1": ChatBackfillPolicy()})]}
+    backfill_started = asyncio.Event()
+    saved = asyncio.Event()
+
+    class Listener:
+        connected = True
+        events = []
+
+        def start(self):
+            pass
+
+        def stop(self):
+            self.connected = False
+
+        def drain_events(self):
+            result, self.events = self.events, []
+            return result
+
+    listener = Listener()
+    runner._listeners[key] = listener
+    runner._loop = asyncio.get_running_loop()
+
+    async def subscriptions():
+        return grouped
+
+    async def slow_backfill(*args):
+        backfill_started.set()
+        await asyncio.Event().wait()
+        return 0
+
+    original_upsert = runner._state_store.upsert_pending_event
+
+    def upsert(*args):
+        original_upsert(*args)
+        saved.set()
+
+    monkeypatch.setattr(
+        runner, "_build_person_subscriptions_by_connection", subscriptions
+    )
+    monkeypatch.setattr(runner, "_backfill_person", slow_backfill)
+    monkeypatch.setattr(runner._state_store, "upsert_pending_event", upsert)
+    task = asyncio.create_task(runner._run_loop())
+    try:
+        await asyncio.wait_for(backfill_started.wait(), 1)
+        listener.events.append(
+            IncomingChatEvent(
+                "slack",
+                "C1",
+                ChatEvent(
+                    event_id="E1",
+                    channel_id="C1",
+                    message_ts="101.1",
+                    thread_ts="100.1",
+                    text="cancel",
+                    author_id="U_OTHER",
+                ),
+            )
+        )
+        # The socket reader notifies from another thread.
+        await asyncio.to_thread(runner._wake_receiver)
+        await asyncio.wait_for(saved.wait(), 1)
+        assert (
+            runner._state_store.load_pending_events("slack", "alice", "C1")[
+                0
+            ].event.text
+            == "cancel"
+        )
+        assert ChatReceiveStatus().available("slack", "alice", "C1")
+    finally:
+        runner.stop()
+        await asyncio.wait_for(task, 1)
+    assert not ChatReceiveStatus().available("slack", "alice", "C1")
+
+
+def test_receive_save_failure_retains_event_and_marks_unavailable(monkeypatch):
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+
+    runner = EventListenerRunner(_FakeContext())
+    key = SlackConnectionKey("slack", "socket_mode", "hash", "https://slack.com/api")
+    runner._connection_subscriptions[key] = [
+        (Person(person_id="alice", name="Alice"), {"C1": ChatBackfillPolicy()})
+    ]
+    events = [
+        IncomingChatEvent(
+            "slack",
+            "C1",
+            ChatEvent(
+                event_id="E1",
+                channel_id="C1",
+                message_ts="101.1",
+                thread_ts="100.1",
+                text="cancel",
+                author_id="U_OTHER",
+            ),
+        )
+    ]
+
+    def drain():
+        result = events[:]
+        events.clear()
+        return result
+
+    runner._listeners[key] = types.SimpleNamespace(connected=True, drain_events=drain)
+    original = runner._state_store.upsert_pending_event
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner._state_store, "upsert_pending_event", fail)
+    runner._flush_listener(key)
+    assert not ChatReceiveStatus().available("slack", "alice", "C1")
+    monkeypatch.setattr(runner._state_store, "upsert_pending_event", original)
+    runner._flush_listener(key)
+    assert ChatReceiveStatus().available("slack", "alice", "C1")
+    assert len(runner._state_store.load_pending_events("slack", "alice", "C1")) == 1
+
+
+def test_receiver_can_restart_on_another_event_loop(monkeypatch):
+    import asyncio
+
+    runner = EventListenerRunner(_FakeContext())
+
+    async def one_cycle():
+        # Let the receiver bind its wait to this loop before ending the cycle.
+        await asyncio.sleep(0.001)
+        runner._stop_event.set()
+
+    monkeypatch.setattr(runner, "_backfill_loop", one_cycle)
+    for _ in range(2):
+        runner._stop_event.clear()
+        asyncio.run(runner._run_loop())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["socket", "backfill"])
+async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
+    monkeypatch, source
+):
+    import asyncio
+
+    from guildbotics.capabilities.chat_updates import (
+        ChatUpdatesRequired,
+        check_chat_updates,
+        ensure_chat_current,
+    )
+    from guildbotics.capabilities.task_runs import RUN_ENV
+    from guildbotics.integrations import chat_receive_status
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+    from guildbotics.utils.shared_write_lock import shared_write_lock
+
+    scope = ("slack", "alice", "C1")
+    RunStore().append_evidence(
+        "run",
+        "chat_batch",
+        {
+            "person_id": "alice",
+            "service": "slack",
+            "channel_id": "C1",
+            "thread_ts": "100.1",
+            "self_user_id": "U_BOT",
+            "event_ids": ["E1"],
+        },
+    )
+    monkeypatch.setenv(RUN_ENV, "run")
+    now = [100.0]
+    monkeypatch.setattr(
+        chat_receive_status,
+        "time",
+        types.SimpleNamespace(time=lambda: now[0], monotonic=lambda: now[0]),
+    )
+    runner = EventListenerRunner(_FakeContext())
+    key = SlackConnectionKey("slack", "socket_mode", "hash", "https://slack.com/api")
+    runner._connection_subscriptions[key] = [
+        (Person(person_id="alice", name="Alice"), {"C1": ChatBackfillPolicy()})
+    ]
+    message = ChatEvent(
+        event_id="E3",
+        channel_id="C1",
+        message_ts="103.1",
+        thread_ts="100.1",
+        author_id="U_USER",
+        text="cancel deployment",
+    )
+    events = [IncomingChatEvent("slack", "C1", message)] if source == "socket" else []
+
+    def drain():
+        result = events[:]
+        events.clear()
+        return result
+
+    runner._listeners[key] = types.SimpleNamespace(connected=True, drain_events=drain)
+    runner._receive_status.save(*scope, state="ready")
+    locked, release = threading.Event(), threading.Event()
+
+    def hold_sync_lock():
+        with shared_write_lock():
+            locked.set()
+            release.wait(timeout=5)
+
+    thread = threading.Thread(target=hold_sync_lock)
+    thread.start()
+    task = None
+    try:
+        assert await asyncio.to_thread(locked.wait, 1)
+        if source == "backfill":
+            task = asyncio.create_task(
+                runner._write_backfill(
+                    scope,
+                    lambda: runner._state_store.upsert_pending_event(*scope, message),
+                )
+            )
+            await asyncio.sleep(0.01)
+        runner._flush_listener(key)  # Must not block on the real shared lock.
+        for elapsed in (5, 10, 20, 35):
+            now[0] = 100.0 + elapsed
+            runner._flush_listener(key)
+            assert ChatReceiveStatus().state(*scope) == "catching_up"
+            assert check_chat_updates("alice", "run")["status"] == "catching_up"
+            with pytest.raises(ChatUpdatesRequired):
+                ensure_chat_current("alice")
+        assert not runner._state_store.load_pending_events(*scope)
+    finally:
+        release.set()
+        await asyncio.to_thread(thread.join, 1)
+        if task:
+            await asyncio.wait_for(task, 2)
+    runner._flush_listener(key)
+    assert ChatReceiveStatus().state(*scope) == "ready"
+    result = check_chat_updates("alice", "run")
+    assert [item["event_id"] for item in result["messages"]] == ["E3"]
+    ensure_chat_current("alice")
+
+
+def test_wake_receiver_uses_one_loop_reference_during_shutdown():
+    class StoppingRunner(EventListenerRunner):
+        @property
+        def _loop(self):
+            loop = self.current_loop
+            self.current_loop = None
+            return loop
+
+        @_loop.setter
+        def _loop(self, value):
+            self.current_loop = value
+
+    runner = StoppingRunner(_FakeContext())
+    calls = []
+    runner._loop = types.SimpleNamespace(
+        call_soon_threadsafe=lambda callback: calls.append(callback)
+    )
+    runner._wake_receiver()
+    assert calls == [runner._receive_wakeup.set]
+    runner._wake_receiver()  # Shutdown has now cleared the loop.
+    assert len(calls) == 1

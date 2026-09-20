@@ -180,16 +180,50 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   event listener together. The persistent file contains owner metadata for status and
   CLI stop handling, but file existence is not a liveness signal. Desktop-owned
   services must be stopped from Desktop rather than by signalling the sidecar PID.
-- Chat events are drained FIFO per Slack thread (`drivers/pending_chat_dispatcher.py`):
-  while a thread's oldest event is retrying or backing off, later events of the same
-  thread are not dispatched (a newer arrival instead wakes the waiting head early,
-  at most once per follower cursor and never before a provider rate-limit reset), and
-  a finally-abandoned event is terminalized so it can never block its thread. This
-  keeps the shared provider conversation's context cursor a monotonic watermark.
-  A resumed session is continued only for the same run/event it last worked on;
-  cursor regression, unorderable cursors, or a run/event identity mismatch rotate the
-  session, record a `continuation_rejected` diagnostics event, and re-feed full
-  context instead of sending the generic continuation prompt.
+- A member that finishes work while messages 3 and 5 arrive in one Slack thread
+  reads the unread conversation through message 5 in its next run. The oldest
+  queued event starts that run; the workflow combines queued messages with a fresh
+  provider snapshot, including intervening conversation and corrections. Historical
+  context is bounded to 100 messages; unread input is kept separately so that the
+  context bound cannot discard an earlier request. Both fresh and resumed AI CLI
+  sessions receive the whole unread batch.
+- Before invoking the agent, the workflow records the batch's event IDs and last
+  message timestamp as `chat_batch` evidence on the task run. Completion acknowledges
+  and removes those IDs. Additional `chat_updates` input is acknowledged only on
+  done/asking after a subsequent chat reply, post, reaction, GitHub write, or Git publication. Blocked runs and updates
+  with no later external action remain queued for another run.
+  Messages not delivered to the agent also remain queued. The dispatcher reloads the thread on its next pass. Recovery
+  after a recorded completion uses that saved membership, not a newly fetched
+  thread, so it cannot acknowledge unread messages or repeat completed actions.
+- Before replying, reacting, pushing Git commits, or writing to GitHub, a chat agent
+  calls `guildbotics member chat updates --person <person> --run-id <run_id>`.
+  The command returns `new_messages`, `up_to_date`, `catching_up`, or `unavailable` from the durable
+  queue for the run's original thread, without calling Slack APIs. The agent reads
+  new messages and reconsiders the work. Capability write boundaries independently
+  reject missing checks, unseen input, and unavailable reception. Interactive and
+  ticket runs have no chat precondition.
+- Socket activity wakes a separate receive task, so persistence does not wait for
+  the five-second backfill scheduling cycle or an in-flight backfill request. Failed
+  persistence retains the drained events for retry. Socket and backfill writes
+  acquire the shared lock without blocking the event loop; contention yields and
+  retries. Until received messages are saved, `catching_up` prevents publication
+  and tells the agent to wait and recheck, without completing as blocked. A
+  device-local heartbeat updates on state changes or every five seconds while
+  unchanged; a disconnected receiver, absent record, or heartbeat older than
+  15 seconds makes checking unavailable. Checking and external writes
+  are separate operations: messages can still arrive after the final check.
+- A failed chat run retains its queue head and retry budget. Its next attempt
+  refreshes unread input, allowing a correction to change the remaining work while
+  passing the run's previous action evidence to the agent. When the provider cannot
+  serve a complete snapshot, dispatch waits without consuming a retry attempt;
+  cached messages cannot establish whether a new correction exists. A new follower can wake a failed
+  head early, once per follower cursor; provider rate-limit resets are respected.
+  Other threads and members proceed independently. Exhaustion terminalizes the
+  failed trigger; unacknowledged followers remain available for a later run.
+- A resumed session is continued only for the same run/event and input cursor it
+  last worked on. A newer batch is delivered as new input; cursor regression,
+  unorderable cursors, or a run/event identity mismatch rotate the session, record
+  `continuation_rejected`, and re-feed historical context with the unread batch.
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
   handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
   `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`
@@ -744,7 +778,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
 
 - **Correlation**: `trace_scope` / `span_scope` / `correlation_fields` /
   `set_attributes` correlate everything that happens in one execution — a manual
-  command, one scheduler cycle, one incoming chat event — under a single `trace_id`,
+  command, one scheduler cycle, one batch of unread chat messages — under a single `trace_id`,
   with spans for LLM / AI CLI tool calls and `call_id` correlation.
   Trace attributes carry structured search keys (e.g. `github.url`, `github.number`).
   Idle ticket patrols (a routine cycle whose selector finds no actionable ticket) open

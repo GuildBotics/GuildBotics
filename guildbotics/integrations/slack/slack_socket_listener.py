@@ -44,7 +44,9 @@ class SlackSocketEventListener(EventListener):
         http_client: httpx.Client | None = None,
         ws_connect: Callable[[str], Any] | None = None,
         person_ids: list[str] | None = None,
+        on_activity: Callable[[], None] | None = None,
     ) -> None:
+        self._on_activity = on_activity
         self._logger = logger
         self._app_token = app_token
         self._base_url = (base_url or "https://slack.com/api").rstrip("/")
@@ -66,6 +68,14 @@ class SlackSocketEventListener(EventListener):
         self._received_events = 0
         self._acks_sent = 0
         self._auth_failed = False
+
+    @property
+    def connected(self) -> bool:
+        return self._get_ws() is not None and not self._stop_event.is_set()
+
+    def _notify_activity(self) -> None:
+        if self._on_activity is not None:
+            self._on_activity()
 
     @property
     def auth_failed(self) -> bool:
@@ -143,6 +153,7 @@ class SlackSocketEventListener(EventListener):
                     if item is not None:
                         self._received_events += 1
                         self._queue.put(item)
+                        self._notify_activity()
                     self._ack_if_needed(ws, payload)
             except SlackSocketAuthError as e:
                 self._auth_failed = True
@@ -270,6 +281,7 @@ class SlackSocketEventListener(EventListener):
     def _set_ws(self, ws: Any) -> None:
         with self._ws_lock:
             self._ws = ws
+        self._notify_activity()
 
     def _get_ws(self) -> Any | None:
         with self._ws_lock:
@@ -283,6 +295,7 @@ class SlackSocketEventListener(EventListener):
         with self._ws_lock:
             if self._ws is ws:
                 self._ws = None
+        self._notify_activity()
 
     def _log_debug(self, message: str) -> None:
         with suppress(Exception):

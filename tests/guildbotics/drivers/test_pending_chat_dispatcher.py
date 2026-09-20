@@ -639,7 +639,7 @@ async def test_thread_follower_runs_after_head_terminalizes(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_thread_events_run_fifo_in_one_pass_when_head_succeeds(
+async def test_dispatcher_reloads_thread_after_each_workflow_snapshot(
     monkeypatch, tmp_path
 ):
     store = FileConversationStateStore(base_dir=tmp_path)
@@ -653,7 +653,9 @@ async def test_thread_events_run_fifo_in_one_pass_when_head_succeeds(
         Person(person_id="alice", name="A", is_active=True)
     )
 
-    assert processed == 2
+    assert processed == 1
+    assert ran == ["EA"]
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
     assert ran == ["EA", "EB"]
 
 
@@ -901,12 +903,28 @@ async def test_failed_event_runs_again_once_its_retry_time_arrives(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("batch_ids", [[], ["E1", "E2"]])
+@pytest.mark.parametrize(
+    "updates_action",
+    [
+        None,
+        "chat_reply",
+        "chat_noop",
+        "blocked",
+        "issue_comment",
+        "git_publish",
+        "git_push",
+        "issue_update",
+    ],
+)
 async def test_event_completed_elsewhere_is_processed_without_running_again(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, batch_ids, updates_action
 ):
     """An event whose run recorded a result stays a duplicate, as before."""
     store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
     store.upsert_pending_event("slack", "alice", "C1", _event())
+    if batch_ids:
+        store.upsert_pending_event("slack", "alice", "C1", _event("E2", ts="101.1"))
     run_store = RunStore()
     run_store.start_record(
         "prior-run",
@@ -921,9 +939,16 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
         },
     )
     run_store.append_evidence("prior-run", "chat_reply", {"text": "answered"})
+    if batch_ids:
+        run_store.append_evidence("prior-run", "chat_batch", {"event_ids": batch_ids})
+    if updates_action:
+        store.upsert_pending_event("slack", "alice", "C1", _event("E3", ts="102.1"))
+        run_store.append_evidence("prior-run", "chat_updates", {"event_ids": ["E3"]})
+        if updates_action != "blocked":
+            run_store.append_evidence("prior-run", updates_action, {"text": "decision"})
     run_store.complete_run(
         "prior-run",
-        "done",
+        "blocked" if updates_action == "blocked" else "done",
         "answered",
         subject_type="chat",
         subject_id="slack:C1:100.1",
@@ -952,7 +977,10 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
 
     assert processed == 1
     assert store.is_processed_event("slack", "alice", "C1", "E1")
-    assert store.load_pending_events("slack", "alice", "C1") == []
+    assert [
+        item.event.event_id
+        for item in store.load_pending_events("slack", "alice", "C1")
+    ] == (["E3"] if updates_action in {"chat_noop", "blocked"} else [])
 
 
 @pytest.mark.asyncio

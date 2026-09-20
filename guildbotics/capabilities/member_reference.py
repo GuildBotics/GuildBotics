@@ -172,6 +172,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Chat (Slack)",
         [
             (
+                "guildbotics member chat updates --person <person> --run-id <run_id>",
+                "Check the source thread's durable queue before replying or publishing in a chat workflow; "
+                "reconsider new messages, and stop external writes when reception is unavailable.",
+            ),
+            (
                 "guildbotics member chat identity --person <person> --service slack",
                 "Show the member's chat identity.",
             ),

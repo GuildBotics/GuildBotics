@@ -827,7 +827,7 @@ The provider-neutral label is never passed through to the provider as a fallback
 ### 9.6. Workflow defaults
 
 - **Ticket-driven workflow**: no automatic assessment. `functions/handle_github_ticket` declares `effort: high` in its frontmatter, so the assumption that ticket work is heavy holds out of the box
-- **Chat workflow**: once per incoming event, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files — or that asks for an issue to be drafted for a repository or for a design or implementation policy decision about one — is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
+- **Chat workflow**: once per batch of unread messages in a thread, an LLM (`functions/assess_effort`) answers `default` or `high`. A request that needs work on local files — or that asks for an issue to be drafted for a repository or for a design or implementation policy decision about one — is `high`; an ordinary conversational reply is `default`. `low` is never produced automatically because no criterion for choosing it has been defined (it remains available for explicit configuration)
 
 The chat assessment only ever **promotes**. An assessment below the thread's stored level is not adopted, and a thread already at `high` skips the call entirely. This state is stored per person_id, so it is one member's view of the thread rather than a single value shared across it.
 
@@ -848,3 +848,26 @@ Only a safe allowlist is recorded:
 - `unsupported`: whether an explicit request found no mapping
 
 Raw effective parameter values are never recorded, because `api_key`, headers, and client configuration can sit alongside them.
+
+## 10. Checking chat updates before publication
+
+In a chat workflow, check the source thread immediately before replying, reacting,
+pushing commits, or writing to GitHub:
+
+```bash
+guildbotics member chat updates --person alice --run-id <workflow-run-id>
+```
+
+The command reads the durable event queue without a Slack API request. `new_messages`
+returns the messages received since this run's input or previous check; read them,
+reconsider the work and response, then check again before publishing. `up_to_date`
+permits proceeding. `catching_up` means received messages are waiting to be saved
+during workspace synchronization: wait a few seconds and retry, without publishing
+or completing as `blocked` solely for this state. `unavailable` means reception cannot be verified: defer external
+writes and complete as `blocked` if reception cannot recover within the turn.
+The write commands also reject missing checks and messages arriving after a check.
+The check uses the original chat thread even when publishing to GitHub or another
+channel. It records which messages were delivered. Additional messages are marked
+processed on done/asking only after a later chat reply, post, reaction, GitHub write, or Git publication. Blocked or
+no-op-only runs leave those messages pending for the next run. A final check cannot
+exclude arrivals after the check.

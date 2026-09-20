@@ -3614,3 +3614,70 @@ def test_member_cli_help_stays_in_sync_with_capability_catalog():
 
     assert sorted(path for path, cmd in leaves.items() if not cmd.help) == []
     assert sorted(leaves) == sorted(command_summaries())
+
+
+def test_chat_updates_reads_queue_without_constructing_chat_service(monkeypatch):
+    from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+    from guildbotics.integrations.chat_service import ChatEvent
+    from guildbotics.integrations.file_chat_state_store import (
+        FileConversationStateStore,
+    )
+
+    monkeypatch.setenv(RUN_ENV, "run-1")
+    lease = _set_workflow_delegation(monkeypatch)
+    person = Person(person_id="aiko", name="Aiko")
+    context = FakeContext(person)
+
+    async def close():
+        pass
+
+    context.aclose = close
+
+    def no_chat_api():
+        pytest.fail("Queue updates must not construct a Slack client")
+
+    context.get_chat_service = no_chat_api
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", lambda _person: (context, person)
+    )
+    RunStore().append_evidence(
+        "run-1",
+        "chat_batch",
+        {
+            "person_id": "aiko",
+            "service": "slack",
+            "channel_id": "C1",
+            "thread_ts": "100.1",
+            "self_user_id": "U_BOT",
+            "event_ids": ["E1"],
+        },
+    )
+    ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+    store = FileConversationStateStore()
+    store.upsert_pending_event(
+        "slack",
+        "aiko",
+        "C1",
+        ChatEvent(
+            event_id="E3",
+            channel_id="C1",
+            message_ts="103.1",
+            thread_ts="100.1",
+            author_id="U_USER",
+            text="訂正です",
+        ),
+    )
+    try:
+        result = CliRunner().invoke(
+            member_module.member,
+            ["chat", "updates", "--person", "aiko", "--run-id", "run-1"],
+        )
+    finally:
+        lease.release()
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "new_messages"
+    assert payload["messages"][0]["text"] == "訂正です"
+    assert len(store.load_pending_events("slack", "aiko", "C1")) == 1
+    assert RunStore().evidence("run-1")[-1]["evidence_type"] == "chat_updates"

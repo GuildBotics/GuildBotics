@@ -20,3 +20,10 @@ en:
     unavailable_with_holder: "Person execution lease is already held by pid %{pid} (%{source}: %{command})."
   sync:
     invalid_identity: "Workspace synchronization did not start because %{path} is invalid. No command changes were made; repair the file and run the command again."
+  chat_updates:
+    catching_up: "Received messages are waiting to be saved while workspace synchronization holds the write lock. Wait briefly and retry chat updates; do not publish or complete as blocked solely for this state."
+    invalid_run: "The run has no chat input for this member. Use the current chat workflow run id."
+    unavailable: "Chat reception is unavailable or its heartbeat has expired. Wait for reception to recover; do not publish."
+    not_checked: "Chat updates have not been checked for this input."
+    new_messages: "New source-thread messages have arrived since the last check."
+    required: "%{reason} Run guildbotics member chat updates --person %{person} --run-id %{run_id}, read its result, and reconsider the operation before retrying."

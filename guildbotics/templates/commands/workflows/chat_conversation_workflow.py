@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from guildbotics.capabilities.chat_batch import completed_chat_event_ids
 from guildbotics.capabilities.completion_retry import run_with_completion_retry
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.capabilities.workflow_completion_events import (
@@ -35,6 +36,7 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_KIND,
+    is_suppressed_chat_event,
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -145,7 +147,7 @@ async def main(
     chat_service: ChatService | None = None,
     state_store: ConversationStateStore | None = None,
 ) -> None:
-    """React to one incoming chat event provided via Context.shared_state."""
+    """Handle unread thread messages, starting from the queued incoming event."""
     chat_service = chat_service or context.get_chat_service()
     state_store = state_store or FileConversationStateStore()
     incoming = _read_incoming_event_from_context(context)
@@ -232,10 +234,12 @@ async def _handle_event(
         )
         return
 
+    workspace_root = get_workspace_root()
+    task_run_root = get_workspace_state_path("task-runs", workspace_root=workspace_root)
+    recovered = _recorded_chat_completion(retry_context.run_id, task_run_root)
     cached_thread_messages = state_store.load_thread_messages(
         service_name, person_id, channel_id, event.thread_ts
     )
-    latest_mentions_self = identity_user_id in set(event.mentions)
     participation = _chat_participation(chat_participation)
     # One provider snapshot serves both the participation decision and the
     # agent prompt: a second fetch could fail and lose the very context the
@@ -243,34 +247,48 @@ async def _handle_event(
     snapshot_events, snapshot_complete = await _fetch_thread_events(
         context=context, chat_service=chat_service, event=event
     )
+    batch_events = (
+        _collect_batch_events(
+            event=event,
+            snapshot_events=snapshot_events,
+            state_store=state_store,
+            service_name=service_name,
+            person_id=person_id,
+            processed_event_ids=set(channel_state.processed_event_ids),
+        )
+        if recovered is None
+        else [event]
+    )
     thread_has_mentioned_self = _events_mention_user(
         snapshot_events, identity_user_id
     ) or _thread_has_mentioned_user(cached_thread_messages, identity_user_id)
-    if (
-        not snapshot_complete
-        and participation == "strict"
-        and not latest_mentions_self
-        and not thread_has_mentioned_self
-    ):
+    if not snapshot_complete and recovered is None:
         raise ThreadContextUnavailableError(
-            "Provider thread snapshot is unavailable and the local cache "
-            "cannot decide participation."
+            "The current thread snapshot is unavailable; cached messages "
+            "cannot establish whether a request has been corrected."
         )
-    if _should_skip_event(
-        participation=participation,
-        mentions=list(event.mentions),
-        latest_mentions_self=latest_mentions_self,
-        thread_has_mentioned_self=thread_has_mentioned_self,
+    if recovered is None and all(
+        _should_skip_event(
+            participation=participation,
+            mentions=list(item.mentions),
+            latest_mentions_self=identity_user_id in item.mentions,
+            thread_has_mentioned_self=thread_has_mentioned_self,
+        )
+        for item in batch_events
+        if not item.is_from_user(identity_user_id)
     ):
-        state_store.mark_processed_event(
-            service_name, person_id, channel_id, event.event_id
+        state_store.mark_processed_events(
+            service_name,
+            person_id,
+            channel_id,
+            [item.event_id for item in batch_events],
         )
         return
 
     # Persist the snapshot into the device-local cache so retries and later
     # events keep this context even when the provider becomes unavailable.
     cached_ts = {message.message_ts for message in cached_thread_messages}
-    for thread_event in snapshot_events:
+    for thread_event in [*snapshot_events, *batch_events]:
         if not thread_event.message_ts or thread_event.message_ts in cached_ts:
             continue
         state_store.append_thread_message(
@@ -280,27 +298,11 @@ async def _handle_event(
             event.thread_ts,
             _event_to_thread_message(event.thread_ts, thread_event),
         )
-    if not already_processed:
-        state_store.append_thread_message(
-            service_name,
-            person_id,
-            channel_id,
-            event.thread_ts,
-            ThreadMessageState(
-                channel_id=event.channel_id,
-                thread_ts=event.thread_ts,
-                message_ts=event.message_ts,
-                author_id=event.author_id,
-                text=event.text,
-                mentions=list(event.mentions),
-                is_bot_message=event.is_bot_message,
-            ),
-        )
+        cached_ts.add(thread_event.message_ts)
 
     thread_messages = state_store.load_thread_messages(
         service_name, person_id, channel_id, event.thread_ts
     )
-    workspace_root = get_workspace_root()
     member_workspace = _get_chat_workspace_path(context)
     if member_workspace is None:
         raise RuntimeError("Member workspace path could not be resolved.")
@@ -313,6 +315,7 @@ async def _handle_event(
         thread_state=thread_state,
         chat_participation=participation,
         live_thread=(snapshot_events, snapshot_complete),
+        batch_events=batch_events,
     )
 
     invoke = getattr(context, "invoke", None)
@@ -348,6 +351,22 @@ async def _handle_event(
         nonlocal current_run_id
         current_run_id = run_id
         effort = await _resolve_effort_once()
+        if _attempt == 1:
+            # Persist membership before the agent can complete. Recovery uses
+            # this exact input even if the thread advanced before restart.
+            RunStore(task_run_root).append_evidence(
+                run_id,
+                "chat_batch",
+                {
+                    "event_ids": [item.event_id for item in batch_events],
+                    "context_cursor": batch_events[-1].message_ts,
+                    "person_id": person_id,
+                    "service": service_name,
+                    "channel_id": channel_id,
+                    "thread_ts": event.thread_ts,
+                    "self_user_id": identity_user_id,
+                },
+            )
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
@@ -362,7 +381,7 @@ async def _handle_event(
                 )
             ),
             "resume_policy": "auto",
-            "context_cursor": event.message_ts,
+            "context_cursor": batch_events[-1].message_ts,
             "event_id": event.event_id,
             "attempt": logical_attempt,
             "rebuild_context": json.dumps(
@@ -396,10 +415,25 @@ async def _handle_event(
             service_name=service_name,
             channel_id=channel_id,
             event_id=event.event_id,
-            message_ts=event.message_ts,
+            message_ts=next(
+                item.message_ts
+                for item in reversed(batch_events)
+                if not item.is_from_user(identity_user_id)
+            ),
             thread_ts=event.thread_ts,
-            latest_message=json.dumps(
-                prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
+            previous_attempt_evidence=json.dumps(
+                [
+                    item
+                    for item in RunStore(task_run_root).evidence(run_id)
+                    if item["evidence_type"] != "chat_batch"
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            unprocessed_messages=json.dumps(
+                prompt_payload["unprocessed_messages"],
+                ensure_ascii=False,
+                sort_keys=True,
             ),
             participant_labels=json.dumps(
                 prompt_payload["participant_labels"],
@@ -426,10 +460,6 @@ async def _handle_event(
     # ticket workflow uses the same helper); the outer pending queue is left only
     # as a crash-recovery net.
     try:
-        recovered = _recorded_chat_completion(
-            retry_context.run_id,
-            get_workspace_state_path("task-runs", workspace_root=workspace_root),
-        )
         if recovered is not None:
             record_workflow_completed(
                 run_id=retry_context.run_id,
@@ -450,9 +480,7 @@ async def _handle_event(
                 invoke=_invoke_chat_turn,
                 check_completion=lambda rid: _chat_run_status(
                     rid,
-                    get_workspace_state_path(
-                        "task-runs", workspace_root=workspace_root
-                    ),
+                    task_run_root,
                 ),
                 max_attempts=_IN_DISPATCH_COMPLETION_ATTEMPTS,
                 run_id=retry_context.run_id or None,
@@ -535,8 +563,11 @@ async def _handle_event(
         event.event_id,
     )
 
-    state_store.mark_processed_event(
-        service_name, person_id, channel_id, event.event_id
+    state_store.mark_processed_events(
+        service_name,
+        person_id,
+        channel_id,
+        [event.event_id, *completed_chat_event_ids(evidence, completion.status)],
     )
     posted = _latest_chat_post_evidence(evidence)
     mentioned_user_ids: list[str] = []
@@ -685,8 +716,10 @@ async def _assess_thread_effort(
             # an explicit empty message it would inherit `Context.pipe`, feeding
             # whatever the previous command emitted in as if it were user input.
             message="",
-            latest_message=json.dumps(
-                prompt_payload["latest_message"], ensure_ascii=False, sort_keys=True
+            unprocessed_messages=json.dumps(
+                prompt_payload["unprocessed_messages"],
+                ensure_ascii=False,
+                sort_keys=True,
             ),
             previous_thread_context=json.dumps(
                 prompt_payload["previous_thread_context"],
@@ -717,6 +750,36 @@ def _agno_model_is_configured(context: Any) -> bool:
     return bool(env_key) and bool(os.environ.get(env_key, "").strip())
 
 
+def _collect_batch_events(
+    *,
+    event: ChatEvent,
+    snapshot_events: list[ChatEvent],
+    state_store: ConversationStateStore,
+    service_name: str,
+    person_id: str,
+    processed_event_ids: set[str],
+) -> list[ChatEvent]:
+    """Freeze unread input from the queue and the provider's current snapshot.
+
+    The trigger is the oldest queued event. Older provider history is context,
+    not new work (in particular after a receive reset). Pending events remain
+    input even when the provider snapshot omits them. Latest provider text wins
+    when the same event was edited since reception.
+    """
+    queued = state_store.load_pending_events(service_name, person_id, event.channel_id)
+    events = {
+        item.event_id: item
+        for item in [event, *(pending.event for pending in queued), *snapshot_events]
+        if item.channel_id == event.channel_id
+        and item.thread_ts == event.thread_ts
+        and _split_timestamp(item.message_ts) >= _split_timestamp(event.message_ts)
+        and item.event_id not in processed_event_ids
+        and not item.is_edit_or_delete
+        and not is_suppressed_chat_event(item)
+    }
+    return sorted(events.values(), key=lambda item: _split_timestamp(item.message_ts))
+
+
 async def _build_agent_prompt_payload(
     *,
     context: Any,
@@ -727,13 +790,12 @@ async def _build_agent_prompt_payload(
     thread_state: ThreadConversationState,
     chat_participation: str = "strict",
     live_thread: tuple[list[ChatEvent], bool] | None = None,
+    batch_events: list[ChatEvent] | None = None,
 ) -> dict[str, Any]:
+    batch_events = batch_events if batch_events is not None else [event]
     person_labels = await _chat_user_to_person_labels(context)
     author_labels = _build_author_labels(
         context, self_user_id, event, thread_messages[-20:], person_labels
-    )
-    prompt_latest_message = _to_prompt_message_from_event(
-        event, self_user_id, author_labels, chat_service
     )
 
     previous_thread_context = {
@@ -760,9 +822,17 @@ async def _build_agent_prompt_payload(
         self_user_id=self_user_id,
         author_labels=author_labels,
         chat_service=chat_service,
+        batch_events=batch_events,
     )
     return {
-        "latest_message": _message_to_prompt_dict(prompt_latest_message),
+        "unprocessed_messages": [
+            _message_to_prompt_dict(
+                _to_prompt_message_from_event(
+                    item, self_user_id, author_labels, chat_service
+                )
+            )
+            for item in batch_events
+        ],
         "participant_labels": author_labels,
         "handoff_candidates": _build_handoff_candidates(context, person_labels),
         "chat_participation": _chat_participation(chat_participation),
@@ -778,11 +848,11 @@ async def _fetch_thread_events(
     chat_service: ChatService,
     event: ChatEvent,
 ) -> tuple[list[ChatEvent], bool]:
-    """Fetch the bounded provider snapshot of the thread once.
+    """Fetch a provider snapshot once, retaining every unread message.
 
-    Returns the raw events (oldest first, at most the context bound) and
-    whether the provider served the thread completely. One fetch serves both
-    the participation decision and the agent prompt.
+    Keep bounded history before the trigger and every message from the trigger
+    onward. Bounding that second part could drop an unread request preceding
+    its correction. One fetch serves participation and the agent input.
     """
     events: dict[str, ChatEvent] = {}
     cursor: str | None = None
@@ -802,8 +872,16 @@ async def _fetch_thread_events(
                 sorted(
                     events.items(),
                     key=lambda item: _split_timestamp(item[0]),
-                )[-_MAX_THREAD_CONTEXT_MESSAGES:]
+                )
             )
+            # Bound history without truncating unread requests.
+            previous = [
+                ts
+                for ts in events
+                if _split_timestamp(ts) < _split_timestamp(event.message_ts)
+            ]
+            for ts in previous[:-_MAX_THREAD_CONTEXT_MESSAGES]:
+                del events[ts]
             next_cursor = str(page.cursor or "")
             if not next_cursor:
                 break
@@ -849,6 +927,7 @@ def _merge_thread_context(
     self_user_id: str,
     author_labels: dict[str, str],
     chat_service: ChatService,
+    batch_events: list[ChatEvent],
 ) -> list[dict[str, str]]:
     messages = {
         message.get("timestamp", ""): message
@@ -860,7 +939,16 @@ def _merge_thread_context(
             thread_event, self_user_id, author_labels, chat_service
         )
         messages[prompt_message.timestamp] = _message_to_prompt_dict(prompt_message)
-    return _bounded_thread_context(messages)
+    batch_timestamps = {item.message_ts for item in batch_events}
+    cutoff = _split_timestamp(batch_events[-1].message_ts)
+    return _bounded_thread_context(
+        {
+            timestamp: message
+            for timestamp, message in messages.items()
+            if timestamp not in batch_timestamps
+            and _split_timestamp(timestamp) < cutoff
+        }
+    )
 
 
 def _bounded_thread_context(

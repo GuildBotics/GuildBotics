@@ -709,3 +709,45 @@ async def test_publish_rejects_empty_commit_message(tmp_path, workspace_repo):
 
     with pytest.raises(MemberCapabilityError, match="must not be empty"):
         await service.publish(repo_path, "  \n")
+
+
+@pytest.mark.asyncio
+async def test_chat_run_cannot_push_unchecked_work(
+    monkeypatch, tmp_path, workspace_repo
+):
+    from guildbotics.capabilities.chat_updates import (
+        ChatUpdatesRequired,
+        check_chat_updates,
+    )
+    from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
+    monkeypatch.setenv(RUN_ENV, "chat-run")
+    RunStore().append_evidence(
+        "chat-run",
+        "chat_batch",
+        {
+            "person_id": "aiko",
+            "service": "slack",
+            "channel_id": "C1",
+            "thread_ts": "100.1",
+            "self_user_id": "U_BOT",
+            "event_ids": ["E1"],
+        },
+    )
+    ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+    service = MemberGitWorkspaceService(_person(), _team(_person()))
+    service.workspace_root = tmp_path / "workspace" / "aiko"
+    repo, repo_path = workspace_repo(service.workspace_root)
+    (repo_path / "README.md").write_text("changed\n", encoding="utf-8")
+    repo.git.add(A=True)
+    commit_sha = repo.index.commit("local commit").hexsha
+    with pytest.raises(ChatUpdatesRequired):
+        await service.push(repo_path)
+    with git.Repo(tmp_path / "remote.git") as remote:
+        assert remote.commit("main").hexsha != commit_sha
+    check_chat_updates("aiko", "chat-run")
+    await service.push(repo_path)
+    with git.Repo(tmp_path / "remote.git") as remote:
+        assert remote.commit("main").hexsha == commit_sha

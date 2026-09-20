@@ -110,15 +110,26 @@ class FileConversationStateStore(ConversationStateStore):
             state = self.load_channel_cursor(service, person_id, channel_id)
             return event_id in set(state.processed_event_ids)
 
-    def mark_processed_event(
-        self, service: str, person_id: str, channel_id: str, event_id: str
+    def mark_processed_events(
+        self, service: str, person_id: str, channel_id: str, event_ids: list[str]
     ) -> None:
+        """Acknowledge input and remove it while holding the shared-write lock.
+
+        This spans the channel cursor and pending queue so a concurrent receive
+        or sync checkout cannot interleave with removal. A crash between the
+        writes is recovered from the completed run's saved batch membership.
+        Removing the whole batch also handles batches larger than the bounded
+        processed-ID history.
+        """
+
         def _mark(data: dict) -> dict:
             state = _channel_cursor_from(data)
-            state.processed_event_ids.append(event_id)
+            state.processed_event_ids.extend(event_ids)
             return self._cursor_payload(state)
 
-        self._update_json(self._channel_file(service, person_id, channel_id), _mark)
+        with shared_write_lock():
+            self._update_json(self._channel_file(service, person_id, channel_id), _mark)
+            self._remove_pending_events(service, person_id, channel_id, set(event_ids))
 
     def load_thread_state(
         self, service: str, person_id: str, channel_id: str, thread_ts: str
@@ -363,6 +374,11 @@ class FileConversationStateStore(ConversationStateStore):
     def remove_pending_event(
         self, service: str, person_id: str, channel_id: str, event_id: str
     ) -> None:
+        self._remove_pending_events(service, person_id, channel_id, {event_id})
+
+    def _remove_pending_events(
+        self, service: str, person_id: str, channel_id: str, event_ids: set[str]
+    ) -> None:
         def _drop(data: dict) -> dict | None:
             raw_items = data.get("events")
             if not isinstance(raw_items, list):
@@ -374,7 +390,8 @@ class FileConversationStateStore(ConversationStateStore):
             filtered = [
                 raw
                 for raw in raw_items
-                if isinstance(raw, dict) and str(raw.get("event_id") or "") != event_id
+                if isinstance(raw, dict)
+                and str(raw.get("event_id") or "") not in event_ids
             ]
             # An empty queue is stored as no file, so a channel that goes quiet
             # stops appearing in list_pending_channels. A removal that fails is

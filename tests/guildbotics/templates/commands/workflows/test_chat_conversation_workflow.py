@@ -416,14 +416,12 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
     assert second_context["rebuild_context_complete"] is True
     assert second_context["attempt"] == 1
     rebuilt = json.loads(second_context["rebuild_context"])
-    assert len(rebuilt) == 3
+    assert len(rebuilt) == 1
     contents = [message["content"] for message in rebuilt]
-    assert contents.count("@alice please check") == 2
-    assert "確認します。" in contents
+    assert contents.count("@alice please check") == 1
+    assert "確認します。" not in contents
     assert {message["timestamp"] for message in rebuilt} == {
         "100.1",
-        "101.1",
-        "200.1",
     }
 
 
@@ -476,8 +474,8 @@ async def test_live_thread_snapshot_paginates_and_keeps_latest_bound() -> None:
     assert service.cursors == [None, "page-2"]
     assert payload["thread_context_complete"] is True
     assert len(payload["thread_context"]) == 100
-    assert payload["thread_context"][0]["timestamp"] == "51.1"
-    assert payload["thread_context"][-1]["timestamp"] == "150.1"
+    assert payload["thread_context"][0]["timestamp"] == "50.1"
+    assert payload["thread_context"][-1]["timestamp"] == "149.1"
 
 
 @pytest.mark.asyncio
@@ -731,9 +729,12 @@ async def test_provider_unavailable_without_cache_keeps_event_unprocessed(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_provider_unavailable_with_cached_mention_still_delegates(tmp_path):
-    # The provider is down but the local cache already proves the prior
-    # mention, so processing continues from the cache.
+@pytest.mark.parametrize("participation", ["strict", "social", "muted"])
+async def test_provider_unavailable_with_cached_mention_waits_for_fresh_input(
+    tmp_path,
+    participation,
+):
+    # Cached participation cannot establish whether a newer correction exists.
     service = UnavailableChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     state_store.append_thread_message(
@@ -752,15 +753,20 @@ async def test_provider_unavailable_with_cached_mention_still_delegates(tmp_path
     )
     ctx = FakeInvokeContext("noop")
     _set_incoming_event(
-        ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
+        ctx,
+        event_id="E2",
+        message_ts="100.2",
+        text="Any update?",
+        mentions=["U_ALICE"],
+        chat_participation=participation,
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
-
-    kwargs = _agent_invocations(ctx)[0][1]
-    assert kwargs["event_id"] == "E2"
+    with pytest.raises(chat_conversation_workflow.ThreadContextUnavailableError):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+    assert ctx.invocations == []
+    assert not state_store.is_processed_event("slack", "alice", "C1", "E2")
 
 
 @pytest.mark.asyncio
@@ -1360,8 +1366,8 @@ async def test_chat_conversation_workflow_reads_from_invocation(tmp_path):
 
     import json
 
-    latest_msg = json.loads(_agent_invocations(ctx)[0][1].get("latest_message", "{}"))
-    assert latest_msg.get("content") == "hello bot"
+    messages = json.loads(_agent_invocations(ctx)[0][1]["unprocessed_messages"])
+    assert [message["content"] for message in messages] == ["hello bot"]
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert "E_INVOCATION" in channel_state.processed_event_ids
@@ -1609,3 +1615,355 @@ async def test_the_effort_is_assessed_once_per_event_not_per_retry(
     assert len(assessments) == 1
     assert len(_agent_invocations(ctx)) == 2
     assert {call[1]["effort"] for call in _agent_invocations(ctx)} == {"high"}
+
+
+class SnapshotChatService(FakeChatService):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    async def list_thread_events(
+        self, channel_id, *, thread_ts, cursor=None, limit=100
+    ):
+        start = int(cursor or 0)
+        end = start + limit
+        return ChatEventPage(
+            events=self.events[start:end],
+            cursor=str(end) if end < len(self.events) else None,
+        )
+
+
+def _batch_event(number, *, text=None, mentions=(), thread_ts="100.1"):
+    return ChatEvent(
+        event_id=f"E{number}",
+        channel_id="C1",
+        message_ts=f"{100 + number}.1",
+        thread_ts=thread_ts,
+        author_id="U_USER",
+        text=text or f"message-{number}",
+        mentions=list(mentions),
+        is_thread_reply=True,
+    )
+
+
+def _batch_context(action="noop", *, run_id="batch-run", attempt=1):
+    ctx = FakeInvokeContext(action)
+    _set_incoming_event(ctx, event_id="E3", message_ts="103.1")
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+        "run_id": run_id,
+        "attempt_count": attempt,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+    }
+    return ctx
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("participation", ["strict", "muted"])
+async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals(
+    tmp_path,
+    participation,
+):
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [
+        _batch_event(2),
+        _batch_event(3, text="Deploy version A", mentions=["U_ALICE"]),
+        _batch_event(4, text="Version B fixes the bug", mentions=["U_BOB"]),
+        _batch_event(5, text="Correction: deploy version B instead"),
+    ]
+    for event in (events[1], events[-1]):
+        store.upsert_pending_event("slack", "alice", "C1", event, participation)
+    store.upsert_pending_event("slack", "bob", "C1", events[-1])
+    store.upsert_pending_event(
+        "slack", "alice", "C1", _batch_event(8, thread_ts="other")
+    )
+    service = SnapshotChatService(events)
+    ctx = _batch_context()
+    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["chat_participation"] = (
+        participation
+    )
+    original_invoke = ctx.invoke
+
+    async def invoke(name, **kwargs):
+        if name == "functions/handle_chat_event":
+            new_event = _batch_event(6, text="Also update the release notes")
+            service.events.append(new_event)
+            store.upsert_pending_event("slack", "alice", "C1", new_event)
+        return await original_invoke(name, **kwargs)
+
+    ctx.invoke = invoke
+    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=store)
+
+    assert len(_agent_invocations(ctx)) == 1
+    kwargs = _agent_invocations(ctx)[0][1]
+    unread = json.loads(kwargs["unprocessed_messages"])
+    assert [item["content"] for item in unread] == [item.text for item in events[1:4]]
+    assert kwargs["agent_execution_context"]["context_cursor"] == "105.1"
+    assert "message-2" in kwargs["agent_execution_context"]["rebuild_context"]
+    assert "release notes" not in kwargs["unprocessed_messages"]
+    # The effort decision sees the same requests and correction as the agent.
+    assessment = next(
+        kwargs for name, kwargs in ctx.invocations if name == "functions/assess_effort"
+    )
+    assert assessment["unprocessed_messages"] == kwargs["unprocessed_messages"]
+    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
+        "E3",
+        "E4",
+        "E5",
+    ]
+    assert not store.is_processed_event("slack", "alice", "C1", "E6")
+    assert not store.is_processed_event("slack", "alice", "C1", "E8")
+    assert not store.is_processed_event("slack", "bob", "C1", "E5")
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_is_refreshed_on_retry_without_losing_action_evidence(
+    tmp_path,
+):
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=["U_ALICE"]), _batch_event(5)]
+    for event in events:
+        store.upsert_pending_event("slack", "alice", "C1", event)
+    service = SnapshotChatService(events)
+    first = _batch_context("crash")
+    with pytest.raises(RuntimeError, match="agent exited"):
+        await chat_conversation_workflow.main(
+            first, chat_service=service, state_store=store
+        )
+    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == []
+    assert len(store.load_pending_events("slack", "alice", "C1")) == 2
+    RunStore().append_evidence("batch-run", "chat_reaction", {"message_ts": "103.1"})
+    events.append(_batch_event(7, text="Cancel deployment; review only"))
+    retry = _batch_context(attempt=2)
+    await chat_conversation_workflow.main(
+        retry, chat_service=service, state_store=store
+    )
+    kwargs = _agent_invocations(retry)[0][1]
+    assert kwargs["agent_execution_context"]["context_cursor"] == "107.1"
+    assert "chat_reaction" in kwargs["previous_attempt_evidence"]
+    assert [
+        item["timestamp"] for item in json.loads(kwargs["unprocessed_messages"])
+    ] == ["103.1", "105.1", "107.1"]
+    evidence = RunStore().evidence("batch-run")
+    assert any(item["evidence_type"] == "chat_reaction" for item in evidence)
+    assert [
+        item["payload"]["event_ids"]
+        for item in evidence
+        if item["evidence_type"] == "chat_batch"
+    ] == [["E3", "E5"], ["E3", "E5", "E7"]]
+    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
+        "E3",
+        "E5",
+        "E7",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_batch_recovery_does_not_consume_new_messages(
+    tmp_path, monkeypatch
+):
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=["U_ALICE"]), _batch_event(5)]
+    service = SnapshotChatService(events)
+    original_mark = store.mark_processed_events
+
+    def crash_before_ack(*args):
+        raise RuntimeError("interrupted before acknowledgement")
+
+    monkeypatch.setattr(store, "mark_processed_events", crash_before_ack)
+    with pytest.raises(RuntimeError, match="before acknowledgement"):
+        await chat_conversation_workflow.main(
+            _batch_context(), chat_service=service, state_store=store
+        )
+    assert RunStore().status("batch-run").completed
+    monkeypatch.setattr(store, "mark_processed_events", original_mark)
+    service.events.append(_batch_event(7, text="A new request after completion"))
+    recovered = _batch_context("crash", attempt=2)
+    await chat_conversation_workflow.main(
+        recovered, chat_service=service, state_store=store
+    )
+    assert recovered.invocations == []
+    assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
+        "E3",
+        "E5",
+    ]
+    assert not store.is_processed_event("slack", "alice", "C1", "E7")
+
+
+@pytest.mark.asyncio
+async def test_batch_keeps_unread_messages_beyond_historical_context_bound(tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [
+        _batch_event(i, mentions=["U_ALICE"] if i == 3 else []) for i in range(3, 155)
+    ]
+    ctx = _batch_context()
+    await chat_conversation_workflow.main(
+        ctx, chat_service=SnapshotChatService(events), state_store=store
+    )
+    kwargs = _agent_invocations(ctx)[0][1]
+    unread = json.loads(kwargs["unprocessed_messages"])
+    assert len(unread) == len(events)
+    assert unread[0]["timestamp"] == "103.1"
+    assert unread[-1]["timestamp"] == "254.1"
+    assert all(
+        store.is_processed_event("slack", "alice", "C1", event.event_id)
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history_limit", [2, 500])
+async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
+    monkeypatch, tmp_path, history_limit
+):
+    from guildbotics.drivers.execution import ExecutionCoordinator
+    from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
+
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=["U_ALICE"]), _batch_event(4), _batch_event(5)]
+    for event in events:
+        store.upsert_pending_event("slack", "alice", "C1", event)
+    store = FileConversationStateStore(
+        base_dir=tmp_path / "state", max_processed_events=history_limit
+    )
+    invocations = []
+    service = SnapshotChatService(events)
+
+    class Parent:
+        logger = StubLogger()
+
+        def clone_for(self, person):
+            ctx = FakeInvokeContext("noop")
+            invocations.append(ctx)
+
+            async def close():
+                pass
+
+            ctx.aclose = close
+            return ctx
+
+    class Runner:
+        def __init__(self, context, *_args):
+            self.context = context
+
+        async def run(self):
+            await chat_conversation_workflow.main(
+                self.context, chat_service=service, state_store=store
+            )
+
+    monkeypatch.setattr("guildbotics.drivers.workflow_dispatcher.CommandRunner", Runner)
+    dispatcher = PendingChatDispatcher(
+        Parent(), state_store=store, execution_coordinator=ExecutionCoordinator()
+    )
+    await dispatcher.process_person(
+        Person(person_id="alice", name="Alice", is_active=True)
+    )
+    assert len(invocations) == 1
+    assert len(_agent_invocations(invocations[0])) == 1
+    assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_batch_includes_members_own_reply_without_using_it_as_reaction_target(
+    tmp_path,
+):
+    store = FileConversationStateStore(base_dir=tmp_path / "state")
+    events = [_batch_event(3, mentions=["U_ALICE"]), _batch_event(5)]
+    own_reply = _batch_event(6, text="I already finished the earlier work")
+    own_reply.author_id = "U_ALICE"
+    own_reply.is_bot_message = True
+    events.append(own_reply)
+    ctx = _batch_context()
+    await chat_conversation_workflow.main(
+        ctx, chat_service=SnapshotChatService(events), state_store=store
+    )
+    kwargs = _agent_invocations(ctx)[0][1]
+    assert kwargs["message_ts"] == "105.1"
+    assert kwargs["agent_execution_context"]["context_cursor"] == "106.1"
+    assert "already finished" in kwargs["unprocessed_messages"]
+    assert store.is_processed_event("slack", "alice", "C1", "E6")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    [
+        "reply",
+        "reaction",
+        "noop",
+        "blocked",
+        "issue_comment",
+        "git_publish",
+        "git_push",
+        "issue_update",
+    ],
+)
+@pytest.mark.parametrize("recover", [False, True])
+async def test_updates_read_during_turn_are_consumed_only_on_completion(
+    monkeypatch, action, recover
+):
+    from guildbotics.capabilities.chat_updates import check_chat_updates
+    from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+
+    store = FileConversationStateStore()
+    service = SnapshotChatService([_batch_event(3, mentions=["U_ALICE"])])
+    secondary = action in {"issue_comment", "git_publish", "git_push", "issue_update"}
+    handled = secondary or action in {"reply", "reaction"}
+    ctx = _batch_context("noop" if secondary else action)
+    original_invoke = ctx.invoke
+    ChatReceiveStatus().save("slack", "alice", "C1", state="ready")
+
+    async def invoke(name, **kwargs):
+        if name == "functions/handle_chat_event":
+            store.upsert_pending_event("slack", "alice", "C1", _batch_event(5))
+            result = check_chat_updates("alice", kwargs["workflow_run_id"])
+            assert [item["event_id"] for item in result["messages"]] == ["E5"]
+            assert not store.is_processed_event("slack", "alice", "C1", "E5")
+            if secondary:
+                RunStore().append_evidence(
+                    kwargs["workflow_run_id"], action, {"published": True}
+                )
+            # This later arrival was never delivered and must stay pending.
+            store.upsert_pending_event("slack", "alice", "C1", _batch_event(6))
+            if action == "blocked":
+                ChatReceiveStatus().save("slack", "alice", "C1", state="unavailable")
+                RunStore().complete_run(
+                    kwargs["workflow_run_id"],
+                    "blocked",
+                    "Reception stopped",
+                    subject_type="chat",
+                    subject_id="slack:C1:100.1:E3",
+                    person_id="alice",
+                )
+                return {"status": "blocked", "message": "Reception stopped"}
+        return await original_invoke(name, **kwargs)
+
+    ctx.invoke = invoke
+    if recover:
+        original_ack = store.mark_processed_events
+
+        def interrupted(*args):
+            raise RuntimeError("crash before ack")
+
+        monkeypatch.setattr(store, "mark_processed_events", interrupted)
+        with pytest.raises(RuntimeError, match="crash before ack"):
+            await chat_conversation_workflow.main(
+                ctx, chat_service=service, state_store=store
+            )
+        monkeypatch.setattr(store, "mark_processed_events", original_ack)
+        ctx = _batch_context("crash", attempt=2)
+    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=store)
+    assert store.is_processed_event("slack", "alice", "C1", "E5") is handled
+    assert not store.is_processed_event("slack", "alice", "C1", "E6")
+    assert [
+        item.event.event_id
+        for item in store.load_pending_events("slack", "alice", "C1")
+    ] == (["E6"] if handled else ["E5", "E6"])
+    if action in {"noop", "blocked"}:
+        following = _batch_context("noop", run_id="following-run")
+        _set_incoming_event(following, event_id="E5", message_ts="105.1")
+        await chat_conversation_workflow.main(
+            following, chat_service=service, state_store=store
+        )
+        assert len(_agent_invocations(following)) == 1
+        assert store.is_processed_event("slack", "alice", "C1", "E5")

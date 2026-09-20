@@ -15,6 +15,10 @@ from uuid import uuid4
 import click
 from pydantic import ValidationError
 
+from guildbotics.capabilities.chat_updates import (
+    ChatUpdatesRequired,
+    check_chat_updates,
+)
 from guildbotics.capabilities.completion_retry import command_failure_payload
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
@@ -767,6 +771,26 @@ async def _chat_identity(person: str, service_name: str) -> dict[str, Any]:
         return await service.identity()
     finally:
         await service.aclose()
+
+
+@chat.command(name="updates")
+@_person_option
+@click.option(
+    "--run-id",
+    required=True,
+    help="Chat workflow run whose source thread should be checked.",
+)
+@_json_format_option
+def chat_updates(person: str, run_id: str, output_format: str) -> None:
+    _run(_chat_updates(person, run_id), output_format=output_format)
+
+
+async def _chat_updates(person: str, run_id: str) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    try:
+        return check_chat_updates(member_person.person_id, run_id)
+    finally:
+        await context.aclose()
 
 
 @chat.group(name="inspect")
@@ -2421,7 +2445,13 @@ def _run(coro, *, output_format: str) -> Any:
                 result = asyncio.run(coro)
             else:
                 result = _run_interactive(coro, interactive_session, command)
-    except (MemberCapabilityError, MemberMemoryError, TaskRunError, KeyError) as exc:
+    except (
+        MemberCapabilityError,
+        MemberMemoryError,
+        ChatUpdatesRequired,
+        TaskRunError,
+        KeyError,
+    ) as exc:
         raise click.ClickException(_safe_error(exc)) from exc
     except SyncRepositoryBusyError as exc:
         raise click.ClickException(str(exc)) from exc
