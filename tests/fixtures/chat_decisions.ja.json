@@ -2,7 +2,6 @@
   "state": {
     "thread_context_complete": true,
     "chat_participation": "strict",
-    "previous_effort": "",
     "member": {
       "person_id": "aiko",
       "roles": ["software_engineer"],
@@ -27,7 +26,6 @@
     {
       "id": "request-then-thanks",
       "expected_routes": ["agent"],
-      "expected_effort": "high",
       "state": {
         "unprocessed_messages": [{"message_ts": "1", "author": "user", "text": "@aiko リポジトリのログイン不具合を調査して修正してください。まだ未対応です。"}, {"message_ts": "2", "author": "user", "text": "よろしくお願いします、ありがとう！"}]
       }
@@ -70,7 +68,6 @@
     {
       "id": "guideline-dependent-design",
       "expected_routes": ["agent"],
-      "expected_effort": "high",
       "state": {"unprocessed_messages": [{"message_ts": "2", "author": "user", "text": "@aiko このリポジトリの責務境界と規約を読んで、認証処理をどの層に置くか設計方針を決めて Issue にまとめてください。"}]}
     }
   ]

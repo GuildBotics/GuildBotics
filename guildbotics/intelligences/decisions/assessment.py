@@ -87,7 +87,6 @@ async def assess(
     selection = select(
         Evaluation(error="recording_failed") if recording_failed else result,
         participation=state.get("chat_participation", "strict"),
-        previous_effort=state.get("previous_effort", ""),
         input_complete=state.get("thread_context_complete") is True,
     )
     payload = {
@@ -112,7 +111,6 @@ async def assess(
         selection = select(
             Evaluation(error="recording_failed"),
             participation="strict",
-            previous_effort=state.get("previous_effort", ""),
         )
     record_correlated_event(
         event_type="decision.evaluated",
@@ -122,7 +120,6 @@ async def assess(
             "brain": config.brain,
             "model": result.model,
             "route": selection.route,
-            "effort": selection.effort,
             "reason": selection.reason,
             "error": "recording_failed" if recording_failed else result.error,
             "duration_ms": payload["duration_ms"],

@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 
 from guildbotics.intelligences.decisions.assessment import assess
-from guildbotics.intelligences.decisions.chat_policy import QUESTIONS
+from guildbotics.intelligences.decisions.chat_policy import QUESTION_VERSION, QUESTIONS
 from guildbotics.intelligences.decisions.models import DecisionConfig, Question
 from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
@@ -34,6 +34,10 @@ async def main() -> None:
     source = json.loads(args.input.read_text(encoding="utf-8"))
     if "payload" in source:
         original = source["payload"]
+        if original.get("question_version") != QUESTION_VERSION:
+            parser.error(
+                "Saved questions use an older schema; evaluate the current case set instead."
+            )
         request = original["input"]
         cases = [
             {
@@ -86,12 +90,7 @@ async def main() -> None:
             }
         )
         if "expected_routes" in case:
-            item["matches_expectation"] = selection.route in case[
-                "expected_routes"
-            ] and (
-                "expected_effort" not in case
-                or selection.effort == case["expected_effort"]
-            )
+            item["matches_expectation"] = selection.route in case["expected_routes"]
         if "original_selection" in case:
             item["original_selection"] = case["original_selection"]
         report.append(item)

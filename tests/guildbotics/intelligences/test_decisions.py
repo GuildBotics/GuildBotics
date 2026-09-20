@@ -42,41 +42,33 @@ def answers(**overrides):
 
 
 @pytest.mark.parametrize(
-    "changes,participation,route,effort",
+    "changes,participation,route",
     [
-        ({"ack_only": "true", "reaction": "ack"}, "strict", "reaction-only", ""),
-        ({}, "strict", "no-op", ""),
+        ({"ack_only": "true", "reaction": "ack"}, "strict", "reaction-only"),
+        ({}, "strict", "no-op"),
         (
-            {"pending_request": "true", "effort_files": "true", "reaction": "ack"},
+            {"work_files": "true", "pending_request": "true", "reaction": "ack"},
             "strict",
             "agent",
-            "high",
         ),
-        ({"context_sufficient": "false"}, "strict", "agent", "default"),
-        ({"pending_request": "unknown"}, "strict", "agent", "default"),
-        ({"role_contribution": "true"}, "strict", "agent", "default"),
+        ({"context_sufficient": "false"}, "strict", "agent"),
+        ({"pending_request": "unknown"}, "strict", "agent"),
+        ({"role_contribution": "true"}, "strict", "agent"),
         (
-            {"role_contribution": "true", "social_fit": "false", "reaction": "support"},
+            {"reaction": "support", "role_contribution": "true", "social_fit": "false"},
             "social",
             "reaction-only",
-            "",
         ),
-        ({"other_role_needed": "true", "handoff_done": "true"}, "strict", "no-op", ""),
-        (
-            {"other_role_needed": "true", "handoff_done": "false"},
-            "strict",
-            "agent",
-            "default",
-        ),
+        ({"handoff_done": "true", "other_role_needed": "true"}, "strict", "no-op"),
+        ({"handoff_done": "false", "other_role_needed": "true"}, "strict", "agent"),
         (
             {
-                "other_role_needed": "true",
                 "handoff_done": "true",
                 "handoff_reopen": "true",
+                "other_role_needed": "true",
             },
             "strict",
             "agent",
-            "default",
         ),
         (
             {
@@ -86,23 +78,18 @@ def answers(**overrides):
             },
             "strict",
             "no-op",
-            "",
         ),
-        ({"reaction": "unknown"}, "strict", "agent", "default"),
-        ({"role_contribution": "unknown", "ack_only": "true"}, "strict", "no-op", ""),
-        ({"role_contribution": "unknown"}, "strict", "agent", "default"),
-        ({"effort_repo_decision": "unknown"}, "strict", "agent", "default"),
-        (
-            {"effort_files": "true", "effort_repo_decision": "unknown"},
-            "strict",
-            "agent",
-            "high",
-        ),
+        ({"reaction": "unknown"}, "strict", "agent"),
+        ({"ack_only": "true", "role_contribution": "unknown"}, "strict", "no-op"),
+        ({"role_contribution": "unknown"}, "strict", "agent"),
+        ({"work_repo_decision": "unknown"}, "strict", "agent"),
+        ({"work_files": "true", "work_repo_decision": "unknown"}, "strict", "agent"),
     ],
 )
-def test_adoption(changes, participation, route, effort):
+def test_adoption(changes, participation, route):
     result = select(answers(**changes), participation=participation)
-    assert (result.route, result.effort) == (route, effort)
+    assert result.route == route
+    assert set(result.model_dump()) == {"route", "reason", "reaction"}
 
 
 @pytest.mark.parametrize(
@@ -240,38 +227,23 @@ def test_self_reported_confidence_does_not_change_assertion():
     assert answer.provenance == "structured_assertion"
 
 
-@pytest.mark.parametrize("previous_effort", ["", "high"])
 @pytest.mark.parametrize("failure", ["error", "malformed", "incomplete"])
-def test_failed_judgment_delegates_without_promoting_effort(previous_effort, failure):
+def test_failed_judgment_delegates_without_execution_settings(failure):
     evaluation = (
         Evaluation(error="failed")
         if failure == "error"
         else Evaluation()
         if failure == "malformed"
-        else answers(effort_files="true")
+        else answers(work_files="true")
     )
     result = select(
-        evaluation,
-        participation="strict",
-        previous_effort=previous_effort,
-        input_complete=failure != "incomplete",
+        evaluation, participation="strict", input_complete=failure != "incomplete"
     )
-    assert result.route == "agent"
-    assert result.effort == ("high" if previous_effort == "high" else "default")
-    assert result.effort_reason == (
-        "effort.preserved" if previous_effort == "high" else "effort.failure"
-    )
-
-
-def test_existing_high_is_preserved_only_for_agent_routes():
-    result = select(
-        answers(pending_request="true"), participation="strict", previous_effort="high"
-    )
-    assert result.effort == "high"
-    assert result.effort_reason == "effort.preserved"
-    assert (
-        select(answers(), participation="strict", previous_effort="high").effort == ""
-    )
+    assert result.model_dump() == {
+        "route": "agent",
+        "reason": "1.invalid",
+        "reaction": "",
+    }
 
 
 @pytest.mark.asyncio
@@ -324,7 +296,6 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
         logger=logging.getLogger(),
     )
     assert result.route == "agent"
-    assert result.effort == "default"
 
 
 def test_generic_choice_is_not_restricted_to_chat_reactions():
@@ -423,6 +394,7 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
 
     def create(person_id, name, language, logger, config):
         assert person_id == "alice"
+        assert set(config) == {"brain", "body"}
         assert config["brain"] == "custom_judgment"
         assert "only the supplied state" in config["body"]
         return TestBrain(person_id, name, logger)
@@ -441,6 +413,7 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
     request, kwargs = calls[0]
     assert request["state"] == state and set(request["questions"]) == set(QUESTIONS)
     assert kwargs["input_only"] is True
+    assert not {"effort", "model", "session_state"} & kwargs.keys()
     assert result.model == "resolved-model" and result.usage == {"input_tokens": 12}
     assert result.retries is None
 

@@ -58,7 +58,6 @@ async def test_fast_path_records_evidence_before_completing(
     assert ("chat_reaction" if visible else "chat_noop") in types
     state = store.load_thread_state("slack", "alice", "C1", "100.1")
     assert ("alice" in state.participants) == visible
-    assert state.effort == ""
     assert "E1" in store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
     assert service.reactions == ([("C1", "100.1", reaction)] if visible else [])
 
@@ -201,9 +200,7 @@ async def test_failed_judgment_and_failed_agent_remain_pending_on_final_attempt(
     async def assess(*args, **kwargs):
         return Selection(
             route="agent",
-            effort="default",
             reason="1.invalid",
-            effort_reason="effort.failure",
         ), "f" * 32
 
     monkeypatch.setattr(workflow, "assess", assess)

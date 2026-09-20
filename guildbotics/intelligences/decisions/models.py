@@ -42,8 +42,7 @@ class Evaluation(BaseModel):
 
 
 class Selection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     route: Literal["agent", "reaction-only", "no-op"]
-    effort: str = ""
     reason: str
-    effort_reason: str = ""
     reaction: str = ""

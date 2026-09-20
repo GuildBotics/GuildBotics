@@ -1,4 +1,4 @@
-"""Chat policy v1: independent questions and conservative three-valued adoption."""
+"""Chat routing: independent questions and conservative three-valued adoption."""
 
 from typing import cast
 
@@ -9,8 +9,8 @@ from guildbotics.intelligences.decisions.models import (
     Truth,
 )
 
-QUESTION_VERSION = "chat-1"
-RULE_VERSION = "chat-2"
+QUESTION_VERSION = "chat-2"
+RULE_VERSION = "chat-3"
 ADOPTION_VERSION = "jev-noul-0.4-0.6-choice-top-3/structured-1"
 
 _GUIDANCE = (
@@ -29,9 +29,9 @@ _NOULS = {
     "other_role_needed": "Across the entire unprocessed batch, is there any missing perspective that requires another role? Evaluate independently from the other handoff questions.",
     "handoff_done": "Across the entire unprocessed batch and history, have ALL topics requiring another role already been handed to the appropriate role? A handoff for another topic, even to the same role, does not count.",
     "handoff_reopen": "Across the entire unprocessed batch and history, is there a concrete new circumstance warranting another call for ANY previously handed-off topic? Evaluate independently of other answers.",
-    "effort_files": "Does the remaining response require creating or changing local code, documents or configuration, or producing an artifact involving a commit or publication?",
-    "effort_repo_research": "Does the remaining response require investigation across a repository?",
-    "effort_repo_decision": "Does the remaining response require filing an issue or deciding a design/implementation policy that requires reading repository guidelines? Technical terminology alone is not sufficient.",
+    "work_files": "Does the remaining response require creating or changing local code, documents or configuration, or producing an artifact involving a commit or publication?",
+    "work_repo_research": "Does the remaining response require investigation across a repository?",
+    "work_repo_decision": "Does the remaining response require filing an issue or deciding a design/implementation policy that requires reading repository guidelines? Technical terminology alone is not sufficient.",
 }
 QUESTIONS = {
     key: Question(type="noul", instructions=_GUIDANCE + text)
@@ -49,7 +49,7 @@ QUESTIONS["reaction"] = Question(
         "none": "A reaction to this target is unnecessary or inappropriate.",
     },
 )
-EFFORT_QUESTIONS = ("effort_files", "effort_repo_research", "effort_repo_decision")
+WORK_QUESTIONS = ("work_files", "work_repo_research", "work_repo_decision")
 
 
 def conjunction(*values: Truth) -> Truth:
@@ -70,7 +70,6 @@ def select(
     evaluation: Evaluation,
     *,
     participation: str,
-    previous_effort: str = "",
     input_complete: bool = True,
 ) -> Selection:
     """Apply ordered rules once; irrelevant unknowns never force a decision."""
@@ -79,28 +78,9 @@ def select(
         values.get(key) not in {"true", "false", "unknown"} for key in _NOULS
     )
     failed = bool(evaluation.error or malformed or not input_complete)
-    high = [values.get(key, "unknown") for key in EFFORT_QUESTIONS]
-    effort_reason = (
-        "effort.preserved"
-        if previous_effort == "high"
-        else "effort.failure"
-        if failed
-        else "effort.required"
-        if "true" in high
-        else "effort.uncertain"
-        if "unknown" in high
-        else "effort.default"
-    )
-    effort = (
-        "high"
-        if effort_reason in {"effort.preserved", "effort.required"}
-        else "default"
-    )
 
     def agent(reason: str) -> Selection:
-        return Selection(
-            route="agent", reason=reason, effort=effort, effort_reason=effort_reason
-        )
+        return Selection(route="agent", reason=reason)
 
     if failed:
         return agent("1.invalid")
@@ -108,7 +88,7 @@ def select(
         return agent("1.context")
     if values["pending_request"] != "false":
         return agent("2.request")
-    if any(value != "false" for value in high):
+    if any(values[key] != "false" for key in WORK_QUESTIONS):
         return agent("2.work")
     # Each value was checked above before entering the three-valued algebra.
     truth = {key: cast(Truth, evaluation.answers[key].value) for key in _NOULS}

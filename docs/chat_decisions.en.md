@@ -25,7 +25,7 @@ Judgment creates a Brain through the common BrainFactory and calls `Brain.run()`
 
 ## What happens before a reply
 
-After the existing mention and participation gates, the workflow evaluates the entire unread batch once, together with thread history, standing roles, character, handoffs, and recorded actions. Corrections and cancellations apply across the batch. Twelve independent yes/no questions cover context, unanswered requests, useful contribution, acknowledgment, repetition, social fit, handoffs, and effort. One Choice question selects `ack`, `agree`, `celebrate`, `support`, or `none` for the last non-self message in the batch.
+After the existing mention and participation gates, the workflow evaluates the entire unread batch once, together with thread history, standing roles, character, handoffs, and recorded actions. Corrections and cancellations apply across the batch. Twelve independent yes/no questions cover context, unanswered requests, useful contribution, acknowledgment, repetition, social fit, handoffs, and remaining work. One Choice question selects `ack`, `agree`, `celebrate`, `support`, or `none` for the last non-self message in the batch.
 
 Jev Noul probabilities at or above `0.6` become true and at or below `0.4` become false. Values between those bounds remain unknown. For Choice, the returned option with the highest probability is adopted without a probability or confidence threshold. The probabilities and confidence remain in the evaluation record. Agno and AI CLI return explicit true, false, or unknown; their optional confidence is preserved as reported, without treating it as a Jev probability.
 
@@ -40,7 +40,7 @@ The shared questions preserve the response prompt's responsibilities:
 | `social_fit` | Instruction 7: require natural character or role fit for social replies |
 | `other_role_needed`, `handoff_done`, `handoff_reopen` | Instruction 8: invite a needed role without repeating a completed handoff |
 | `reaction` | Instructions 11 and 12: choose a lightweight reaction for the fixed target or a no-op |
-| `effort_files`, `effort_repo_research`, `effort_repo_decision` | The previous effort prompt's three high-effort conditions |
+| `work_files`, `work_repo_research`, `work_repo_decision` | Remaining file changes, repository investigation, or decisions requiring repository guidelines |
 
 Noul is used where a condition's presence changes the route. Its intermediate probabilities mean uncertainty, not partial usefulness or partial completion. Choice represents unordered reaction meanings. Score is not used because intermediate degrees of novelty, relevance, or social fit would lead to the same action. The thresholds above are this implementation's initial policy, not a claimed probability of correctness.
 
@@ -56,13 +56,13 @@ For example, when Noul excludes any outstanding work or substantive response, an
 
 Unknown values that cannot change a rule's result do not force escalation. Before a reaction or no-op completes, the workflow checks reception and rereads the thread for new messages or edits. Changed or unavailable input remains pending. Reactions record evidence and join the thread; a no-op does not join it. Repeated completion attempts reuse evidence, and an already-present Slack reaction counts as success.
 
-The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. A valid judgment uses high effort when any of the conditions for file changes, repository investigation, or a repository-guideline-dependent decision is true. Otherwise, including unknown or failed judgment, it uses default effort. An existing high effort is preserved. A reaction or no-op does not promote effort. Unconfigured, unavailable, malformed, or failed judgment still falls back to the response agent; if that response cannot run, the batch remains pending.
+The agent remains responsible for the final reply, reaction, question, handoff, or blocked result. Judgment selects only whether to start the agent, send a reaction, or take no action. It never specifies the response agent’s model or effort, and stores no thread effort. The response command uses its own configuration on success, uncertainty, and failure alike. If that response cannot run, the batch remains pending.
 
 ## Inspect and replay
 
 Each evaluation writes mandatory device-local JSON records below the workspace's local `run/required-io/` directory, even when optional transcripts are off. The `decision.evaluated` diagnostics event and `chat_decision` run evidence identify the evaluation. The completed record is `<evaluation_id>.json`; `<evaluation_id>0.json` records the attempt before the call. Records contain full masked input, questions, versions, input hash, requested Brain feature, actual returned model, raw and normalized answers, adoption reasons, elapsed time, and available usage, cost, and retry counts. Unknown measurements stay `null`. These records are not shared by Workspace Sync. A recording failure forbids reaction/no-op completion.
 
-To compare another model on a saved input without posting to chat or changing receipt state:
+To compare another model on a saved input from the current question version without posting to chat or changing receipt state (older question versions are rejected before any model call):
 
 ```bash
 uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.json \
@@ -75,6 +75,8 @@ To compare a different model, add another feature assignment (for example `compa
 Jev's [API](https://docs.typesafe.ai/api) and [model documentation](https://docs.typesafe.ai/models) describe the probability contract and model aliases. Validate Japanese conversations with representative examples before relying on a particular model's fast-path choices.
 
 ## Initial Japanese evaluation (2026-09-20)
+
+These historical results include the former response-effort selection. Current rules (`chat-3`, questions `chat-2`) do not select response effort; the measurements below are not results of the current implementation.
 
 The [eight synthetic cases](../tests/fixtures/chat_decisions.ja.json) define expected routes before execution. They cover acknowledgment, an unresolved request followed by thanks, cancellation, missing context, a new topic needing a handoff, a completed handoff, unrelated social chatter, and a guideline-dependent design request. Run the same cases with either engine:
 
@@ -115,4 +117,4 @@ Applying alternative thresholds only to the saved answers gives the following se
 | 0.4 / 0.6 | 0.6 | 2 / 8 |
 | 0.5 / 0.5 (true wins at the boundary) | 0.5 | 3 / 8 |
 
-These results do not justify recommending 0.5 or 0.6. Further evaluation needs question-level labels and held-out cases, including whether the context question conflates information needed to choose a route with information needed to perform the task. Tune and validate on separate examples, comparing missed obligations, reaction types, unnecessary high effort, and skipped starts for both engines before treating the adoption policy as validated.
+These results do not justify recommending 0.5 or 0.6. Further evaluation needs question-level labels and held-out cases, including whether the context question conflates information needed to choose a route with information needed to perform the task. Tune and validate on separate examples, comparing missed obligations, reaction types and skipped starts for both engines before treating the adoption policy as validated.

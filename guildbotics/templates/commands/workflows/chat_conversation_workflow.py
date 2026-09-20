@@ -366,7 +366,6 @@ async def _handle_event(
                     "thread_ts": event.thread_ts,
                     "event_ids": [item.event_id for item in batch_events],
                     "reaction_target": reaction_target,
-                    "previous_effort": thread_state.effort,
                     "previous_outcomes": RunStore(task_run_root).evidence(run_id),
                 },
                 None,
@@ -442,12 +441,6 @@ async def _handle_event(
                 person_id=person_id,
             )
             return
-        if decision.effort != thread_state.effort:
-            thread_state.effort = decision.effort
-            state_store.save_thread_state(
-                service_name, person_id, channel_id, event.thread_ts, thread_state
-            )
-        effort = thread_state.effort
         logical_attempt = retry_context.attempt_count + _attempt - 1
         execution_context = {
             "run_id": run_id,
@@ -483,10 +476,8 @@ async def _handle_event(
         await invoke(
             "functions/handle_chat_event",
             person_id=person_id,
-            effort=effort,
             # The thread content is passed as named parameters below, so the
-            # prompt must not also inherit `Context.pipe` (which now holds the
-            # effort assessor's output) as the user's message.
+            # prompt must not also inherit `Context.pipe` as the user's message.
             message="",
             workflow_contract=t(
                 "commands.workflows.common.workflow_contract",
