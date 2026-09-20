@@ -4,6 +4,36 @@ from typing import Any
 
 from guildbotics.entities.team import Person
 from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability.event_types import GITHUB_WORK_TARGET_EVENT_TYPE
+
+
+def record_member_work_target(
+    member_person: Person, target: dict[str, Any], *, read_only: bool
+) -> None:
+    """Declare the PR / issue a member command worked on, or only read.
+
+    The trace the command runs inside names its first recorded target
+    (``observability.trace_title``). A read declares one as well, marked
+    ``inspected``, so diagnostics learn the target without the read becoming
+    activity of its own.
+    """
+    kind = str(target.get("kind") or "")
+    number = target.get("number")
+    title = str(target.get("title") or "").strip()
+    url = str(target.get("html_url") or "")
+    _record_member_domain_event(
+        member_person,
+        GITHUB_WORK_TARGET_EVENT_TYPE,
+        {kind: {"number": number, "title": title, "html_url": url}},
+        {
+            "github.action": "inspected" if read_only else "",
+            "github.kind": kind,
+            "github.number": str(number or ""),
+            "github.repo": str(target.get("repo") or ""),
+            "github.url": url,
+            "github.title": title,
+        },
+    )
 
 
 def record_member_push_event(member_person: Person, payload: dict[str, Any]) -> None:

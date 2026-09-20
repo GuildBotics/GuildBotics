@@ -12,7 +12,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability.event_types import COMMAND_LIFECYCLE_EVENT_TYPES
+from guildbotics.observability.event_types import (
+    COMMAND_LIFECYCLE_EVENT_TYPES,
+    GITHUB_WORK_TARGET_EVENT_TYPE,
+)
 
 DEFAULT_TRANSCRIPT_DETAIL = "standard"
 DEFAULT_TRANSCRIPT_RETENTION_DAYS = 30
@@ -43,6 +46,9 @@ INDEX_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
         "workflow.rate_limited",
         "credential.failed",
         "credential.verified",
+        # The execution list is built from the index alone, so the work target
+        # a member command declares has to reach it for the trace to be titled.
+        GITHUB_WORK_TARGET_EVENT_TYPE,
     }
 )
 

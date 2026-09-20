@@ -5,10 +5,25 @@ from __future__ import annotations
 from guildbotics.observability import (
     correlation_fields,
     current_trace,
+    join_trace,
     set_attributes,
     span_scope,
     trace_scope,
 )
+
+
+def test_join_trace_records_into_an_existing_trace_without_owning_it() -> None:
+    with join_trace(
+        "trace-parent", person_id="aiko", command="member github pr inspect"
+    ):
+        fields = correlation_fields()
+        assert fields["trace_id"] == "trace-parent"
+        assert fields["person_id"] == "aiko"
+        assert fields["command"] == "member github pr inspect"
+        # No source of its own: a record falls back to its own default source.
+        assert fields["source"] == ""
+        assert fields["span_id"] is None
+    assert current_trace() is None
 
 
 def test_no_trace_yields_empty_correlation() -> None:

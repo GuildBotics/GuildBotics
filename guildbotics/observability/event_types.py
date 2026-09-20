@@ -20,6 +20,11 @@ COMMAND_LIFECYCLE_EVENT_TYPES = frozenset(
 #: stashed commit on that device. The stashed content itself is never recorded.
 SYNC_UPDATE_REJECTED = "sync.update_rejected"
 
+#: The PR / issue a member command worked on (or read), recorded by the member
+#: CLI so the trace it runs inside can name that item as its work target. It is
+#: diagnostics only: the domain events above carry the activity itself.
+GITHUB_WORK_TARGET_EVENT_TYPE = "github.work_target"
+
 #: Events that mean "the execution this trace covers is over, and it ended
 #: well". Only the layer that opened the trace records one of these, so they
 #: are the sole evidence that can make a trace read as success. A child

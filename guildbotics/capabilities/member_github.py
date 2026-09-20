@@ -156,16 +156,12 @@ class MemberGitHubCapabilityService:
 
     async def issue_inspect(self, url: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
+        issue = await self._issue(resource)
         client = await self._get_client()
-        issue_resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}"
-        )
-        _raise_for_status(issue_resp)
         comments_resp = await client.get(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments"
         )
         _raise_for_status(comments_resp)
-        issue = issue_resp.json()
         comments = [
             self._comment_summary(comment) for comment in _as_list(comments_resp.json())
         ]
@@ -185,10 +181,16 @@ class MemberGitHubCapabilityService:
             "project_metadata": project_metadata,
             "linked_pull_request_candidates": linked_pull_request_candidates,
             "comments": comments,
+            "target": _work_target(resource, issue, url),
         }
 
     async def issue_comment(self, url: str, body: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
+        # The target is read before the write, never after it: a read that
+        # fails after the comment landed would make a retry post it twice. The
+        # freshness check runs first so a refused write costs no read either.
+        ensure_chat_current(self.person.person_id)
+        issue = await self._issue(resource)
         comment = await self._post_comment(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments",
             body,
@@ -202,6 +204,7 @@ class MemberGitHubCapabilityService:
                 "issue_url": (
                     f"{self.web_base_url()}/{resource.full_repo}/issues/{resource.number}"
                 ),
+                "target": _work_target(resource, issue, url),
             }
         )
         return result
@@ -228,14 +231,21 @@ class MemberGitHubCapabilityService:
         project_item_id = None
         if add_to_project and issue.get("node_id"):
             project_item_id = await self.add_project_item(str(issue["node_id"]))
+        resource = GitHubResource(
+            owner, repo_name, int(issue.get("number") or 0), "issue"
+        )
+        issue_url = (
+            issue.get("html_url")
+            or f"{self.web_base_url()}/{owner}/{repo_name}/issues/{resource.number}"
+        )
         return {
             "issue_number": issue.get("number"),
             "issue_title": issue.get("title", title),
             "repo": f"{owner}/{repo_name}",
-            "issue_url": issue.get("html_url")
-            or f"{self.web_base_url()}/{owner}/{repo_name}/issues/{issue.get('number')}",
+            "issue_url": issue_url,
             "labels": _label_names(issue),
             "project_item_id": project_item_id,
+            "target": _work_target(resource, issue, issue_url),
         }
 
     async def issue_update(
@@ -301,6 +311,7 @@ class MemberGitHubCapabilityService:
             "state_changed": state_changed,
             "labels": _label_names(issue),
             "body": "" if response_body is None else response_body,
+            "target": _work_target(resource, issue, url),
         }
 
     async def _issue_state(self, resource: GitHubResource) -> str:
@@ -404,6 +415,7 @@ class MemberGitHubCapabilityService:
             "head_repo_name": head.repo,
             "base": (pr.get("base") or {}).get("ref", ""),
             **freshness,
+            "target": _work_target(resource, pr, url),
         }
         if include_comments:
             result["conversation_comments"] = await self._issue_comments(resource)
@@ -500,6 +512,7 @@ class MemberGitHubCapabilityService:
                 "repo": resource.full_repo,
                 "pr_number": resource.number,
                 "pr_url": pr.get("html_url", url),
+                "target": _work_target(resource, pr, url),
                 **freshness,
                 "current_base_sha": current_base_sha,
                 "current_head_sha": current_head_sha,
@@ -530,6 +543,7 @@ class MemberGitHubCapabilityService:
             "repo": resource.full_repo,
             "pr_number": resource.number,
             "pr_url": pr.get("html_url", url),
+            "target": _work_target(resource, pr, url),
             "base_sha": None,
             "head_sha": checked_head_sha,
             "behind_by": None,
@@ -833,6 +847,7 @@ class MemberGitHubCapabilityService:
                 "draft": bool(pr.get("draft", False)),
                 "head": head,
                 "base": base_branch,
+                "target": _work_target(_pull_resource(owner, repo_name, pr), pr),
             }
 
         body = _append_issue_link(body, issue_url, closes=closes_issue)
@@ -854,6 +869,7 @@ class MemberGitHubCapabilityService:
             "draft": bool(pr.get("draft", payload.get("draft", False))),
             "head": head,
             "base": base_branch,
+            "target": _work_target(_pull_resource(owner, repo_name, pr), pr),
         }
 
     async def pr_update(
@@ -881,15 +897,18 @@ class MemberGitHubCapabilityService:
             "pr_url": pr.get("html_url", url),
             "title": pr.get("title", ""),
             "body": "" if response_body is None else response_body,
+            "target": _work_target(resource, pr, url),
         }
 
     async def pr_comment(self, url: str, body: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        ensure_chat_current(self.person.person_id)
+        pr = await self._pull_request(resource)
         comment = await self._post_comment(
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments",
             body,
         )
-        return _comment_result(comment)
+        return {**_comment_result(comment), "target": _work_target(resource, pr, url)}
 
     async def pr_review(self, url: str, body: str, event: str) -> dict[str, Any]:
         """Submit a review verdict on the PR head as a GitHub review.
@@ -923,6 +942,7 @@ class MemberGitHubCapabilityService:
             "state": review.get("state"),
             "commit_id": head_sha,
             "submitted_at": review.get("submitted_at"),
+            "target": _work_target(resource, pr, url),
         }
 
     async def pr_review_comment(
@@ -963,12 +983,15 @@ class MemberGitHubCapabilityService:
             "path": path,
             "line": line,
             "side": side,
+            "target": _work_target(resource, pr, url),
         }
 
     async def pr_reply(
         self, url: str, reply_target_id: int, body: str
     ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        ensure_chat_current(self.person.person_id)
+        pr = await self._pull_request(resource)
         threads = await self._review_threads(resource)
         allowed = {
             int(thread["reply_target_id"])
@@ -991,6 +1014,7 @@ class MemberGitHubCapabilityService:
             "reply_comment_id": reply.get("id"),
             "html_url": reply.get("html_url"),
             "created_at": reply.get("created_at"),
+            "target": _work_target(resource, pr, url),
         }
 
     async def reaction_add(
@@ -1098,15 +1122,23 @@ class MemberGitHubCapabilityService:
         return self._pull_request_head(resource, await self._pull_request(resource))
 
     async def _pull_request(self, resource: GitHubResource) -> dict[str, Any]:
+        return await self._item(resource, "pulls", "pull request")
+
+    async def _issue(self, resource: GitHubResource) -> dict[str, Any]:
+        return await self._item(resource, "issues", "issue")
+
+    async def _item(
+        self, resource: GitHubResource, collection: str, noun: str
+    ) -> dict[str, Any]:
         client = await self._get_client()
         resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}"
+            f"/repos/{resource.owner}/{resource.repo}/{collection}/{resource.number}"
         )
         _raise_for_status(resp)
         payload = resp.json()
         if not isinstance(payload, dict):
             raise MemberCapabilityError(
-                "Unexpected GitHub pull request response for "
+                f"Unexpected GitHub {noun} response for "
                 f"{resource.full_repo}#{resource.number}."
             )
         return payload
@@ -1656,6 +1688,27 @@ def _raise_for_status(resp: Any) -> None:
         raise MemberCapabilityError(
             f"GitHub API request failed with status {status_code}."
         ) from exc
+
+
+def _work_target(
+    resource: GitHubResource, item: dict[str, Any], url: str = ""
+) -> dict[str, Any]:
+    """The PR / issue a command worked on, in one shape for every command.
+
+    The member CLI records it as the work target of the trace it runs inside,
+    so each command reports it the same way whatever else it returns.
+    """
+    return {
+        "kind": "pull_request" if resource.kind == "pull" else "issue",
+        "repo": resource.full_repo,
+        "number": item.get("number", resource.number),
+        "title": str(item.get("title") or ""),
+        "html_url": str(item.get("html_url") or url),
+    }
+
+
+def _pull_resource(owner: str, repo: str, pr: dict[str, Any]) -> GitHubResource:
+    return GitHubResource(owner, repo, int(pr.get("number") or 0), "pull")
 
 
 def _comment_result(comment: dict[str, Any]) -> dict[str, Any]:

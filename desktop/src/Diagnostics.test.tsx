@@ -369,6 +369,48 @@ describe("Diagnostics memory tab", () => {
 });
 
 describe("Diagnostics executions tab", () => {
+  it("titles a trace by its work target and keeps the command as a subtitle", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTraces).mockResolvedValue({
+      traces: [
+        {
+          trace_id: "trace-544",
+          source: "routine",
+          person_id: "alice",
+          command: "workflows/ticket_driven_workflow",
+          workflow: "",
+          title: "診断ログの実行タイトルに作業対象を表示する",
+          started_at: "2026-06-12T00:00:01Z",
+          updated_at: "2026-06-12T00:00:03Z",
+          status: "running",
+          event_count: 1,
+          log_count: 0,
+          error_count: 0,
+          span_count: 0,
+          attributes: {
+            "github.kind": "issue",
+            "github.number": "544",
+            "github.url": "https://github.com/o/r/issues/544",
+          },
+        },
+      ],
+    });
+    vi.mocked(getTraceDetail).mockResolvedValue({
+      trace_id: "trace-544",
+      summary: null,
+      records: [],
+    });
+
+    renderApp("/diagnostics?tab=executions");
+    await openTab(user, t("diagnostics.tabs.executions"));
+
+    expect(
+      await screen.findByText("診断ログの実行タイトルに作業対象を表示する"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("workflows/ticket_driven_workflow")).toBeInTheDocument();
+    expect(screen.getByText("#544")).toBeInTheDocument();
+  });
+
   it("lists traces and shows the selected trace timeline", async () => {
     const user = userEvent.setup();
     vi.mocked(getTraces).mockResolvedValue({
@@ -379,6 +421,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "success",
@@ -460,6 +503,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "success",
@@ -529,6 +573,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "success",
@@ -584,6 +629,7 @@ describe("Diagnostics executions tab", () => {
         person_id: "alice",
         command: traceId === "trace-a" ? "first task" : "second task",
         workflow: "",
+        title: "",
         started_at: traceId === "trace-a" ? "2026-06-12T00:00:01Z" : "2026-06-12T00:00:03Z",
         updated_at: traceId === "trace-a" ? "2026-06-12T00:00:02Z" : "2026-06-12T00:00:04Z",
         status: "success",
@@ -626,6 +672,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "failed",
@@ -696,6 +743,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "failed",
@@ -879,6 +927,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "",
           command: "",
           workflow: "",
+          title: "",
           started_at: "",
           updated_at: "",
           status: "info",
@@ -974,6 +1023,7 @@ describe("Diagnostics executions tab", () => {
           person_id: "alice",
           command: "workflows/demo",
           workflow: "",
+          title: "",
           started_at: "2026-06-12T00:00:01Z",
           updated_at: "2026-06-12T00:00:03Z",
           status: "success",
@@ -1167,6 +1217,7 @@ describe("Diagnostics troubleshooting assistant", () => {
     person_id: "alice",
     command: "workflows/demo",
     workflow: "",
+    title: "",
     started_at: "2026-06-12T00:00:01Z",
     updated_at: "2026-06-12T00:00:03Z",
     status: "failed" as const,

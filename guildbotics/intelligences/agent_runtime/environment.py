@@ -49,6 +49,7 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
     terminate_process_job,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
+from guildbotics.observability import TRACE_ID_ENV
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.processes import terminate_posix_process_group
 
@@ -182,6 +183,8 @@ def member_command_environment(context: AgentExecutionContext) -> dict[str, str]
     }
     if context.participant_labels:
         env[CHAT_PARTICIPANT_LABELS_ENV] = context.participant_labels
+    if context.trace_id:
+        env[TRACE_ID_ENV] = context.trace_id
     return env
 
 

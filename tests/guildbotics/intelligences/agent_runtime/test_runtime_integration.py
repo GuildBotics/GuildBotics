@@ -789,6 +789,25 @@ def test_member_command_environment_carries_only_execution_metadata(tmp_path) ->
     }
 
 
+def test_member_command_environment_hands_over_the_turns_trace(tmp_path) -> None:
+    # The member CLI runs in another process; the trace it should record into
+    # travels with the turn, not with the caller's context variables.
+    from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
+    from guildbotics.observability import TRACE_ID_ENV
+
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="run-1",
+        cwd=tmp_path,
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1"),
+        trace_id="trace-parent",
+    )
+
+    assert member_command_environment(context)[TRACE_ID_ENV] == "trace-parent"
+
+
 def test_agent_diagnostics_redact_credentials_and_keep_correlation(
     monkeypatch, tmp_path
 ) -> None:

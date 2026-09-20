@@ -157,10 +157,12 @@ async def test_chat_write_checks_source_even_for_another_destination(chat_run, a
 async def test_github_comment_checks_original_chat(chat_run):
     service = github_service()
     client = FakeClient()
+    client.get_payloads["/repos/owner/repo/issues/1"] = {"number": 1, "title": "T"}
     service._client = client
     with pytest.raises(ChatUpdatesRequired):
         await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
-    assert not client.posts
+    # A refused write reaches GitHub for nothing, not even to read the issue.
+    assert not client.posts and not client.gets
     check_chat_updates("aiko", "chat-run")
     await service.issue_comment("https://github.com/owner/repo/issues/1", "comment")
     assert len(client.posts) == 1

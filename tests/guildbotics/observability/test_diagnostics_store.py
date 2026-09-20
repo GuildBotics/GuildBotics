@@ -457,3 +457,120 @@ def test_recorded_completion_overrides_earlier_failed_attempt(tmp_path: Path) ->
 
     summary = store.list_traces()[0]
     assert summary["status"] == "success"
+
+
+def test_summary_title_is_the_first_work_target_recorded_in_the_trace(
+    tmp_path: Path,
+) -> None:
+    # A chat workflow carries no GitHub attributes of its own; the member CLI's
+    # work-target record, bound to the same trace, names the PR for it.
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(
+        _event(
+            "t-chat",
+            "command.started",
+            command="workflows/chat_conversation_workflow",
+            person_id="alice",
+            timestamp="2026-06-12T00:00:01+09:00",
+            attributes={"event.provider": "slack"},
+        )
+    )
+    store.record(
+        _event(
+            "t-chat",
+            "github.work_target",
+            timestamp="2026-06-12T00:00:02+09:00",
+            attributes={
+                "github.action": "inspected",
+                "github.kind": "pull_request",
+                "github.number": "528",
+                "github.url": "https://github.com/owner/repo/pull/528",
+                "github.title": "Copilot の利用枠を表示する",
+            },
+        )
+    )
+    store.record(
+        _event(
+            "t-chat",
+            "github.work_target",
+            timestamp="2026-06-12T00:00:03+09:00",
+            attributes={
+                "github.kind": "issue",
+                "github.number": "9",
+                "github.title": "A later, different item",
+            },
+        )
+    )
+
+    summary = store.get_summary("t-chat")
+    assert summary is not None
+    assert summary["title"] == "Copilot の利用枠を表示する"
+    assert summary["attributes"]["github.number"] == "528"
+    assert store.list_traces()[0]["title"] == summary["title"]
+
+
+def test_summary_title_uses_the_completion_summary_the_caller_supplies(
+    tmp_path: Path,
+) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(
+        _event(
+            "t-chat",
+            "command.started",
+            command="workflows/chat_conversation_workflow",
+            person_id="alice",
+            attributes={"event.provider": "slack"},
+        )
+    )
+
+    def completion_summary(attributes: dict[str, object], person_id: str) -> str:
+        assert attributes["event.provider"] == "slack"
+        return "請求プランの質問に回答" if person_id == "alice" else ""
+
+    listed = store.list_traces(completion_summary=completion_summary)[0]
+    assert listed["title"] == "請求プランの質問に回答"
+    assert store.get_summary("t-chat")["title"] != listed["title"]  # type: ignore[index]
+
+
+def test_summary_attributes_follow_timestamp_order_not_append_order(
+    tmp_path: Path,
+) -> None:
+    # The workflow and the member CLI write into one trace from different
+    # processes, so a later item can be appended before an earlier one. The
+    # trace still names the item that happened first, in the title, in the
+    # attributes the chip shows, and in the attribute filter.
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    later = {
+        "github.kind": "issue",
+        "github.number": "9",
+        "github.title": "Second",
+    }
+    earlier = {
+        "github.kind": "pull_request",
+        "github.number": "528",
+        "github.title": "First",
+    }
+    store.record(
+        _event(
+            "t-chat",
+            "github.work_target",
+            timestamp="2026-06-12T00:00:02+09:00",
+            attributes=later,
+        )
+    )
+    store.record(
+        _event(
+            "t-chat",
+            "github.work_target",
+            timestamp="2026-06-12T00:00:01+09:00",
+            attributes=earlier,
+        )
+    )
+
+    summary = store.get_summary("t-chat")
+    assert summary is not None
+    assert summary["title"] == "First"
+    assert summary["attributes"]["github.number"] == "528"
+    assert [item["title"] for item in store.list_traces()] == ["First"]
+    assert store.list_traces(attr_key="github.number", attr_value="528")
+    assert not store.list_traces(attr_key="github.number", attr_value="9")

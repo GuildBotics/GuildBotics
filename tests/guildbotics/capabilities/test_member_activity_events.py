@@ -2,8 +2,51 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from guildbotics.capabilities import member_activity_events
 from guildbotics.entities.team import Person
+
+
+@pytest.mark.parametrize("read_only", [True, False])
+def test_record_member_work_target_names_the_item_and_marks_reads(
+    monkeypatch, read_only: bool
+) -> None:
+    recorded: dict[str, Any] = {}
+    monkeypatch.setattr(
+        member_activity_events,
+        "record_correlated_event",
+        lambda **kwargs: recorded.update(kwargs),
+    )
+
+    member_activity_events.record_member_work_target(
+        Person(person_id="aiko", name="Aiko"),
+        {
+            "kind": "pull_request",
+            "repo": "owner/repo",
+            "number": 544,
+            "title": "  Show the work target  ",
+            "html_url": "https://github.com/owner/repo/pull/544",
+        },
+        read_only=read_only,
+    )
+
+    assert recorded["event_type"] == "github.work_target"
+    assert recorded["payload"] == {
+        "pull_request": {
+            "number": 544,
+            "title": "Show the work target",
+            "html_url": "https://github.com/owner/repo/pull/544",
+        }
+    }
+    assert recorded["attributes"] == {
+        "github.action": "inspected" if read_only else "",
+        "github.kind": "pull_request",
+        "github.number": "544",
+        "github.repo": "owner/repo",
+        "github.url": "https://github.com/owner/repo/pull/544",
+        "github.title": "Show the work target",
+    }
 
 
 def test_record_member_pr_create_event_records_github_number_as_string(

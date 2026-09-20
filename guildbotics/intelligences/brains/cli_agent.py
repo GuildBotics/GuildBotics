@@ -810,6 +810,7 @@ class CliAgentBrain(Brain):
                 workspace_root=get_workspace_root(),
                 workspace_data_root=data_root,
                 conversation_key=key,
+                trace_id=str(correlation_fields().get("trace_id") or ""),
                 resume_policy=policy,
                 context_cursor=str(configured.get("context_cursor") or ""),
                 event_id=str(configured.get("event_id") or ""),

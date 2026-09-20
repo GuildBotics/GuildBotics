@@ -9,13 +9,17 @@ import shlex
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from guildbotics.app_api.activity_history import build_activity_history, parse_timestamp
+from guildbotics.app_api.activity_history import (
+    build_activity_history,
+    parse_timestamp,
+    run_subject_id,
+)
 from guildbotics.app_api.agent_environment_status import (
     EnvironmentProblemEntry,
     agent_environment_problems,
@@ -167,6 +171,7 @@ from guildbotics.observability.session_transcripts import (
     transcript_detail,
     transcript_retention_days,
 )
+from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.live_state import LiveStatePort
 from guildbotics.runtime.local_command_executor import LocalCommandExecutor
@@ -1380,6 +1385,7 @@ class AppRuntime:
             attr_key=attr_key,
             attr_value=attr_value,
             limit=limit,
+            completion_summary=_completion_summary_lookup(),
         )
         traces = [TraceSummary.model_validate(summary) for summary in summaries]
         return TracesResponse(traces=traces)
@@ -1388,7 +1394,9 @@ class AppRuntime:
         records: list[TraceRecord] = []
         summary = None
         if self._diagnostics_store is not None:
-            raw_summary = self._diagnostics_store.get_summary(trace_id)
+            raw_summary = self._diagnostics_store.get_summary(
+                trace_id, _completion_summary_lookup()
+            )
             summary = (
                 TraceSummary.model_validate(raw_summary)
                 if raw_summary is not None
@@ -1536,18 +1544,12 @@ class AppRuntime:
             context.team, sync_start_time, sync_end_time, force=refresh
         )
         records = self._activity_records_between(start_time, end_time, limit=limit)
-        run_store = RunStore()
-        run_summaries = run_store.summaries_by_subject()
-        run_subjects = run_store.subjects_by_run()
         return build_activity_history(
             start=start_time,
             end=end_time,
             members=context.team.members,
             records=records,
-            run_summary=lambda subject_id, person_id: run_summaries.get(
-                (subject_id, person_id), ""
-            ),
-            run_subject=lambda run_id: run_subjects.get(run_id, ""),
+            completion_summary=_completion_summary_lookup(),
         )
 
     def _refresh_activity_events(
@@ -2284,6 +2286,25 @@ def _apply_runtime_log_level(log_level: str) -> None:
     agno_log.logger.setLevel(level)
     for handler in agno_log.logger.handlers:
         handler.setLevel(level)
+
+
+def _completion_summary_lookup() -> CompletionSummary:
+    """Resolve a trace's recorded run completion summary from its attributes.
+
+    The run records are read once per request, and only if some trace asks
+    (``resolve_trace_title`` asks only for a trace that names no PR / issue),
+    so listing traces stays cheap.
+    """
+    store = RunStore()
+    summaries: dict[tuple[str, str], str] | None = None
+
+    def lookup(attributes: Mapping[str, Any], person_id: str) -> str:
+        nonlocal summaries
+        if summaries is None:
+            summaries = store.summaries_by_subject()
+        return summaries.get((run_subject_id(attributes), person_id), "")
+
+    return lookup
 
 
 def _to_trace_record(item: dict[str, Any]) -> TraceRecord:

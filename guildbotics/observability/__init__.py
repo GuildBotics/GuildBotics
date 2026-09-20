@@ -26,6 +26,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
+#: How a process hands the trace it runs inside to a member CLI it spawns.
+TRACE_ID_ENV = "GUILDBOTICS_TRACE_ID"
+
 _current_trace: ContextVar[TraceContext | None] = ContextVar(
     "guildbotics_trace", default=None
 )
@@ -98,6 +101,31 @@ def trace_scope(
 
 
 @contextlib.contextmanager
+def join_trace(
+    trace_id: str, *, person_id: str = "", command: str = ""
+) -> Iterator[TraceContext]:
+    """Record into a trace another process opened, for the block.
+
+    A member CLI spawned by an agent turn runs outside the process that opened
+    the workflow's trace; this binds its records to that trace so they show up
+    as part of the same execution. Unlike :func:`trace_scope` it opens nothing
+    and records no boundary: the owner of the trace records its end, and a
+    member command's own start / finish events would otherwise flip the
+    owner's still-running execution to success.
+    """
+    ctx = TraceContext(
+        trace_id=trace_id, source="", person_id=person_id, command=command
+    )
+    trace_token = _current_trace.set(ctx)
+    span_token = _current_span.set(None)
+    try:
+        yield ctx
+    finally:
+        _current_span.reset(span_token)
+        _current_trace.reset(trace_token)
+
+
+@contextlib.contextmanager
 def span_scope(name: str) -> Iterator[SpanContext]:
     """Bind a new span (with a fresh ``call_id``) for an individual operation."""
     parent = _current_span.get()
@@ -145,11 +173,13 @@ def correlation_fields() -> dict[str, Any]:
 
 
 __all__ = [
+    "TRACE_ID_ENV",
     "SpanContext",
     "TraceContext",
     "correlation_fields",
     "current_span",
     "current_trace",
+    "join_trace",
     "new_id",
     "set_attributes",
     "span_scope",
