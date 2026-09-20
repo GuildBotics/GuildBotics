@@ -100,6 +100,13 @@ def test_temp_workspace_member_flow_before_project_init(
             },
         )
         refreshed_team = client.get("/team", headers=AUTH_HEADERS)
+        deleted = client.request(
+            "DELETE",
+            "/config/members/local-agent",
+            headers=AUTH_HEADERS,
+            json={"config_dir": str(config_dir)},
+        )
+        empty_team = client.get("/team", headers=AUTH_HEADERS)
 
     assert not (config_dir / "team/project.yml").exists()
     assert created.status_code == HTTP_OK
@@ -117,6 +124,8 @@ def test_temp_workspace_member_flow_before_project_init(
     assert snapshot.json()["person_name"] == "Local Agent"
     assert updated.status_code == HTTP_OK
     assert refreshed_team.json()["members"][0]["name"] == "Renamed Agent"
+    assert deleted.status_code == HTTP_OK
+    assert empty_team.json()["members"] == []
 
 
 def test_temp_workspace_init_project_member_team_flow(
