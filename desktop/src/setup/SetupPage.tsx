@@ -71,7 +71,6 @@ import {
   type EffortOverlay,
   type ConfigRevisions,
   type ConfigStatus,
-  getDecisionOptions,
   type BrainAssignment,
   type IntelligenceConfig,
   type ModelDefinition,
@@ -1771,7 +1770,6 @@ function IntelligenceEditor({
     });
   }, []);
   const hasJsonError = Object.keys(jsonErrors).length > 0;
-  const decisionOptions = useQuery({ queryKey: ["decision-options"], queryFn: getDecisionOptions });
   const mutation = useMutation({
     mutationFn: updateIntelligenceConfig,
     onSuccess: (written) => {
@@ -2267,12 +2265,10 @@ function IntelligenceEditor({
 
   const renderBrainAssignment = (name: string, index: number) => {
     const assignment = draft.brain_mapping[index];
-    const targetOptions =
-      assignment?.engine === "jev"
-        ? (decisionOptions.data?.models ?? [])
-        : assignment?.engine === "cli"
-          ? cliSlots.map((s) => ({ value: s, label: s }))
-          : modelSlots.map((s) => ({ value: s, label: s }));
+    const targetOptions = (assignment?.engine === "cli" ? cliSlots : modelSlots).map((s) => ({
+      value: s,
+      label: s,
+    }));
 
     return (
       <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
@@ -2300,14 +2296,20 @@ function IntelligenceEditor({
           }
           flex={1}
         />
-        <Select
-          label={t("setup.intelligence.target")}
-          data={targetOptions}
-          value={assignment?.target ?? null}
-          disabled={!assignment}
-          onChange={(value) => handleUpdateBrain(name, { target: value ?? "default" })}
-          flex={1.5}
-        />
+        {assignment?.engine === "jev" ? (
+          <Text size="sm" flex={1.5}>
+            {t("decision.jevLatest")}
+          </Text>
+        ) : (
+          <Select
+            label={t("setup.intelligence.target")}
+            data={targetOptions}
+            value={assignment?.target ?? null}
+            disabled={!assignment}
+            onChange={(value) => handleUpdateBrain(name, { target: value ?? "default" })}
+            flex={1.5}
+          />
+        )}
         {assignment && !isBrainFeatureLocked(name) ? (
           <ActionIcon
             color="danger"

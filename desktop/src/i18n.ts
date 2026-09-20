@@ -31,6 +31,7 @@ const resources = {
         cliEnvironment: "AI CLI environment and login",
         register: "Save Jev credentials",
         check: "Check saved chat judgment assignment",
+        jevLatest: "Uses jev-latest (latest official release).",
         assignmentHint:
           "Select the engine and target below, then save at the top of this section. LLM and CLI use the existing slots.",
         saveBeforeCheck: "Save your changes before checking the assignment.",
@@ -2111,6 +2112,7 @@ const resources = {
         cliEnvironment: "AI CLI の環境準備・ログイン",
         register: "Jev の認証情報を保存",
         check: "保存済みのチャット判断設定を接続確認",
+        jevLatest: "jev-latest（最新の正式版）を使用します。",
         assignmentHint:
           "エンジンと割り当て先を選び、このセクション上部の保存ボタンで保存します。LLM／CLI は既存のスロットを使います。",
         saveBeforeCheck: "変更を保存してから接続確認してください。",

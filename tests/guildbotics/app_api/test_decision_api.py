@@ -15,6 +15,7 @@ from guildbotics.app_api.intelligences import (
 from guildbotics.app_api.models import BrainAssignment, IntelligenceConfigUpdateRequest
 from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
 from guildbotics.intelligences.decisions import preparation
 from guildbotics.intelligences.decisions.models import DecisionConfig, Evaluation
@@ -77,7 +78,9 @@ def test_malformed_credential_never_echoes_its_input(configured):
     assert "private-credential" not in response.text
 
 
-@pytest.mark.parametrize("model", ["", "gpt-5", "claude-sonnet"])
+@pytest.mark.parametrize(
+    "model", ["", "gpt-5", "claude-sonnet", "jev-1.13.0", "jev-preview"]
+)
 def test_wrong_jev_model_is_rejected(configured, model):
     root, _ = configured
     with pytest.raises(SetupServiceError):
@@ -94,7 +97,9 @@ def test_member_inherits_and_overrides_through_brain_factory(configured):
     service = IntelligenceConfigService()
     service.update_config(
         IntelligenceConfigUpdateRequest(
-            config_dir=root, brain_mapping=[assignment("jev-latest")]
+            config_dir=root,
+            cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
+            brain_mapping=[assignment("jev-latest")],
         )
     )
     factory = SimpleBrainFactory()
@@ -116,12 +121,22 @@ def test_member_inherits_and_overrides_through_brain_factory(configured):
     assert not (root / "intelligences/decision.yml").exists()
     service.update_config(
         IntelligenceConfigUpdateRequest(
-            config_dir=root, person_id="alice", brain_mapping=[assignment("jev-1.13.0")]
+            config_dir=root,
+            person_id="alice",
+            cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
+            brain_mapping=[
+                BrainAssignment(
+                    name="chat_decision",
+                    brain_class=CLI_BRAIN_CLASS,
+                    engine="cli",
+                    target="default",
+                )
+            ],
         )
     )
-    assert selected().model == "jev-1.13.0"
+    assert isinstance(selected(), CliAgentBrain)
     summary = service.read_config(config_dir=root, person_id="alice").chat_decision
-    assert summary.model == "jev-1.13.0" and not summary.assignment_inherited
+    assert summary.engine == "cli" and not summary.assignment_inherited
     service.update_config(
         IntelligenceConfigUpdateRequest(
             config_dir=root, person_id="alice", inherit_team_defaults=True

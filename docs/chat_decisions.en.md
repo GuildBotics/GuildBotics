@@ -4,7 +4,7 @@ In **Setup → LLM / AI CLI tools → Advanced → Chat judgment engine**, selec
 
 - **LLM** uses an existing model slot, including its provider, model, parameters, and credentials.
 - **CLI** uses an existing AI CLI slot and its model/effort settings through the shared Codex, Claude, Grok, Copilot, or Antigravity adapter. Prepare the device environment and log in first.
-- **Jev** selects `jev-1.13.0`, `jev-latest`, or `jev-preview`. Register its key in the **Chat judgment engine** card; it is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
+- **Jev** uses `jev-latest`, which follows the latest official release. No model selection is needed. Register its key in the **Chat judgment engine** card; it is stored as `TYPESAFE_API_KEY` in the workspace SecretStore.
 
 The **Chat judgment engine** card sits between the AI CLI tool definitions and the environment declaration. It shows the saved engine, slot, and configured model, plus whether a member's assignment is inherited or overridden. A CLI slot without an explicit model shows **CLI default (determined at execution)**. Unsaved edits do not replace this saved summary.
 
@@ -16,7 +16,7 @@ For example, a team using Jev stores this entry in the existing `.guildbotics/co
 chat_decision:
   class: guildbotics.intelligences.brains.jev.JevBrain
   args:
-    model: jev-1.13.0
+    model: jev-latest
 ```
 
 For LLM, `AgnoAgentDefaultBrain.model` names an existing model slot; for CLI, `CliAgentBrain.cli_agent` names an existing CLI slot. The initial assignment uses the LLM `default` slot. Member feature overrides use the normal mapping inheritance, preserving team values for untouched features and slots. The old `decision.yml` is not read; reselect any trial configuration using this assignment. Stored API keys remain in SecretStore.

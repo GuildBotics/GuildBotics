@@ -11,7 +11,7 @@ from guildbotics.utils.fileio import get_workspace_config_dir
 from guildbotics.utils.secret_store import KeyringSecretStore
 
 JEV_KEY = "TYPESAFE_API_KEY"
-JEV_MODELS = ("jev-1.13.0", "jev-latest", "jev-preview")
+JEV_MODEL = "jev-latest"
 
 
 def credential(config_dir: Path) -> str:
@@ -38,9 +38,9 @@ class JevBrain(Brain):
 
     probabilistic_answers = True
 
-    def __init__(self, *args, model: str = "jev-latest", **kwargs):
+    def __init__(self, *args, model: str = JEV_MODEL, **kwargs):
         super().__init__(*args, **kwargs)
-        if model not in JEV_MODELS:
+        if model != JEV_MODEL:
             raise ValueError("Unsupported Jev model")
         self.model = model
 

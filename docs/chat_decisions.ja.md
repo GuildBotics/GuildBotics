@@ -4,7 +4,7 @@
 
 - **LLM**: 既存の LLM スロットを選びます。プロバイダー、モデル、パラメーター、認証情報はそのスロットの設定を使います。
 - **CLI**: 既存の AI CLI スロットを選びます。Codex・Claude・Grok・Copilot・Antigravity の共通実行基盤を使います。モデルと effort の設定もそのスロットから解決します。端末での環境準備とログインが必要です。
-- **Jev**: `jev-1.13.0`・`jev-latest`・`jev-preview` から選びます。「チャット判断エンジン」の API キー欄から登録すると、Workspace の SecretStore に `TYPESAFE_API_KEY` として保存します。
+- **Jev**: `jev-latest`（最新の正式版）を使用します。モデル選択は不要です。「チャット判断エンジン」の API キー欄から登録すると、Workspace の SecretStore に `TYPESAFE_API_KEY` として保存します。
 
 「AI CLIツール定義」と「環境の宣言」の間にある「チャット判断エンジン」カードで、保存済みのエンジン・スロット・設定モデルを確認できます。メンバー画面では割り当ての継承／上書きも表示します。CLI でモデルを明示していない場合は「CLI の既定（実行時に決定）」と表示します。未保存の編集はこの表示に反映しません。
 
@@ -16,7 +16,7 @@
 chat_decision:
   class: guildbotics.intelligences.brains.jev.JevBrain
   args:
-    model: jev-1.13.0
+    model: jev-latest
 ```
 
 LLM は `AgnoAgentDefaultBrain` の `model`、CLI は `CliAgentBrain` の `cli_agent` に既存のスロット名を指定します。初期値は LLM の `default` スロットです。メンバーの同名マッピングは通常の機能別設定と同様にチーム設定を上書きし、上書きしない機能・スロットは継承します。旧 `decision.yml` は読み取りません。既に試行設定がある場合は、この割り当てで選び直してください。API キーは引き続き SecretStore に保存されます。

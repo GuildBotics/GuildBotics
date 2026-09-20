@@ -52,8 +52,10 @@ test("uses the common brain assignment for chat judgment and restores it after r
   const row = card;
   await row.getByRole("combobox").nth(0).click();
   await page.getByRole("option", { name: "Jev", exact: true }).click();
-  await row.getByRole("combobox").nth(1).click();
-  await page.getByRole("option", { name: "jev-1.13.0", exact: true }).click();
+  await expect(card.getByRole("combobox")).toHaveCount(1);
+  await expect(
+    card.getByText("Uses jev-latest (latest official release).", { exact: true }),
+  ).toBeVisible();
   await expect(card.getByText("Not configured", { exact: true })).toBeVisible();
   await expect(
     card.getByRole("button", { name: "Check saved chat judgment assignment", exact: true }),
@@ -62,9 +64,9 @@ test("uses the common brain assignment for chat judgment and restores it after r
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await page.reload();
   await expect(row.getByRole("combobox").nth(0)).toHaveValue("Jev");
-  await expect(row.getByRole("combobox").nth(1)).toHaveValue("jev-1.13.0");
+  await expect(card.getByRole("combobox")).toHaveCount(1);
   await expect(card.getByText("Engine: Jev", { exact: true })).toBeVisible();
-  await expect(card.getByText("Configured model: jev-1.13.0", { exact: true })).toBeVisible();
+  await expect(card.getByText("Configured model: jev-latest", { exact: true })).toBeVisible();
   await page.route("**/intelligences/decisions/check", (route) => {
     expect(route.request().postDataJSON()).toEqual({ config: { brain: "chat_decision" } });
     return route.fulfill({ json: { state: "verified", model: "jev-1.13.0" } });

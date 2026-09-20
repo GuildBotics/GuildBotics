@@ -45,7 +45,6 @@ beforeEach(async () => {
   vi.resetAllMocks();
   await i18n.changeLanguage("en");
   vi.mocked(getDecisionOptions).mockResolvedValue({
-    models: ["jev-latest"],
     credential_present: false,
   });
 });

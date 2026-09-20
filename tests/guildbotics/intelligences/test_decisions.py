@@ -325,6 +325,29 @@ def test_generic_choice_is_not_restricted_to_chat_reactions():
 
 
 @pytest.mark.asyncio
+async def test_jev_uses_latest_and_records_the_returned_version(monkeypatch):
+    async def request(_root, _method, _path, payload):
+        assert payload["model"] == "jev-latest"
+        return {
+            "model": "jev-future-test-version",
+            "answers": {},
+            "usage": {"input_tokens": 12},
+        }
+
+    monkeypatch.setattr(jev, "request", request)
+    brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
+    await brain.run(json.dumps({"state": "test", "questions": {}}))
+    assert brain.execution.model == "jev-future-test-version"
+    assert brain.execution.usage == {"input_tokens": 12}
+
+
+@pytest.mark.parametrize("model", ["jev-1.13.0", "jev-preview"])
+def test_jev_rejects_other_models(model):
+    with pytest.raises(ValueError, match="Unsupported Jev model"):
+        jev.JevBrain("alice", "chat_decision", logging.getLogger(), model=model)
+
+
+@pytest.mark.asyncio
 async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
     calls = []
 

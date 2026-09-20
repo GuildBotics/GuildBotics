@@ -4058,6 +4058,12 @@ describe("IntelligenceEditor (team default)", () => {
       expect(card.getByRole("combobox", { name: t("setup.intelligence.target") })).toBeDisabled();
       await user.click(engine);
       await user.click(await screen.findByRole("option", { name: label }));
+      if (label === "Jev") {
+        expect(
+          card.queryByRole("combobox", { name: t("setup.intelligence.target") }),
+        ).not.toBeInTheDocument();
+        expect(card.getByText(t("decision.jevLatest"))).toBeInTheDocument();
+      }
       await saveSection(user);
       await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
       expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].brain_mapping).toEqual([

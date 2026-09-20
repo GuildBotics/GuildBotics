@@ -1730,7 +1730,6 @@ export async function getIntelligenceConfig(personId?: string): Promise<Intellig
 export type DecisionConfig = { brain: string };
 export type DecisionCheckResult = { state: string; model: string };
 export async function getDecisionOptions(): Promise<{
-  models: string[];
   credential_present: boolean;
 }> {
   return request("/intelligences/decisions/options");

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from guildbotics.intelligences.brains.jev import JEV_KEY, JEV_MODELS, credential
+from guildbotics.intelligences.brains.jev import JEV_KEY, credential
 from guildbotics.intelligences.decisions.engines import evaluate
 from guildbotics.intelligences.decisions.models import DecisionConfig, Question
 from guildbotics.utils.i18n_tool import t
@@ -11,7 +11,7 @@ from guildbotics.utils.secret_store import KeyringSecretStore
 
 
 def options(root: Path):
-    return {"models": list(JEV_MODELS), "credential_present": bool(credential(root))}
+    return {"credential_present": bool(credential(root))}
 
 
 async def check(config: DecisionConfig, root: Path, person_id: str | None = None):

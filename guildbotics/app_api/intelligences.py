@@ -35,7 +35,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     parse_toolchain,
 )
 from guildbotics.intelligences.brains import agno_agent, cli_agent
-from guildbotics.intelligences.brains.jev import JEV_MODELS
+from guildbotics.intelligences.brains.jev import JEV_MODEL
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
     cli_agent_name_from_path,
@@ -841,7 +841,7 @@ class IntelligenceConfigService:
         return assignments
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
-        if assignment.engine == "jev" and assignment.target not in JEV_MODELS:
+        if assignment.engine == "jev" and assignment.target != JEV_MODEL:
             raise SetupServiceError("invalid_decision", "Unsupported Jev model")
         if assignment.engine == "cli":
             return {
