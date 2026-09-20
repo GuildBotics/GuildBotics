@@ -4045,13 +4045,41 @@ describe("IntelligenceEditor (team default)", () => {
     });
   });
 
+  it.each(["LLM", "CLI", "Jev"])(
+    "creates an absent chat assignment by selecting %s",
+    async (label) => {
+      const user = userEvent.setup();
+      await openTeamIntelligenceAdvanced(user);
+      const card = within(
+        screen.getByText(t("decision.title")).closest(".mantine-Card-root")! as HTMLElement,
+      );
+      const engine = card.getByRole("combobox", { name: t("setup.intelligence.engine") });
+      expect(engine).toHaveValue("");
+      expect(card.getByRole("combobox", { name: t("setup.intelligence.target") })).toBeDisabled();
+      await user.click(engine);
+      await user.click(await screen.findByRole("option", { name: label }));
+      await saveSection(user);
+      await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].brain_mapping).toEqual([
+        teamIntelligenceConfig().brain_mapping[0],
+        expect.objectContaining({
+          name: "chat_decision",
+          engine: label.toLowerCase(),
+          target: label === "Jev" ? "jev-latest" : "default",
+        }),
+      ]);
+    },
+  );
+
   it("edits the brain feature-to-engine mapping and sends the new assignment", async () => {
     const user = userEvent.setup();
     await openTeamIntelligenceAdvanced(user);
 
-    const engineSelect = await screen.findByRole("combobox", {
-      name: t("setup.intelligence.engine"),
-    });
+    const engineSelect = (
+      await screen.findAllByRole("combobox", {
+        name: t("setup.intelligence.engine"),
+      })
+    )[0];
     await user.click(engineSelect);
     await user.click(await screen.findByRole("option", { name: "CLI" }));
 

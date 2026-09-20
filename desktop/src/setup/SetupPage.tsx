@@ -2220,21 +2220,22 @@ function IntelligenceEditor({
     });
   };
 
-  const handleUpdateBrain = (index: number, updates: Partial<BrainAssignment>) => {
+  const handleUpdateBrain = (name: string, updates: Partial<BrainAssignment>) => {
     updateDraft((current) => {
       const updated = [...current.brain_mapping];
+      const index = updated.findIndex((item) => item.name === name);
       const currentAssignment = updated[index];
-      if (!currentAssignment) return current;
+      const engine = updates.engine ?? currentAssignment?.engine;
+      if (!engine) return current;
+      let nextClass = currentAssignment?.brain_class ?? "";
+      let nextTarget = updates.target ?? currentAssignment?.target ?? "";
 
-      let nextClass = currentAssignment.brain_class;
-      let nextTarget = updates.target !== undefined ? updates.target : currentAssignment.target;
-
-      if (updates.engine !== undefined && updates.engine !== currentAssignment.engine) {
-        if (updates.engine === "cli") {
+      if (engine !== currentAssignment?.engine) {
+        if (engine === "cli") {
           nextClass = "guildbotics.intelligences.brains.cli_agent.CliAgentBrain";
           const firstCliSlot = Object.keys(current.cli_agent_mapping)[0] ?? "default";
           nextTarget = firstCliSlot;
-        } else if (updates.engine === "jev") {
+        } else if (engine === "jev") {
           nextClass = "guildbotics.intelligences.brains.jev.JevBrain";
           nextTarget = "jev-latest";
         } else {
@@ -2244,12 +2245,9 @@ function IntelligenceEditor({
         }
       }
 
-      updated[index] = {
-        ...currentAssignment,
-        ...updates,
-        brain_class: nextClass,
-        target: nextTarget,
-      };
+      const assignment = { name, engine, brain_class: nextClass, target: nextTarget };
+      if (index < 0) updated.push(assignment);
+      else updated[index] = assignment;
       return { ...current, brain_mapping: updated };
     });
   };
@@ -2267,21 +2265,22 @@ function IntelligenceEditor({
     });
   };
 
-  const renderBrainAssignment = (assignment: BrainAssignment, index: number) => {
+  const renderBrainAssignment = (name: string, index: number) => {
+    const assignment = draft.brain_mapping[index];
     const targetOptions =
-      assignment.engine === "jev"
+      assignment?.engine === "jev"
         ? (decisionOptions.data?.models ?? [])
-        : assignment.engine === "cli"
+        : assignment?.engine === "cli"
           ? cliSlots.map((s) => ({ value: s, label: s }))
           : modelSlots.map((s) => ({ value: s, label: s }));
 
     return (
       <Group key={index} align="flex-end" gap="xs" wrap="nowrap">
-        {assignment.name !== "chat_decision" && (
+        {name !== "chat_decision" && (
           <TextInput
             label={t("setup.intelligence.feature")}
-            value={assignment.name}
-            disabled={isBrainFeatureLocked(assignment.name)}
+            value={name}
+            disabled={isBrainFeatureLocked(name)}
             onChange={(e) => handleRenameBrain(index, e.currentTarget.value)}
             flex={2}
           />
@@ -2293,9 +2292,9 @@ function IntelligenceEditor({
             { value: "cli", label: "CLI" },
             { value: "jev", label: "Jev" },
           ]}
-          value={assignment.engine}
+          value={assignment?.engine ?? null}
           onChange={(value) =>
-            handleUpdateBrain(index, {
+            handleUpdateBrain(name, {
               engine: (value as BrainAssignment["engine"]) ?? "llm",
             })
           }
@@ -2304,11 +2303,12 @@ function IntelligenceEditor({
         <Select
           label={t("setup.intelligence.target")}
           data={targetOptions}
-          value={assignment.target}
-          onChange={(value) => handleUpdateBrain(index, { target: value ?? "default" })}
+          value={assignment?.target ?? null}
+          disabled={!assignment}
+          onChange={(value) => handleUpdateBrain(name, { target: value ?? "default" })}
           flex={1.5}
         />
-        {!isBrainFeatureLocked(assignment.name) ? (
+        {assignment && !isBrainFeatureLocked(name) ? (
           <ActionIcon
             color="danger"
             variant="subtle"
@@ -2332,8 +2332,9 @@ function IntelligenceEditor({
       selection={query.data?.chat_decision}
     >
       {!draft.inherited &&
-        draft.brain_mapping.map((assignment, index) =>
-          assignment.name === "chat_decision" ? renderBrainAssignment(assignment, index) : null,
+        renderBrainAssignment(
+          "chat_decision",
+          draft.brain_mapping.findIndex((item) => item.name === "chat_decision"),
         )}
     </DecisionSettings>
   );
@@ -2399,7 +2400,7 @@ function IntelligenceEditor({
                 {draft.brain_mapping.map((assignment, index) =>
                   assignment.name === "chat_decision"
                     ? null
-                    : renderBrainAssignment(assignment, index),
+                    : renderBrainAssignment(assignment.name, index),
                 )}
               </Stack>
             </Card>
