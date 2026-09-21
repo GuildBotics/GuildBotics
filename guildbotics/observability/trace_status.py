@@ -22,6 +22,13 @@ their own. A finished provider span cannot: it reports that one call returned,
 and a chat workflow decides with an LLM call before its agent turn even
 starts, so treating that span as the trace's success shows a still-running
 execution as finished.
+
+Layer 4 has two readers. The diagnostics index folds the trace's own boundary
+events, which stay on the device that ran it. The activity timeline reads the
+run's shared lifecycle record instead -- one record per run, written by the
+boundary that ran it -- and hands its state in through :meth:`TraceStatus.observe`
+before folding the shared fact events. The three layers above it are the same
+events on both screens.
 """
 
 from __future__ import annotations
@@ -41,6 +48,18 @@ _COMPLETION_EVIDENCE = {
 }
 _ERROR_LOG_LEVELS = frozenset({"ERROR", "CRITICAL"})
 _TERMINAL_OBSERVATIONS = frozenset({"failed", "success"})
+#: What a run's lifecycle record says, in the status vocabulary the screens show.
+#: ``result_unknown`` means the process disappeared before the outcome could be
+#: observed, so it claims neither success nor failure.
+_LIFECYCLE_OBSERVATIONS = {
+    "running": "running",
+    "succeeded": "success",
+    "success": "success",
+    "failed": "failed",
+    "cancelled": "failed",
+    "interrupted": "failed",
+    "result_unknown": "info",
+}
 
 
 class TraceStatus:
@@ -56,6 +75,16 @@ class TraceStatus:
         self._completion = ""
         self._dispatch = ""
         self._rate_limited = False
+
+    def observe(self, lifecycle_status: str) -> None:
+        """Take the run's lifecycle record as layer 4.
+
+        Args:
+            lifecycle_status: The state the run's shared record holds (a task
+                run's ``running`` / ``succeeded`` / ``failed`` / ..., or an
+                interactive session's ``success`` / ``failed``).
+        """
+        self._observed = _LIFECYCLE_OBSERVATIONS.get(lifecycle_status, "info")
 
     def add(self, item: Mapping[str, Any]) -> None:
         """Fold one diagnostics record into the status."""

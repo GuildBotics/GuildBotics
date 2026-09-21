@@ -36,6 +36,10 @@ from guildbotics.integrations.chat_state_store import (
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability.activity_event_store import ActivityEventStore
+from guildbotics.observability.interactive_sessions import (
+    InteractiveSessionStore,
+    InteractiveTraceSession,
+)
 from guildbotics.utils.workspace_sync_port import SHARED_RECORD_SCHEMA_VERSION
 from guildbotics.workspace.identity import (
     ensure_workspace_identity,
@@ -118,6 +122,10 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
 
     RunStore().append("run-1", {"kind": "evidence", "evidence_type": "commit"})
 
+    InteractiveSessionStore().record(
+        _interactive_session(), command="member memory recall", status="success"
+    )
+
 
 #: One writer per record kind, handed a generation that is not this build's.
 #: Every one of them takes a mapping from somewhere it does not control -- a
@@ -166,6 +174,14 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
     )
 
     RunStore().append("run-1", {"kind": "evidence", "schema_version": AHEAD})
+    sessions = workspace / ".guildbotics/state/sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "trace-1.json").write_text(
+        json.dumps({"schema_version": AHEAD, "trace_id": "trace-1"}), encoding="utf-8"
+    )
+    InteractiveSessionStore().record(
+        _interactive_session(), command="member memory recall", status="success"
+    )
     MemoryAuditStore().record(
         {"kind": "memory", "type": "memory.get", "schema_version": AHEAD}
     )
@@ -181,7 +197,21 @@ def _write_with_a_foreign_generation(workspace: Path) -> dict[str, Path]:
         "memory metadata": (
             workspace / f".guildbotics/state/documents/team/{policy['doc_id']}/meta.yml"
         ),
+        "interactive session": sessions / "trace-1.json",
     }
+
+
+def _interactive_session() -> InteractiveTraceSession:
+    return InteractiveTraceSession(
+        trace_id="trace-1",
+        person_id="p1",
+        workspace="/repo",
+        host="codex",
+        thread_key="thread-1",
+        started_at="2026-07-01T10:00:00+00:00",
+        last_seen_at="2026-07-01T10:00:00+00:00",
+        expires_at="2026-07-01T10:30:00+00:00",
+    )
 
 
 def test_a_generation_the_caller_supplies_never_survives(workspace: Path) -> None:

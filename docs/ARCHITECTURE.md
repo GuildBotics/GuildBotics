@@ -509,7 +509,7 @@ the process cwd or a member working clone.
 | Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `run/service.lock` — state needed _before_ a workspace is chosen                                                                      |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
-| Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run evidence, activity events                                                                                       |
+| Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
 | Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones, AI CLI sessions, work dirs, hotkeys, `debug.env`                                            |
 
 Invariants:
@@ -568,6 +568,18 @@ device. That next attempt continues under the same run id, on the device now
 doing the work, keeping the evidence earlier attempts recorded. A run whose
 outcome could not be observed (`result_unknown`) keeps its input, because the
 work may already have taken effect elsewhere; only the user starts it again.
+
+A run record means work was taken. The ticket patrol selects its ticket outside
+the boundary and claims a slot only for a ticket it dispatches, so an idle patrol
+leaves no record (and no trace). A chat event is different: whether it holds work
+for the member is known only after the thread has been read, so the dispatcher
+only claims the event's identity (`record_start=False`) and the workflow records
+the start itself, under the same barrier, once it takes the batch; a batch the
+member does not act on leaves no record, and the boundary finishes only a run
+that started. The run is its trace (`run_id == trace_id`, for the ticket workflow
+too), and the boundary mirrors the trace's source and attributes into the record
+at start and at finish, so the record names the run's PR / issue or chat thread
+on every device without the trace.
 
 **Workspace Sync Port** (`utils/workspace_sync_port.py`). Storage layers announce a
 completed shared write as a `ChangeSet` and never learn that Git is involved. Writes go
@@ -793,13 +805,29 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   under `documents/memory_events/<device_id>.jsonl`: each device appends to and trims only
   its own bounded journal, so two devices never write the same shared path, and readers
   merge every device's journal in timestamp order.
-- **Consumption**: `app_api` reads the index, selected execution transcript, and memory
-  audit, and converts provider payloads into provider-neutral activity
+- **Lifecycle records, fact events**: one execution is one shared record. A workflow
+  run is its task-run record (`state/task-runs/<trace_id>/result.json`); an interactive
+  member CLI session is its session record (`state/sessions/<trace_id>.json`,
+  `interactive_sessions.py`), rewritten at the end of every command with the session's
+  first command, its last command's result, and the first `github.*` attributes its
+  commands recorded. The shared activity events (`activity_event_store.py`) carry only
+  the facts recorded inside an execution — provider domain outcomes, completion
+  evidence, dispatch decisions, sync rejections — never the `command.*` /
+  `member.command.*` boundary events, which stay in local diagnostics. The Activity
+  History therefore reads one record per execution instead of folding every command
+  it ran, and every device shows the same status for it. Two consequences are
+  deliberate: an interactive session's status is its last command's result rather than
+  "failed once, failed forever", and an `ERROR` log no longer marks a session failed
+  (logs are local; the diagnostics index still folds them for its own list).
+- **Consumption**: `app_api` reads the lifecycle records, the shared activity events,
+  the memory audit, and — from local diagnostics — only the `github.work_target` events,
+  and converts provider payloads into provider-neutral activity
   events/links for the desktop Activity History (`activity_events.py`,
   `activity_links.py`). Display normalization lives _only_ there — not in
   observability, not in the frontend — with two exceptions resolved once next to the
   records, because the execution list and the activity timeline ask the same question
-  of the same records: a trace's status (`trace_status.py`) and its title
+  about the same execution: a trace's status (`trace_status.py`, which the timeline
+  seeds with the lifecycle record through `TraceStatus.observe`) and its title
   (`trace_title.py`). A trace is titled by the first PR / issue recorded inside it
   (`github.title`): the ticket workflow declares it when it starts, and a chat workflow
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed

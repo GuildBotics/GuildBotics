@@ -1,5 +1,4 @@
 import os
-import re
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,7 @@ from guildbotics.integrations.workflow_status_comment import (
     workflow_status_comment_payload,
 )
 from guildbotics.intelligences.common import AgentResponse
-from guildbotics.observability import set_attributes
+from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     get_member_clone_path,
@@ -75,28 +74,6 @@ async def _move_task_to_working_if_ready(
         moved = await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
         if moved:
             context.task.status = Task.IN_PROGRESS
-
-
-def _ticket_trace_attributes(task: Task) -> dict[str, str]:
-    """Correlation attributes that make a ticket run findable in diagnostics."""
-    attributes: dict[str, str] = {}
-    if task.repository:
-        attributes["github.repo"] = task.repository
-    if task.title:
-        attributes["github.title"] = task.title
-    if task.pull_request_url:
-        attributes["github.kind"] = "pull_request"
-        attributes["github.url"] = task.pull_request_url
-        match = re.search(r"/pull/(\d+)", task.pull_request_url)
-        if match:
-            attributes["github.number"] = match.group(1)
-    else:
-        attributes["github.kind"] = "issue"
-        if task.url:
-            attributes["github.url"] = task.url
-        if task.number is not None:
-            attributes["github.number"] = str(task.number)
-    return attributes
 
 
 async def _build_task_error_message(
@@ -302,8 +279,12 @@ async def main(context: Context) -> AgentResponse | None:
         return None
 
     context.update_task(task)
-    set_attributes(**_ticket_trace_attributes(task))
-    run_id = uuid4().hex
+    set_attributes(**task.trace_attributes())
+    # The run is its trace: the boundary that dispatched this ticket recorded
+    # the run under the trace id, and the member's completion lands on that
+    # same record. Without a trace (a plain CLI run) the run stands alone.
+    trace = current_trace()
+    run_id = trace.trace_id if trace is not None else uuid4().hex
     try:
         return await _main(context, ticket_manager, run_id)
     except Exception as error:

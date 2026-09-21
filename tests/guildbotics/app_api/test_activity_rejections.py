@@ -41,6 +41,7 @@ def _events(*records: dict[str, Any]):
         start=START,
         end=END,
         members=[Person(person_id="alice", name="Alice", person_type="agent")],
+        lifecycles=[],
         records=list(records),
     ).events
 

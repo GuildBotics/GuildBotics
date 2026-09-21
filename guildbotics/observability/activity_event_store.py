@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability.event_types import (
-    COMMAND_LIFECYCLE_EVENT_TYPES,
-    SYNC_UPDATE_REJECTED,
-)
-from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
+from guildbotics.utils.fileio import get_workspace_state_path, iter_json_objects
 from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
     redact_for_sharing,
@@ -23,12 +19,15 @@ from guildbotics.utils.workspace_sync_port import (
 )
 
 _MAX_SAFE_SUMMARY_CHARS = MAX_SHARED_TEXT_CHARS
-# Explicit allowlist of what shared activity history carries (workspace sync
-# plan §8.1): provider domain outcomes, workflow / command start, completion,
-# and failure, and retry / abandonment decisions. Device-health events
-# (credential probes, diagnostics and verify runs, scheduler worker failures)
-# stay in local diagnostics; a new event type must opt in here.
-_DOMAIN_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
+# Explicit allowlist of what shared activity history carries: the facts of a
+# run -- provider domain outcomes, workflow completion evidence, and retry /
+# abandonment decisions. The run's own lifecycle (start, end, status) is one
+# shared record per run (``state/task-runs`` for a workflow, ``state/sessions``
+# for an interactive session), so the ``command.*`` / ``member.command.*``
+# boundary events stay in local diagnostics. Device-health events (credential
+# probes, diagnostics and verify runs, scheduler worker failures) stay local
+# too; a new event type must opt in here.
+_DOMAIN_EVENT_TYPES = frozenset(
     {
         "github.push",
         "github.pull_request",
@@ -93,15 +92,7 @@ class ActivityEventStore:
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
-        if not self.root.exists():
-            return events
-        for path in sorted(self.root.glob("*/*/*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict):
-                continue
+        for payload in iter_json_objects(self.root, "*/*/*.json"):
             occurred = _parse_occurred(payload.get("occurred_at"))
             if occurred is None or occurred < start or occurred > end:
                 continue

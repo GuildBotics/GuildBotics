@@ -1,9 +1,11 @@
 """The activity timeline and the diagnostics trace list agree on one trace.
 
-Both screens answer the same question about the same records, so they read
-one implementation. Before that, each folded the events itself and the two
-folds had already drifted apart (only one of them knew about rate limits and
-error logs).
+Both screens answer the same question, so they read one fold. They feed it
+different records, by design: the diagnostics index folds the boundary events
+the device that ran the trace recorded, while the timeline reads the run's
+shared lifecycle record and the shared fact events. The boundary that records
+``command.finished`` / ``command.failed`` is the boundary that finishes the
+run record as ``succeeded`` / ``failed``, so each stage below pairs the two.
 """
 
 from __future__ import annotations
@@ -14,8 +16,12 @@ from typing import Any
 
 import pytest
 
-from guildbotics.app_api.activity_history import build_activity_history
+from guildbotics.app_api.activity_history import (
+    ActivityLifecycle,
+    build_activity_history,
+)
 from guildbotics.entities.team import Person
+from guildbotics.observability.activity_event_store import is_domain_activity_event
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 
 TRACE_ID = "t-chat"
@@ -43,6 +49,11 @@ _BASE: dict[str, Any] = {
     "payload": {"command": "workflows/chat_conversation_workflow"},
 }
 
+_BOUNDARY_OUTCOMES = {
+    "command.finished": "succeeded",
+    "command.failed": "failed",
+}
+
 
 def _stage(*event_types: str) -> list[dict[str, Any]]:
     records = [dict(_BASE)]
@@ -60,17 +71,36 @@ def _stage(*event_types: str) -> list[dict[str, Any]]:
 STAGES: dict[str, list[dict[str, Any]]] = {
     "llm decision finished, agent turn still running": _stage("span.finished"),
     "command boundary closed": _stage("span.finished", "command.finished"),
+    "command boundary failed": _stage("span.finished", "command.failed"),
     "workflow completion recorded": _stage(
         "span.finished", "command.finished", "workflow.completed"
     ),
     "completion missing, retry scheduled": _stage(
-        "command.finished",
+        "command.failed",
         "workflow.completion_missing",
         "chat_dispatch.retry_scheduled",
     ),
-    "rate limited": _stage("workflow.rate_limited"),
-    "provider span failed": _stage("span.failed"),
+    "rate limited": _stage("workflow.rate_limited", "command.failed"),
 }
+
+
+def _lifecycle(records: list[dict[str, Any]]) -> ActivityLifecycle:
+    """The run record the boundary that recorded these events leaves behind."""
+    outcomes = [
+        _BOUNDARY_OUTCOMES[str(item["type"])]
+        for item in records
+        if item["type"] in _BOUNDARY_OUTCOMES
+    ]
+    return ActivityLifecycle(
+        trace_id=TRACE_ID,
+        person_id="alice",
+        source="event_listener",
+        command="workflows/chat_conversation_workflow",
+        status=outcomes[-1] if outcomes else "running",
+        started_at=str(_BASE["timestamp"]),
+        ended_at=str(records[-1]["timestamp"]) if outcomes else "",
+        attributes=dict(_BASE["attributes"]),
+    )
 
 
 def _timeline_status(records: list[dict[str, Any]]) -> str:
@@ -80,7 +110,10 @@ def _timeline_status(records: list[dict[str, Any]]) -> str:
         members=[
             Person(person_id="alice", name="Alice", person_type="agent", is_active=True)
         ],
-        records=records,
+        lifecycles=[_lifecycle(records)],
+        records=[
+            item for item in records if is_domain_activity_event(str(item["type"]))
+        ],
     )
     assert len(history.sessions) == 1
     return str(history.sessions[0].status)

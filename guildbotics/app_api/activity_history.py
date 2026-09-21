@@ -1,6 +1,18 @@
+"""Build the desktop Activity History from lifecycle records and fact events.
+
+A session on the timeline is one execution (trace). Its existence, times and
+status come from the run's one shared lifecycle record -- a task run
+(``state/task-runs``) for a workflow, a session record (``state/sessions``)
+for an interactive member CLI session -- and its links, title and the layers
+above the lifecycle (dispatch decisions, rate limits, completion evidence)
+come from the fact events recorded inside the trace. Nothing here folds
+command boundary events: those stay on the device that ran the command.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -23,10 +35,11 @@ from guildbotics.app_api.models import (
     ActivityHistoryResponse,
     ActivityHistorySession,
 )
+from guildbotics.entities.task_run import TaskRunRecord
 from guildbotics.entities.team import Person
-from guildbotics.observability.trace_status import resolve_trace_status
+from guildbotics.observability.interactive_sessions import INTERACTIVE_SOURCE
+from guildbotics.observability.trace_status import TraceStatus
 from guildbotics.observability.trace_title import (
-    CompletionSummary,
     first_seen_attributes,
     is_read_only_record,
     resolve_trace_title,
@@ -39,6 +52,74 @@ AUTOMATED_WORKFLOW_SOURCES = {"routine", "scheduled", "event_listener"}
 # to belong on the activity timeline, so they never become sessions. Whatever
 # such a run actually changed still surfaces through activity events.
 MANUAL_SESSION_SOURCE = "manual"
+#: A run that ended without incident and without touching anything is not
+#: activity; every other outcome is, on every device alike.
+_QUIET_STATUSES = frozenset({"success", "running", "info"})
+
+
+@dataclass(frozen=True)
+class ActivityLifecycle:
+    """One execution as its shared lifecycle record describes it.
+
+    Attributes:
+        trace_id: The execution's trace (a task run's ``run_id``).
+        person_id: The member the execution ran as.
+        source: The trace source (``interactive``, ``routine``, ``manual``...).
+        command: The command the execution ran.
+        status: The lifecycle state, in the record's own vocabulary.
+        started_at: When the execution started.
+        ended_at: When it ended, or empty while it runs.
+        attributes: The trace attributes the record mirrors (first-seen).
+        summary: The member's completion summary, when the run recorded one.
+        has_evidence: Whether the run recorded an outcome or provider evidence.
+    """
+
+    trace_id: str
+    person_id: str
+    source: str
+    command: str
+    status: str
+    started_at: str
+    ended_at: str = ""
+    attributes: Mapping[str, Any] = field(default_factory=dict)
+    summary: str = ""
+    has_evidence: bool = False
+
+
+def lifecycle_from_run(record: TaskRunRecord) -> ActivityLifecycle:
+    """Describe a workflow run from its task-run record."""
+    return ActivityLifecycle(
+        trace_id=record.run_id,
+        person_id=record.member_id,
+        source=(
+            MANUAL_SESSION_SOURCE
+            if record.execution_mode == "user_initiated"
+            else record.source
+        ),
+        command=record.work_kind,
+        status=record.status,
+        started_at=record.started_at,
+        ended_at=record.finished_at or "",
+        attributes=record.attributes,
+        summary=record.safe_summary if record.result is not None else "",
+        has_evidence=record.result is not None or bool(record.provider_evidence),
+    )
+
+
+def lifecycle_from_session(record: Mapping[str, Any]) -> ActivityLifecycle:
+    """Describe an interactive session from its session record."""
+    attributes = record.get("attributes")
+    return ActivityLifecycle(
+        trace_id=str(record.get("trace_id") or ""),
+        person_id=str(record.get("person_id") or ""),
+        source=INTERACTIVE_SOURCE,
+        command=str(record.get("command") or ""),
+        status=str(record.get("status") or ""),
+        started_at=str(record.get("started_at") or ""),
+        ended_at=str(record.get("last_seen_at") or ""),
+        attributes=attributes if isinstance(attributes, Mapping) else {},
+        has_evidence=True,
+    )
 
 
 def build_activity_history(
@@ -46,9 +127,19 @@ def build_activity_history(
     start: datetime,
     end: datetime,
     members: Iterable[Person],
+    lifecycles: Iterable[ActivityLifecycle],
     records: Iterable[dict[str, Any]],
-    completion_summary: CompletionSummary | None = None,
 ) -> ActivityHistoryResponse:
+    """Assemble the response from lifecycle records and fact records.
+
+    Args:
+        start: The start of the shown window.
+        end: The end of the shown window.
+        members: The team; humans are not shown.
+        lifecycles: One per execution to show as a session.
+        records: The fact records (shared activity events, memory audit
+            events, work targets) in diagnostics-record shape.
+    """
     display_members = [
         ActivityHistoryMember(
             person_id=member.person_id,
@@ -61,11 +152,7 @@ def build_activity_history(
     ]
     display_member_ids = {member.person_id for member in display_members}
     ordered_records = sorted(records, key=_record_sort_key)
-    sessions = _build_sessions(
-        ordered_records,
-        display_member_ids,
-        completion_summary or (lambda _attributes, _person_id: ""),
-    )
+    sessions = _build_sessions(lifecycles, ordered_records, display_member_ids)
     events = _build_events(ordered_records, display_member_ids)
     return ActivityHistoryResponse(
         start=start.isoformat(),
@@ -78,87 +165,97 @@ def build_activity_history(
 
 
 def _build_sessions(
+    lifecycles: Iterable[ActivityLifecycle],
     records: list[dict[str, Any]],
     display_member_ids: set[str],
-    completion_summary: CompletionSummary,
 ) -> list[ActivityHistorySession]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in records:
         trace_id = str(item.get("trace_id") or "")
-        person_id = str(item.get("person_id") or "")
-        if not trace_id or person_id not in display_member_ids:
-            continue
-        grouped.setdefault(trace_id, []).append(item)
+        if trace_id:
+            grouped.setdefault(trace_id, []).append(item)
 
     sessions: list[ActivityHistorySession] = []
-    for trace_id, trace_records in grouped.items():
-        summary = _summarize_trace(trace_id, trace_records, completion_summary)
-        if summary is None:
+    for lifecycle in lifecycles:
+        if not lifecycle.trace_id or lifecycle.person_id not in display_member_ids:
             continue
-        sessions.append(summary)
+        summary = _summarize_trace(lifecycle, grouped.get(lifecycle.trace_id, []))
+        if summary is not None:
+            sessions.append(summary)
     sessions.sort(key=lambda session: _timestamp_sort_key(session.started_at))
     return sessions
 
 
 def _summarize_trace(
-    trace_id: str,
-    records: list[dict[str, Any]],
-    completion_summary: CompletionSummary,
+    lifecycle: ActivityLifecycle, records: list[dict[str, Any]]
 ) -> ActivityHistorySession | None:
-    timestamps = [
-        parsed
-        for item in records
-        if (parsed := parse_timestamp(str(item.get("timestamp", "")))) is not None
-    ]
-    if not timestamps:
+    if lifecycle.source == MANUAL_SESSION_SOURCE:
         return None
-    source = _first_text(records, "source")
-    if source == MANUAL_SESSION_SOURCE:
+    started_at = parse_timestamp(lifecycle.started_at)
+    if started_at is None:
         return None
-    first = records[0]
-    attributes = first_seen_attributes(records)
-    command = _first_text(records, "command")
-    workflow = _first_text(records, "workflow")
-    status = resolve_trace_status(records)
-    started_at = min(timestamps)
-    ended_at = max(timestamps)
+    ended_at = parse_timestamp(lifecycle.ended_at) or _latest_timestamp(
+        records, started_at
+    )
+    # The lifecycle record holds the trace's attributes as recorded at its
+    # start, so it precedes every fact record in the first-seen merge.
+    attributes = first_seen_attributes([{"attributes": lifecycle.attributes}, *records])
+    status = TraceStatus()
+    status.observe(lifecycle.status)
+    for item in records:
+        status.add(item)
+    resolved = status.resolve()
     # A read (PR / issue inspect, memory recall) names what the session looked
     # at, which titles it, but is not its work, so it yields no link.
     worked = [item for item in records if not is_read_only_record(item)]
-    links = links_from_records(worked, first_seen_attributes(worked))
+    links = links_from_records(
+        worked, first_seen_attributes([{"attributes": lifecycle.attributes}, *worked])
+    )
     rate_limit = _rate_limit_from_records(records)
-    mode: ActivitySessionMode = "interactive" if source == "interactive" else "workflow"
+    mode: ActivitySessionMode = (
+        "interactive" if lifecycle.source == INTERACTIVE_SOURCE else "workflow"
+    )
     if (
         mode == "workflow"
-        and source in AUTOMATED_WORKFLOW_SOURCES
+        and lifecycle.source in AUTOMATED_WORKFLOW_SOURCES
+        and resolved in _QUIET_STATUSES
         and rate_limit is None
+        and not lifecycle.has_evidence
         and not _has_workflow_activity_evidence(records, attributes, links)
     ):
         return None
-    person_id = str(first.get("person_id") or "")
     return ActivityHistorySession(
-        trace_id=trace_id,
-        person_id=person_id,
-        source=source,
-        command=command,
-        workflow=workflow,
+        trace_id=lifecycle.trace_id,
+        person_id=lifecycle.person_id,
+        source=lifecycle.source,
+        command=lifecycle.command,
+        workflow="",
         title=resolve_trace_title(
             records,
             attributes,
-            person_id=person_id,
-            command=command,
-            workflow=workflow,
-            completion_summary=completion_summary,
-            fallback=trace_id,
+            person_id=lifecycle.person_id,
+            command=lifecycle.command,
+            completion_summary=lambda _attributes, _person_id: lifecycle.summary,
+            fallback=lifecycle.trace_id,
         ),
         mode=mode,
-        status=status,
+        status=resolved,
         started_at=started_at.isoformat(),
         ended_at=ended_at.isoformat(),
         duration_seconds=max(0.0, (ended_at - started_at).total_seconds()),
         links=links,
         rate_limit=rate_limit,
     )
+
+
+def _latest_timestamp(records: list[dict[str, Any]], floor: datetime) -> datetime:
+    """The end of a still-running execution: its latest record, at the earliest."""
+    latest = floor
+    for item in records:
+        parsed = parse_timestamp(str(item.get("timestamp") or ""))
+        if parsed is not None and parsed > latest:
+            latest = parsed
+    return latest
 
 
 def _has_workflow_activity_evidence(
@@ -170,7 +267,7 @@ def _has_workflow_activity_evidence(
         return True
     if _has_work_target_attributes(attributes):
         return True
-    return any(_record_indicates_work(item) for item in records)
+    return any(str(item.get("kind") or "") == "memory" for item in records)
 
 
 def _has_work_target_attributes(attributes: dict[str, Any]) -> bool:
@@ -191,40 +288,6 @@ def _has_work_target_attributes(attributes: dict[str, Any]) -> bool:
 def _attribute_has_value(attributes: dict[str, Any], key: str) -> bool:
     value = attributes.get(key)
     return value is not None and str(value).strip() != ""
-
-
-def _record_indicates_work(item: dict[str, Any]) -> bool:
-    kind = str(item.get("kind") or "")
-    if kind == "memory":
-        return True
-    payload = item.get("payload")
-    if not isinstance(payload, dict):
-        return False
-    return bool(
-        _first_payload_value(payload, "title", "prompt", "response", "stdout")
-        or _source_payload_has_url(payload)
-    )
-
-
-def _first_payload_value(payload: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = payload.get(key)
-        if value:
-            return str(value)
-    fields = payload.get("fields")
-    if isinstance(fields, dict):
-        for key in keys:
-            value = fields.get(key)
-            if value:
-                return str(value)
-    return ""
-
-
-def _source_payload_has_url(payload: dict[str, Any]) -> bool:
-    source = payload.get("source")
-    return isinstance(source, list) and any(
-        isinstance(item, dict) and item.get("url") for item in source
-    )
 
 
 def _build_events(
@@ -343,14 +406,6 @@ def _rate_limit_from_records(
             or ""
         ),
     )
-
-
-def _first_text(records: list[dict[str, Any]], key: str) -> str:
-    for item in records:
-        value = item.get(key)
-        if value:
-            return str(value)
-    return ""
 
 
 def run_subject_id(attributes: Mapping[str, Any]) -> str:

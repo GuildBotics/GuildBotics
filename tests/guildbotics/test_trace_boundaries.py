@@ -58,7 +58,9 @@ TRACE_ROOTS: dict[tuple[str, str], str] = {
         "guildbotics/drivers/task_scheduler.py",
         "_process_routine_tasks",
     ): "command.finished",
-    ("guildbotics/drivers/task_scheduler.py", "_traced"): "command.finished",
+    # The ticket patrol: a dispatched ticket or a failed selection, through
+    # ``run_with_logging``; an idle patrol opens no trace at all.
+    ("guildbotics/drivers/task_scheduler.py", "_patrol_tickets"): "command.finished",
     # Interactive member CLI sessions.
     ("guildbotics/cli/member.py", "_run_interactive"): "member.command.finished",
 }

@@ -1,18 +1,42 @@
+"""Interactive member CLI sessions: their identity on this device and their
+shared lifecycle record.
+
+An interactive session is the run of one AI CLI conversation's member commands.
+Which commands belong to one session is decided here on the device
+(:class:`InteractiveTraceStore`, under ``local/``): a session is keyed by
+member, workspace, host and thread and expires when idle. What the session did
+is recorded once per session as a shared record (:class:`InteractiveSessionStore`,
+``state/sessions/<trace_id>.json``), rewritten at the end of every command, so
+another device shows the session from that one record instead of folding the
+command events it emitted.
+"""
+
 from __future__ import annotations
 
 import json
 import os
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from guildbotics.utils.fileio import get_workspace_local_path
+from guildbotics.utils.fileio import (
+    get_workspace_local_path,
+    get_workspace_state_path,
+    iter_json_objects,
+)
 from guildbotics.utils.timestamps import parse_iso_datetime
+from guildbotics.utils.workspace_sync_port import (
+    SHARED_RECORD_SCHEMA_VERSION,
+    update_shared_json,
+)
 
 INTERACTIVE_TRACE_STATE_FILE = "interactive_trace_state.json"
+INTERACTIVE_SESSIONS_DIR = "sessions"
+INTERACTIVE_SOURCE = "interactive"
 DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 _STATE_LOCK = threading.Lock()
 
@@ -136,6 +160,88 @@ class InteractiveTraceStore:
             temporary.replace(path)
         except OSError:
             return
+
+
+class InteractiveSessionStore:
+    """The shared lifecycle record of interactive sessions, one file per session.
+
+    Args:
+        root (Path | None): The sessions directory, or None for the selected
+            workspace's ``state/sessions``.
+    """
+
+    def __init__(self, root: Path | None = None) -> None:
+        self._root = root
+
+    @property
+    def root(self) -> Path:
+        return self._root or get_workspace_state_path(INTERACTIVE_SESSIONS_DIR)
+
+    def record(
+        self,
+        session: InteractiveTraceSession,
+        *,
+        command: str,
+        status: str,
+        attributes: Mapping[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Rewrite the session's record with the command that just ended.
+
+        One device writes one session, so there is no concurrent writer to
+        lose to; the read-modify-write span is still held because the sync
+        queue may check the hub's copy out in between.
+
+        Args:
+            session: The session the command ran in.
+            command: The command that ended.
+            status: How it ended: ``success`` or ``failed``. The session shows
+                its last command's result.
+            attributes: The attributes the command recorded. Only the
+                ``github.*`` ones are kept -- the rest (host, workspace path,
+                thread key) describe this machine -- and the session keeps the
+                first value it saw for each, which is how a trace names its
+                first target.
+            now: The time the command ended.
+        """
+        seen_at = _aware(now).isoformat()
+
+        def _apply(current: Any | None) -> dict[str, Any]:
+            record = dict(current) if isinstance(current, dict) else {}
+            merged = dict(record.get("attributes") or {})
+            for key, value in (attributes or {}).items():
+                if str(key).startswith("github.") and value is not None and str(value):
+                    merged.setdefault(str(key), str(value))
+            record.update(
+                {
+                    "schema_version": SHARED_RECORD_SCHEMA_VERSION,
+                    "trace_id": session.trace_id,
+                    "person_id": session.person_id,
+                    "source": INTERACTIVE_SOURCE,
+                    "command": str(record.get("command") or command),
+                    "started_at": str(record.get("started_at") or session.started_at),
+                    "last_seen_at": seen_at,
+                    "status": status,
+                    "attributes": merged,
+                }
+            )
+            return record
+
+        written: dict[str, Any] = update_shared_json(
+            self.root / f"{session.trace_id}.json", _apply
+        )
+        return written
+
+    def list_between(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
+        """Return the sessions active at some point in ``[start, end]``."""
+        sessions: list[dict[str, Any]] = []
+        for payload in iter_json_objects(self.root, "*.json"):
+            started = parse_iso_datetime(str(payload.get("started_at") or ""))
+            seen = parse_iso_datetime(str(payload.get("last_seen_at") or ""))
+            if started is None or seen is None or started > end or seen < start:
+                continue
+            sessions.append(payload)
+        return sessions
 
 
 def interactive_host() -> str:

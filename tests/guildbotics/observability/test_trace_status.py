@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from guildbotics.observability.trace_status import resolve_trace_status
+import pytest
+
+from guildbotics.observability.trace_status import TraceStatus, resolve_trace_status
 
 
 def _event(event_type: str) -> dict[str, Any]:
@@ -103,3 +105,37 @@ def test_trace_with_nothing_recorded_yet_is_info() -> None:
     assert (
         resolve_trace_status([{"kind": "event", "type": "session.pointer"}]) == "info"
     )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle_status", "expected"),
+    [
+        ("running", "running"),
+        ("succeeded", "success"),
+        ("success", "success"),
+        ("failed", "failed"),
+        ("cancelled", "failed"),
+        ("interrupted", "failed"),
+        ("result_unknown", "info"),
+        ("", "info"),
+    ],
+)
+def test_lifecycle_record_is_layer_four(lifecycle_status: str, expected: str) -> None:
+    status = TraceStatus()
+    status.observe(lifecycle_status)
+    assert status.resolve() == expected
+
+
+def test_layers_above_the_lifecycle_still_win() -> None:
+    status = TraceStatus()
+    status.observe("succeeded")
+    status.add(_event("workflow.completion_missing"))
+    status.add(_event("chat_dispatch.retry_scheduled"))
+    assert status.resolve() == "retry_scheduled"
+
+
+def test_fact_events_never_override_a_lifecycle_failure_with_success() -> None:
+    status = TraceStatus()
+    status.observe("failed")
+    status.add(_event("github.pull_request"))
+    assert status.resolve() == "failed"

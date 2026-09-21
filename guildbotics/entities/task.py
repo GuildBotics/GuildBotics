@@ -77,6 +77,32 @@ class Task(BaseModel):
         description="Short reason why the task was selected for the workflow.",
     )
 
+    def trace_attributes(self) -> dict[str, str]:
+        """Correlation attributes that name this ticket in diagnostics.
+
+        The scheduler opens the run's trace with them and the workflow sets
+        them when it runs without a caller trace, so the run names its PR /
+        issue from its first record on every device.
+        """
+        attributes: dict[str, str] = {}
+        if self.repository:
+            attributes["github.repo"] = self.repository
+        if self.title:
+            attributes["github.title"] = self.title
+        if self.pull_request_url:
+            attributes["github.kind"] = "pull_request"
+            attributes["github.url"] = self.pull_request_url
+            match = re.search(r"/pull/(\d+)", self.pull_request_url)
+            if match:
+                attributes["github.number"] = match.group(1)
+        else:
+            attributes["github.kind"] = "issue"
+            if self.url:
+                attributes["github.url"] = self.url
+            if self.number is not None:
+                attributes["github.number"] = str(self.number)
+        return attributes
+
     def __lt__(self, other: "Task") -> bool:
         """
         Compare two tasks based on creation date, oldest first.

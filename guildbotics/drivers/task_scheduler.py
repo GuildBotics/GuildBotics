@@ -2,7 +2,7 @@ import asyncio
 import datetime
 import threading
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Coroutine
 from contextlib import suppress
 from typing import Any
 
@@ -15,10 +15,10 @@ from guildbotics.drivers.execution import (
 )
 from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
 from guildbotics.drivers.utils import run_command
-from guildbotics.entities import Person, ScheduledCommand
+from guildbotics.entities import Person, ScheduledCommand, Task
 from guildbotics.intelligences.agent_environment.snapshot import SnapshotUpkeep
 from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.observability import new_id, trace_scope
+from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 
@@ -286,14 +286,9 @@ class TaskScheduler:
                         scheduled_task.command,
                         run_command(context, scheduled_task.command, "scheduled"),
                         work_id=trace.trace_id,
-                        work_identity={
-                            "kind": "scheduled",
-                            "person_id": person.person_id,
-                            "command": scheduled_task.command,
-                            "slot": start_time.replace(
-                                second=0, microsecond=0
-                            ).isoformat(),
-                        },
+                        work_identity=_slot_identity(
+                            "scheduled", person, scheduled_task.command, start_time
+                        ),
                     )
                 consecutive_errors, should_stop = self._update_consecutive_errors(
                     ok,
@@ -342,25 +337,8 @@ class TaskScheduler:
                 # is picked again once the device is ready.
                 ok = True
             elif routine_command == "workflows/ticket_driven_workflow":
-                # The ticket patrol opens its trace lazily (only when it
-                # dispatches work or fails), so the work id doubles as the
-                # trace id it will use.
-                work_id = new_id()
-                ok = self._run_work(
-                    loop,
-                    person,
-                    "routine",
-                    routine_command,
-                    self._run_routine_ticket_workflow(
-                        context, person, routine_command, work_id
-                    ),
-                    work_id=work_id,
-                    work_identity={
-                        "kind": "routine",
-                        "person_id": person.person_id,
-                        "command": routine_command,
-                        "slot": start_time.replace(second=0, microsecond=0).isoformat(),
-                    },
+                ok = self._patrol_tickets(
+                    loop, context, person, routine_command, start_time
                 )
             else:
                 with trace_scope(
@@ -376,14 +354,9 @@ class TaskScheduler:
                         routine_command,
                         run_command(context, routine_command, "routine"),
                         work_id=trace.trace_id,
-                        work_identity={
-                            "kind": "routine",
-                            "person_id": person.person_id,
-                            "command": routine_command,
-                            "slot": start_time.replace(
-                                second=0, microsecond=0
-                            ).isoformat(),
-                        },
+                        work_identity=_slot_identity(
+                            "routine", person, routine_command, start_time
+                        ),
                     )
             now = datetime.datetime.now()
             next_routine_time = now + datetime.timedelta(
@@ -434,31 +407,31 @@ class TaskScheduler:
                 "next_routine_at": next_at.astimezone().isoformat(),
             }
 
-    async def _run_routine_ticket_workflow(
-        self, context: Context, person: Person, command: str, work_id: str
+    def _patrol_tickets(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        context: Context,
+        person: Person,
+        command: str,
+        start_time: datetime.datetime,
     ) -> bool:
-        """Run the routine ticket workflow via selector and dispatcher.
+        """Select one actionable ticket, then dispatch it as tracked work.
 
-        Ticket selection runs outside any trace so an idle patrol (no
-        actionable ticket) leaves no diagnostics records; a trace is opened
-        only when a ticket is dispatched or the selection itself fails.
+        Selection runs outside any trace and outside the execution boundary:
+        an idle patrol (no actionable ticket) leaves neither diagnostics
+        records nor a task-run record. Both are opened only for a ticket that
+        is actually dispatched -- so a run record means work was taken -- or
+        for a selection that failed, which the trace records as the failure it
+        is. The trace opens with the ticket's attributes so the run names its
+        PR / issue from its first record.
         """
         from guildbotics.drivers.ticket_selector import TicketSelector
         from guildbotics.drivers.utils import run_with_logging
         from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 
-        async def _traced(action: Callable[[], Awaitable[None]]) -> bool:
-            with trace_scope(
-                "routine",
-                person_id=person.person_id,
-                command=command,
-                attributes={"service_run_id": self.service_run_id},
-                trace_id=work_id,
-            ):
-                return await run_with_logging(context, command, "routine", action)
-
+        attributes: dict[str, Any] = {"service_run_id": self.service_run_id}
         try:
-            invocation = await TicketSelector(context).select(person)
+            invocation = self._run(loop, TicketSelector(context).select(person))
         except Exception as exc:
             # Bind outside the except block: Python unbinds `exc` when the
             # block exits, but the closure runs inside run_with_logging.
@@ -467,9 +440,19 @@ class TaskScheduler:
             async def _reraise() -> None:
                 raise failure
 
-            return await _traced(_reraise)
+            with trace_scope(
+                "routine",
+                person_id=person.person_id,
+                command=command,
+                attributes=attributes,
+            ):
+                return bool(
+                    self._run(
+                        loop, run_with_logging(context, command, "routine", _reraise)
+                    )
+                )
 
-        if invocation is None:
+        if not invocation:
             context.logger.debug(
                 f"No active ticket task found for person '{person.person_id}'."
             )
@@ -479,7 +462,28 @@ class TaskScheduler:
             dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
             await dispatcher.dispatch(invocation, person)
 
-        return await _traced(_dispatch)
+        task_payload = invocation.payload.get("task")
+        if isinstance(task_payload, dict):
+            attributes.update(Task.model_validate(task_payload).trace_attributes())
+        with trace_scope(
+            "routine",
+            person_id=person.person_id,
+            command=command,
+            attributes=attributes,
+        ) as trace:
+            return bool(
+                self._run_work(
+                    loop,
+                    person,
+                    "routine",
+                    command,
+                    run_with_logging(context, command, "routine", _dispatch),
+                    work_id=trace.trace_id,
+                    work_identity=_slot_identity(
+                        "routine", person, command, start_time
+                    ),
+                )
+            )
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""
@@ -649,3 +653,15 @@ class TaskScheduler:
             return consecutive_errors, False
         # Reset on success
         return 0, False
+
+
+def _slot_identity(
+    kind: str, person: Person, command: str, start_time: datetime.datetime
+) -> dict[str, str]:
+    """The stable identity of one scheduler slot: the input the boundary claims."""
+    return {
+        "kind": kind,
+        "person_id": person.person_id,
+        "command": command,
+        "slot": start_time.replace(second=0, microsecond=0).isoformat(),
+    }

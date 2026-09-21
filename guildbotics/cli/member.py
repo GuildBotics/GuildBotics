@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections.abc import Awaitable, Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from functools import wraps
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -64,6 +64,7 @@ from guildbotics.commands.errors import (
 from guildbotics.observability import TRACE_ID_ENV, join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
+    InteractiveSessionStore,
     InteractiveTraceSession,
     InteractiveTraceStore,
     interactive_host,
@@ -75,8 +76,10 @@ from guildbotics.sync.activation import (
     PreparedOneShotSync,
     prepare_commit_and_push_once,
 )
+from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
 from guildbotics.workspace.identity import (
     DeviceIdentity,
@@ -2428,14 +2431,32 @@ def _member_command_needs_lease() -> bool:
 def _run_interactive(
     coro, session: InteractiveTraceSession, command: str
 ) -> dict[str, Any]:
+    """Run one member command inside its interactive session.
+
+    The command's start and end are local diagnostics; what the session did
+    is one shared record, rewritten when the command ends, so other devices
+    read the session from that record instead of from its command events.
+    """
     store = InteractiveTraceStore()
+    recorded: dict[str, Any] = {}
+
+    def _observe(item: dict[str, Any]) -> None:
+        attributes = item.get("attributes")
+        if isinstance(attributes, dict):
+            for key, value in attributes.items():
+                recorded.setdefault(str(key), value)
+
+    status = "failed"
     try:
-        with trace_scope(
-            "interactive",
-            person_id=session.person_id,
-            command=command,
-            attributes=session.attributes,
-            trace_id=session.trace_id,
+        with (
+            trace_scope(
+                "interactive",
+                person_id=session.person_id,
+                command=command,
+                attributes=session.attributes,
+                trace_id=session.trace_id,
+            ),
+            diagnostics_record_scope(_observe),
         ):
             _record_member_command_event("member.command.started", command)
             try:
@@ -2451,9 +2472,27 @@ def _run_interactive(
                 )
                 raise
             _record_member_command_event("member.command.finished", command)
+            status = "success"
             return cast(dict[str, Any], result)
     finally:
         store.touch(session)
+        _record_interactive_session(
+            session, command=command, status=status, attributes=recorded
+        )
+
+
+def _record_interactive_session(
+    session: InteractiveTraceSession,
+    *,
+    command: str,
+    status: str,
+    attributes: dict[str, Any],
+) -> None:
+    """Rewrite the session's shared record; recording never fails the command."""
+    with suppress(OSError, SharedWriteBusyError):
+        InteractiveSessionStore().record(
+            session, command=command, status=status, attributes=attributes
+        )
 
 
 def _run_in_owner_trace(coro, command: str) -> Any:

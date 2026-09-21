@@ -12,6 +12,7 @@ from guildbotics.drivers.execution import (
     WorkRejectedError,
 )
 from guildbotics.entities.task_run import TASK_RUN_TERMINAL_STATES
+from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.workspace_sync_port import set_workspace_sync_port
@@ -486,5 +487,88 @@ def test_task_run_begin_keeps_a_recorded_asking_completion_terminal() -> None:
 
         assert again.accepted is False
         assert again.reason == "already_finished"
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_claim_only_begin_records_nothing_and_leaves_nothing_to_finish() -> None:
+    """A workflow that records its own start leaves no record when it declines."""
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        claimed = coordinator.begin(
+            "event-claim", "alice", "device-1", run_id="run-claim", record_start=False
+        )
+        assert claimed.accepted is True
+        assert claimed.record is None
+        assert list(RunStore().records()) == []
+        assert port.changes == []
+
+        # The boundary still finishes the run when the workflow took the work.
+        assert coordinator.finish("run-claim", "succeeded", "done") is None
+        assert list(RunStore().records()) == []
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_claim_only_begin_still_rejects_a_held_identity() -> None:
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        assert coordinator.begin("event-held", "alice", "device-1").accepted is True
+        duplicate = coordinator.begin(
+            "event-held", "alice", "device-2", record_start=False
+        )
+        assert duplicate.accepted is False
+        assert duplicate.reason == "already_running"
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_begin_and_finish_mirror_the_runs_trace_into_its_record() -> None:
+    """The record names the run's work on every device, without the trace."""
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        coordinator = TaskRunCoordinator()
+        with trace_scope(
+            "routine",
+            trace_id="run-trace",
+            attributes={"github.url": "https://github.com/o/r/issues/1"},
+        ) as trace:
+            started = coordinator.begin(
+                "event-trace", "alice", "device-1", run_id="run-trace", source="x"
+            )
+            assert started.record is not None
+            assert started.record.source == "routine"
+            assert started.record.attributes == {
+                "github.url": "https://github.com/o/r/issues/1"
+            }
+            trace.attributes["github.title"] = "Fix it"
+            trace.attributes["github.url"] = "https://github.com/o/r/pull/2"
+            finished = coordinator.finish("run-trace", "succeeded", "done")
+        assert finished is not None
+        # What the trace learned is added; what it started with is kept.
+        assert finished.attributes == {
+            "github.url": "https://github.com/o/r/issues/1",
+            "github.title": "Fix it",
+        }
+    finally:
+        set_workspace_sync_port(None)
+
+
+def test_begin_outside_the_runs_trace_stamps_only_the_fallback_source() -> None:
+    port = _BarrierPort()
+    set_workspace_sync_port(port)
+    try:
+        with trace_scope("manual", trace_id="another", attributes={"k": "v"}):
+            started = TaskRunCoordinator().begin(
+                "event-other", "alice", "device-1", run_id="run-other", source="routine"
+            )
+        assert started.record is not None
+        assert started.record.source == "routine"
+        assert started.record.attributes == {}
     finally:
         set_workspace_sync_port(None)

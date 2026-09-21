@@ -53,6 +53,13 @@ class TaskRunRecord(BaseModel):
     execution_mode: TaskRunExecutionMode
     member_id: str
     device_id: str
+    #: The source of the trace the run is (``routine``, ``event_listener``, ...),
+    #: so another device can place the run on its timeline without the trace.
+    source: str = ""
+    #: The trace's attributes as the run's boundary saw them -- the PR / issue
+    #: or chat thread the run targets. Mirrored so the run names its work on
+    #: every device, not only the one holding the trace.
+    attributes: dict[str, str] = Field(default_factory=dict)
     started_at: str
     finished_at: str | None = None
     status: TaskRunState = "running"

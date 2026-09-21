@@ -10,7 +10,13 @@ from guildbotics.observability.activity_event_store import (
 def test_is_domain_activity_event() -> None:
     assert is_domain_activity_event("github.push") is True
     assert is_domain_activity_event("workflow.completed") is True
-    assert is_domain_activity_event("command.started") is True
+    # A run's lifecycle is one shared record per run, not its boundary events:
+    # those would be read once per command on every device, for nothing the
+    # record does not already say.
+    assert is_domain_activity_event("command.started") is False
+    assert is_domain_activity_event("command.finished") is False
+    assert is_domain_activity_event("member.command.started") is False
+    assert is_domain_activity_event("member.command.failed") is False
     assert is_domain_activity_event("span.finished") is False
     assert is_domain_activity_event("session.pointer") is False
     # Device-health diagnostics never enter the shared store.

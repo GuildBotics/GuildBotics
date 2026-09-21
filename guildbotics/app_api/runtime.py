@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from guildbotics.app_api.activity_history import (
+    ActivityLifecycle,
     build_activity_history,
+    lifecycle_from_run,
+    lifecycle_from_session,
     parse_timestamp,
     run_subject_id,
 )
@@ -171,6 +174,8 @@ from guildbotics.observability.diagnostics_store import (
     DEFAULT_DIAGNOSTICS_MAX_BYTES,
     DiagnosticsStore,
 )
+from guildbotics.observability.event_types import GITHUB_WORK_TARGET_EVENT_TYPE
+from guildbotics.observability.interactive_sessions import InteractiveSessionStore
 from guildbotics.observability.session_transcripts import (
     transcript_detail,
     transcript_retention_days,
@@ -1569,13 +1574,12 @@ class AppRuntime:
         self._refresh_activity_events(
             context.team, sync_start_time, sync_end_time, force=refresh
         )
-        records = self._activity_records_between(start_time, end_time, limit=limit)
         return build_activity_history(
             start=start_time,
             end=end_time,
             members=context.team.members,
-            records=records,
-            completion_summary=_completion_summary_lookup(),
+            lifecycles=_activity_lifecycles_between(start_time, end_time),
+            records=self._activity_records_between(start_time, end_time, limit=limit),
         )
 
     def _refresh_activity_events(
@@ -1619,6 +1623,13 @@ class AppRuntime:
     def _activity_records_between(
         self, start: datetime, end: datetime, *, limit: int
     ) -> list[dict[str, Any]]:
+        """The fact records of the window: what happened inside each execution.
+
+        Executions themselves come from their lifecycle records
+        (:func:`_activity_lifecycles_between`), so the only local diagnostics
+        read here are the work targets member commands declared: they title a
+        session on the device that ran it and are nowhere else.
+        """
         records: list[dict[str, Any]] = []
 
         def includes(value: str) -> bool:
@@ -1643,8 +1654,7 @@ class AppRuntime:
         records.extend(
             item
             for item in diagnostics_records
-            if item.get("type")
-            not in {"session.pointer", "system.started", "system.finished"}
+            if item.get("type") == GITHUB_WORK_TARGET_EVENT_TYPE
         )
         records.extend(
             MemoryAuditStore().list_events(
@@ -2312,6 +2322,20 @@ def _apply_runtime_log_level(log_level: str) -> None:
     agno_log.logger.setLevel(level)
     for handler in agno_log.logger.handlers:
         handler.setLevel(level)
+
+
+def _activity_lifecycles_between(
+    start: datetime, end: datetime
+) -> list[ActivityLifecycle]:
+    """One lifecycle per execution active in the window, from its shared record."""
+    lifecycles = [
+        lifecycle_from_run(record) for record in RunStore().records_between(start, end)
+    ]
+    lifecycles.extend(
+        lifecycle_from_session(record)
+        for record in InteractiveSessionStore().list_between(start, end)
+    )
+    return lifecycles
 
 
 def _completion_summary_lookup() -> CompletionSummary:
