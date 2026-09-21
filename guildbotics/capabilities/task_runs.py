@@ -77,10 +77,16 @@ def _string_attributes(attributes: Mapping[str, Any]) -> dict[str, str]:
 def _first_seen(
     current: Mapping[str, str], incoming: Mapping[str, Any] | None
 ) -> dict[str, str]:
-    """Merge attributes the way a trace is titled: the earliest value wins."""
+    """Merge attributes the way a trace is titled: the earliest value wins.
+
+    The incoming values cross the shared boundary here, so this is where they
+    are masked and bounded like every other shared payload: a PR title can
+    quote a secret value as easily as an error message can.
+    """
     merged = dict(current)
-    for key, value in _string_attributes(incoming or {}).items():
-        merged.setdefault(key, value)
+    shared: dict[str, Any] = redact_for_sharing(_string_attributes(incoming or {}))
+    for key, value in shared.items():
+        merged.setdefault(key, str(value))
     return merged
 
 

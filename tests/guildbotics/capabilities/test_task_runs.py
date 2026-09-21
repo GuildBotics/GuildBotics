@@ -441,3 +441,35 @@ def test_records_between_returns_runs_active_in_the_window(tmp_path):
         "overlaps-start",
         "still-running",
     ]
+
+
+def test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded(
+    tmp_path, monkeypatch, fake_keyring
+):
+    """A PR title can quote a secret value as easily as an error message can."""
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "sk-live-secret-12345"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret-12345")
+    store = RunStore(tmp_path / "runs")
+
+    started = store.start_record(
+        "run-1",
+        work_kind="demo",
+        execution_mode="autonomous",
+        member_id="aiko",
+        attributes={"github.title": "leaked sk-live-secret-12345 in title"},
+    )
+    finished = store.finish_record(
+        "run-1", status="succeeded", attributes={"github.repo": "x" * 1000}
+    )
+
+    assert started.attributes["github.title"] == "leaked *** in title"
+    assert finished is not None
+    assert len(finished.attributes["github.repo"]) <= 500
+    assert "sk-live-secret-12345" not in (
+        tmp_path / "runs/run-1/result.json"
+    ).read_text(encoding="utf-8")

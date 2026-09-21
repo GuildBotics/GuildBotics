@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +102,9 @@ class ActivityEventStore:
         costs a slot nor pushes a fact out of the window.
         """
         events: list[dict[str, Any]] = []
-        for year, month in _months_between(start, end):
+        for year, month in _months_between(
+            _reached(start, -_OFFSET_REACH), _reached(end, _OFFSET_REACH)
+        ):
             for payload in iter_json_objects(self.root / year / month, "*.json"):
                 if str(payload.get("kind") or "") in COMMAND_LIFECYCLE_EVENT_TYPES:
                     continue
@@ -184,6 +186,21 @@ def _as_diagnostics_record(event: dict[str, Any]) -> dict[str, Any]:
         "local_trace_id": event.get("local_trace_id") or "",
         "device_id": event.get("device_id") or "",
     }
+
+
+#: An event is filed under the calendar month of its own timestamp, in the
+#: recording device's UTC offset, while a window is asked in UTC. Offsets stay
+#: within a day of UTC, so a window reaches one day into the neighbouring
+#: months to find an event that a device on another offset filed there.
+_OFFSET_REACH = timedelta(days=1)
+
+
+def _reached(moment: datetime, reach: timedelta) -> datetime:
+    """``moment + reach``, or ``moment`` itself at the ends of the calendar."""
+    try:
+        return moment + reach
+    except OverflowError:
+        return moment
 
 
 def _months_between(start: datetime, end: datetime) -> list[tuple[str, str]]:

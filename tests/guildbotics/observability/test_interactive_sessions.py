@@ -178,3 +178,32 @@ def test_session_store_lists_sessions_active_in_the_window(tmp_path):
         )
         == []
     )
+
+
+def test_session_targets_cross_the_shared_boundary_masked_and_bounded(
+    tmp_path, monkeypatch, fake_keyring
+):
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "sk-live-secret-12345"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret-12345")
+    store = InteractiveSessionStore(tmp_path / "sessions")
+
+    record = store.record(
+        _session(),
+        command="member github pr inspect",
+        status="success",
+        attributes={
+            "github.title": "leaked sk-live-secret-12345 in title",
+            "github.repo": "x" * 1000,
+        },
+    )
+
+    assert record["attributes"]["github.title"] == "leaked *** in title"
+    assert len(record["attributes"]["github.repo"]) <= 500
+    assert "sk-live-secret-12345" not in (tmp_path / "sessions/trace-1.json").read_text(
+        encoding="utf-8"
+    )

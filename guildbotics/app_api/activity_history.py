@@ -198,8 +198,11 @@ def _summarize_trace(
         records, started_at
     )
     # The lifecycle record holds the trace's attributes as recorded at its
-    # start, so it precedes every fact record in the first-seen merge.
-    attributes = first_seen_attributes([{"attributes": lifecycle.attributes}, *records])
+    # start, so it precedes every fact record in the first-seen merge. It is
+    # one more record for the read-only rule: a session whose first target
+    # was only inspected names it, but does not link to it.
+    described = [{"attributes": dict(lifecycle.attributes)}, *records]
+    attributes = first_seen_attributes(described)
     status = TraceStatus()
     status.observe(lifecycle.status)
     for item in records:
@@ -207,10 +210,8 @@ def _summarize_trace(
     resolved = status.resolve()
     # A read (PR / issue inspect, memory recall) names what the session looked
     # at, which titles it, but is not its work, so it yields no link.
-    worked = [item for item in records if not is_read_only_record(item)]
-    links = links_from_records(
-        worked, first_seen_attributes([{"attributes": lifecycle.attributes}, *worked])
-    )
+    worked = [item for item in described if not is_read_only_record(item)]
+    links = links_from_records(worked, first_seen_attributes(worked))
     rate_limit = _rate_limit_from_records(records)
     mode: ActivitySessionMode = (
         "interactive" if lifecycle.source == INTERACTIVE_SOURCE else "workflow"

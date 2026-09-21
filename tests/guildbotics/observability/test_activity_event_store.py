@@ -106,7 +106,7 @@ def test_record_enforces_shared_boundary_guarantees(
     assert payload["run_id"] == "run-1"
 
 
-def test_list_between_reads_only_the_months_of_the_window(
+def test_list_between_reads_only_the_months_the_window_can_reach(
     tmp_path, monkeypatch
 ) -> None:
     store = ActivityEventStore(tmp_path / "events")
@@ -131,7 +131,8 @@ def test_list_between_reads_only_the_months_of_the_window(
         datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC)
     )
 
-    assert read == ["2026/07", "2026/08"]
+    # The window's months, plus the neighbours one day of UTC offset can reach.
+    assert read == ["2026/06", "2026/07", "2026/08", "2026/09"]
     assert [item["occurred_at"] for item in events] == ["2026-07-15T09:00:00Z"]
 
 
@@ -157,6 +158,38 @@ def test_boundary_events_an_earlier_build_shared_do_not_count_toward_the_limit(
 
     events = store.list_between(
         datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC), limit=2
+    )
+
+    assert [item["kind"] for item in events] == ["github.push"]
+
+
+def test_list_between_finds_events_another_offset_filed_in_a_neighbouring_month(
+    tmp_path,
+) -> None:
+    """An event is filed under the calendar month of its own offset; the window
+    is asked in UTC. ``2026-08-31T13:00-12:00`` is ``2026-09-01T01:00Z`` and
+    lives in ``2026/08``."""
+    store = ActivityEventStore(tmp_path / "events")
+    path = store.record(
+        {"type": "github.push", "timestamp": "2026-08-31T13:00:00-12:00"}
+    )
+    assert path.parent.parent.name == "2026" and path.parent.name == "08"
+
+    events = store.list_between(
+        datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 2, tzinfo=UTC)
+    )
+
+    assert [item["occurred_at"] for item in events] == ["2026-08-31T13:00:00-12:00"]
+
+
+def test_list_between_accepts_an_unbounded_window(tmp_path) -> None:
+    # A caller asking for everything hands in the ends of the calendar; the
+    # neighbouring-month reach must not step past them.
+    store = ActivityEventStore(tmp_path / "events")
+    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+
+    events = store.list_between(
+        datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
     )
 
     assert [item["kind"] for item in events] == ["github.push"]

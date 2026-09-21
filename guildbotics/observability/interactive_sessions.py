@@ -28,6 +28,7 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
     iter_json_objects,
 )
+from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.timestamps import parse_iso_datetime
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
@@ -209,9 +210,19 @@ class InteractiveSessionStore:
         def _apply(current: Any | None) -> dict[str, Any]:
             record = dict(current) if isinstance(current, dict) else {}
             merged = dict(record.get("attributes") or {})
-            for key, value in (attributes or {}).items():
-                if str(key).startswith("github.") and value is not None and str(value):
-                    merged.setdefault(str(key), str(value))
+            # The targets cross the shared boundary here, so they are masked
+            # and bounded like every other shared payload.
+            targets: dict[str, Any] = redact_for_sharing(
+                {
+                    str(key): str(value)
+                    for key, value in (attributes or {}).items()
+                    if str(key).startswith("github.")
+                    and value is not None
+                    and str(value)
+                }
+            )
+            for key, value in targets.items():
+                merged.setdefault(key, str(value))
             record.update(
                 {
                     "schema_version": SHARED_RECORD_SCHEMA_VERSION,

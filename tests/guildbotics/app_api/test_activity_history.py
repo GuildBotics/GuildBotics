@@ -429,6 +429,44 @@ def test_inspected_pull_request_titles_the_session_but_is_not_its_work() -> None
     assert session.links == []
 
 
+def test_inspected_target_kept_by_the_session_record_is_not_a_link() -> None:
+    # ``InteractiveSessionStore`` keeps the first ``github.*`` attributes a
+    # session's commands recorded, ``github.action: inspected`` included. The
+    # record names the session; it does not turn the read into its work.
+    inspected = _lifecycle(
+        "t-int",
+        source="interactive",
+        command="member github pr inspect",
+        attributes={
+            "github.action": "inspected",
+            "github.kind": "pull_request",
+            "github.number": "528",
+            "github.url": "https://github.com/o/r/pull/528",
+            "github.title": "Copilot の利用枠を表示する",
+        },
+    )
+    session = _session(inspected)
+    assert session.title == "Copilot の利用枠を表示する"
+    assert session.links == []
+
+    # Work on a different item later links that item only: the inspected
+    # target does not come back through the first-seen merge.
+    later = _work_target_record("")
+    later["trace_id"] = "t-int"
+    later["attributes"] = {
+        **later["attributes"],
+        "github.kind": "issue",
+        "github.number": "9",
+        "github.url": "https://github.com/o/r/issues/9",
+        "github.title": "A later, different item",
+    }
+    session = _session(inspected, [later])
+    assert session.title == "Copilot の利用枠を表示する"
+    assert [(link.kind, link.label) for link in session.links] == [
+        ("issue", "Issue #9")
+    ]
+
+
 def test_worked_pull_request_titles_and_links_the_session() -> None:
     session = _session(_lifecycle(), [_work_target_record("")])
     assert session.title == "Copilot の利用枠を表示する"
