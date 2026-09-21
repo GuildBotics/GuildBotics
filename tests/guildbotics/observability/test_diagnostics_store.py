@@ -8,7 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.session_transcripts import (
+    SYSTEM_TRACE_PREFIX,
+    SessionTranscriptStore,
+)
 
 TWO_RECORDS = 2
 
@@ -237,12 +243,27 @@ def test_records_between_returns_every_matching_record(tmp_path: Path) -> None:
     assert records[0]["trace_id"] == "t0"
 
 
-def test_transcript_exists_asks_only_for_the_file(tmp_path: Path) -> None:
+def test_transcript_exists_asks_only_for_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Activity history asks this once per session on every refresh, so
+    the answer must come from the file's existence, never from its contents."""
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "command.started"))
+    store.start_system_session("svc-1")
+
+    def _no_reading(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        raise AssertionError("transcript_exists must not read a transcript")
+
+    monkeypatch.setattr(SessionTranscriptStore, "_read", staticmethod(_no_reading))
+
+    system_trace_id = store.latest_system_trace_id()
+    assert system_trace_id is not None
 
     assert store.transcript_exists("t1") is True
     assert store.transcript_exists("elsewhere") is False
+    assert store.transcript_exists(system_trace_id) is True
+    assert store.transcript_exists(f"{SYSTEM_TRACE_PREFIX}nope") is False
 
 
 def test_records_after_reads_disk_rows_beyond_memory_window(tmp_path: Path) -> None:
