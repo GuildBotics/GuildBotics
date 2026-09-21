@@ -223,13 +223,18 @@ def test_fact_records_without_a_lifecycle_make_events_but_no_session() -> None:
 
 
 @pytest.mark.parametrize("status", ["succeeded", "running"])
-def test_quiet_automated_run_without_evidence_is_hidden(status: str) -> None:
-    # A scheduled command that ran and touched nothing is not activity.
+@pytest.mark.parametrize("source", ["scheduled", "routine", "event_listener", ""])
+def test_quiet_automated_run_without_evidence_is_hidden(
+    status: str, source: str
+) -> None:
+    # A scheduled command that ran and touched nothing is not activity. The
+    # rule does not read the source: a run record written before the source
+    # was recorded (an idle patrol of the past) hides the same way.
     history = _history(
         [
             _lifecycle(
                 "t-cron",
-                source="scheduled",
+                source=source,
                 command="daily-report",
                 status=status,
                 attributes={},

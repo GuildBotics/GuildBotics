@@ -47,13 +47,14 @@ from guildbotics.observability.trace_title import (
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 type ActivitySessionMode = Literal["interactive", "workflow"]
-AUTOMATED_WORKFLOW_SOURCES = {"routine", "scheduled", "event_listener"}
 # Desktop command runs (commands page and hotkey quick run) fire far too often
 # to belong on the activity timeline, so they never become sessions. Whatever
 # such a run actually changed still surfaces through activity events.
 MANUAL_SESSION_SOURCE = "manual"
-#: A run that ended without incident and without touching anything is not
-#: activity; every other outcome is, on every device alike.
+#: An automated run that ended without incident and without touching anything
+#: is not activity; every other outcome is, on every device alike. Automated
+#: means every workflow run that is not manual, whatever its source says (a
+#: record written before the source was recorded says nothing).
 _QUIET_STATUSES = frozenset({"success", "running", "info"})
 
 
@@ -217,7 +218,6 @@ def _summarize_trace(
     )
     if (
         mode == "workflow"
-        and lifecycle.source in AUTOMATED_WORKFLOW_SOURCES
         and resolved in _QUIET_STATUSES
         and rate_limit is None
         and not lifecycle.has_evidence
