@@ -7,7 +7,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.observability.event_types import SYNC_UPDATE_REJECTED
+from guildbotics.observability.event_types import (
+    COMMAND_LIFECYCLE_EVENT_TYPES,
+    SYNC_UPDATE_REJECTED,
+)
 from guildbotics.utils.fileio import get_workspace_state_path, iter_json_objects
 from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
@@ -91,12 +94,22 @@ class ActivityEventStore:
         *,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        """Return the fact events that occurred in ``[start, end]``.
+
+        Only the months the window touches are read, and a boundary event an
+        earlier build shared (``command.*`` / ``member.command.*``, now local
+        diagnostics) is skipped before ``limit`` is applied, so it neither
+        costs a slot nor pushes a fact out of the window.
+        """
         events: list[dict[str, Any]] = []
-        for payload in iter_json_objects(self.root, "*/*/*.json"):
-            occurred = _parse_occurred(payload.get("occurred_at"))
-            if occurred is None or occurred < start or occurred > end:
-                continue
-            events.append(payload)
+        for year, month in _months_between(start, end):
+            for payload in iter_json_objects(self.root / year / month, "*.json"):
+                if str(payload.get("kind") or "") in COMMAND_LIFECYCLE_EVENT_TYPES:
+                    continue
+                occurred = _parse_occurred(payload.get("occurred_at"))
+                if occurred is None or occurred < start or occurred > end:
+                    continue
+                events.append(payload)
         events.sort(
             key=lambda item: (str(item.get("occurred_at")), str(item.get("event_id")))
         )
@@ -171,6 +184,16 @@ def _as_diagnostics_record(event: dict[str, Any]) -> dict[str, Any]:
         "local_trace_id": event.get("local_trace_id") or "",
         "device_id": event.get("device_id") or "",
     }
+
+
+def _months_between(start: datetime, end: datetime) -> list[tuple[str, str]]:
+    """The ``(year, month)`` directories a window can hold events in."""
+    months: list[tuple[str, str]] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        months.append((f"{year:04d}", f"{month:02d}"))
+        year, month = year + month // 12, month % 12 + 1
+    return months
 
 
 def _year_month(occurred_at: str) -> tuple[str, str]:

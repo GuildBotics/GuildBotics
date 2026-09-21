@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 
+from guildbotics.observability import activity_event_store as store_module
 from guildbotics.observability.activity_event_store import (
     ActivityEventStore,
     is_domain_activity_event,
@@ -103,3 +104,59 @@ def test_record_enforces_shared_boundary_guarantees(
     assert payload["nested"]["note"] == "*** again"
     assert payload["error_category"] == "failed"
     assert payload["run_id"] == "run-1"
+
+
+def test_list_between_reads_only_the_months_of_the_window(
+    tmp_path, monkeypatch
+) -> None:
+    store = ActivityEventStore(tmp_path / "events")
+    for occurred in (
+        "2026-06-30T23:00:00Z",
+        "2026-07-15T09:00:00Z",
+        "2026-09-01T00:00:00Z",
+    ):
+        store.record(
+            {"type": "github.push", "timestamp": occurred, "person_id": "aiko"}
+        )
+    read: list[str] = []
+    real = store_module.iter_json_objects
+
+    def _observed(directory, pattern):
+        read.append(directory.relative_to(tmp_path / "events").as_posix())
+        return real(directory, pattern)
+
+    monkeypatch.setattr(store_module, "iter_json_objects", _observed)
+
+    events = store.list_between(
+        datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC)
+    )
+
+    assert read == ["2026/07", "2026/08"]
+    assert [item["occurred_at"] for item in events] == ["2026-07-15T09:00:00Z"]
+
+
+def test_boundary_events_an_earlier_build_shared_do_not_count_toward_the_limit(
+    tmp_path,
+) -> None:
+    """A boundary event an earlier build shared is skipped, not read as a fact.
+
+    The cap used to count every record in the window, so a week of old
+    ``member.command.*`` files pushed the week's pushes and pull requests out
+    of the last thousand records and off the timeline.
+    """
+    store = ActivityEventStore(tmp_path / "events")
+    for index in range(5):
+        store.record(
+            {
+                "type": "member.command.started",
+                "timestamp": f"2026-08-10T09:00:{index:02d}+00:00",
+                "person_id": "aiko",
+            }
+        )
+    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+
+    events = store.list_between(
+        datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC), limit=2
+    )
+
+    assert [item["kind"] for item in events] == ["github.push"]
