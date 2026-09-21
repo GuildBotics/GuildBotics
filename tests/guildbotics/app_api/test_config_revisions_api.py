@@ -27,7 +27,7 @@ CLI_MAPPING = "intelligences/cli_agent_mapping.yml"
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)

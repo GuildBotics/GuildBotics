@@ -232,7 +232,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point cwd and HOME at the tmp tree and clear config overrides."""
     monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)

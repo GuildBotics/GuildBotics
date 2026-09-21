@@ -29,7 +29,7 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A hermetic temp workspace acting as the runtime working directory."""
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
