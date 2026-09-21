@@ -606,7 +606,9 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
         member_module._run_interactive(failing(), session, "member git push")
 
     record = json.loads(
-        (tmp_path / ".guildbotics/state/sessions/trace-target.json").read_text()
+        (tmp_path / ".guildbotics/state/sessions/trace-target.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert record["command"] == "member github pr inspect"
     assert record["status"] == "failed"

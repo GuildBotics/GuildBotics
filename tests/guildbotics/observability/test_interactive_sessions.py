@@ -125,7 +125,10 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
     assert sorted(path.name for path in (tmp_path / "sessions").iterdir()) == [
         "trace-1.json"
     ]
-    assert json.loads((tmp_path / "sessions/trace-1.json").read_text()) == record
+    assert (
+        json.loads((tmp_path / "sessions/trace-1.json").read_text(encoding="utf-8"))
+        == record
+    )
     assert record["schema_version"] == SHARED_RECORD_SCHEMA_VERSION
     assert record["trace_id"] == "trace-1"
     assert record["person_id"] == "aiko"
