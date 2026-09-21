@@ -396,6 +396,8 @@ export type ActivityHistorySession = {
     retry_after_at: string;
     retry_after_text: string;
   } | null;
+  /** Whether this device holds the execution's transcript, i.e. a detail view to link to. */
+  detail_available: boolean;
 };
 
 /**
@@ -1636,15 +1638,11 @@ export async function getGlobalRecords(limit = 200): Promise<TraceDetailResponse
 export async function getActivityHistory(params: {
   start: string;
   end: string;
-  limit?: number;
   refresh?: boolean;
   syncStart?: string;
   syncEnd?: string;
 }): Promise<ActivityHistoryResponse> {
   const search = new URLSearchParams({ start: params.start, end: params.end });
-  if (params.limit) {
-    search.set("limit", String(params.limit));
-  }
   if (params.refresh) {
     search.set("refresh", "true");
   }

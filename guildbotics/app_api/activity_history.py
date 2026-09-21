@@ -11,7 +11,7 @@ command boundary events: those stay on the device that ran the command.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -129,6 +129,7 @@ def build_activity_history(
     members: Iterable[Person],
     lifecycles: Iterable[ActivityLifecycle],
     records: Iterable[dict[str, Any]],
+    detail_available: Callable[[str], bool],
 ) -> ActivityHistoryResponse:
     """Assemble the response from lifecycle records and fact records.
 
@@ -139,6 +140,9 @@ def build_activity_history(
         lifecycles: One per execution to show as a session.
         records: The fact records (shared activity events, memory audit
             events, work targets) in diagnostics-record shape.
+        detail_available: Whether this device holds the transcript of a
+            trace, by trace id. Every other part of a session is shared and
+            reads the same on every device.
     """
     display_members = [
         ActivityHistoryMember(
@@ -152,7 +156,9 @@ def build_activity_history(
     ]
     display_member_ids = {member.person_id for member in display_members}
     ordered_records = sorted(records, key=_record_sort_key)
-    sessions = _build_sessions(lifecycles, ordered_records, display_member_ids)
+    sessions = _build_sessions(
+        lifecycles, ordered_records, display_member_ids, detail_available
+    )
     events = _build_events(ordered_records, display_member_ids)
     return ActivityHistoryResponse(
         start=start.isoformat(),
@@ -168,6 +174,7 @@ def _build_sessions(
     lifecycles: Iterable[ActivityLifecycle],
     records: list[dict[str, Any]],
     display_member_ids: set[str],
+    detail_available: Callable[[str], bool],
 ) -> list[ActivityHistorySession]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in records:
@@ -181,6 +188,7 @@ def _build_sessions(
             continue
         summary = _summarize_trace(lifecycle, grouped.get(lifecycle.trace_id, []))
         if summary is not None:
+            summary.detail_available = detail_available(lifecycle.trace_id)
             sessions.append(summary)
     sessions.sort(key=lambda session: _timestamp_sort_key(session.started_at))
     return sessions

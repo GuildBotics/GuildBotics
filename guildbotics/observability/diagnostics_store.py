@@ -263,26 +263,32 @@ class DiagnosticsStore:
             if self._transcripts is None:
                 return []
             if trace_id.startswith(SYSTEM_TRACE_PREFIX):
-                _, records = self._transcripts.system_records(
+                records = self._transcripts.system_records(
                     trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
                 )
             else:
-                _, records = self._transcripts.trace_records(trace_id)
+                records = self._transcripts.trace_records(trace_id)
         records.sort(key=_record_timestamp_sort_key)
         return records
 
     def transcript_exists(self, trace_id: str) -> bool:
+        """Whether this device holds the transcript of ``trace_id``.
+
+        Only the file's existence is asked: the Activity history asks this once
+        per session on every refresh to decide whether a detail link would
+        open anything, and must not read every transcript to find out.
+        """
         with self._lock:
             self._refresh_path_locked()
             if self._transcripts is None:
                 return False
             if trace_id.startswith(SYSTEM_TRACE_PREFIX):
-                exists, _ = self._transcripts.system_records(
+                path = self._transcripts.system_path(
                     trace_id.removeprefix(SYSTEM_TRACE_PREFIX)
                 )
             else:
-                exists, _ = self._transcripts.trace_records(trace_id)
-            return exists
+                path = self._transcripts.trace_path(trace_id)
+            return path.is_file()
 
     def get_summary(
         self, trace_id: str, completion_summary: CompletionSummary | None = None
@@ -317,7 +323,7 @@ class DiagnosticsStore:
             session_id = self._transcripts.latest_system_session_id(list(self._records))
             if session_id is None:
                 return []
-            _, records = self._transcripts.system_records(session_id)
+            records = self._transcripts.system_records(session_id)
         records.sort(key=_record_timestamp_sort_key)
         return records[-max(1, limit) :]
 
@@ -330,16 +336,12 @@ class DiagnosticsStore:
         return f"{SYSTEM_TRACE_PREFIX}{session_id}" if session_id else None
 
     def records_between(
-        self,
-        *,
-        includes: Callable[[str], bool],
-        limit: int = 1000,
+        self, *, includes: Callable[[str], bool]
     ) -> list[dict[str, Any]]:
-        """Return records whose timestamp satisfies ``includes``.
+        """Return every record whose timestamp satisfies ``includes``, oldest first.
 
         The caller owns timestamp parsing so this store remains a generic JSONL
-        persistence layer. Returned records are oldest-first and capped to the
-        most recent ``limit`` matching rows.
+        persistence layer.
         """
         with self._lock:
             self._refresh_path_locked()
@@ -351,7 +353,7 @@ class DiagnosticsStore:
                 not in {"session.pointer", "system.started", "system.finished"}
             ]
         records.sort(key=_record_timestamp_sort_key)
-        return records[-max(1, limit) :]
+        return records
 
     def records_after(
         self,

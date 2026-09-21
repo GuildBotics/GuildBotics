@@ -23,7 +23,6 @@ from guildbotics.workspace.validation import MAX_SHARED_JOURNAL_BYTES
 
 MEMORY_AUDIT_DIR = "memory_events"
 MEMORY_AUDIT_SUFFIX = ".jsonl"
-DEFAULT_MEMORY_AUDIT_LIMIT = 5000
 # The audit journal is shared between devices, so its self-imposed bound is the
 # same one the commit boundary enforces for append journals.
 DEFAULT_MEMORY_AUDIT_MAX_BYTES = MAX_SHARED_JOURNAL_BYTES
@@ -203,12 +202,13 @@ class MemoryAuditStore:
         since: str | None = None,
         until: str | None = None,
         trace_id: str | None = None,
-        limit: int | None = DEFAULT_MEMORY_AUDIT_LIMIT,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Return matching events from every device's journal, newest first.
 
         Args:
-            limit (int | None): The most events to return, or None for all.
+            limit (int | None): The most events to return, or None (the
+                default) for every match.
         """
         # Read backwards so that events sharing a timestamp keep the newest
         # first: the sort below is stable, and a journal is in append order.

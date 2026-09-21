@@ -87,19 +87,13 @@ class ActivityEventStore:
         write_shared_json(path, event, workspace_root=self.workspace_root)
         return path
 
-    def list_between(
-        self,
-        start: datetime,
-        end: datetime,
-        *,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return the fact events that occurred in ``[start, end]``.
+    def list_between(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
+        """Return every fact event that occurred in ``[start, end]``.
 
         Only the months the window touches are read, and a boundary event an
         earlier build shared (``command.*`` / ``member.command.*``, now local
-        diagnostics) is skipped before ``limit`` is applied, so it neither
-        costs a slot nor pushes a fact out of the window.
+        diagnostics) is skipped. Nothing caps the count: a cap on raw records
+        would silently drop the older side of a busy window.
         """
         events: list[dict[str, Any]] = []
         for year, month in _months_between(
@@ -115,22 +109,11 @@ class ActivityEventStore:
         events.sort(
             key=lambda item: (str(item.get("occurred_at")), str(item.get("event_id")))
         )
-        if limit is not None:
-            events = events[-limit:]
         return events
 
-    def records_between(
-        self,
-        start: datetime,
-        end: datetime,
-        *,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]]:
+    def records_between(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         """Return events in the diagnostics-record shape used by Activity history."""
-        return [
-            _as_diagnostics_record(item)
-            for item in self.list_between(start, end, limit=limit)
-        ]
+        return [_as_diagnostics_record(item) for item in self.list_between(start, end)]
 
 
 def _to_activity_event(record: dict[str, Any]) -> dict[str, Any]:

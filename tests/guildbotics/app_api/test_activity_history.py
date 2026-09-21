@@ -10,6 +10,7 @@ provider-neutral trigger label while the run is still in progress.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -112,6 +113,7 @@ def _history(
     lifecycles: list[ActivityLifecycle],
     records: list[dict[str, Any]] | None = None,
     members: list[Person] | None = None,
+    detail_available: Callable[[str], bool] = lambda _trace_id: False,
 ) -> Any:
     return build_activity_history(
         start=START,
@@ -119,6 +121,7 @@ def _history(
         members=members or _members(),
         lifecycles=lifecycles,
         records=records or [],
+        detail_available=detail_available,
     )
 
 

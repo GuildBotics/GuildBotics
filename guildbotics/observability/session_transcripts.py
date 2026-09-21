@@ -195,13 +195,11 @@ class SessionTranscriptStore:
         self._append(session.path, item)
         return TranscriptRoute(index_records=[item])
 
-    def trace_records(self, trace_id: str) -> tuple[bool, list[dict[str, Any]]]:
-        path = self.trace_path(trace_id)
-        return path.is_file(), self._read(path)
+    def trace_records(self, trace_id: str) -> list[dict[str, Any]]:
+        return self._read(self.trace_path(trace_id))
 
-    def system_records(self, session_id: str) -> tuple[bool, list[dict[str, Any]]]:
-        path = self.sessions_dir / f"{_safe_id(session_id)}.jsonl"
-        return path.is_file(), self._read(path)
+    def system_records(self, session_id: str) -> list[dict[str, Any]]:
+        return self._read(self.system_path(session_id))
 
     def latest_system_session_id(
         self, index_records: list[dict[str, Any]]
@@ -215,6 +213,9 @@ class SessionTranscriptStore:
 
     def trace_path(self, trace_id: str) -> Path:
         return self.sessions_dir / f"{_safe_id(trace_id)}.jsonl"
+
+    def system_path(self, session_id: str) -> Path:
+        return self.sessions_dir / f"{_safe_id(session_id)}.jsonl"
 
     def prune_expired(self, *, now: datetime | None = None) -> list[Path]:
         cutoff = (now or datetime.now(UTC)) - timedelta(

@@ -1522,7 +1522,6 @@ class AppRuntime:
         *,
         start: str | None = None,
         end: str | None = None,
-        limit: int = 1000,
         refresh: bool = False,
         sync_start: str | None = None,
         sync_end: str | None = None,
@@ -1579,7 +1578,12 @@ class AppRuntime:
             end=end_time,
             members=context.team.members,
             lifecycles=_activity_lifecycles_between(start_time, end_time),
-            records=self._activity_records_between(start_time, end_time, limit=limit),
+            records=self._activity_records_between(start_time, end_time),
+            detail_available=(
+                self._diagnostics_store.transcript_exists
+                if self._diagnostics_store is not None
+                else lambda _trace_id: False
+            ),
         )
 
     def _refresh_activity_events(
@@ -1621,50 +1625,36 @@ class AppRuntime:
             )
 
     def _activity_records_between(
-        self, start: datetime, end: datetime, *, limit: int
+        self, start: datetime, end: datetime
     ) -> list[dict[str, Any]]:
         """The fact records of the window: what happened inside each execution.
 
         Executions themselves come from their lifecycle records
         (:func:`_activity_lifecycles_between`), so the only local diagnostics
         read here are the work targets member commands declared: they title a
-        session on the device that ran it and are nowhere else.
+        session on the device that ran it and are nowhere else. Every record
+        keeps the trace id it was recorded with, whichever device recorded it:
+        the facts of an execution belong to its session on every device, and
+        whether *this* device can show the execution's detail is a separate
+        question (``ActivityHistorySession.detail_available``).
         """
-        records: list[dict[str, Any]] = []
 
         def includes(value: str) -> bool:
             return _timestamp_in_range(value, start, end)
 
-        diagnostics_records: list[dict[str, Any]] = (
-            self._diagnostics_store.records_between(includes=includes, limit=limit)
-            if self._diagnostics_store is not None
-            else []
-        )
-        # Shared activity events may originate on another device; only traces
-        # this device's diagnostics actually know get a detail link.
-        local_trace_ids = {
-            trace_id
-            for item in diagnostics_records
-            if (trace_id := item.get("trace_id"))
-        }
-        for item in ActivityEventStore().records_between(start, end, limit=limit):
-            if item.get("trace_id") not in local_trace_ids:
-                item["trace_id"] = None
-            records.append(item)
-        records.extend(
-            item
-            for item in diagnostics_records
-            if item.get("type") == GITHUB_WORK_TARGET_EVENT_TYPE
-        )
+        records = ActivityEventStore().records_between(start, end)
+        if self._diagnostics_store is not None:
+            records.extend(
+                item
+                for item in self._diagnostics_store.records_between(includes=includes)
+                if item.get("type") == GITHUB_WORK_TARGET_EVENT_TYPE
+            )
         records.extend(
             MemoryAuditStore().list_events(
-                since=start.isoformat(),
-                until=end.isoformat(),
-                limit=limit,
+                since=start.isoformat(), until=end.isoformat()
             )
         )
-        records.sort(key=_activity_record_sort_key)
-        return records[-max(1, limit) :]
+        return records
 
     def list_memory_events(
         self,
@@ -2384,15 +2374,6 @@ def _to_trace_record(item: dict[str, Any]) -> TraceRecord:
 def _trace_record_sort_key(record: TraceRecord) -> datetime:
     return parse_memory_audit_timestamp(record.timestamp) or datetime.min.replace(
         tzinfo=UTC
-    )
-
-
-def _activity_record_sort_key(item: dict[str, Any]) -> datetime:
-    parsed = parse_timestamp(str(item.get("timestamp") or ""))
-    return (
-        parsed.astimezone(UTC)
-        if parsed is not None
-        else datetime.min.replace(tzinfo=UTC)
     )
 
 

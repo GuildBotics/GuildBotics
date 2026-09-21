@@ -53,8 +53,7 @@ def test_trace_routes_full_records_to_session_and_summary_to_index(
     assert io_route.index_records == []
     assert error_route.index_records == []
     assert [item["type"] for item in finished.index_records] == ["command.finished"]
-    exists, records = store.trace_records("trace-1")
-    assert exists is True
+    records = store.trace_records("trace-1")
     assert [item["kind"] for item in records] == [
         "event",
         "io",
@@ -178,7 +177,6 @@ def test_transcript_reader_skips_malformed_rows(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    exists, records = store.trace_records("trace-1")
+    records = store.trace_records("trace-1")
 
-    assert exists is True
     assert len(records) == 1

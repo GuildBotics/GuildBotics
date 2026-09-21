@@ -845,6 +845,10 @@ class ActivityHistorySession(BaseModel):
     duration_seconds: float = 0
     links: list[ActivityHistoryLink] = Field(default_factory=list)
     rate_limit: ActivityHistoryRateLimit | None = None
+    # Whether this device holds the execution's transcript. The session itself
+    # is shared and looks the same on every device; only the detail view is
+    # local, so the frontend offers its link from this and not from trace_id.
+    detail_available: bool = False
 
 
 class ActivityHistoryRejection(BaseModel):

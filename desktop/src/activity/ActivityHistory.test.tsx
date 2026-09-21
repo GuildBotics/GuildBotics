@@ -92,6 +92,7 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
           url: "https://github.com/owner/repo/issues/42",
         },
       ],
+      detail_available: true,
     },
   ],
   events: [
@@ -563,6 +564,42 @@ describe("ActivityHistoryPage", () => {
     expect(screen.getByRole("button", { name: "workflows/ticket_driven_workflow" })).toHaveClass(
       "activity-session-week",
     );
+  });
+
+  it.each([
+    ["links the block title to its executions when their detail is on this device", true],
+    ["shows the block title without a link when its detail is elsewhere", false],
+  ])("%s", async (_name, detailAvailable) => {
+    vi.mocked(getActivityHistory).mockResolvedValue({
+      ...ACTIVITY_FIXTURE,
+      events: [],
+      sessions: [
+        {
+          ...ACTIVITY_FIXTURE.sessions[0],
+          trace_id: "shared",
+          title: "Shared work",
+          detail_available: detailAvailable,
+        },
+      ],
+    });
+    renderActivity();
+    const user = userEvent.setup({ delay: null });
+
+    await user.hover(await screen.findByRole("button", { name: "Shared work" }));
+
+    const title = await waitFor(() => {
+      const inCard = screen
+        .getAllByText("Shared work")
+        .find((element) => element.closest(".activity-hover-card"));
+      expect(inCard).toBeDefined();
+      return inCard as HTMLElement;
+    });
+    const link = title.closest("a");
+    if (detailAvailable) {
+      expect(link).toHaveAttribute("href", "/diagnostics?tab=executions&trace_ids=shared");
+    } else {
+      expect(link).toBe(null);
+    }
   });
 
   it("marks a merged mixed-mode block with the mixed style", async () => {
@@ -1645,6 +1682,34 @@ describe("activityBlockExecutionUrl", () => {
     expect(activityBlockExecutionUrl(blocks[0])).toBe(
       "/diagnostics?tab=executions&trace_ids=first%2Csecond",
     );
+  });
+
+  it("links only the executions whose detail this device holds", () => {
+    const blocks = buildActivityBlocks([
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "here",
+        started_at: "2026-07-01T12:31:00Z",
+        ended_at: "2026-07-01T12:34:00Z",
+      },
+      {
+        ...ACTIVITY_FIXTURE.sessions[0],
+        trace_id: "elsewhere",
+        detail_available: false,
+        started_at: "2026-07-01T12:55:00Z",
+        ended_at: "2026-07-01T12:58:00Z",
+      },
+    ]);
+
+    expect(activityBlockExecutionUrl(blocks[0])).toBe("/diagnostics?tab=executions&trace_ids=here");
+  });
+
+  it("offers no link when no execution of the block has its detail here", () => {
+    const blocks = buildActivityBlocks([
+      { ...ACTIVITY_FIXTURE.sessions[0], trace_id: "elsewhere", detail_available: false },
+    ]);
+
+    expect(activityBlockExecutionUrl(blocks[0])).toBe("");
   });
 });
 

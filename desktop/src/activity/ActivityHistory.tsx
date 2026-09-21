@@ -93,7 +93,6 @@ export type ActivityBlockMode = ActivitySessionMode | "mixed";
 const SESSION_MODE_ORDER: ActivitySessionMode[] = ["workflow", "interactive"];
 
 const HOURS = ["03:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00"];
-const ACTIVITY_LIMIT = 1000;
 const ACTIVITY_BLOCK_MINUTES = 60;
 const EVENT_STACK_WINDOW_MS = 60 * 1000;
 const EVENT_STACK_GAP_PX = 18;
@@ -145,7 +144,6 @@ export function ActivityHistoryPage() {
         return await getActivityHistory({
           start: range.start.toISOString(),
           end: range.end.toISOString(),
-          limit: ACTIVITY_LIMIT,
           refresh: forceRefresh.current,
           syncStart: syncRange.start.toISOString(),
           syncEnd: syncRange.end.toISOString(),
@@ -1083,8 +1081,11 @@ function activityLinkTimestamp(link: ActivityHistoryLink): number {
   return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
 }
 
+// A session is shared and reads the same on every device, but its detail
+// view (the transcript) exists only where it ran, so the link opens the
+// executions this device can actually show and nothing when it has none.
 export function activityBlockExecutionUrl(block: ActivityBlock): string {
-  const traceIds = uniqueTraceIds(block.sessions);
+  const traceIds = detailTraceIds(block.sessions);
   if (traceIds.length === 0) {
     return "";
   }
@@ -1093,10 +1094,13 @@ export function activityBlockExecutionUrl(block: ActivityBlock): string {
   return `/diagnostics?${search.toString()}`;
 }
 
-function uniqueTraceIds(sessions: ActivityHistorySession[]): string[] {
+function detailTraceIds(sessions: ActivityHistorySession[]): string[] {
   return Array.from(
     new Set(
-      sessions.map((session) => session.trace_id.trim()).filter((traceId) => traceId.length > 0),
+      sessions
+        .filter((session) => session.detail_available)
+        .map((session) => session.trace_id.trim())
+        .filter((traceId) => traceId.length > 0),
     ),
   );
 }
