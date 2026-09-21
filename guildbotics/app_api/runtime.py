@@ -421,14 +421,9 @@ class AppRuntime:
         members: Sequence[Person | PersonConfigSummary]
         try:
             context = self._get_context()
-        except AppApiError as exc:
+        except AppApiError:
             status = self.get_config_status()
-            missing_path = Path(str(exc.context.get("path", "")))
-            if (
-                exc.code != "config_not_found"
-                or missing_path.name != "project.yml"
-                or status.project_file_exists
-            ):
+            if status.project_file_exists:
                 raise
             project = Project()
             members = (
