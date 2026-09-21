@@ -19,6 +19,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
+HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -88,6 +89,15 @@ def test_temp_workspace_member_flow_before_project_init(
             "/config/members", headers=AUTH_HEADERS, json=member_request
         )
         team = client.get("/team", headers=AUTH_HEADERS)
+        missing_avatar = client.get(
+            "/config/members/local-agent/avatar", headers=AUTH_HEADERS
+        )
+        uploaded_avatar = client.post(
+            "/config/members/local-agent/avatar",
+            headers=AUTH_HEADERS,
+            files={"file": ("avatar.png", b"avatar", "image/png")},
+        )
+        avatar = client.get("/config/members/local-agent/avatar", headers=AUTH_HEADERS)
         snapshot = client.get("/config/members/local-agent", headers=AUTH_HEADERS)
         updated = client.put(
             "/config/members/local-agent",
@@ -111,6 +121,10 @@ def test_temp_workspace_member_flow_before_project_init(
     assert not (config_dir / "team/project.yml").exists()
     assert created.status_code == HTTP_OK
     assert team.status_code == HTTP_OK
+    assert missing_avatar.status_code == HTTP_NOT_FOUND
+    assert uploaded_avatar.status_code == HTTP_OK
+    assert avatar.status_code == HTTP_OK
+    assert avatar.content == b"avatar"
     assert team.json()["members"] == [
         {
             "person_id": "local-agent",

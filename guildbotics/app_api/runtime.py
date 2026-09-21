@@ -418,14 +418,18 @@ class AppRuntime:
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
-        status = self.get_config_status()
         members: Sequence[Person | PersonConfigSummary]
-        if status.project_file_exists:
+        try:
             context = self._get_context()
-            project = context.team.project
-            members = context.team.members
-            default_person_id = context.team.get_default_person_id()
-        else:
+        except AppApiError as exc:
+            status = self.get_config_status()
+            missing_path = Path(str(exc.context.get("path", "")))
+            if (
+                exc.code != "config_not_found"
+                or missing_path.name != "project.yml"
+                or status.project_file_exists
+            ):
+                raise
             project = Project()
             members = (
                 SimplePersonSetupService().list_person_configs(
@@ -435,6 +439,10 @@ class AppRuntime:
                 else []
             )
             default_person_id = ""
+        else:
+            project = context.team.project
+            members = context.team.members
+            default_person_id = context.team.get_default_person_id()
         return TeamSummary(
             project=ProjectSummary(
                 name=getattr(project, "name", ""),
