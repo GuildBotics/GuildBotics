@@ -10,8 +10,6 @@ from guildbotics.integrations.github.github_utils import create_github_client
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
-ACTIVITY_DUPLICATE_SCAN_LIMIT = 50_000
-
 
 class GitHubActivityEventPoller:
     """Poll the configured GitHub Project and persist closed work once.
@@ -239,9 +237,7 @@ def _timestamp_between(timestamp: str, start: datetime, end: datetime) -> bool:
 def _existing_activity_ids(start: datetime, end: datetime) -> set[str]:
     return {
         str(attributes.get("github.activity_id"))
-        for item in ActivityEventStore().list_between(
-            start, end, limit=ACTIVITY_DUPLICATE_SCAN_LIMIT
-        )
+        for item in ActivityEventStore().list_between(start, end)
         if isinstance((attributes := item.get("attributes")), dict)
         and attributes.get("github.activity_id")
     }

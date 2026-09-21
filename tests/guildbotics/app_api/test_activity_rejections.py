@@ -43,6 +43,7 @@ def _events(*records: dict[str, Any]):
         members=[Person(person_id="alice", name="Alice", person_type="agent")],
         lifecycles=[],
         records=list(records),
+        detail_available=lambda _trace_id: False,
     ).events
 
 

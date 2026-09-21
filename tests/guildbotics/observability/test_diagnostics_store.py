@@ -206,16 +206,43 @@ def test_get_records_orders_mixed_offset_timestamps_by_instant(tmp_path: Path) -
     ]
 
 
-def test_records_between_orders_and_limits_mixed_offset_timestamps_by_instant(
+def test_records_between_orders_mixed_offset_timestamps_by_instant(
     tmp_path: Path,
 ) -> None:
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     store.record(_event("t1", "command.started", timestamp="2026-07-01T09:00:00+09:00"))
     store.record(_event("t2", "command.started", timestamp="2026-07-01T00:30:00Z"))
 
-    records = store.records_between(includes=lambda _timestamp: True, limit=1)
+    records = store.records_between(includes=lambda _timestamp: True)
 
-    assert [record["trace_id"] for record in records] == ["t2"]
+    assert [record["trace_id"] for record in records] == ["t1", "t2"]
+
+
+def test_records_between_returns_every_matching_record(tmp_path: Path) -> None:
+    """No cap on the count: the Activity history shows a window whole, and a
+    cap on raw rows would silently drop the older side of a busy one."""
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    for index in range(1200):
+        store.record(
+            _event(
+                f"t{index}",
+                "command.started",
+                timestamp=f"2026-07-01T00:{index // 60:02d}:{index % 60:02d}Z",
+            )
+        )
+
+    records = store.records_between(includes=lambda _timestamp: True)
+
+    assert len(records) == 1200
+    assert records[0]["trace_id"] == "t0"
+
+
+def test_transcript_exists_asks_only_for_the_file(tmp_path: Path) -> None:
+    store = DiagnosticsStore(tmp_path / "diag.jsonl")
+    store.record(_event("t1", "command.started"))
+
+    assert store.transcript_exists("t1") is True
+    assert store.transcript_exists("elsewhere") is False
 
 
 def test_records_after_reads_disk_rows_beyond_memory_window(tmp_path: Path) -> None:
@@ -333,7 +360,7 @@ def test_reads_pick_up_records_appended_by_another_process(tmp_path: Path) -> No
         _event("t1", "command.started", timestamp="2026-07-02T22:40:00+09:00")
     )
 
-    records = reader.records_between(includes=lambda _timestamp: True, limit=10)
+    records = reader.records_between(includes=lambda _timestamp: True)
     assert [record["trace_id"] for record in records] == ["t1"]
     assert [record["type"] for record in records] == ["command.started"]
     assert reader.list_traces()[0]["trace_id"] == "t1"

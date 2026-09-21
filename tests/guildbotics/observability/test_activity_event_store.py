@@ -136,15 +136,10 @@ def test_list_between_reads_only_the_months_the_window_can_reach(
     assert [item["occurred_at"] for item in events] == ["2026-07-15T09:00:00Z"]
 
 
-def test_boundary_events_an_earlier_build_shared_do_not_count_toward_the_limit(
+def test_boundary_events_an_earlier_build_shared_are_not_read_as_facts(
     tmp_path,
 ) -> None:
-    """A boundary event an earlier build shared is skipped, not read as a fact.
-
-    The cap used to count every record in the window, so a week of old
-    ``member.command.*`` files pushed the week's pushes and pull requests out
-    of the last thousand records and off the timeline.
-    """
+    """A boundary event an earlier build shared is skipped, not read as a fact."""
     store = ActivityEventStore(tmp_path / "events")
     for index in range(5):
         store.record(
@@ -157,7 +152,7 @@ def test_boundary_events_an_earlier_build_shared_do_not_count_toward_the_limit(
     store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
 
     events = store.list_between(
-        datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC), limit=2
+        datetime(2026, 8, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC)
     )
 
     assert [item["kind"] for item in events] == ["github.push"]

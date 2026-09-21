@@ -114,6 +114,7 @@ def _timeline_status(records: list[dict[str, Any]]) -> str:
         records=[
             item for item in records if is_domain_activity_event(str(item["type"]))
         ],
+        detail_available=lambda _trace_id: False,
     )
     assert len(history.sessions) == 1
     return str(history.sessions[0].status)
