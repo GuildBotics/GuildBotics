@@ -282,7 +282,7 @@ def test_describe_command_input_paths_reaches_nothing_when_grants_are_broken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     # A grant that names a file cannot be resolved.
     (home / "notes").write_text("not a directory", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))

@@ -110,7 +110,7 @@ def _device(
 @pytest.fixture
 def home(monkeypatch, tmp_path: Path) -> Path:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(device_module, "load_shared_grants", lambda: SharedGrants())
     monkeypatch.setattr(device_module, "load_local_grants", lambda: LocalGrants())

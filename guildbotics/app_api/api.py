@@ -1371,8 +1371,8 @@ def create_app(
         try:
             payload = request.model_dump()
             status = app_runtime.get_config_status()
-            if _get_existing_config_dir(status) is not None:
-                payload["config_dir"] = _resolve_existing_config_dir(app_runtime)
+            if status.config_dir is not None:
+                payload["config_dir"] = status.config_dir
             member = PersonSetupInput.model_validate(payload)
 
             receipt = apply_config_write(
@@ -1395,14 +1395,7 @@ def create_app(
         person_id: str,
         _: None = Depends(require_token),
     ) -> PersonConfigSnapshot:
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                context={"project": str(status.project_file)},
-                status_code=400,
-            )
+        config_dir = _resolve_member_config_dir(app_runtime)
         revisions = config_repository(config_dir).revisions(
             person_config_paths(person_id)
         )
@@ -1434,7 +1427,7 @@ def create_app(
                     "person_id_mismatch",
                     status_code=400,
                 )
-            config_dir = _resolve_existing_config_dir(app_runtime)
+            config_dir = _resolve_member_config_dir(app_runtime)
             payload["config_dir"] = config_dir
 
             receipt = apply_config_write(
@@ -1464,7 +1457,7 @@ def create_app(
         request: MemberDeleteRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
-        config_dir = _resolve_existing_config_dir(app_runtime)
+        config_dir = _resolve_member_config_dir(app_runtime)
         try:
             receipt = apply_config_write(
                 config_dir,
@@ -1640,13 +1633,7 @@ def create_app(
                 "invalid_session_token",
                 status_code=401,
             )
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                status_code=400,
-            )
+        config_dir = _resolve_member_config_dir(app_runtime)
         from guildbotics.app_api.avatar import find_avatar_file
 
         avatar_path = find_avatar_file(config_dir, person_id)
@@ -1666,13 +1653,7 @@ def create_app(
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                status_code=400,
-            )
+        config_dir = _resolve_member_config_dir(app_runtime)
         from guildbotics.app_api.avatar import read_upload, store_avatar
 
         try:
@@ -1707,13 +1688,7 @@ def create_app(
         person_id: str,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                status_code=400,
-            )
+        config_dir = _resolve_member_config_dir(app_runtime)
         try:
             member_config = SimplePersonSetupService().read_person_config(
                 config_dir=config_dir,
@@ -1756,13 +1731,7 @@ def create_app(
         person_id: str,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
-        status = app_runtime.get_config_status()
-        config_dir = _get_existing_config_dir(status)
-        if config_dir is None:
-            raise AppApiError(
-                "project_not_found",
-                status_code=400,
-            )
+        config_dir = _resolve_member_config_dir(app_runtime)
         try:
             member_config = SimplePersonSetupService().read_person_config(
                 config_dir=config_dir,
@@ -1861,6 +1830,17 @@ def _resolve_existing_config_dir(app_runtime: AppRuntime) -> Path:
     config_dir = _get_existing_config_dir(status)
     if config_dir is not None:
         return config_dir
+    raise AppApiError(
+        "project_not_found",
+        context={"project": str(status.project_file)},
+        status_code=400,
+    )
+
+
+def _resolve_member_config_dir(app_runtime: AppRuntime) -> Path:
+    status = app_runtime.get_config_status()
+    if status.config_dir is not None:
+        return status.config_dir
     raise AppApiError(
         "project_not_found",
         context={"project": str(status.project_file)},

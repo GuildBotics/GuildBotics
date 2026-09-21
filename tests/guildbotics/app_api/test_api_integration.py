@@ -19,6 +19,7 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
+HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -28,7 +29,7 @@ AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A hermetic temp workspace acting as the runtime working directory."""
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
@@ -65,6 +66,80 @@ def _init_project(
         },
     )
     assert response.status_code == HTTP_OK
+
+
+def test_temp_workspace_member_flow_before_project_init(
+    client: TestClient, workspace: Path
+) -> None:
+    config_dir = workspace / ".guildbotics/config"
+    member_request = {
+        "config_dir": str(config_dir),
+        "person_type": "agent",
+        "person_id": "local-agent",
+        "person_name": "Local Agent",
+        "is_active": True,
+        "github_username": "",
+        "git_email": "",
+        "roles": ["architect"],
+        "speaking_style": "concise",
+    }
+
+    with client:
+        created = client.post(
+            "/config/members", headers=AUTH_HEADERS, json=member_request
+        )
+        team = client.get("/team", headers=AUTH_HEADERS)
+        missing_avatar = client.get(
+            "/config/members/local-agent/avatar", headers=AUTH_HEADERS
+        )
+        uploaded_avatar = client.post(
+            "/config/members/local-agent/avatar",
+            headers=AUTH_HEADERS,
+            files={"file": ("avatar.png", b"avatar", "image/png")},
+        )
+        avatar = client.get("/config/members/local-agent/avatar", headers=AUTH_HEADERS)
+        snapshot = client.get("/config/members/local-agent", headers=AUTH_HEADERS)
+        updated = client.put(
+            "/config/members/local-agent",
+            headers=AUTH_HEADERS,
+            json={
+                **member_request,
+                "original_person_id": "local-agent",
+                "person_name": "Renamed Agent",
+                "expected_revisions": snapshot.json()["revisions"],
+            },
+        )
+        refreshed_team = client.get("/team", headers=AUTH_HEADERS)
+        deleted = client.request(
+            "DELETE",
+            "/config/members/local-agent",
+            headers=AUTH_HEADERS,
+            json={"config_dir": str(config_dir)},
+        )
+        empty_team = client.get("/team", headers=AUTH_HEADERS)
+
+    assert not (config_dir / "team/project.yml").exists()
+    assert created.status_code == HTTP_OK
+    assert team.status_code == HTTP_OK
+    assert missing_avatar.status_code == HTTP_NOT_FOUND
+    assert uploaded_avatar.status_code == HTTP_OK
+    assert avatar.status_code == HTTP_OK
+    assert avatar.content == b"avatar"
+    assert team.json()["members"] == [
+        {
+            "person_id": "local-agent",
+            "name": "Local Agent",
+            "person_type": "agent",
+            "is_active": True,
+            "roles": ["architect"],
+        }
+    ]
+    assert snapshot.status_code == HTTP_OK
+    assert snapshot.json()["person_name"] == "Local Agent"
+    assert updated.status_code == HTTP_OK
+    assert refreshed_team.json()["members"][0]["name"] == "Renamed Agent"
+    assert deleted.status_code == HTTP_OK
+    assert empty_team.json()["members"] == []
 
 
 def test_temp_workspace_init_project_member_team_flow(

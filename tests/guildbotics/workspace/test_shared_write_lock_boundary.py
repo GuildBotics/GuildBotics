@@ -59,7 +59,7 @@ from tests.guildbotics.workspace.test_config_repository import shared_write_lock
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))

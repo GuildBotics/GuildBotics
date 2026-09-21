@@ -63,7 +63,7 @@ class _Sidecar:
 @pytest.fixture
 def sidecar(tmp_path: Path) -> Iterator[_Sidecar]:
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     running_sidecar = _start_sidecar(tmp_path, home)
     try:
         yield running_sidecar
@@ -197,8 +197,9 @@ def test_sidecar_restores_backend_active_workspace(tmp_path: Path) -> None:
     startup = tmp_path / "startup"
     workspace = tmp_path / "selected"
     home = tmp_path / "home"
-    for path in (startup, workspace, home):
-        path.mkdir()
+    startup.mkdir()
+    workspace.mkdir()
+    home.mkdir(exist_ok=True)
     (workspace / ".guildbotics" / "config").mkdir(parents=True)
     state_path = home / ".guildbotics" / "data" / "active-workspace.json"
     state_path.parent.mkdir(parents=True)
