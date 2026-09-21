@@ -6,6 +6,7 @@ import pytest
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
+from guildbotics.observability import trace_scope
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import get_language, set_language, t
@@ -112,6 +113,22 @@ class StubContext:
                 kwargs["person_id"],
             )
         return self.invoke_response
+
+
+@pytest.mark.asyncio
+async def test_run_is_recorded_under_the_trace_that_dispatched_it(tmp_path):
+    """The run is its trace: the boundary that dispatched the ticket recorded
+    the run under the trace id, and the member's completion lands on it."""
+    task = Task(id="1", title="T", description="D", status=Task.READY)
+    ctx = StubContext(task, StubTicketManager(task))
+
+    with trace_scope("routine", trace_id="trace-7", person_id="aiko"):
+        await ticket_driven_workflow.main(ctx)
+
+    _command, _args, kwargs, execution_context = ctx.invocations[0]
+    assert kwargs["workflow_run_id"] == "trace-7"
+    assert execution_context["run_id"] == "trace-7"
+    assert TaskRunStore(None).status("trace-7").completed
 
 
 @pytest.mark.asyncio
@@ -321,6 +338,8 @@ async def test_run_posts_safe_error_message_without_leaking_details(
 
 
 def test_ticket_trace_attributes_for_issue_and_pull_request():
+    # The scheduler opens the run's trace with these and the workflow sets
+    # them when it runs without a caller trace; both read the one definition.
     issue = Task(
         id="1",
         title="T",
@@ -329,7 +348,7 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
         number=42,
         url="https://github.com/owner/repo/issues/42",
     )
-    assert ticket_driven_workflow._ticket_trace_attributes(issue) == {
+    assert issue.trace_attributes() == {
         "github.repo": "repo",
         "github.title": "T",
         "github.kind": "issue",
@@ -344,7 +363,7 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
         repository="repo",
         pull_request_url="https://github.com/owner/repo/pull/7",
     )
-    assert ticket_driven_workflow._ticket_trace_attributes(pr) == {
+    assert pr.trace_attributes() == {
         "github.repo": "repo",
         "github.title": "T",
         "github.kind": "pull_request",

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +11,7 @@ from guildbotics.observability.event_types import (
     COMMAND_LIFECYCLE_EVENT_TYPES,
     SYNC_UPDATE_REJECTED,
 )
-from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.utils.fileio import get_workspace_state_path, iter_json_objects
 from guildbotics.utils.shared_redaction import (
     MAX_SHARED_TEXT_CHARS,
     redact_for_sharing,
@@ -23,12 +22,15 @@ from guildbotics.utils.workspace_sync_port import (
 )
 
 _MAX_SAFE_SUMMARY_CHARS = MAX_SHARED_TEXT_CHARS
-# Explicit allowlist of what shared activity history carries (workspace sync
-# plan §8.1): provider domain outcomes, workflow / command start, completion,
-# and failure, and retry / abandonment decisions. Device-health events
-# (credential probes, diagnostics and verify runs, scheduler worker failures)
-# stay in local diagnostics; a new event type must opt in here.
-_DOMAIN_EVENT_TYPES = COMMAND_LIFECYCLE_EVENT_TYPES | frozenset(
+# Explicit allowlist of what shared activity history carries: the facts of a
+# run -- provider domain outcomes, workflow completion evidence, and retry /
+# abandonment decisions. The run's own lifecycle (start, end, status) is one
+# shared record per run (``state/task-runs`` for a workflow, ``state/sessions``
+# for an interactive session), so the ``command.*`` / ``member.command.*``
+# boundary events stay in local diagnostics. Device-health events (credential
+# probes, diagnostics and verify runs, scheduler worker failures) stay local
+# too; a new event type must opt in here.
+_DOMAIN_EVENT_TYPES = frozenset(
     {
         "github.push",
         "github.pull_request",
@@ -92,20 +94,24 @@ class ActivityEventStore:
         *,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
+        """Return the fact events that occurred in ``[start, end]``.
+
+        Only the months the window touches are read, and a boundary event an
+        earlier build shared (``command.*`` / ``member.command.*``, now local
+        diagnostics) is skipped before ``limit`` is applied, so it neither
+        costs a slot nor pushes a fact out of the window.
+        """
         events: list[dict[str, Any]] = []
-        if not self.root.exists():
-            return events
-        for path in sorted(self.root.glob("*/*/*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-            occurred = _parse_occurred(payload.get("occurred_at"))
-            if occurred is None or occurred < start or occurred > end:
-                continue
-            events.append(payload)
+        for year, month in _months_between(
+            _reached(start, -_OFFSET_REACH), _reached(end, _OFFSET_REACH)
+        ):
+            for payload in iter_json_objects(self.root / year / month, "*.json"):
+                if str(payload.get("kind") or "") in COMMAND_LIFECYCLE_EVENT_TYPES:
+                    continue
+                occurred = _parse_occurred(payload.get("occurred_at"))
+                if occurred is None or occurred < start or occurred > end:
+                    continue
+                events.append(payload)
         events.sort(
             key=lambda item: (str(item.get("occurred_at")), str(item.get("event_id")))
         )
@@ -180,6 +186,31 @@ def _as_diagnostics_record(event: dict[str, Any]) -> dict[str, Any]:
         "local_trace_id": event.get("local_trace_id") or "",
         "device_id": event.get("device_id") or "",
     }
+
+
+#: An event is filed under the calendar month of its own timestamp, in the
+#: recording device's UTC offset, while a window is asked in UTC. Offsets stay
+#: within a day of UTC, so a window reaches one day into the neighbouring
+#: months to find an event that a device on another offset filed there.
+_OFFSET_REACH = timedelta(days=1)
+
+
+def _reached(moment: datetime, reach: timedelta) -> datetime:
+    """``moment + reach``, or ``moment`` itself at the ends of the calendar."""
+    try:
+        return moment + reach
+    except OverflowError:
+        return moment
+
+
+def _months_between(start: datetime, end: datetime) -> list[tuple[str, str]]:
+    """The ``(year, month)`` directories a window can hold events in."""
+    months: list[tuple[str, str]] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        months.append((f"{year:04d}", f"{month:02d}"))
+        year, month = year + month // 12, month % 12 + 1
+    return months
 
 
 def _year_month(occurred_at: str) -> tuple[str, str]:

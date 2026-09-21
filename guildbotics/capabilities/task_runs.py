@@ -9,7 +9,7 @@ an event log.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,10 +21,11 @@ from guildbotics.entities.task_run import (
     TaskRunRecord,
     TaskRunResult,
 )
+from guildbotics.observability import current_trace
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.timestamps import utc_now_iso
+from guildbotics.utils.timestamps import parse_iso_datetime, utc_now_iso
 from guildbotics.utils.workspace_sync_port import (
     SHARED_RECORD_SCHEMA_VERSION,
     ChangeSet,
@@ -34,6 +35,59 @@ from guildbotics.workspace.identity import ensure_device_identity
 
 RUN_ENV = "GUILDBOTICS_RUN_ID"
 TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
+
+
+def chat_event_work_identity(
+    service: str, channel_id: str, event_id: str
+) -> dict[str, str]:
+    """The stable input identity one chat event has as a run.
+
+    The dispatcher claims it before running the workflow and the workflow
+    records it when it takes the batch, so both name the same run.
+    """
+    return {
+        "kind": "chat-event",
+        "event_id": event_id,
+        "service": service,
+        "channel_id": channel_id,
+    }
+
+
+def trace_stamp(run_id: str, fallback_source: str = "") -> tuple[str, dict[str, str]]:
+    """The source and attributes a run record mirrors from its trace.
+
+    A run is its trace (``run_id == trace_id``), so only that trace may be
+    mirrored: a boundary that exits after its trace closed, or inside another
+    one, stamps the fallback source and nothing else.
+    """
+    trace = current_trace()
+    if trace is None or trace.trace_id != run_id:
+        return fallback_source, {}
+    return trace.source, _string_attributes(trace.attributes)
+
+
+def _string_attributes(attributes: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        str(key): str(value)
+        for key, value in attributes.items()
+        if value is not None and str(value) != ""
+    }
+
+
+def _first_seen(
+    current: Mapping[str, str], incoming: Mapping[str, Any] | None
+) -> dict[str, str]:
+    """Merge attributes the way a trace is titled: the earliest value wins.
+
+    The incoming values cross the shared boundary here, so this is where they
+    are masked and bounded like every other shared payload: a PR title can
+    quote a secret value as easily as an error message can.
+    """
+    merged = dict(current)
+    shared: dict[str, Any] = redact_for_sharing(_string_attributes(incoming or {}))
+    for key, value in shared.items():
+        merged.setdefault(key, str(value))
+    return merged
 
 
 @dataclass(frozen=True)
@@ -177,6 +231,8 @@ class RunStore:
         execution_mode: TaskRunExecutionMode,
         member_id: str,
         work_identity: dict[str, str] | None = None,
+        source: str = "",
+        attributes: Mapping[str, Any] | None = None,
     ) -> TaskRunRecord:
         """Create the running record used by the common execution boundary."""
 
@@ -186,6 +242,8 @@ class RunStore:
             execution_mode=execution_mode,
             member_id=member_id,
             work_identity=work_identity,
+            source=source,
+            attributes=attributes,
         )
         return record
 
@@ -197,6 +255,8 @@ class RunStore:
         execution_mode: TaskRunExecutionMode,
         member_id: str,
         work_identity: dict[str, str] | None = None,
+        source: str = "",
+        attributes: Mapping[str, Any] | None = None,
     ) -> tuple[TaskRunRecord, ChangeSet | None]:
         """Create a running record and expose its sync notification.
 
@@ -207,6 +267,11 @@ class RunStore:
         is never restarted. Re-opening moves the record's ownership to the
         device that is starting this attempt, which is the device the run is
         now running on.
+
+        Args:
+            source: The source of the run's trace.
+            attributes: The trace's attributes at this point; an attribute an
+                earlier attempt recorded keeps its earlier value.
         """
 
         def _start(current: TaskRunRecord) -> TaskRunRecord:
@@ -219,6 +284,8 @@ class RunStore:
                     "member_id": member_id,
                     "device_id": self.device_id,
                     "work_identity": work_identity,
+                    "source": source or current.source,
+                    "attributes": _first_seen(current.attributes, attributes),
                     "status": "running",
                     "finished_at": None,
                 }
@@ -232,10 +299,11 @@ class RunStore:
         *,
         status: str,
         safe_summary: str = "",
-    ) -> TaskRunRecord:
+        attributes: Mapping[str, Any] | None = None,
+    ) -> TaskRunRecord | None:
         """Record a generic execution outcome without bypassing evidence rules."""
         record, _ = self.finish_record_with_change(
-            run_id, status=status, safe_summary=safe_summary
+            run_id, status=status, safe_summary=safe_summary, attributes=attributes
         )
         return record
 
@@ -245,19 +313,37 @@ class RunStore:
         *,
         status: str,
         safe_summary: str = "",
-    ) -> tuple[TaskRunRecord, ChangeSet | None]:
-        """Finish a run and expose the sync notification for a barrier."""
+        attributes: Mapping[str, Any] | None = None,
+    ) -> tuple[TaskRunRecord | None, ChangeSet | None]:
+        """Finish a run and expose the sync notification for a barrier.
+
+        A run that never recorded its start took no work, so there is nothing
+        to finish and no record is created for it: an input the workflow
+        decided not to act on stays absent from the shared history.
+
+        Args:
+            attributes: The trace's attributes at the end of the run; the
+                attributes recorded at its start keep their values.
+
+        Returns:
+            The finished record and its sync notification, or ``(None, None)``
+            when the run has no record.
+        """
         if status not in TASK_RUN_TERMINAL_STATES:
             raise TaskRunError(f"Task run has invalid terminal status '{status}'.")
+        if not self._path(run_id).is_file():
+            return None, None
 
         def _finish(current: TaskRunRecord) -> TaskRunRecord:
+            merged = _first_seen(current.attributes, attributes)
             if current.finished_at:
-                return current
+                return current.model_copy(update={"attributes": merged})
             return current.model_copy(
                 update={
                     "finished_at": utc_now_iso(),
                     "status": status,
                     "safe_summary": str(redact_for_sharing(safe_summary)),
+                    "attributes": merged,
                 }
             )
 
@@ -279,6 +365,36 @@ class RunStore:
                 )
             except (OSError, ValueError) as exc:
                 raise TaskRunError(f"Task run record is invalid: {path}") from exc
+
+    def records_between(self, start: datetime, end: datetime) -> list[TaskRunRecord]:
+        """Return the runs that were running at some point in ``[start, end]``.
+
+        This is the timeline's read: a run is one lifecycle record, so the
+        screen shows it from this alone instead of folding the events it
+        emitted. A record that cannot be read is skipped here rather than
+        failing the whole screen; the synchronization boundary reports it.
+        """
+        matched: list[TaskRunRecord] = []
+        for record in self._readable_records():
+            started = parse_iso_datetime(record.started_at)
+            if started is None or started > end:
+                continue
+            finished = parse_iso_datetime(record.finished_at or "")
+            if finished is not None and finished < start:
+                continue
+            matched.append(record)
+        return matched
+
+    def _readable_records(self) -> Iterator[TaskRunRecord]:
+        if not self.root.is_dir():
+            return
+        for path in sorted(self.root.glob("*/result.json")):
+            try:
+                yield TaskRunRecord.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                continue
 
     def find_by_work_identity(
         self, work_identity: dict[str, str]
@@ -389,15 +505,7 @@ class RunStore:
         return self._completions_cache
 
     def _read_completions(self) -> Iterator[_RunCompletion]:
-        if not self.root.is_dir():
-            return
-        for path in sorted(self.root.glob("*/result.json")):
-            try:
-                record = TaskRunRecord.model_validate_json(
-                    path.read_text(encoding="utf-8")
-                )
-            except (OSError, ValueError):
-                continue
+        for record in self._readable_records():
             if not record.finished_at:
                 continue
             result = _result_subject(record)

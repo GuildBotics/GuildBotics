@@ -567,7 +567,7 @@ The process cwd is never treated as a workspace. From the selected workspace, `G
 GuildBotics stores three kinds of local data:
 
 - Machine-wide management information — the workspace in use, the CLI scheduler PID, and so on — is stored in `$HOME/.guildbotics/data`
-- Shared workspace state — memory, chat control, task-run evidence, activity events — is stored in `<workspace>/.guildbotics/state`
+- Shared workspace state — memory, chat control, task-run records, interactive session records, activity events — is stored in `<workspace>/.guildbotics/state`
 - Device-local data — diagnostics, transcripts, chat cache, member clones, the built agent environment (`local/agent_environment/snapshots`) — is stored in `<workspace>/.guildbotics/local`
 - The isolated agent environment's runtime and its images live in `$HOME/.guildbotics/data/msb`; the AI CLI tools' logins and sessions, shared by every member and workspace on the machine, live in `$HOME/.guildbotics/data/agent_environment/<tool>/`
 

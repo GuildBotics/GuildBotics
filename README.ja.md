@@ -562,7 +562,7 @@ guildbotics workspace use /path/to/workspace
 GuildBotics が保存するローカルデータは、次の 3 種類です。
 
 - 使用中のワークスペース情報や CLI スケジューラーの PID など、PC 全体で共有する管理情報は `$HOME/.guildbotics/data` に保存されます
-- memory、会話の制御状態、task-run 証跡、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
+- memory、会話の制御状態、task-run 記録、interactive session 記録、Activity イベントなど、共有する永続状態は `<workspace>/.guildbotics/state` に保存されます
 - 診断ログ、transcript、チャット cache、member clone、ビルド済みのエージェント隔離環境（`local/agent_environment/snapshots`）、ホットキーなど、このマシンだけのデータは `<workspace>/.guildbotics/local` に保存されます
 - エージェント隔離環境の runtime と image は `$HOME/.guildbotics/data/msb` に、AI CLI ツールのログインとセッション（マシン内の全メンバー・全ワークスペースで共有）は `$HOME/.guildbotics/data/agent_environment/<tool>/` に保存されます
 

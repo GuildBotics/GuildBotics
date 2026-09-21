@@ -1,11 +1,15 @@
+import asyncio
 import datetime as dt
 from types import SimpleNamespace
 
 import pytest
 
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
+from guildbotics.entities.task import Task
 from guildbotics.observability import current_trace
+from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.i18n_tool import t
 
 EXPECTED_ROUTINE_CALL_COUNT = 2
@@ -177,31 +181,29 @@ def test_routine_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
     assert work_ids == [trace_id]
 
 
-def test_routine_ticket_workflow_runs_without_caller_trace(monkeypatch) -> None:
+def test_routine_ticket_patrol_selects_outside_any_trace_or_tracked_work(
+    monkeypatch,
+) -> None:
     person = _Person(["workflows/ticket_driven_workflow"])
     scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
-    seen: list[tuple[str | None, str, list[str]]] = []
+    seen: list[tuple[str | None, list[str]]] = []
 
-    async def fake_ticket_workflow(context, person, command, work_id) -> bool:
+    def fake_patrol(loop, context, person, command, start_time) -> bool:
         trace = current_trace()
         works = scheduler._execution.snapshot()
-        seen.append(
-            (trace.trace_id if trace else None, work_id, [work.id for work in works])
-        )
+        seen.append((trace.trace_id if trace else None, [work.id for work in works]))
         scheduler.shutdown()
         return True
 
-    monkeypatch.setattr(scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow)
+    monkeypatch.setattr(scheduler, "_patrol_tickets", fake_patrol)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     scheduler._process_tasks_list(person, [])
 
-    trace_id, work_id, work_ids = seen[0]
-    # The caller must not pre-open a trace: an idle patrol leaves no
-    # diagnostics records, so the workflow opens its own trace (as work_id)
-    # only when it actually dispatches work or fails.
-    assert trace_id is None
-    assert work_ids == [work_id]
+    # The caller must not pre-open a trace nor claim work: an idle patrol
+    # leaves neither diagnostics records nor a task-run record, so the patrol
+    # opens both only for a ticket it actually dispatches.
+    assert seen == [(None, [])]
 
 
 @pytest.mark.parametrize("setting", ["building", "filesystem"])
@@ -218,11 +220,11 @@ def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
     )
     dispatched: list[str] = []
 
-    async def fake_ticket_workflow(context, person, command, work_id) -> bool:
+    def fake_patrol(loop, context, person, command, start_time) -> bool:
         dispatched.append(command)
         return True
 
-    monkeypatch.setattr(scheduler, "_run_routine_ticket_workflow", fake_ticket_workflow)
+    monkeypatch.setattr(scheduler, "_patrol_tickets", fake_patrol)
     reason = (
         t("intelligences.agent_environment.filesystem.macos_documents", app="")
         if setting == "filesystem"
@@ -271,8 +273,39 @@ async def test_pending_chat_is_deferred_while_the_environment_is_unavailable(
     assert calls == []
 
 
-@pytest.mark.asyncio
-async def test_ticket_workflow_idle_patrol_leaves_no_trace_records(monkeypatch) -> None:
+def _patrol(scheduler: TaskScheduler) -> bool:
+    loop = asyncio.new_event_loop()
+    try:
+        return scheduler._patrol_tickets(
+            loop,
+            _Context(_Person()),
+            _Person(),
+            "workflows/ticket_driven_workflow",
+            dt.datetime(2026, 1, 1, 9, 0, 0),
+        )
+    finally:
+        loop.close()
+
+
+def _ticket_invocation() -> WorkflowInvocation:
+    task = Task(
+        id="7",
+        title="ログイン修正",
+        description="",
+        repository="o/r",
+        number=7,
+        url="https://github.com/o/r/issues/7",
+    )
+    return WorkflowInvocation(
+        command="workflows/ticket_driven_workflow",
+        person_id="alice",
+        source="routine",
+        trigger_type="ticket",
+        payload={"task": task.model_dump(), "ticket_url": task.url},
+    )
+
+
+def test_ticket_patrol_idle_leaves_no_trace_and_no_run_record(monkeypatch) -> None:
     from guildbotics.drivers import ticket_selector
     from guildbotics.drivers import utils as driver_utils
 
@@ -287,21 +320,19 @@ async def test_ticket_workflow_idle_patrol_leaves_no_trace_records(monkeypatch) 
     monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
     monkeypatch.setattr(driver_utils, "run_with_logging", forbidden_run_with_logging)
 
-    ok = await scheduler._run_routine_ticket_workflow(
-        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-1"
-    )
-
-    assert ok is True
+    assert _patrol(scheduler) is True
+    assert list(RunStore().records()) == []
 
 
-@pytest.mark.asyncio
-async def test_ticket_workflow_dispatches_under_trace_with_work_id(monkeypatch) -> None:
+def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
+    monkeypatch,
+) -> None:
     from guildbotics.drivers import ticket_selector, workflow_dispatcher
     from guildbotics.drivers import utils as driver_utils
 
     scheduler = TaskScheduler(_Context(_Person()))
-    invocation = object()
-    dispatched: list[tuple[str | None, object]] = []
+    invocation = _ticket_invocation()
+    dispatched: list[tuple[str | None, dict[str, object], list[str], object]] = []
 
     async def fake_select(self, person):
         return invocation
@@ -312,7 +343,15 @@ async def test_ticket_workflow_dispatches_under_trace_with_work_id(monkeypatch) 
 
         async def dispatch(self, inv, person):
             trace = current_trace()
-            dispatched.append((trace.trace_id if trace else None, inv))
+            works = scheduler._execution.snapshot()
+            dispatched.append(
+                (
+                    trace.trace_id if trace else None,
+                    dict(trace.attributes) if trace else {},
+                    [work.id for work in works],
+                    inv,
+                )
+            )
 
     async def fake_run_with_logging(context, command, task_type, action):
         await action()
@@ -322,16 +361,29 @@ async def test_ticket_workflow_dispatches_under_trace_with_work_id(monkeypatch) 
     monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
-    ok = await scheduler._run_routine_ticket_workflow(
-        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-1"
-    )
+    assert _patrol(scheduler) is True
+    trace_id, attributes, work_ids, inv = dispatched[0]
+    assert inv is invocation
+    assert trace_id is not None
+    # The dispatch is tracked work under its own trace, and the trace opens
+    # with the ticket's attributes so the run record names the issue.
+    assert work_ids == [trace_id]
+    assert attributes["github.title"] == "ログイン修正"
+    assert attributes["github.url"] == "https://github.com/o/r/issues/7"
+    records = list(RunStore().records())
+    assert [record.run_id for record in records] == [trace_id]
+    assert records[0].source == "routine"
+    assert records[0].attributes["github.title"] == "ログイン修正"
+    assert records[0].work_identity == {
+        "kind": "routine",
+        "person_id": "alice",
+        "command": "workflows/ticket_driven_workflow",
+        "slot": "2026-01-01T09:00:00",
+    }
+    assert records[0].status == "succeeded"
 
-    assert ok is True
-    assert dispatched == [("work-1", invocation)]
 
-
-@pytest.mark.asyncio
-async def test_ticket_workflow_selection_failure_is_recorded_under_trace(
+def test_ticket_patrol_selection_failure_is_recorded_under_a_trace(
     monkeypatch,
 ) -> None:
     from guildbotics.drivers import ticket_selector
@@ -357,12 +409,12 @@ async def test_ticket_workflow_selection_failure_is_recorded_under_trace(
     monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
-    ok = await scheduler._run_routine_ticket_workflow(
-        _Context(_Person()), _Person(), "workflows/ticket_driven_workflow", "work-err"
-    )
-
-    assert ok is False
-    assert recorded == [("work-err", failure)]
+    assert _patrol(scheduler) is False
+    assert len(recorded) == 1
+    assert recorded[0][0] is not None
+    assert recorded[0][1] is failure
+    # A selection that failed took no work, so it leaves no run record.
+    assert list(RunStore().records()) == []
 
 
 def test_routine_run_updates_member_routine_heartbeat(monkeypatch) -> None:

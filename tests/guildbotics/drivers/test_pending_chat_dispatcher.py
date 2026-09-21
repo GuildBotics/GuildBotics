@@ -159,6 +159,71 @@ async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_only_claims_the_event_the_workflow_records_the_run(
+    monkeypatch, tmp_path
+):
+    """A batch the member does not act on leaves no run record.
+
+    Whether an event holds work is decided by the workflow after it has read
+    the thread, so the boundary claims the identity and the workflow records
+    the start; a workflow that ran and declined leaves the history untouched.
+    """
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "strict")
+    ran: list[str] = []
+    _install_runner(monkeypatch, ran)
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    processed = await dispatcher.process_person(
+        Person(person_id="alice", name="A", is_active=True)
+    )
+
+    assert processed == 1
+    assert ran == ["E1"]
+    assert list(RunStore().records()) == []
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path / "chat-state")
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "strict")
+
+    class _Runner:
+        def __init__(self, context, command, args):
+            self.run_id = context.shared_state[WORKFLOW_INVOCATION_KEY].payload[
+                "retry_context"
+            ]["run_id"]
+
+        async def run(self):
+            RunStore().start_record(
+                self.run_id,
+                work_kind="workflows/chat_conversation_workflow",
+                execution_mode="autonomous",
+                member_id="alice",
+            )
+            return "ok"
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _Runner
+    )
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        execution_coordinator=TaskRunCoordinator(),
+    )
+
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    records = list(RunStore().records())
+    assert [record.status for record in records] == ["succeeded"]
+    assert records[0].finished_at is not None
+
+
+@pytest.mark.asyncio
 async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
     store = FileConversationStateStore(base_dir=tmp_path)
     store.upsert_pending_event("slack", "alice", "C1", _event(), "social")

@@ -14,6 +14,7 @@ from guildbotics.integrations.chat_service import (
     ChatPostResult,
 )
 from guildbotics.integrations.chat_state_store import (
+    ThreadContextUnavailableError,
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
@@ -25,6 +26,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionResult,
 )
 from guildbotics.intelligences.decisions.models import Selection
+from guildbotics.observability import trace_scope
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -528,6 +530,92 @@ async def test_noop_completion_processes_without_visible_action(tmp_path, monkey
     # thread participant.
     thread_state = state_store.load_thread_state("slack", "alice", "C1", "100.1")
     assert "alice" not in thread_state.participants
+
+
+@pytest.mark.asyncio
+async def test_taking_a_batch_records_the_runs_start_under_its_trace(tmp_path):
+    """The workflow, not the dispatcher, records the start of a chat run.
+
+    The dispatcher only claimed the event; the record is created once the
+    member takes the batch, mirroring the trace the dispatcher opened so the
+    run names its thread on every device.
+    """
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx)
+    _set_retry_context(ctx, run_id="run-chat")
+
+    with trace_scope(
+        "event_listener",
+        trace_id="run-chat",
+        person_id="alice",
+        attributes={"event.provider": "slack", "slack.channel": "C1"},
+    ):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    records = list(RunStore().records())
+    assert [record.run_id for record in records] == ["run-chat"]
+    record = records[0]
+    assert record.source == "event_listener"
+    assert record.execution_mode == "autonomous"
+    assert record.member_id == "alice"
+    assert record.work_kind == "workflows/chat_conversation_workflow"
+    assert record.work_identity == {
+        "kind": "chat-event",
+        "event_id": "E1",
+        "service": "slack",
+        "channel_id": "C1",
+    }
+    assert record.attributes == {"event.provider": "slack", "slack.channel": "C1"}
+    assert record.result is not None
+
+
+@pytest.mark.asyncio
+async def test_declined_batch_leaves_no_run_record(tmp_path):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx, text="please check", mentions=[])
+    _set_retry_context(ctx, run_id="run-declined")
+
+    await chat_conversation_workflow.main(
+        ctx, chat_service=service, state_store=state_store
+    )
+
+    assert ctx.invocations == []
+    assert list(RunStore().records()) == []
+
+
+@pytest.mark.asyncio
+async def test_unshared_run_start_hands_the_batch_back(tmp_path, monkeypatch):
+    service = FakeChatService()
+    state_store = FileConversationStateStore(base_dir=tmp_path)
+    ctx = FakeInvokeContext("reply")
+    _set_incoming_event(ctx)
+    _set_retry_context(ctx, run_id="run-unshared")
+    monkeypatch.setattr(
+        chat_conversation_workflow, "await_shared_change", lambda change: False
+    )
+
+    with pytest.raises(ThreadContextUnavailableError):
+        await chat_conversation_workflow.main(
+            ctx, chat_service=service, state_store=state_store
+        )
+
+    assert ctx.invocations == []
+
+
+def _set_retry_context(ctx: types.SimpleNamespace, *, run_id: str) -> None:
+    invocation = ctx.shared_state[WORKFLOW_INVOCATION_KEY]
+    invocation.payload["retry_context"] = {
+        "attempt_count": 1,
+        "max_attempts": 5,
+        "is_final_attempt": False,
+        "run_id": run_id,
+    }
 
 
 @pytest.mark.asyncio

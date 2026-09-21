@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,10 +20,15 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Project, Team
-from guildbotics.observability import span_scope, trace_scope
+from guildbotics.observability import current_trace, span_scope, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
+from guildbotics.observability.interactive_sessions import (
+    InteractiveSessionStore,
+    InteractiveTraceSession,
+)
 
 
 HEADERS = {"X-GuildBotics-Session-Token": "secret"}
@@ -346,6 +352,8 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         event_bus=bus,
         diagnostics_store=store,
     )
+    # A workflow run is its shared task-run record, mirrored from its trace by
+    # the execution boundary; its command events stay in local diagnostics.
     with trace_scope(
         "routine",
         trace_id="agent-trace",
@@ -358,7 +366,27 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         },
     ):
         bus.publish_event("command.started", {"command": "demo"})
+        RunStore().start_record(
+            "agent-trace",
+            work_kind="demo",
+            execution_mode="autonomous",
+            member_id="alice",
+            source="routine",
+            attributes=current_trace().attributes if current_trace() else {},
+        )
         bus.publish_event("command.finished", {"command": "demo"})
+        RunStore().finish_record("agent-trace", status="succeeded")
+    # An interactive session is its shared session record.
+    skill_session = InteractiveTraceSession(
+        trace_id="skill-trace",
+        person_id="alice",
+        workspace=str(tmp_path),
+        host="codex",
+        thread_key="thread-1",
+        started_at=datetime.now(UTC).isoformat(),
+        last_seen_at=datetime.now(UTC).isoformat(),
+        expires_at=datetime.now(UTC).isoformat(),
+    )
     with trace_scope(
         "interactive",
         trace_id="skill-trace",
@@ -368,6 +396,9 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         bus.publish_event("member.command.started", {"command": "member memory recall"})
         bus.publish_event(
             "member.command.finished", {"command": "member memory recall"}
+        )
+        InteractiveSessionStore().record(
+            skill_session, command="member memory recall", status="success"
         )
         pr_opened = {
             "action": "opened",
@@ -393,22 +424,29 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
         }
         bus.publish_event("github.push", push_payload)
         record_github("github.push", push_payload, person_id="alice")
-    with trace_scope(
-        "interactive", trace_id="human-trace", person_id="bob", command="human"
-    ):
-        bus.publish_event("command.started", {"command": "human"})
-    with trace_scope(
-        "routine",
-        trace_id="empty-routine",
-        person_id="alice",
-        command="workflows/ticket_driven_workflow",
-    ):
-        bus.publish_event(
-            "command.started", {"command": "workflows/ticket_driven_workflow"}
-        )
-        bus.publish_event(
-            "command.finished", {"command": "workflows/ticket_driven_workflow"}
-        )
+    InteractiveSessionStore().record(
+        InteractiveTraceSession(
+            trace_id="human-trace",
+            person_id="bob",
+            workspace=str(tmp_path),
+            host="codex",
+            thread_key="thread-2",
+            started_at=datetime.now(UTC).isoformat(),
+            last_seen_at=datetime.now(UTC).isoformat(),
+            expires_at=datetime.now(UTC).isoformat(),
+        ),
+        command="human",
+        status="success",
+    )
+    # A scheduled command that ran and touched nothing is not activity.
+    RunStore().start_record(
+        "empty-routine",
+        work_kind="daily-report",
+        execution_mode="autonomous",
+        member_id="alice",
+        source="scheduled",
+    )
+    RunStore().finish_record("empty-routine", status="succeeded")
     merged = {
         "action": "closed",
         "pull_request": {
@@ -467,8 +505,10 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert set(sessions) == {"agent-trace", "skill-trace"}
     assert sessions["agent-trace"]["mode"] == "workflow"
     assert sessions["agent-trace"]["title"] == "Issue #42"
+    assert sessions["agent-trace"]["status"] == "success"
     assert sessions["skill-trace"]["mode"] == "interactive"
     assert sessions["skill-trace"]["title"] == "member memory recall"
+    assert sessions["skill-trace"]["status"] == "success"
     assert [_without_timestamp(link) for link in sessions["agent-trace"]["links"]] == [
         {
             "kind": "issue",
@@ -523,9 +563,10 @@ def test_activity_history_returns_sessions_and_recorded_github_events(
     assert body["unsupported_event_sources"] == []
 
 
-def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
+def test_activity_history_reads_sessions_from_their_lifecycle_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Sessions come from the shared lifecycle records, in the window asked."""
     store = DiagnosticsStore(tmp_path / "diag.jsonl")
     bus = EventBus(store=store)
     runtime = AppRuntime(bus, diagnostics_store=store)
@@ -536,23 +577,28 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
         ],
     )
     monkeypatch.setattr(runtime, "_get_context", lambda: SimpleNamespace(team=team))
+    InteractiveSessionStore().record(
+        InteractiveTraceSession(
+            trace_id="mixed-trace",
+            person_id="alice",
+            workspace=str(tmp_path),
+            host="codex",
+            thread_key="thread-1",
+            started_at="2026-07-01T09:00:00+09:00",
+            last_seen_at="2026-07-01T09:00:00+09:00",
+            expires_at="2026-07-01T09:30:00+09:00",
+        ),
+        command="demo",
+        status="failed",
+        now=datetime(2026, 7, 1, 0, 30, tzinfo=UTC),
+    )
+    # A command boundary event alone is not a session any more.
     store.record(
         {
             "kind": "event",
             "type": "command.finished",
-            "timestamp": "2026-07-01T00:30:00Z",
-            "trace_id": "mixed-trace",
-            "source": "interactive",
-            "person_id": "alice",
-            "command": "demo",
-        }
-    )
-    store.record(
-        {
-            "kind": "event",
-            "type": "command.started",
-            "timestamp": "2026-07-01T09:00:00+09:00",
-            "trace_id": "mixed-trace",
+            "timestamp": "2026-07-01T00:40:00Z",
+            "trace_id": "boundary-only",
             "source": "interactive",
             "person_id": "alice",
             "command": "demo",
@@ -564,10 +610,11 @@ def test_activity_history_sorts_mixed_timestamp_offsets_by_time(
         end="2026-07-01T01:00:00Z",
     )
 
-    assert len(history.sessions) == 1
-    assert history.sessions[0].status == "success"
+    assert [session.trace_id for session in history.sessions] == ["mixed-trace"]
+    assert history.sessions[0].status == "failed"
     assert history.sessions[0].started_at == "2026-07-01T09:00:00+09:00"
     assert history.sessions[0].ended_at == "2026-07-01T00:30:00+00:00"
+    assert history.sessions[0].duration_seconds == 1800.0
 
 
 def test_memory_events_endpoint_filters_and_returns_body_preview(

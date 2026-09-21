@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from guildbotics.capabilities.chat_batch import completed_chat_event_ids
-from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.task_runs import RunStore, chat_event_work_identity
 from guildbotics.capabilities.workflow_completion_events import (
     record_chat_dispatch_abandoned,
     record_chat_dispatch_retry_scheduled,
@@ -179,17 +179,20 @@ class PendingChatDispatcher:
             trace_id=pending.run_id,
         ) as trace:
             try:
+                # The boundary only claims the event here: whether there is
+                # work in it (the member is addressed, the batch is new) is
+                # decided by the workflow after it has read the thread, and a
+                # batch the member does not act on must leave no run record.
+                # The workflow records the start when it takes the batch.
                 with self._execution.track_work(
                     source="event_queue",
                     person_id=person.person_id,
                     command=self._workflow_command,
                     work_id=trace.trace_id,
-                    work_identity={
-                        "kind": "chat-event",
-                        "event_id": event_id,
-                        "service": service,
-                        "channel_id": channel_id,
-                    },
+                    work_identity=chat_event_work_identity(
+                        service, channel_id, event_id
+                    ),
+                    record_start=False,
                 ):
                     # Consume a retry attempt only once the work is accepted, so a
                     # dispatch rejected while the runtime drains does not burn the

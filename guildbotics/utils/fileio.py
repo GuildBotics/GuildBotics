@@ -1,5 +1,7 @@
+import json
 import os
 import tempfile
+from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -142,6 +144,25 @@ def apply_workspace_root(workspace_root: Path) -> Path:
 def get_workspace_config_dir(workspace_root: Path | None = None) -> Path:
     """Return ``<workspace>/.guildbotics/config``."""
     return get_workspace_root(workspace_root) / ".guildbotics" / "config"
+
+
+def iter_json_objects(directory: Path, pattern: str) -> Iterator[dict[str, Any]]:
+    """Yield the JSON objects in the files matching ``pattern`` under ``directory``.
+
+    A store that keeps one record per file reads them all this way. A file
+    that cannot be read or does not hold an object is skipped: a screen does
+    not fail on one damaged record, and the synchronization boundary is what
+    reports it.
+    """
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.glob(pattern)):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            yield payload
 
 
 def get_workspace_state_path(

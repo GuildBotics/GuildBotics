@@ -1,8 +1,10 @@
 import json
+from datetime import UTC, datetime
 
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore, TaskRunError, TaskRunStore
+from guildbotics.entities.task_run import TaskRunRecord
 
 
 def test_task_run_complete_requires_write_evidence(tmp_path):
@@ -366,3 +368,108 @@ def test_start_record_never_restarts_a_run_whose_outcome_is_unknown(tmp_path):
 
     assert unchanged.status == "result_unknown"
     assert unchanged.finished_at is not None
+
+
+def test_finish_record_without_a_start_creates_nothing(tmp_path):
+    store = RunStore(tmp_path)
+
+    assert store.finish_record("never-started", status="succeeded") is None
+    assert list(store.records()) == []
+
+
+def test_start_record_keeps_the_first_seen_attributes_across_attempts(tmp_path):
+    store = RunStore(tmp_path)
+    start_args = {
+        "work_kind": "chat-event",
+        "execution_mode": "autonomous",
+        "member_id": "aiko",
+        "source": "event_listener",
+    }
+    store.start_record(
+        "run-1", **start_args, attributes={"github.title": "first", "a": "1"}
+    )
+    store.finish_record(
+        "run-1", status="failed", attributes={"github.title": "later", "b": "2"}
+    )
+    reopened = store.start_record(
+        "run-1", **start_args, attributes={"github.title": "third", "c": "3"}
+    )
+
+    assert reopened.source == "event_listener"
+    assert reopened.attributes == {
+        "github.title": "first",
+        "a": "1",
+        "b": "2",
+        "c": "3",
+    }
+
+
+def test_records_between_returns_runs_active_in_the_window(tmp_path):
+    store = RunStore(tmp_path)
+    for run_id, started_at, finished_at in (
+        ("before", "2026-07-01T00:00:00Z", "2026-07-01T01:00:00Z"),
+        ("overlaps-start", "2026-07-01T09:00:00Z", "2026-07-01T10:30:00Z"),
+        ("inside", "2026-07-01T11:00:00Z", "2026-07-01T11:30:00Z"),
+        ("still-running", "2026-07-01T11:40:00Z", None),
+        ("after", "2026-07-02T00:00:00Z", None),
+    ):
+        store.start_record(
+            run_id,
+            work_kind="demo",
+            execution_mode="autonomous",
+            member_id="aiko",
+        )
+        path = tmp_path / run_id / "result.json"
+        payload = path.read_text(encoding="utf-8")
+        record = TaskRunRecord.model_validate_json(payload).model_copy(
+            update={
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "status": "succeeded" if finished_at else "running",
+            }
+        )
+        path.write_text(record.model_dump_json(), encoding="utf-8")
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "broken" / "result.json").write_text("{", encoding="utf-8")
+
+    found = store.records_between(
+        datetime(2026, 7, 1, 10, tzinfo=UTC), datetime(2026, 7, 1, 12, tzinfo=UTC)
+    )
+
+    assert [record.run_id for record in found] == [
+        "inside",
+        "overlaps-start",
+        "still-running",
+    ]
+
+
+def test_lifecycle_attributes_cross_the_shared_boundary_masked_and_bounded(
+    tmp_path, monkeypatch, fake_keyring
+):
+    """A PR title can quote a secret value as easily as an error message can."""
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(tmp_path))
+    KeyringSecretStore(tmp_path / ".guildbotics" / "config").set(
+        "OPENAI_API_KEY", "sk-live-secret-12345"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret-12345")
+    store = RunStore(tmp_path / "runs")
+
+    started = store.start_record(
+        "run-1",
+        work_kind="demo",
+        execution_mode="autonomous",
+        member_id="aiko",
+        attributes={"github.title": "leaked sk-live-secret-12345 in title"},
+    )
+    finished = store.finish_record(
+        "run-1", status="succeeded", attributes={"github.repo": "x" * 1000}
+    )
+
+    assert started.attributes["github.title"] == "leaked *** in title"
+    assert finished is not None
+    assert len(finished.attributes["github.repo"]) <= 500
+    assert "sk-live-secret-12345" not in (
+        tmp_path / "runs/run-1/result.json"
+    ).read_text(encoding="utf-8")

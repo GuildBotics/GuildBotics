@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.task_runs import RunStore, trace_stamp
 from guildbotics.entities.task_run import TaskRunExecutionMode, TaskRunRecord
 from guildbotics.observability import new_id
 from guildbotics.runtime.live_state import LivePresentation, LiveStatePort
@@ -18,11 +18,7 @@ from guildbotics.runtime.person_lease import (
 from guildbotics.runtime.trace_presentations import normalize_trace_presentation
 from guildbotics.utils.diagnostics_records import diagnostics_record_scope
 from guildbotics.utils.shared_write_lock import shared_write_lock
-from guildbotics.utils.workspace_sync_port import (
-    ChangeSet,
-    NoOpWorkspaceSyncPort,
-    get_workspace_sync_port,
-)
+from guildbotics.utils.workspace_sync_port import ChangeSet, await_shared_change
 
 WorkSource = Literal["manual", "scheduled", "routine", "event_queue"]
 WorkRejectionReason = Literal[
@@ -119,6 +115,7 @@ class ExecutionCoordinator:
         exclusive: bool = True,
         work_identity: str | Mapping[str, object] | None = None,
         owner_device_id: str | None = None,
+        record_start: bool = True,
     ) -> Iterator[ActiveWork]:
         """Track one unit of member work for the lifetime of the context.
 
@@ -132,6 +129,11 @@ class ExecutionCoordinator:
                 work that never touches the member's workspace, chat or tickets
                 passes ``False`` so it can run alongside scheduled work. It is
                 still drained and cancelled like any other tracked work.
+            work_identity: The stable input identity a task-run boundary
+                claims; this coordinator records nothing and ignores it.
+            owner_device_id: The device claiming that identity; ignored here.
+            record_start: Whether a task-run boundary records the run's start
+                itself; ignored here.
 
         Yields:
             ActiveWork: The tracked work entry.
@@ -247,6 +249,7 @@ class ExecutionStatusPublisher:
                     work.command,
                 )
         if record:
+            source, attributes = trace_stamp(work.id, work.source)
             with suppress(Exception):
                 RunStore().start_record(
                     work.id,
@@ -256,6 +259,8 @@ class ExecutionStatusPublisher:
                     ),
                     member_id=work.person_id,
                     work_identity={"source": work.source, "command": work.command},
+                    source=source,
+                    attributes=attributes,
                 )
 
     def progressed(
@@ -299,6 +304,7 @@ class ExecutionStatusPublisher:
             with suppress(Exception):
                 self._live_state.finished(work.id)
         if record:
+            _source, attributes = trace_stamp(work.id)
             with suppress(Exception):
                 RunStore().finish_record(
                     work.id,
@@ -308,6 +314,7 @@ class ExecutionStatusPublisher:
                         if status == "succeeded"
                         else "Execution failed."
                     ),
+                    attributes=attributes,
                 )
 
     def _live_allowed(self, service_work: bool) -> bool:
@@ -353,6 +360,8 @@ class TaskRunCoordinator(ExecutionCoordinator):
         work_kind: str = "workflow",
         execution_mode: TaskRunExecutionMode = "autonomous",
         run_id: str | None = None,
+        source: str = "",
+        record_start: bool = True,
     ) -> BeginResult:
         """Atomically accept a new work identity and publish its start.
 
@@ -361,6 +370,11 @@ class TaskRunCoordinator(ExecutionCoordinator):
         for one member. The exact write's sync notification is then awaited
         outside that local lock; a failed barrier never starts the caller's
         workflow.
+
+        With ``record_start`` false the identity is only claimed: the workflow
+        records the run's start itself, with the same barrier, once it has
+        decided to act on the input, so an input it declines leaves no record.
+        The scan still rejects an identity another run holds.
 
         A run holds an identity while it is running, and keeps holding it
         unless it ended proving that its work did not happen. A run that
@@ -396,7 +410,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
                     with self._finish_lock:
                         pending_finish = self._pending_finishes.get(record.run_id)
                     if pending_finish is not None:
-                        if not _await_change(pending_finish):
+                        if not await_shared_change(pending_finish):
                             return BeginResult(False, record, "sync_unavailable")
                         with self._finish_lock:
                             self._pending_finishes.pop(record.run_id, None)
@@ -406,27 +420,43 @@ class TaskRunCoordinator(ExecutionCoordinator):
                     else "already_finished"
                 )
                 return BeginResult(False, record, reason)
+            if not record_start:
+                return BeginResult(True, None, "started")
             accepted_run_id = run_id or new_id()
+            _source, attributes = trace_stamp(accepted_run_id, source)
             record, change = store.start_record_with_change(
                 accepted_run_id,
                 work_kind=work_kind,
                 execution_mode=execution_mode,
                 member_id=member_id,
                 work_identity=identity,
+                source=_source,
+                attributes=attributes,
             )
-        if not _await_change(change):
+        if not await_shared_change(change):
             return BeginResult(False, record, "sync_unavailable")
         return BeginResult(True, record, "started")
 
     def finish(
         self, run_id: str, terminal_status: str, safe_summary: str = ""
-    ) -> TaskRunRecord:
-        """Persist a terminal state and wait for its sync notification."""
+    ) -> TaskRunRecord | None:
+        """Persist a terminal state and wait for its sync notification.
+
+        Returns:
+            The finished record, or None when the run never recorded a start
+            (the workflow declined the input, so there is nothing to finish).
+        """
         store = RunStore()
+        _source, attributes = trace_stamp(run_id)
         record, change = store.finish_record_with_change(
-            run_id, status=terminal_status, safe_summary=safe_summary
+            run_id,
+            status=terminal_status,
+            safe_summary=safe_summary,
+            attributes=attributes,
         )
-        if change is not None and not _await_change(change):
+        if record is None:
+            return None
+        if change is not None and not await_shared_change(change):
             with self._finish_lock:
                 self._pending_finishes[run_id] = change
             raise TaskRunSyncUnavailableError(record)
@@ -451,11 +481,13 @@ class TaskRunCoordinator(ExecutionCoordinator):
                     status="interrupted",
                     safe_summary="The previous service owner stopped before completion.",
                 )
+                if updated is None:
+                    continue
                 interrupted.append(updated)
                 if change is not None:
                     changes.append(change)
         for change in changes:
-            if not _await_change(change):
+            if not await_shared_change(change):
                 raise TaskRunSyncUnavailableError(interrupted[-1])
         return interrupted
 
@@ -483,7 +515,17 @@ class TaskRunCoordinator(ExecutionCoordinator):
         exclusive: bool = True,
         work_identity: str | Mapping[str, object] | None = None,
         owner_device_id: str | None = None,
+        record_start: bool = True,
     ) -> Iterator[ActiveWork]:
+        """Track autonomous work through the task-run boundary.
+
+        Args:
+            record_start: Whether this boundary records the run's start. A
+                workflow that decides only after inspecting its input whether
+                there is work to do passes ``False`` and records the start
+                itself when it takes the work; the boundary then only claims
+                the identity and records how the run ended, if it started.
+        """
         with super().track_work(
             source=source,
             person_id=person_id,
@@ -501,6 +543,8 @@ class TaskRunCoordinator(ExecutionCoordinator):
                     owner_device_id or RunStore().device_id,
                     work_kind=work.command,
                     run_id=work.id,
+                    source=work.source,
+                    record_start=record_start,
                 )
                 if not accepted.accepted:
                     if accepted.reason in {"already_running", "already_finished"}:
@@ -571,15 +615,3 @@ def _work_identity(value: str | Mapping[str, object]) -> dict[str, str]:
     if isinstance(value, str):
         return {"value": value}
     return {str(key): str(item) for key, item in value.items()}
-
-
-def _await_change(change: ChangeSet | None) -> bool:
-    if change is None:
-        return True
-    port = get_workspace_sync_port()
-    if isinstance(port, NoOpWorkspaceSyncPort):
-        # A workspace without synchronization has no Hub to await. The local
-        # service remains usable; an enabled queue is the case that must prove
-        # the start record reached its Hub.
-        return True
-    return port.await_pushed(change.change_id)

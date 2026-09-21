@@ -14,7 +14,11 @@ from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
-from guildbotics.observability.interactive_sessions import InteractiveTraceSession
+from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.observability.interactive_sessions import (
+    InteractiveSessionStore,
+    InteractiveTraceSession,
+)
 from guildbotics.sync.local_repository import LocalSyncRepository
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
@@ -564,6 +568,59 @@ def test_member_memory_update_reads_stdin_only_when_requested(monkeypatch):
     assert payload["body"] == "Updated body\n"
 
 
+def test_interactive_session_record_keeps_the_targets_its_commands_named(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        member_module.InteractiveTraceStore, "touch", lambda self, session: None
+    )
+    session = InteractiveTraceSession(
+        trace_id="trace-target",
+        person_id="aiko",
+        workspace=str(tmp_path),
+        host="codex",
+        thread_key="thread-1",
+        started_at="2026-07-01T10:00:00+00:00",
+        last_seen_at="2026-07-01T10:00:00+00:00",
+        expires_at="2026-07-01T10:30:00+00:00",
+    )
+
+    async def inspect_pr():
+        record_correlated_event(
+            event_type="github.work_target",
+            payload={},
+            attributes={
+                "github.action": "inspected",
+                "github.kind": "pull_request",
+                "github.title": "利用枠の表示",
+                "interactive.host": "codex",
+            },
+        )
+        return {}
+
+    async def failing():
+        raise RuntimeError("boom")
+
+    member_module._run_interactive(inspect_pr(), session, "member github pr inspect")
+    with pytest.raises(RuntimeError):
+        member_module._run_interactive(failing(), session, "member git push")
+
+    record = json.loads(
+        (tmp_path / ".guildbotics/state/sessions/trace-target.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert record["command"] == "member github pr inspect"
+    assert record["status"] == "failed"
+    # Only the targets are shared: the session's host attributes describe
+    # this machine.
+    assert record["attributes"] == {
+        "github.action": "inspected",
+        "github.kind": "pull_request",
+        "github.title": "利用枠の表示",
+    }
+
+
 def test_interrupted_interactive_command_records_its_end(monkeypatch):
     # Ctrl-C ends the command. ``KeyboardInterrupt`` is not an ``Exception``,
     # so a boundary that only caught ``Exception`` left
@@ -676,6 +733,17 @@ def test_member_cli_reuses_trace_for_interactive_session(monkeypatch, tmp_path):
         "memory.recall",
         "memory.record",
     }
+    # The command boundary stays local; the session itself is one shared
+    # record, rewritten by each command, that other devices read instead.
+    assert [record["type"] for record in _domain_event_records("type")] == []
+    sessions = InteractiveSessionStore().list_between(
+        datetime(1970, 1, 1, tzinfo=UTC), datetime(9999, 1, 1, tzinfo=UTC)
+    )
+    assert [item["trace_id"] for item in sessions] == [trace_id]
+    assert sessions[0]["command"] == "member memory record"
+    assert sessions[0]["status"] == "success"
+    assert sessions[0]["person_id"] == "aiko"
+    assert sessions[0]["attributes"] == {}
 
 
 def test_member_context_markdown_renders_capabilities_section(monkeypatch):

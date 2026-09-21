@@ -356,3 +356,19 @@ def update_shared_json_with_change(
             if updated != current:
                 change = write_shared_text(path, updated, workspace_root=workspace_root)
     return written, change
+
+
+def await_shared_change(change: ChangeSet | None) -> bool:
+    """Wait for one announced change to reach the Hub.
+
+    A workspace without synchronization has no Hub to await, so the local
+    service stays usable; an enabled queue is the case that has to prove the
+    write arrived. Execution boundaries use this as their start / finish
+    barrier, and a workflow that records its own start applies the same one.
+    """
+    if change is None:
+        return True
+    port = get_workspace_sync_port()
+    if isinstance(port, NoOpWorkspaceSyncPort):
+        return True
+    return port.await_pushed(change.change_id)

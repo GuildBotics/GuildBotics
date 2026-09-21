@@ -16,7 +16,11 @@ from guildbotics.capabilities.chat_updates import (
 )
 from guildbotics.capabilities.completion_retry import run_with_completion_retry
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
-from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.task_runs import (
+    RunStore,
+    chat_event_work_identity,
+    trace_stamp,
+)
 from guildbotics.capabilities.workflow_completion_events import (
     record_chat_dispatch_abandoned,
     record_workflow_completed,
@@ -57,6 +61,7 @@ from guildbotics.utils.fileio import (
     get_workspace_state_path,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.workspace_sync_port import await_shared_change
 
 CHAT_MAX_ATTEMPTS_ENV = "GUILDBOTICS_CHAT_MAX_ATTEMPTS"
 _MAX_THREAD_CONTEXT_MESSAGES = 100
@@ -64,6 +69,7 @@ _SLACK_MENTION_RE = re.compile(r"<@([^>|]+)(?:\|[^>]+)?>")
 _MAX_HANDOFF_TEXT_LENGTH = 240
 _DEFAULT_MAX_ATTEMPTS = 5
 _IN_DISPATCH_COMPLETION_ATTEMPTS = 2
+_WORKFLOW_COMMAND = "workflows/chat_conversation_workflow"
 
 
 @dataclass(frozen=True)
@@ -355,6 +361,14 @@ async def _handle_event(
         nonlocal current_run_id, decision
         current_run_id = run_id
         if _attempt == 1:
+            _record_run_started(
+                run_id,
+                task_run_root=task_run_root,
+                person_id=person_id,
+                service_name=service_name,
+                channel_id=channel_id,
+                event_id=event.event_id,
+            )
             # Persist membership before the agent can complete. Recovery uses
             # this exact input even if the thread advanced before restart.
             RunStore(task_run_root).append_evidence(
@@ -625,7 +639,7 @@ async def _handle_event(
             )
             record_workflow_rate_limited(
                 person_id=person_id,
-                command="workflows/chat_conversation_workflow",
+                command=_WORKFLOW_COMMAND,
                 run_id=run_id,
                 source_event_id=event.event_id,
                 retry_after=rate_limit,
@@ -1019,6 +1033,39 @@ def _split_timestamp(timestamp: str) -> tuple[int, ...]:
         return tuple(int(part) for part in timestamp.split("."))
     except ValueError:
         return (0,)
+
+
+def _record_run_started(
+    run_id: str,
+    *,
+    task_run_root: Path,
+    person_id: str,
+    service_name: str,
+    channel_id: str,
+    event_id: str,
+) -> None:
+    """Record the run's start now that the member has taken the batch.
+
+    The dispatcher only claimed the event: a batch the member does not act on
+    (not addressed to them, already handled) leaves no run record. The start
+    still reaches the Hub before the agent acts -- the same barrier the
+    execution boundary applies to the runs it records itself -- and a Hub that
+    cannot confirm it hands the attempt back like any other outage.
+    """
+    source, attributes = trace_stamp(run_id, "event_listener")
+    _record, change = RunStore(task_run_root).start_record_with_change(
+        run_id,
+        work_kind=_WORKFLOW_COMMAND,
+        execution_mode="autonomous",
+        member_id=person_id,
+        work_identity=chat_event_work_identity(service_name, channel_id, event_id),
+        source=source,
+        attributes=attributes,
+    )
+    if not await_shared_change(change):
+        raise ThreadContextUnavailableError(
+            "The run could not be shared with the Hub; the batch remains pending."
+        )
 
 
 def _recorded_chat_completion(
