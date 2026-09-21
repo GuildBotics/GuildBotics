@@ -813,12 +813,32 @@ def test_lifecycle_from_run_keeps_the_boundary_summary_out_of_the_title() -> Non
     assert lifecycle.has_evidence is False
 
 
-def test_lifecycle_from_run_treats_user_initiated_runs_as_manual() -> None:
+def test_lifecycle_from_run_hides_a_run_whose_trace_was_manual() -> None:
     lifecycle = lifecycle_from_run(
         _run_record(execution_mode="user_initiated", source="manual")
     )
     assert lifecycle.source == "manual"
     assert _history([lifecycle]).sessions == []
+
+
+def test_lifecycle_from_run_shows_a_members_own_completion() -> None:
+    # A run the member completed outside a boundary (or before the trace
+    # source was recorded) is user-initiated but not a Desktop command run.
+    lifecycle = lifecycle_from_run(
+        _run_record(
+            work_kind="ticket",
+            execution_mode="user_initiated",
+            source="",
+            attributes={},
+            finished_at="2026-07-01T10:05:00+00:00",
+            status="succeeded",
+            safe_summary="Issue #42 を対応",
+            result=TaskRunResult(
+                subject_type="ticket", subject_id=TICKET_URL, status="done"
+            ),
+        )
+    )
+    assert _session(lifecycle).title == "Issue #42 を対応"
 
 
 def test_lifecycle_from_session_describes_the_session_record() -> None:

@@ -92,11 +92,10 @@ def lifecycle_from_run(record: TaskRunRecord) -> ActivityLifecycle:
     return ActivityLifecycle(
         trace_id=record.run_id,
         person_id=record.member_id,
-        source=(
-            MANUAL_SESSION_SOURCE
-            if record.execution_mode == "user_initiated"
-            else record.source
-        ),
+        # The trace source, not the execution mode: a member's own completion
+        # (``member task complete`` outside a boundary) is user-initiated too,
+        # and is work worth showing.
+        source=record.source,
         command=record.work_kind,
         status=record.status,
         started_at=record.started_at,
