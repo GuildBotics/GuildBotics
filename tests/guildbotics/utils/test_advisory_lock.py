@@ -123,16 +123,22 @@ def test_threads_are_serialized_without_os_help(
     path = tmp_path / "advisory.lock"
     start = threading.Barrier(2)
     overlap = threading.Barrier(2)
+    failures: list[BaseException] = []
+    entered: list[bool] = []
     overlapped: list[bool] = []
 
     def acquire() -> None:
-        start.wait()
-        with held_lock(path):
-            try:
-                overlap.wait(0.2)
-            except threading.BrokenBarrierError:
-                return
-            overlapped.append(True)
+        try:
+            start.wait()
+            with held_lock(path):
+                entered.append(True)
+                try:
+                    overlap.wait(0.2)
+                except threading.BrokenBarrierError:
+                    return
+                overlapped.append(True)
+        except BaseException as exc:  # pragma: no cover - failure detail
+            failures.append(exc)
 
     threads = [threading.Thread(target=acquire) for _ in range(2)]
     for thread in threads:
@@ -140,7 +146,9 @@ def test_threads_are_serialized_without_os_help(
     for thread in threads:
         thread.join()
 
-    assert not overlapped
+    assert failures == []
+    assert entered == [True, True]
+    assert overlapped == []
 
 
 def test_a_lock_excludes_another_process(tmp_path: Path) -> None:

@@ -92,9 +92,10 @@ def held_lock(
 ) -> Iterator[IO[str]]:
     """Hold the advisory lock at ``path`` for the duration of the block.
 
-    The lock guards a short critical section, not a user-visible edit session,
-    so it carries no owner metadata and no TTL: the OS releases it when the
-    holding process exits.
+    A per-path mutex excludes other threads in this process before the OS lock
+    excludes other processes. The lock guards a short critical section, not a
+    user-visible edit session, so it carries no owner metadata and no TTL: the
+    OS releases its layer when the holding process exits.
 
     Args:
         path (Path): The lock file. Parent directories are created.
@@ -105,7 +106,8 @@ def held_lock(
         IO[str]: The open lock file handle.
 
     Raises:
-        LockTimeoutError: When the lock stays held for longer than ``timeout``.
+        LockTimeoutError: When another thread or process holds the lock for
+            longer than ``timeout``.
     """
     deadline = time.monotonic() + timeout
     process_lock = _process_lock(path)
