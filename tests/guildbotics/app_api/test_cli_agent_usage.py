@@ -213,3 +213,63 @@ async def test_tools_without_usage_or_login(readers, cache, monkeypatch):
     assert response.usage is None and response.check is None
     assert cache.checks() == {}
     assert readers.calls == ["codex"]
+
+
+async def test_a_logout_while_probing_does_not_start_a_second_probe(
+    readers, cache, monkeypatch
+):
+    read = asyncio.create_task(cache.read("codex"))
+    await settle()
+    monkeypatch.setattr(module, "has_credentials", lambda _: False)
+
+    logged_out = await cache.read("codex")
+
+    assert logged_out.usage is None and logged_out.check is None
+    monkeypatch.setattr(module, "has_credentials", lambda _: True)
+    back = asyncio.create_task(cache.read("codex"))
+    await settle()
+
+    assert readers.calls == ["codex"]
+    assert back.done()
+    assert back.result().refreshing and back.result().usage is None
+    read.cancel()
+
+
+async def test_shutdown_releases_a_probe_whose_tool_logged_out(
+    readers, cache, monkeypatch
+):
+    read = asyncio.create_task(cache.read("codex"))
+    await settle()
+    monkeypatch.setattr(module, "has_credentials", lambda _: False)
+    await cache.read("codex")
+
+    await cache.aclose()
+
+    assert readers.cancelled == ["codex"]
+    with pytest.raises(asyncio.CancelledError):
+        await read
+
+
+async def test_a_reading_taken_before_a_logout_is_not_published(
+    readers, cache, monkeypatch
+):
+    read = asyncio.create_task(cache.read("codex"))
+    await settle()
+    monkeypatch.setattr(module, "has_credentials", lambda _: False)
+    await cache.read("codex")
+    readers.gates["codex"].set()
+    await read
+
+    assert cache.checks() == {}
+
+    monkeypatch.setattr(module, "has_credentials", lambda _: True)
+    readers.percent = 55.0
+    fresh = asyncio.create_task(cache.read("codex"))
+    await settle()
+    assert readers.calls == ["codex", "codex"]
+    readers.gates["codex"].set()
+
+    response = await fresh
+
+    assert response.usage is not None
+    assert response.usage.windows[0].used_percent == 55.0

@@ -61,6 +61,13 @@ def _usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
 
 @dataclass
 class _ToolUsage:
+    """One tool's reading, and the probe fetching the next one.
+
+    The entry outlives a logout, because it is what holds the tool to one
+    probe at a time and what lets shutdown release a running probe's
+    environment. A logout drops the reading instead of the entry.
+    """
+
     #: The last successful reading; a failed probe leaves it in place.
     usage: CliAgentUsage | None = None
     #: The latest completed probe, whatever its outcome.
@@ -68,9 +75,22 @@ class _ToolUsage:
     #: ``time.monotonic()`` when ``check`` completed.
     checked: float = 0.0
     probe: asyncio.Task[None] | None = None
+    #: Set when a logout dropped the reading while ``probe`` was still
+    #: running. That probe reads the account that just went away, so its
+    #: result is discarded and no reader waits for it, while the task stays
+    #: here so the tool still runs one probe at a time and ``aclose()`` still
+    #: releases its environment.
+    retired: bool = False
 
     def probing(self) -> bool:
         return self.probe is not None and not self.probe.done()
+
+    def forget(self) -> None:
+        """Drop the reading of an account that is no longer logged in."""
+        self.usage = None
+        self.check = None
+        self.checked = 0.0
+        self.retired = self.probing()
 
 
 class CliAgentUsageCache:
@@ -100,7 +120,9 @@ class CliAgentUsageCache:
         if name not in CLI_AGENT_USAGE_READERS:
             raise AppApiError("validation_error", status_code=422)
         if not has_credentials(cli_agent_info(name)):
-            self._tools.pop(name, None)
+            tool = self._tools.get(name)
+            if tool is not None:
+                tool.forget()
             return CliAgentUsageResponse(agent=name)
         tool = self._tools.setdefault(name, _ToolUsage())
         due = tool.check is None or time.monotonic() - tool.checked >= (
@@ -109,9 +131,15 @@ class CliAgentUsageCache:
             else USAGE_RETRY_SECONDS
         )
         if (refresh or due) and not tool.probing():
+            tool.retired = False
             tool.probe = asyncio.create_task(self._probe(name, tool))
         probe = tool.probe
-        if probe is not None and not probe.done() and (refresh or tool.usage is None):
+        if (
+            probe is not None
+            and not probe.done()
+            and not tool.retired
+            and (refresh or tool.usage is None)
+        ):
             # A reader that goes away must not cancel the probe others share.
             await asyncio.shield(probe)
         return CliAgentUsageResponse(
@@ -138,6 +166,9 @@ class CliAgentUsageCache:
                 logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
                     "Could not read %s usage: %s", name, exc
                 )
+        if tool.retired:
+            # This probe read the account that logged out while it ran.
+            return
         tool.usage = usage or tool.usage
         tool.check = CliAgentUsageCheck(
             status="succeeded" if usage is not None else "failed",
