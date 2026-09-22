@@ -902,24 +902,6 @@ class GitHubTicketManager(TicketManager):
         tasks = sorted(tasks)
         return tasks, task_metadata
 
-    async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
-        """
-        Retrieve a ticket from a specific internal lane.
-
-        get_task_to_work_on() is the primary entrypoint for the simplified workflow;
-        this method remains as a narrow compatibility helper for direct callers.
-        """
-        tasks, task_metadata = self._build_project_tasks(all_items)
-
-        for task in tasks:
-            if task.status != column_name:
-                continue
-            assert task.id, "Task ID must be set"
-            selected = await self._select_actionable_task(task, task_metadata[task.id])
-            if selected:
-                return selected
-        return None
-
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
@@ -969,31 +951,61 @@ class GitHubTicketManager(TicketManager):
             return task
         return None
 
-    async def get_task_to_work_on(self) -> Task | None:
-        """
-        Retrieve a ticket that the person can work on.
-
-        Open pull requests the member wrote or reviews come first: they are
-        work in flight that someone is waiting on. Then the ready lane, then
-        the working lane.
-
-        Returns:
-            Task | None: The next available Task or None.
-        """
-        pull_request = await self._select_pull_request_work()
-        if pull_request is not None:
-            return pull_request
+    async def get_task_candidates(self) -> list[Task]:
+        """Return every currently actionable PR and issue in patrol order."""
+        candidates: list[Task] = []
+        for item in await self._search_pull_requests():
+            pull_request = await self._load_pull_request(item)
+            work = pull_request_work(pull_request, self._login)
+            if work is None:
+                continue
+            task = self._pull_request_task(pull_request, work)
+            if work == REVIEW_LIMIT:
+                await self._announce_review_limit(task)
+                continue
+            candidates.append(task)
 
         all_items = await self.get_all_tickets()
         tasks, task_metadata = self._build_project_tasks(all_items)
-
         ready_tasks = [task for task in tasks if task.status == Task.READY]
         working_tasks = [task for task in tasks if task.status != Task.READY]
         for task in [*ready_tasks, *working_tasks]:
             assert task.id, "Task ID must be set"
             selected = await self._select_actionable_task(task, task_metadata[task.id])
             if selected:
-                return selected
+                candidates.append(selected)
+        return candidates
+
+    async def refresh_task(self, candidate: Task) -> Task | None:
+        """Re-read one patrol candidate and apply the canonical work test."""
+        if candidate.pull_request_url:
+            if candidate.number is None or not candidate.repository:
+                return None
+            pull_request = await self._load_pull_request(
+                {
+                    "number": candidate.number,
+                    "html_url": candidate.pull_request_url,
+                    "repository_url": (
+                        f"{self.base_url}/repos/{self.owner}/{candidate.repository}"
+                    ),
+                }
+            )
+            work = pull_request_work(pull_request, self._login)
+            if work is None:
+                return None
+            task = self._pull_request_task(pull_request, work)
+            if work == REVIEW_LIMIT:
+                await self._announce_review_limit(task)
+                return None
+            return task
+
+        all_items = await self.get_all_tickets()
+        tasks, task_metadata = self._build_project_tasks(all_items)
+        for task in tasks:
+            if task.id != candidate.id:
+                continue
+            assert task.id, "Task ID must be set"
+            return await self._select_actionable_task(task, task_metadata[task.id])
         return None
 
     # --------------------------------------------------------------------- #
@@ -1052,20 +1064,6 @@ class GitHubTicketManager(TicketManager):
         if not node:
             raise RuntimeError(f"Pull request unavailable: {item.get('html_url')}")
         return parse_pull_request(node, repo)
-
-    async def _select_pull_request_work(self) -> Task | None:
-        """The oldest-updated open PR that asks something of this member."""
-        for item in await self._search_pull_requests():
-            pull_request = await self._load_pull_request(item)
-            work = pull_request_work(pull_request, self._login)
-            if work is None:
-                continue
-            task = self._pull_request_task(pull_request, work)
-            if work == REVIEW_LIMIT:
-                await self._announce_review_limit(task)
-                continue
-            return task
-        return None
 
     def _pull_request_task(
         self, pull_request: PullRequest, trigger_reason: str
