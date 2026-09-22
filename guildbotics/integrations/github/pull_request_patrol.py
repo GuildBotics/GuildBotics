@@ -57,6 +57,8 @@ query($owner: String!, $repo: String!, $number: Int!) {
       url
       title
       body
+      state
+      isDraft
       createdAt
       headRefOid
       author { login }
@@ -134,6 +136,8 @@ class PullRequest:
     url: str
     title: str
     body: str
+    state: str
+    is_draft: bool
     created_at: str
     repository: str
     author: str
@@ -209,6 +213,8 @@ def parse_pull_request(node: dict, repository: str) -> PullRequest:
         url=str(node.get("url") or ""),
         title=str(node.get("title") or ""),
         body=str(node.get("body") or ""),
+        state=str(node.get("state") or "OPEN"),
+        is_draft=bool(node.get("isDraft")),
         created_at=str(node.get("createdAt") or ""),
         repository=repository,
         author=_login(node.get("author")),
@@ -344,7 +350,7 @@ def pull_request_work(pr: PullRequest, me: str) -> str | None:
         ``FEEDBACK`` or ``REVIEW`` for work to dispatch, ``REVIEW_LIMIT`` when
         the re-review budget is exhausted and not yet announced, else ``None``.
     """
-    if _is_suppressed(pr, me):
+    if pr.state != "OPEN" or pr.is_draft or _is_suppressed(pr, me):
         return None
     if pr.author == me:
         return (

@@ -21,6 +21,7 @@ from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
+from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
@@ -73,6 +74,7 @@ class TaskScheduler:
         self._cancel_event = threading.Event()
         #: The last reason AI CLI work was deferred here, so it is logged once.
         self._environment_refusal = ""
+        self._ticket_patrol_candidates: dict[str, list[WorkflowInvocation]] = {}
         self._threads: list[threading.Thread] = []
         # Queued chat events are executed here, in each member's single worker
         # thread, so a member's chat / ticket / scheduled / routine work shares
@@ -319,9 +321,18 @@ class TaskScheduler:
         consecutive_errors: int,
     ) -> tuple[int, int, datetime.datetime | None, bool]:
         """Check and execute routine tasks, routing ticket workflows through the selector."""
-        routine_due = next_routine_time is None or start_time >= next_routine_time
+        pending_ticket_patrol = bool(
+            self._ticket_patrol_candidates.get(person.person_id)
+        )
+        routine_due = (
+            pending_ticket_patrol
+            or next_routine_time is None
+            or start_time >= next_routine_time
+        )
         routine_command = ""
-        if self.routine_source_enabled and routine_commands and routine_due:
+        if self.routine_source_enabled and pending_ticket_patrol:
+            routine_command = "workflows/ticket_driven_workflow"
+        elif self.routine_source_enabled and routine_commands and routine_due:
             routine_command = routine_commands[
                 routine_command_index % len(routine_commands)
             ]
@@ -335,12 +346,15 @@ class TaskScheduler:
                 # yet (the environment is being built, or is not set up). It
                 # is deferred, not failed: the worker stays up and the ticket
                 # is picked again once the device is ready.
+                self._ticket_patrol_candidates.pop(person.person_id, None)
                 ok = True
+                patrol_exhausted = True
             elif routine_command == "workflows/ticket_driven_workflow":
-                ok = self._patrol_tickets(
+                ok, patrol_exhausted = self._patrol_tickets(
                     loop, context, person, routine_command, start_time
                 )
             else:
+                patrol_exhausted = True
                 with trace_scope(
                     "routine",
                     person_id=person.person_id,
@@ -358,11 +372,14 @@ class TaskScheduler:
                             "routine", person, routine_command, start_time
                         ),
                     )
-            now = datetime.datetime.now()
-            next_routine_time = now + datetime.timedelta(
-                minutes=self.routine_interval_minutes
-            )
-            self._record_member_routine(person, last=now, next_at=next_routine_time)
+            if patrol_exhausted:
+                now = datetime.datetime.now()
+                next_routine_time = now + datetime.timedelta(
+                    minutes=self.routine_interval_minutes
+                )
+                self._record_member_routine(person, last=now, next_at=next_routine_time)
+            else:
+                next_routine_time = None
             consecutive_errors, should_stop = self._update_consecutive_errors(
                 ok,
                 source="routine",
@@ -414,8 +431,8 @@ class TaskScheduler:
         person: Person,
         command: str,
         start_time: datetime.datetime,
-    ) -> bool:
-        """Select one actionable ticket, then dispatch it as tracked work.
+    ) -> tuple[bool, bool]:
+        """Refresh and dispatch one candidate from the current patrol batch.
 
         Selection runs outside any trace and outside the execution boundary:
         an idle patrol (no actionable ticket) leaves neither diagnostics
@@ -430,8 +447,19 @@ class TaskScheduler:
         from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 
         attributes: dict[str, Any] = {"service_run_id": self.service_run_id}
+        selector = TicketSelector(context)
+        candidates = self._ticket_patrol_candidates.setdefault(person.person_id, [])
         try:
-            invocation = self._run(loop, TicketSelector(context).select(person))
+            if not candidates:
+                candidates.extend(self._run(loop, selector.candidates(person)))
+                if not candidates:
+                    self._ticket_patrol_candidates.pop(person.person_id, None)
+                    context.logger.debug(
+                        f"No active ticket task found for person '{person.person_id}'."
+                    )
+                    return True, True
+            candidate = candidates.pop(0)
+            invocation = self._run(loop, selector.refresh(person, candidate))
         except Exception as exc:
             # Bind outside the except block: Python unbinds `exc` when the
             # block exits, but the closure runs inside run_with_logging.
@@ -446,17 +474,20 @@ class TaskScheduler:
                 command=command,
                 attributes=attributes,
             ):
-                return bool(
-                    self._run(
-                        loop, run_with_logging(context, command, "routine", _reraise)
-                    )
+                return (
+                    bool(
+                        self._run(
+                            loop,
+                            run_with_logging(context, command, "routine", _reraise),
+                        )
+                    ),
+                    not candidates,
                 )
 
         if not invocation:
-            context.logger.debug(
-                f"No active ticket task found for person '{person.person_id}'."
-            )
-            return True
+            if not candidates:
+                self._ticket_patrol_candidates.pop(person.person_id, None)
+            return True, not candidates
 
         async def _dispatch() -> None:
             dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
@@ -471,7 +502,7 @@ class TaskScheduler:
             command=command,
             attributes=attributes,
         ) as trace:
-            return bool(
+            ok = bool(
                 self._run_work(
                     loop,
                     person,
@@ -479,11 +510,14 @@ class TaskScheduler:
                     command,
                     run_with_logging(context, command, "routine", _dispatch),
                     work_id=trace.trace_id,
-                    work_identity=_slot_identity(
-                        "routine", person, command, start_time
+                    work_identity=_ticket_slot_identity(
+                        person, command, start_time, invocation
                     ),
                 )
             )
+        if not candidates:
+            self._ticket_patrol_candidates.pop(person.person_id, None)
+        return ok, not candidates
 
     def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small steps so the stop event can interrupt waits."""
@@ -665,3 +699,20 @@ def _slot_identity(
         "command": command,
         "slot": start_time.replace(second=0, microsecond=0).isoformat(),
     }
+
+
+def _ticket_slot_identity(
+    person: Person,
+    command: str,
+    start_time: datetime.datetime,
+    invocation: WorkflowInvocation,
+) -> dict[str, str]:
+    """Identify one patrol item within a scheduler slot."""
+    identity = _slot_identity("routine", person, command, start_time)
+    identity.update(
+        {
+            "ticket_url": str(invocation.payload.get("ticket_url") or ""),
+            "trigger_reason": str(invocation.payload.get("trigger_reason") or ""),
+        }
+    )
+    return identity

@@ -285,7 +285,7 @@ Open the **Service** screen in the desktop app and press **Run**. A worker start
 
 The screen has three execution sources, each toggled individually with **Include in service run** (only while the service is stopped).
 
-- **Patrol commands**: runs each member's patrol commands once per **Patrol interval (minutes)**. A new member with a GitHub account gets the ticket-driven workflow as its default; a member without one starts with no patrol commands, so pick them under **Setup → Members → Patrol**
+- **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. A new member with a GitHub account gets the ticket-driven workflow as its default; a member without one starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
@@ -345,7 +345,7 @@ For the manual Slack App setup steps (including the list of required scopes), sh
 
 Configure two kinds of automated execution per member under **Setup → Members → Patrol** in the desktop app. Both are run by the service you start on the **Service** screen.
 
-- **Patrol commands**: while the service is running, these run repeatedly in round-robin order once per **Patrol interval (minutes)** (for example, patrolling the task board). Turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work
+- **Patrol commands**: while the service is running, these run repeatedly in round-robin order (for example, patrolling the task board). The **Patrol interval (minutes)** is the wait after no patrol work remains; a ticket patrol continues through all candidates without waiting for that interval between them. Turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.

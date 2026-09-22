@@ -33,6 +33,20 @@ class TicketManager(ABC):
         """
         pass
 
+    async def get_task_candidates(self) -> list[Task]:
+        """Return actionable tasks in patrol order.
+
+        Integrations that can enumerate work should override this method. The
+        default keeps other ticket managers compatible with the single-task
+        interface.
+        """
+        task = await self.get_task_to_work_on()
+        return [task] if task is not None else []
+
+    async def refresh_task(self, task: Task) -> Task | None:
+        """Re-read one candidate immediately before it is dispatched."""
+        return task
+
     @abstractmethod
     async def move_ticket(self, task: Task, new_status: str) -> bool:
         """

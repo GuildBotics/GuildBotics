@@ -1250,6 +1250,72 @@ async def test_pull_request_work_precedes_the_ready_lane():
 
 
 @pytest.mark.asyncio
+async def test_task_candidates_include_all_prs_then_ready_and_working_issues():
+    manager = _Manager(
+        items=[
+            _item(number=1, status="In Progress"),
+            _item(number=2, status="Todo"),
+        ]
+    )
+    manager.search_items = [_search_item(4), _search_item(3)]
+    manager.pull_request_nodes = {
+        3: _pull_request_node(number=3, threads=[_thread("reviewer")]),
+        4: _pull_request_node(number=4, threads=[_thread("reviewer")]),
+    }
+
+    candidates = await manager.get_task_candidates()
+
+    assert [(task.number, task.trigger_reason) for task in candidates] == [
+        (4, "pull_request_feedback"),
+        (3, "pull_request_feedback"),
+        (2, "ready_lane"),
+        (1, "working_lane"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_refresh_pull_request_skips_closed_or_draft_candidate():
+    node = _pull_request_node(threads=[_thread("reviewer")])
+    manager = _patrol_manager(node)
+    candidate = (await manager.get_task_candidates())[0]
+
+    node["state"] = "CLOSED"
+    assert await manager.refresh_task(candidate) is None
+
+    node["state"] = "OPEN"
+    node["isDraft"] = True
+    assert await manager.refresh_task(candidate) is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_issue_uses_current_comments_and_trigger_reason():
+    manager = _Manager(items=[_item(number=1, status="In Progress")])
+    candidate = (await manager.get_task_candidates())[0]
+    endpoint = "/repos/GuildBotics/repo/issues/1/comments"
+    manager.client_stub.responses[endpoint] = [
+        {
+            "user": {"login": "human"},
+            "body": "Please update this too",
+            "created_at": "2026-01-02T00:00:00Z",
+        }
+    ]
+
+    refreshed = await manager.refresh_task(candidate)
+
+    assert refreshed is not None
+    assert refreshed.trigger_reason == "issue_comment"
+
+    manager.client_stub.responses[endpoint] = [
+        {
+            "user": {"login": "aiko-gh"},
+            "body": "Handled",
+            "created_at": "2026-01-03T00:00:00Z",
+        }
+    ]
+    assert await manager.refresh_task(candidate) is None
+
+
+@pytest.mark.asyncio
 async def test_ready_lane_is_selected_when_no_pull_request_needs_the_member():
     manager = _patrol_manager(
         _pull_request_node(threads=[_thread("aiko-gh", "reviewer")]),

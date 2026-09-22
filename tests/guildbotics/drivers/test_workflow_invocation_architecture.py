@@ -182,14 +182,19 @@ def test_task_scheduler_uses_ticket_selector(monkeypatch):
         def __init__(self, context):
             pass
 
-        async def select(self, person):
-            return WorkflowInvocation(
-                command="workflows/ticket_driven_workflow",
-                person_id="alice",
-                source="routine",
-                trigger_type="ticket",
-                payload={"task": {"title": "stub", "description": "stub"}},
-            )
+        async def candidates(self, person):
+            return [
+                WorkflowInvocation(
+                    command="workflows/ticket_driven_workflow",
+                    person_id="alice",
+                    source="routine",
+                    trigger_type="ticket",
+                    payload={"task": {"title": "stub", "description": "stub"}},
+                )
+            ]
+
+        async def refresh(self, person, candidate):
+            return candidate
 
     dispatched = []
 
@@ -248,8 +253,8 @@ def test_task_scheduler_ticket_selector_returns_none(monkeypatch):
         def __init__(self, context):
             pass
 
-        async def select(self, person):
-            return None
+        async def candidates(self, person):
+            return []
 
     dispatched = []
 
@@ -310,7 +315,7 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
         def __init__(self, context):
             pass
 
-        async def select(self, person):
+        async def candidates(self, person):
             raise RuntimeError("Selector API Failure")
 
     dispatched = []
