@@ -62,6 +62,9 @@ _REVIEW_EVENTS = {
     "request-changes": "REQUEST_CHANGES",
     "comment": "COMMENT",
 }
+PR_INSPECT_FEEDBACK_SOURCES = frozenset(
+    {"conversation_comments", "review_summaries", "review_threads"}
+)
 
 
 class MemberCapabilityError(RuntimeError):
@@ -419,6 +422,7 @@ class MemberGitHubCapabilityService:
         }
         if include_comments:
             result["conversation_comments"] = await self._issue_comments(resource)
+            result["review_summaries"] = await self._review_summaries(resource)
             result["review_threads"] = await self._review_threads(resource)
         if include_diff:
             result["files"] = await self._pull_request_files(resource)
@@ -1346,11 +1350,41 @@ class MemberGitHubCapabilityService:
 
     async def _issue_comments(self, resource: GitHubResource) -> list[dict[str, Any]]:
         client = await self._get_client()
-        resp = await client.get(
+        endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments"
         )
-        _raise_for_status(resp)
-        return [self._comment_summary(comment) for comment in _as_list(resp.json())]
+        comments: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = await client.get(
+                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
+            )
+            _raise_for_status(resp)
+            page_items = _as_list(resp.json())
+            comments.extend(self._comment_summary(comment) for comment in page_items)
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
+        return comments
+
+    async def _review_summaries(self, resource: GitHubResource) -> list[dict[str, Any]]:
+        client = await self._get_client()
+        endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews"
+        )
+        reviews: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = await client.get(
+                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
+            )
+            _raise_for_status(resp)
+            page_items = _as_list(resp.json())
+            reviews.extend(self._review_summary(review) for review in page_items)
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
+        return reviews
 
     async def _pull_request_files(
         self, resource: GitHubResource
@@ -1569,6 +1603,21 @@ class MemberGitHubCapabilityService:
             "author_type": get_author_type(self.person, login) if login else "",
             "created_at": comment.get("created_at"),
             "html_url": comment.get("html_url"),
+        }
+
+    def _review_summary(self, review: dict[str, Any]) -> dict[str, Any]:
+        body = str(review.get("body") or "")
+        user = review.get("user") or {}
+        login = str(user.get("login") or "")
+        return {
+            "id": review.get("id"),
+            "body": body,
+            "author": login,
+            "author_type": get_author_type(self.person, login) if login else "",
+            "state": review.get("state", ""),
+            "submitted_at": review.get("submitted_at"),
+            "html_url": review.get("html_url"),
+            "commit_id": review.get("commit_id"),
         }
 
     def _pull_request_file_summary(self, file: dict[str, Any]) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from guildbotics.capabilities.member_github import (
     MAX_ARTIFACT_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
+    PR_INSPECT_FEEDBACK_SOURCES,
     _append_issue_link,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
@@ -1570,6 +1571,93 @@ async def test_pr_inspect_includes_review_thread_resolution_fields():
     assert result["review_threads"][0]["resolved"] is True
     assert result["review_threads"][0]["replyable"] is True
     assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_includes_review_summaries_without_inline_comments():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "PR")
+    fake.get_payloads["/repos/owner/repo/pulls/7/reviews"] = [
+        {
+            "id": 201,
+            "body": "Please re-request this review.",
+            "state": "COMMENTED",
+            "submitted_at": "2026-01-01T00:02:00Z",
+            "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-201",
+            "commit_id": "abc123",
+            "user": {"login": "reviewer"},
+        }
+    ]
+    fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
+    fake.graphql_payloads.append(_review_threads_payload())
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7", include_comments=True
+    )
+
+    assert result["review_summaries"] == [
+        {
+            "id": 201,
+            "body": "Please re-request this review.",
+            "author": "reviewer",
+            "author_type": "User",
+            "state": "COMMENTED",
+            "submitted_at": "2026-01-01T00:02:00Z",
+            "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-201",
+            "commit_id": "abc123",
+        }
+    ]
+    assert PR_INSPECT_FEEDBACK_SOURCES <= result.keys()
+
+
+@pytest.mark.asyncio
+async def test_pr_inspect_pages_through_conversation_comments_and_review_summaries():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "PR")
+    comments_endpoint = "/repos/owner/repo/issues/7/comments"
+    reviews_endpoint = "/repos/owner/repo/pulls/7/reviews"
+    fake.get_sequences[comments_endpoint] = [
+        [
+            {
+                "id": index,
+                "body": f"comment {index}",
+                "user": {"login": "reviewer"},
+            }
+            for index in range(100)
+        ],
+        [{"id": 100, "body": "latest comment", "user": {"login": "reviewer"}}],
+    ]
+    fake.get_sequences[reviews_endpoint] = [
+        [
+            {
+                "id": index,
+                "body": f"review {index}",
+                "user": {"login": "reviewer"},
+            }
+            for index in range(100)
+        ],
+        [{"id": 100, "body": "latest review", "user": {"login": "reviewer"}}],
+    ]
+    fake.graphql_payloads.append(_review_threads_payload())
+    service._client = fake
+
+    result = await service.pr_inspect(
+        "https://github.com/owner/repo/pull/7", include_comments=True
+    )
+
+    assert result["conversation_comments"][-1]["body"] == "latest comment"
+    assert result["review_summaries"][-1]["body"] == "latest review"
+    assert [call[:2] for call in fake.gets if call[0] == comments_endpoint] == [
+        (comments_endpoint, {"per_page": 100, "page": 1}),
+        (comments_endpoint, {"per_page": 100, "page": 2}),
+    ]
+    assert [call[:2] for call in fake.gets if call[0] == reviews_endpoint] == [
+        (reviews_endpoint, {"per_page": 100, "page": 1}),
+        (reviews_endpoint, {"per_page": 100, "page": 2}),
+    ]
 
 
 @pytest.mark.asyncio
