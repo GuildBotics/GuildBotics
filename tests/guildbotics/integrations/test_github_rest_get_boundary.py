@@ -17,7 +17,7 @@ GITHUB_REST_FILES = (
 # Every low-level REST GET belongs here. Collection reads have one entry in
 # paginated_items; the remaining entries are single resources or deliberately
 # bounded queries. Adding another raw collection read changes this inventory.
-EXPECTED_REST_GETS = Counter(
+EXPECTED_REST_GET_SOURCES = Counter(
     {
         (
             "guildbotics/capabilities/member_github.py",
@@ -115,6 +115,18 @@ EXPECTED_REST_GETS = Counter(
 )
 
 
+def _expression_shape(source: str) -> str:
+    return ast.dump(ast.parse(source, mode="eval").body, annotate_fields=False)
+
+
+EXPECTED_REST_GETS = Counter(
+    {
+        (*entry[:3], _expression_shape(entry[3])): count
+        for entry, count in EXPECTED_REST_GET_SOURCES.items()
+    }
+)
+
+
 class _RestGetVisitor(ast.NodeVisitor):
     def __init__(self, path: str) -> None:
         self.path = path
@@ -143,7 +155,7 @@ class _RestGetVisitor(ast.NodeVisitor):
                         self.path,
                         self.functions[-1],
                         callee,
-                        ast.unparse(call.args[0]),
+                        ast.dump(call.args[0], annotate_fields=False),
                     )
                 ] += 1
         self.generic_visit(node)
