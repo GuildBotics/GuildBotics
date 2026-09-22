@@ -403,7 +403,7 @@ def test_review_limit_is_announced_only_once():
     assert _work(announced) is None
 
 
-def test_explicit_request_and_thread_replies_outlive_the_limit():
+def test_only_explicit_request_outlives_the_limit():
     requested = _theirs(
         reviews={"nodes": _rounds(3)},
         reviewRequests={"nodes": [{"requestedReviewer": {"login": ME}}]},
@@ -414,4 +414,25 @@ def test_explicit_request_and_thread_replies_outlive_the_limit():
     )
 
     assert _work(requested) == REVIEW
-    assert _work(replied) == REVIEW
+    assert _work(replied) == REVIEW_LIMIT
+
+
+def test_thread_reply_after_the_review_limit_notice_asks_nothing():
+    node = _theirs(
+        reviews={"nodes": _rounds(3)},
+        comments={
+            "nodes": [_comment(ME, _notice("review_limit"), "2026-01-05T00:00:00Z")]
+        },
+        reviewThreads={"nodes": [_thread(ME, "other", at="2026-01-06T00:00:00Z")]},
+    )
+
+    assert _work(node) is None
+
+
+def test_thread_reply_before_the_review_limit_is_review_work():
+    node = _theirs(
+        reviews={"nodes": _rounds(2)},
+        reviewThreads={"nodes": [_thread(ME, "other")]},
+    )
+
+    assert _work(node) == REVIEW

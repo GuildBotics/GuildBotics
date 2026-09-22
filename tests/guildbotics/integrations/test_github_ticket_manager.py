@@ -12,7 +12,7 @@ from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
     workflow_status_comment_payload,
 )
-from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.i18n_tool import set_language, t
 
 
 class _Response:
@@ -1384,6 +1384,23 @@ async def test_review_limit_is_announced_once_and_not_dispatched():
     )
     assert await manager.first_task() is None
     assert len(manager.comments_added) == 1
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_phrases"),
+    [
+        ("en", ("request my review", "Slack", "interactive session")),
+        ("ja", ("review request", "Slack", "対話セッション")),
+    ],
+)
+def test_review_limit_notice_explains_how_to_restart(language, expected_phrases):
+    set_language(language)
+
+    message = t(
+        "integrations.github.github_ticket_manager.review_limit_reached", count=3
+    )
+
+    assert all(phrase in message for phrase in expected_phrases)
 
 
 @pytest.mark.asyncio
