@@ -153,6 +153,10 @@ class _RestGetVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self.functions.pop()
 
+    @property
+    def function_name(self) -> str:
+        return self.functions[-1] if self.functions else "<module>"
+
     def visit_Await(self, node: ast.Await) -> None:
         call = node.value
         if isinstance(call, ast.Call):
@@ -179,7 +183,7 @@ class _RestGetVisitor(ast.NodeVisitor):
                 self.calls[
                     (
                         self.path,
-                        self.functions[-1],
+                        self.function_name,
                         callee,
                         ast.dump(endpoint, annotate_fields=False),
                     )
@@ -198,7 +202,7 @@ class _RestGetVisitor(ast.NodeVisitor):
             self.calls[
                 (
                     self.path,
-                    self.functions[-1],
+                    self.function_name,
                     ast.unparse(node.func),
                     ast.dump(endpoint, annotate_fields=False),
                 )
@@ -309,6 +313,24 @@ async def load(client, owner, repo):
                 "load",
                 "client.request",
                 _expression_shape('f"/repos/{owner}/{repo}/labels"'),
+            ): 1,
+        }
+    )
+
+
+def test_github_rest_get_finder_classifies_module_level_requests():
+    tree = ast.parse('response = requests.get("https://api.github.com/rate_limit")')
+    visitor = _RestGetVisitor("guildbotics/example.py", provider_source=False)
+
+    visitor.visit(tree)
+
+    assert visitor.calls == Counter(
+        {
+            (
+                "guildbotics/example.py",
+                "<module>",
+                "requests.get",
+                _expression_shape('"https://api.github.com/rate_limit"'),
             ): 1,
         }
     )
