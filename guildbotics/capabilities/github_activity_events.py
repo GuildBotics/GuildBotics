@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Any, cast
 
 from guildbotics.entities.team import Person, Service, Team
-from guildbotics.integrations.github.github_utils import create_github_client
+from guildbotics.integrations.github.github_utils import (
+    create_github_client,
+    paginated_items,
+)
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
@@ -121,30 +124,30 @@ class GitHubActivityEventPoller:
     async def _closed_pull_requests(
         self, client: Any, items: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected GitHub pull request response")
+            return [item for item in payload if isinstance(item, dict)]
+
         repositories = {_repository_name(item) for item in items}
         pull_requests: list[dict[str, Any]] = []
         for repository in sorted(
             repository for repository in repositories if repository
         ):
-            response = await client.get(
-                f"/repos/{repository}/pulls",
+            endpoint = f"/repos/{repository}/pulls"
+            async for pull_request in paginated_items(
+                client.get,
+                endpoint,
+                parse_page,
                 params={
                     "state": "closed",
                     "sort": "updated",
                     "direction": "desc",
-                    "per_page": 100,
                 },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, list):
-                raise RuntimeError(
-                    f"Unexpected GitHub pull request response for {repository}"
-                )
-            for pull_request in payload:
-                if not isinstance(pull_request, dict) or not pull_request.get(
-                    "closed_at"
-                ):
+            ):
+                if not pull_request.get("closed_at"):
                     continue
                 pull_requests.append(
                     {

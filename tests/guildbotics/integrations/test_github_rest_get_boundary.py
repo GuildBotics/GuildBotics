@@ -7,112 +7,111 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).parents[3]
-GITHUB_REST_FILES = (
-    "guildbotics/capabilities/member_github.py",
-    "guildbotics/integrations/github/github_ticket_manager.py",
-    "guildbotics/integrations/github/actions_client.py",
-    "guildbotics/integrations/github/github_utils.py",
-)
 
-# Every low-level REST GET belongs here. Collection reads have one entry in
-# paginated_items; the remaining entries are single resources or deliberately
-# bounded queries. Adding another raw collection read changes this inventory.
-EXPECTED_REST_GET_SOURCES = Counter(
-    {
-        (
-            "guildbotics/capabilities/member_github.py",
-            "context",
-            "client.get",
-            "'/rate_limit'",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "issue_update",
-            "client.get",
-            "issue_endpoint",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "_issue_state",
-            "client.get",
-            "f'/repos/{resource.owner}/{resource.repo}/issues/{resource.number}'",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "open_pr_checks",
-            "client.get",
-            "f'/repos/{owner}/{repo}/pulls'",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "pr_create",
-            "client.get",
-            "endpoint",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "default_branch",
-            "client.get",
-            "f'/repos/{owner}/{repo}'",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "_item",
-            "client.get",
-            "f'/repos/{resource.owner}/{resource.repo}/{collection}/{resource.number}'",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "_pull_request_freshness",
-            "client.get",
-            'f"/repos/{resource.owner}/{resource.repo}/compare/'
-            "{quote(base_sha, safe='')}...{quote(head_sha, safe='')}\"",
-        ): 1,
-        (
-            "guildbotics/capabilities/member_github.py",
-            "_pull_request_current_base_sha",
-            "client.get",
-            'f"/repos/{resource.owner}/{resource.repo}/branches/'
-            "{quote(branch, safe='')}\"",
-        ): 1,
-        (
-            "guildbotics/integrations/github/github_ticket_manager.py",
-            "_get_pull_request_from_url",
-            "client.get",
-            "f'/repos/{owner}/{repo}/pulls/{number}'",
-        ): 1,
-        (
-            "guildbotics/integrations/github/github_ticket_manager.py",
-            "_search_pull_requests",
-            "client.get",
-            "'/search/issues'",
-        ): 1,
-        (
-            "guildbotics/integrations/github/github_ticket_manager.py",
-            "add_comment_to_ticket",
-            "client.get",
-            "f'{self._get_issue_path(task.repository)}/{issue_number}'",
-        ): 1,
-        (
-            "guildbotics/integrations/github/actions_client.py",
-            "_redirect_or_body",
-            "self._get",
-            "endpoint",
-        ): 1,
-        (
-            "guildbotics/integrations/github/actions_client.py",
-            "_get",
-            "self._client.get",
-            "endpoint",
-        ): 1,
-        (
-            "guildbotics/integrations/github/github_utils.py",
-            "paginated_items",
-            "get_page",
-            "endpoint",
-        ): 1,
-    }
-)
+# Every low-level REST GET belongs here. Each value records why a raw request
+# is correct: it reads one resource, is deliberately bounded, wraps the HTTP
+# transport, or is the one request issued by the shared pagination boundary.
+# Adding a raw GET requires both a classification and a concrete reason.
+EXPECTED_REST_GET_CLASSIFICATIONS = {
+    (
+        "guildbotics/capabilities/member_github.py",
+        "context",
+        "client.get",
+        "'/rate_limit'",
+    ): "single_resource: GitHub exposes one rate-limit status document",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "issue_update",
+        "client.get",
+        "issue_endpoint",
+    ): "single_resource: issue_endpoint identifies one issue",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "_issue_state",
+        "client.get",
+        "f'/repos/{resource.owner}/{resource.repo}/issues/{resource.number}'",
+    ): "single_resource: owner, repository, and issue number identify one issue",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "open_pr_checks",
+        "client.get",
+        "f'/repos/{owner}/{repo}/pulls'",
+    ): "bounded: the configured repository and exact head branch select member-owned PRs",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "pr_create",
+        "client.get",
+        "endpoint",
+    ): "bounded: exact head and base are queried only to find one reusable PR",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "default_branch",
+        "client.get",
+        "f'/repos/{owner}/{repo}'",
+    ): "single_resource: owner and repository identify one repository",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "_item",
+        "client.get",
+        "f'/repos/{resource.owner}/{resource.repo}/{collection}/{resource.number}'",
+    ): "single_resource: owner, repository, kind, and number identify one item",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "_pull_request_freshness",
+        "client.get",
+        'f"/repos/{resource.owner}/{resource.repo}/compare/'
+        "{quote(base_sha, safe='')}...{quote(head_sha, safe='')}\"",
+    ): "single_resource: the base and head pair identify one comparison",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "_pull_request_current_base_sha",
+        "client.get",
+        'f"/repos/{resource.owner}/{resource.repo}/branches/'
+        "{quote(branch, safe='')}\"",
+    ): "single_resource: owner, repository, and branch name identify one branch",
+    (
+        "guildbotics/integrations/github/app_manifest.py",
+        "get_page",
+        "client.get",
+        "endpoint",
+    ): "paginated: get_page is passed to paginated_items for app installations",
+    (
+        "guildbotics/integrations/github/github_ticket_manager.py",
+        "_get_pull_request_from_url",
+        "client.get",
+        "f'/repos/{owner}/{repo}/pulls/{number}'",
+    ): "single_resource: owner, repository, and pull request number identify one PR",
+    (
+        "guildbotics/integrations/github/github_ticket_manager.py",
+        "_search_pull_requests",
+        "client.get",
+        "'/search/issues'",
+    ): "bounded: oldest updated matches are intentionally processed first per qualifier",
+    (
+        "guildbotics/integrations/github/github_ticket_manager.py",
+        "add_comment_to_ticket",
+        "client.get",
+        "f'{self._get_issue_path(task.repository)}/{issue_number}'",
+    ): "single_resource: repository and issue number identify the comment target",
+    (
+        "guildbotics/integrations/github/actions_client.py",
+        "_redirect_or_body",
+        "self._get",
+        "endpoint",
+    ): "single_resource: downloads inspect one redirect or response body",
+    (
+        "guildbotics/integrations/github/actions_client.py",
+        "_get",
+        "self._client.get",
+        "endpoint",
+    ): "transport: _get centralizes HTTP error conversion for Actions requests",
+    (
+        "guildbotics/integrations/github/github_utils.py",
+        "paginated_items",
+        "get_page",
+        "endpoint",
+    ): "paginated: this is the shared page request for every REST collection",
+}
 
 
 def _expression_shape(source: str) -> str:
@@ -120,10 +119,8 @@ def _expression_shape(source: str) -> str:
 
 
 EXPECTED_REST_GETS = Counter(
-    {
-        (*entry[:3], _expression_shape(entry[3])): count
-        for entry, count in EXPECTED_REST_GET_SOURCES.items()
-    }
+    (*entry[:3], _expression_shape(entry[3]))
+    for entry in EXPECTED_REST_GET_CLASSIFICATIONS
 )
 
 
@@ -161,11 +158,42 @@ class _RestGetVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _imports_github_integration(tree: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and bool(node.module)
+        and node.module.startswith("guildbotics.integrations.github")
+        for node in ast.walk(tree)
+    )
+
+
+def _github_rest_sources() -> list[tuple[str, ast.AST]]:
+    sources: list[tuple[str, ast.AST]] = []
+    provider_root = ROOT / "guildbotics" / "integrations" / "github"
+    candidates = {
+        *provider_root.rglob("*.py"),
+        *(ROOT / "guildbotics" / "capabilities").glob("*.py"),
+    }
+    for path in sorted(candidates):
+        relative_path = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if path.is_relative_to(provider_root) or _imports_github_integration(tree):
+            sources.append((relative_path, tree))
+    return sources
+
+
 def test_every_github_rest_get_is_classified_or_paginated():
     observed: Counter[tuple[str, str, str, str]] = Counter()
-    for relative_path in GITHUB_REST_FILES:
+    for relative_path, tree in _github_rest_sources():
         visitor = _RestGetVisitor(relative_path)
-        visitor.visit(ast.parse((ROOT / relative_path).read_text(encoding="utf-8")))
+        visitor.visit(tree)
         observed.update(visitor.calls)
 
     assert observed == EXPECTED_REST_GETS
+    assert all(
+        classification.startswith(
+            ("single_resource:", "bounded:", "transport:", "paginated:")
+        )
+        and classification.partition(":")[2].strip()
+        for classification in EXPECTED_REST_GET_CLASSIFICATIONS.values()
+    )

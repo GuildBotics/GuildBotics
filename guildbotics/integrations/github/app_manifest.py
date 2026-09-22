@@ -9,11 +9,16 @@ code-to-credentials conversion API, and installation listing with an app JWT.
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from pydantic import BaseModel
 
 from guildbotics.integrations.github.async_client import raise_for_status_with_text
-from guildbotics.integrations.github.github_utils import create_github_app_jwt
+from guildbotics.integrations.github.github_utils import (
+    create_github_app_jwt,
+    paginated_items,
+)
 
 GITHUB_URL = "https://github.com"
 GITHUB_API_URL = "https://api.github.com"
@@ -107,22 +112,33 @@ async def list_app_installations(
 ) -> list[AppInstallation]:
     """List the app's installations, authenticated with an app JWT."""
     jwt_token = create_github_app_jwt(app_id, private_key_pem)
-    async with _api_client(transport) as client:
-        response = await client.get(
-            "/app/installations",
-            headers={"Authorization": f"Bearer {jwt_token}"},
-        )
+
+    async def get_page(endpoint: str, **kwargs: Any) -> httpx.Response:
+        response = await client.get(endpoint, **kwargs)
         await raise_for_status_with_text(response)
+        return response
+
+    def parse_page(response: httpx.Response) -> list[dict[str, Any]]:
         data = response.json()
+        if not isinstance(data, list):
+            raise TypeError("Unexpected GitHub app installations response")
+        return [item for item in data if isinstance(item, dict)]
+
     installations: list[AppInstallation] = []
-    for item in data or []:
-        account = item.get("account") or {}
-        installations.append(
-            AppInstallation(
-                installation_id=int(item["id"]),
-                account_login=str(account.get("login") or ""),
+    async with _api_client(transport) as client:
+        async for item in paginated_items(
+            get_page,
+            "/app/installations",
+            parse_page,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+        ):
+            account = item.get("account") or {}
+            installations.append(
+                AppInstallation(
+                    installation_id=int(item["id"]),
+                    account_login=str(account.get("login") or ""),
+                )
             )
-        )
     return installations
 
 

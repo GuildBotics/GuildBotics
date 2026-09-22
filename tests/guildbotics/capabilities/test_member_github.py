@@ -75,8 +75,13 @@ class FakeClient:
         self.history.append(("get", endpoint))
         if endpoint in self.contents:
             return FakeResponse([], content=self.contents[endpoint])
+        status_code = self.get_status_codes.get(endpoint, 200)
+        if endpoint in self.get_status_sequences:
+            status_code = self.get_status_sequences[endpoint].pop(0)
         if endpoint in self.get_sequences:
-            return FakeResponse(self.get_sequences[endpoint].pop(0))
+            return FakeResponse(
+                self.get_sequences[endpoint].pop(0), status_code=status_code
+            )
         payload = deepcopy(self.get_payloads.get(endpoint, []))
         if "/branches/" in endpoint and endpoint not in self.get_payloads:
             payload = {"commit": {"sha": "base123"}}
@@ -89,9 +94,6 @@ class FakeClient:
             payload.setdefault("head", {}).setdefault("sha", "abc123")
         if "/compare/" in endpoint and endpoint not in self.get_payloads:
             payload = {"behind_by": 0}
-        status_code = self.get_status_codes.get(endpoint, 200)
-        if endpoint in self.get_status_sequences:
-            status_code = self.get_status_sequences[endpoint].pop(0)
         return FakeResponse(
             payload,
             status_code=status_code,
