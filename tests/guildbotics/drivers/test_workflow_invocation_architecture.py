@@ -8,7 +8,6 @@ import pytest
 
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
-from guildbotics.drivers.ticket_selector import TicketSelector
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
@@ -27,15 +26,8 @@ def _environment_ready(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _FakeTicketManager:
-    def __init__(self, task: Task | None = None) -> None:
-        self._task = task
+    def __init__(self) -> None:
         self.comments: list[tuple[Task, str]] = []
-
-    async def get_task_to_work_on(self) -> Task | None:
-        return self._task
-
-    async def get_ticket_url(self, task: Task, markdown: bool = False) -> str:
-        return "https://github.com/fake/repo/issues/123"
 
     async def add_comment_to_ticket(self, task: Task, message: str) -> None:
         self.comments.append((task, message))
@@ -138,57 +130,21 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
     assert getattr(ctx_used, "closed", False) is True
 
 
-@pytest.mark.asyncio
-async def test_ticket_selector_returns_invocation():
-    task = Task(
-        title="Fix bug",
-        description="Fix it",
-        pull_request_url="https://github.com/pr",
-        trigger_reason="assigned",
-    )
-    ticket_mgr = _FakeTicketManager(task)
-    context = _FakeContext(ticket_manager=ticket_mgr)
-
-    selector = TicketSelector(context)  # type: ignore[arg-type]
-    inv = await selector.select(context.person)
-
-    assert inv is not None
-    assert inv.command == "workflows/ticket_driven_workflow"
-    assert inv.person_id == "alice"
-    assert inv.source == "routine"
-    assert inv.trigger_type == "ticket"
-    assert inv.payload["task"]["title"] == "Fix bug"
-    assert inv.payload["ticket_url"] == "https://github.com/fake/repo/issues/123"
-    assert inv.payload["pull_request_url"] == "https://github.com/pr"
-    assert inv.payload["trigger_reason"] == "assigned"
-    assert (
-        "github:ticket:alice:https://github.com/fake/repo/issues/123"
-        in inv.idempotency_key
-    )
-
-
-@pytest.mark.asyncio
-async def test_ticket_selector_returns_none_if_no_task():
-    ticket_mgr = _FakeTicketManager(None)
-    context = _FakeContext(ticket_manager=ticket_mgr)
-
-    selector = TicketSelector(context)  # type: ignore[arg-type]
-    inv = await selector.select(context.person)
-    assert inv is None
-
-
 def test_task_scheduler_uses_ticket_selector(monkeypatch):
     class _FakeTicketSelector:
         def __init__(self, context):
             pass
 
-        async def select(self, person):
+        async def candidates(self, person):
+            return [Task(title="stub", description="stub")]
+
+        async def refresh(self, person, candidate):
             return WorkflowInvocation(
                 command="workflows/ticket_driven_workflow",
                 person_id="alice",
                 source="routine",
                 trigger_type="ticket",
-                payload={"task": {"title": "stub", "description": "stub"}},
+                payload={"task": candidate.model_dump()},
             )
 
     dispatched = []
@@ -248,8 +204,8 @@ def test_task_scheduler_ticket_selector_returns_none(monkeypatch):
         def __init__(self, context):
             pass
 
-        async def select(self, person):
-            return None
+        async def candidates(self, person):
+            return []
 
     dispatched = []
 
@@ -310,7 +266,7 @@ def test_task_scheduler_ticket_selector_raises_error(monkeypatch):
         def __init__(self, context):
             pass
 
-        async def select(self, person):
+        async def candidates(self, person):
             raise RuntimeError("Selector API Failure")
 
     dispatched = []

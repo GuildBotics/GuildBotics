@@ -188,12 +188,12 @@ def test_routine_ticket_patrol_selects_outside_any_trace_or_tracked_work(
     scheduler = TaskScheduler(_Context(person), routine_interval_minutes=3)
     seen: list[tuple[str | None, list[str]]] = []
 
-    def fake_patrol(loop, context, person, command, start_time) -> bool:
+    def fake_patrol(loop, context, person, command, start_time) -> tuple[bool, bool]:
         trace = current_trace()
         works = scheduler._execution.snapshot()
         seen.append((trace.trace_id if trace else None, [work.id for work in works]))
         scheduler.shutdown()
-        return True
+        return True, True
 
     monkeypatch.setattr(scheduler, "_patrol_tickets", fake_patrol)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
@@ -273,7 +273,7 @@ async def test_pending_chat_is_deferred_while_the_environment_is_unavailable(
     assert calls == []
 
 
-def _patrol(scheduler: TaskScheduler) -> bool:
+def _patrol(scheduler: TaskScheduler) -> tuple[bool, bool]:
     loop = asyncio.new_event_loop()
     try:
         return scheduler._patrol_tickets(
@@ -287,21 +287,29 @@ def _patrol(scheduler: TaskScheduler) -> bool:
         loop.close()
 
 
-def _ticket_invocation() -> WorkflowInvocation:
-    task = Task(
-        id="7",
+def _ticket_task(number: int = 7) -> Task:
+    return Task(
+        id=str(number),
         title="ログイン修正",
         description="",
         repository="o/r",
-        number=7,
-        url="https://github.com/o/r/issues/7",
+        number=number,
+        url=f"https://github.com/o/r/issues/{number}",
     )
+
+
+def _ticket_invocation(task: Task | None = None) -> WorkflowInvocation:
+    task = task or _ticket_task()
     return WorkflowInvocation(
         command="workflows/ticket_driven_workflow",
         person_id="alice",
         source="routine",
         trigger_type="ticket",
-        payload={"task": task.model_dump(), "ticket_url": task.url},
+        payload={
+            "task": task.model_dump(),
+            "ticket_url": task.url,
+            "trigger_reason": task.trigger_reason or "",
+        },
     )
 
 
@@ -311,16 +319,16 @@ def test_ticket_patrol_idle_leaves_no_trace_and_no_run_record(monkeypatch) -> No
 
     scheduler = TaskScheduler(_Context(_Person()))
 
-    async def fake_select(self, person):
-        return None
+    async def fake_candidates(self, person):
+        return []
 
     async def forbidden_run_with_logging(*args, **kwargs):
         raise AssertionError("an idle patrol must not create trace records")
 
-    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
     monkeypatch.setattr(driver_utils, "run_with_logging", forbidden_run_with_logging)
 
-    assert _patrol(scheduler) is True
+    assert _patrol(scheduler) == (True, True)
     assert list(RunStore().records()) == []
 
 
@@ -331,10 +339,15 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
     from guildbotics.drivers import utils as driver_utils
 
     scheduler = TaskScheduler(_Context(_Person()))
+    task = _ticket_task()
     invocation = _ticket_invocation()
     dispatched: list[tuple[str | None, dict[str, object], list[str], object]] = []
 
-    async def fake_select(self, person):
+    async def fake_candidates(self, person):
+        return [task]
+
+    async def fake_refresh(self, person, candidate):
+        assert candidate is task
         return invocation
 
     class FakeDispatcher:
@@ -357,11 +370,12 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
         await action()
         return True
 
-    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", fake_refresh)
     monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
-    assert _patrol(scheduler) is True
+    assert _patrol(scheduler) == (True, True)
     trace_id, attributes, work_ids, inv = dispatched[0]
     assert inv is invocation
     assert trace_id is not None
@@ -379,8 +393,89 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
         "person_id": "alice",
         "command": "workflows/ticket_driven_workflow",
         "slot": "2026-01-01T09:00:00",
+        "ticket_url": "https://github.com/o/r/issues/7",
+        "trigger_reason": "",
     }
     assert records[0].status == "succeeded"
+
+
+def test_ticket_patrol_keeps_next_candidate_due_and_uses_distinct_identity(
+    monkeypatch,
+) -> None:
+    from guildbotics.drivers import ticket_selector, workflow_dispatcher
+    from guildbotics.drivers import utils as driver_utils
+
+    person = _Person(["workflows/ticket_driven_workflow"])
+    context = _Context(person)
+    scheduler = TaskScheduler(context, routine_interval_minutes=10)
+    first = _ticket_task()
+    second = _ticket_task(8)
+    second.trigger_reason = "issue_comment"
+    dispatched: list[WorkflowInvocation] = []
+
+    async def fake_candidates(self, selected_person):
+        assert selected_person is person
+        return [first, second]
+
+    async def fake_refresh(self, selected_person, candidate):
+        return _ticket_invocation(candidate)
+
+    class FakeDispatcher:
+        def __init__(self, selected_context, service_run_id=None):
+            pass
+
+        async def dispatch(self, invocation, selected_person):
+            dispatched.append(invocation)
+
+    async def fake_run_with_logging(context, command, task_type, action):
+        await action()
+        return True
+
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", fake_refresh)
+    monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
+    monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
+
+    loop = asyncio.new_event_loop()
+    try:
+        index, errors, next_at, stopped = scheduler._process_routine_tasks(
+            loop,
+            context,
+            person,
+            person.routine_commands,
+            0,
+            None,
+            dt.datetime(2026, 1, 1, 9, 0, 0),
+            0,
+        )
+        assert (index, errors, next_at, stopped) == (1, 0, None, False)
+
+        index, errors, next_at, stopped = scheduler._process_routine_tasks(
+            loop,
+            context,
+            person,
+            person.routine_commands,
+            index,
+            next_at,
+            dt.datetime(2026, 1, 1, 9, 1, 0),
+            errors,
+        )
+    finally:
+        loop.close()
+
+    assert [invocation.payload["ticket_url"] for invocation in dispatched] == [
+        "https://github.com/o/r/issues/7",
+        "https://github.com/o/r/issues/8",
+    ]
+    assert index == 1
+    assert errors == 0
+    assert next_at is not None
+    assert stopped is False
+    records = list(RunStore().records())
+    assert {record.work_identity["ticket_url"] for record in records} == {
+        "https://github.com/o/r/issues/7",
+        "https://github.com/o/r/issues/8",
+    }
 
 
 def test_ticket_patrol_selection_failure_is_recorded_under_a_trace(
@@ -393,7 +488,7 @@ def test_ticket_patrol_selection_failure_is_recorded_under_a_trace(
     failure = RuntimeError("boom")
     recorded: list[tuple[str | None, BaseException | None]] = []
 
-    async def fake_select(self, person):
+    async def fake_candidates(self, person):
         raise failure
 
     async def fake_run_with_logging(context, command, task_type, action):
@@ -406,10 +501,10 @@ def test_ticket_patrol_selection_failure_is_recorded_under_a_trace(
         recorded.append((trace.trace_id if trace else None, None))
         return True
 
-    monkeypatch.setattr(ticket_selector.TicketSelector, "select", fake_select)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
-    assert _patrol(scheduler) is False
+    assert _patrol(scheduler) == (False, True)
     assert len(recorded) == 1
     assert recorded[0][0] is not None
     assert recorded[0][1] is failure

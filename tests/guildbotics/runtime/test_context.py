@@ -56,8 +56,12 @@ class DummyLoaderFactory(LoaderFactory):
 class DummyTicketManager(TicketManager):
     """Concrete TicketManager test double with no-op async methods."""
 
-    async def get_task_to_work_on(self) -> Task | None:
-        """No-op fetch task."""
+    async def get_task_candidates(self) -> list[Task]:
+        """Return no candidate tasks."""
+        return []
+
+    async def refresh_task(self, task: Task) -> Task | None:
+        """Return no refreshed task."""
         return None
 
     async def move_ticket(self, task: Task, new_status: str) -> bool:

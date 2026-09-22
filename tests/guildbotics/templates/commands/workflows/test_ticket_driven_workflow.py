@@ -28,8 +28,8 @@ class StubTicketManager:
         self.commented = []
         self.move_succeeds = move_succeeds
 
-    async def get_task_to_work_on(self):
-        return self.task
+    async def get_task_candidates(self):
+        return [self.task] if self.task is not None else []
 
     async def move_ticket(self, task: Task, status: str) -> bool:
         self.moved.append((task, status))
