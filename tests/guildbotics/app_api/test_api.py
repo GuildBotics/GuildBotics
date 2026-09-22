@@ -25,7 +25,7 @@ from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
     CliAgentUsage,
-    CliAgentUsagesResponse,
+    CliAgentUsageResponse,
     CliAgentUsageWindow,
     CommandOption,
     CommandOptionsResponse,
@@ -386,25 +386,28 @@ class RuntimeStub:
         )
 
     async def get_cli_agent_usage(
-        self, refresh: bool = False, agent_name: str | None = None
-    ) -> CliAgentUsagesResponse:
-        return CliAgentUsagesResponse(
-            usages=[
-                CliAgentUsage(
-                    agent="codex",
-                    windows=[
-                        CliAgentUsageWindow(
-                            window="primary",
-                            used_percent=42.5,
-                            resets_at="2026-07-18T05:00:00+00:00",
-                            window_minutes=300,
-                        )
-                    ],
-                    limit_reached=False,
-                    checked_at="2026-07-18T00:00:00+00:00",
-                )
-            ]
+        self, agent_name: str, refresh: bool = False
+    ) -> CliAgentUsageResponse:
+        return CliAgentUsageResponse(
+            agent=agent_name,
+            usage=CliAgentUsage(
+                agent=agent_name,
+                windows=[
+                    CliAgentUsageWindow(
+                        window="primary",
+                        used_percent=42.5,
+                        resets_at="2026-07-18T05:00:00+00:00",
+                        window_minutes=300,
+                    )
+                ],
+                limit_reached=False,
+                checked_at="2026-07-18T00:00:00+00:00",
+            ),
+            refreshing=refresh,
         )
+
+    async def close_cli_agent_usage(self) -> None:
+        self.usage_closed = True
 
     def is_github_integration_enabled(self) -> bool:
         return False
@@ -1181,26 +1184,28 @@ def test_validation_error_uses_stable_error_shape(tmp_path: Path) -> None:
     assert isinstance(payload["context"].get("errors"), list)
 
 
-def test_cli_agent_usage_endpoint_uses_runtime(tmp_path: Path) -> None:
-    app = create_app(session_token="secret", runtime=RuntimeStub(tmp_path))
+def test_cli_agent_usage_endpoint_reads_one_tool(tmp_path: Path) -> None:
+    runtime = RuntimeStub(tmp_path)
+    app = create_app(session_token="secret", runtime=runtime)
 
     with TestClient(app) as client:
         response = client.get(
-            "/intelligences/cli-agents/usage",
+            "/intelligences/cli-agents/codex/usage?refresh=true",
             headers={"X-GuildBotics-Session-Token": "secret"},
         )
 
     assert response.status_code == HTTP_OK
     payload = response.json()
-    assert payload["usages"][0]["agent"] == "codex"
-    assert payload["usages"][0]["windows"][0]["used_percent"] == 42.5
-    assert (
-        payload["usages"][0]["windows"][0]["resets_at"] == "2026-07-18T05:00:00+00:00"
-    )
+    assert payload["agent"] == "codex"
+    assert payload["refreshing"] is True
+    assert payload["usage"]["windows"][0]["used_percent"] == 42.5
+    assert payload["usage"]["windows"][0]["resets_at"] == "2026-07-18T05:00:00+00:00"
+    # Shutting the app down releases the probes still running.
+    assert runtime.usage_closed
 
 
 @pytest.mark.asyncio
-async def test_app_runtime_cli_agent_usage_probes_detected_readers(
+async def test_app_runtime_cli_agent_usage_reads_the_named_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from guildbotics.intelligences.agent_runtime import usage as usage_module
@@ -1223,6 +1228,7 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
                 UsageWindow(
                     window="current_week_fable",
                     used_percent=59.0,
+                    resets_at="2026-07-24T00:00:00+00:00",
                     window_minutes=10_080,
                     label="Fable",
                 ),
@@ -1231,98 +1237,21 @@ async def test_app_runtime_cli_agent_usage_probes_detected_readers(
             checked_at="2026-07-18T00:00:00+00:00",
         )
 
-    async def fake_read_codex(timeout: float = 20.0):
-        probed.append("codex")
-        return CliAgentUsageSnapshot(
-            agent="codex",
-            windows=[UsageWindow(window="primary", used_percent=12.0)],
-            limit_reached=False,
-            checked_at="2026-07-18T00:00:00+00:00",
-        )
-
-    async def fake_read_grok(timeout: float = 20.0):
-        probed.append("grok")
-        return CliAgentUsageSnapshot(
-            agent="grok",
-            windows=[
-                UsageWindow(
-                    window="subscription",
-                    used_percent=0.0,
-                    resets_at="2026-07-24T00:00:00+00:00",
-                    window_minutes=10_080,
-                )
-            ],
-            limit_reached=False,
-            checked_at="2026-07-18T00:00:00+00:00",
-        )
-
     monkeypatch.setitem(
         usage_module.CLI_AGENT_USAGE_READERS, "claude", fake_read_claude
     )
-    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", fake_read_codex)
-    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "grok", fake_read_grok)
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.has_credentials",
-        lambda agent: agent.name in {"claude", "codex", "grok", "copilot"},
+        "guildbotics.app_api.cli_agent_usage.has_credentials", lambda _: True
     )
 
-    first = await runtime.get_cli_agent_usage()
-    second = await runtime.get_cli_agent_usage()
+    response = await runtime.get_cli_agent_usage("claude")
 
-    # Copilot has no structured usage interface, so only the registry's tools
-    # that are logged in here are probed, in catalog order, and the second
-    # call is served from the TTL cache without a new probe.
-    assert probed == ["codex", "claude", "grok"]
-    assert first.usages[0].agent == "codex"
-    assert first.usages[0].windows[0].used_percent == 12.0
-    assert first.usages[1].agent == "claude"
-    assert first.usages[1].windows[1].label == "Fable"
-    assert first.usages[2].agent == "grok"
-    assert first.usages[2].windows[0].used_percent == 0.0
-    assert first.usages[2].windows[0].resets_at == "2026-07-24T00:00:00+00:00"
-    assert second == first
-
-
-@pytest.mark.asyncio
-async def test_app_runtime_cli_agent_usage_degrades_on_probe_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageError
-
-    runtime = AppRuntime(EventBus())
-
-    async def failing_read():
-        raise CliAgentUsageError("not logged in")
-
-    from guildbotics.intelligences.agent_runtime import usage as usage_module
-
-    monkeypatch.setitem(usage_module.CLI_AGENT_USAGE_READERS, "codex", failing_read)
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.has_credentials",
-        lambda agent: agent.name == "codex",
-    )
-
-    response = await runtime.get_cli_agent_usage()
-
-    assert response.usages == []
-
-
-def test_usage_endpoint_forwards_targeted_recheck(tmp_path, monkeypatch):
-    runtime = RuntimeStub(tmp_path)
-    calls = []
-
-    async def read(refresh=False, agent_name=None):
-        calls.append((refresh, agent_name))
-        return CliAgentUsagesResponse()
-
-    monkeypatch.setattr(runtime, "get_cli_agent_usage", read)
-    with TestClient(create_app(session_token="secret", runtime=runtime)) as client:
-        response = client.get(
-            "/intelligences/cli-agents/usage?refresh=true&agent=claude",
-            headers={"X-GuildBotics-Session-Token": "secret"},
-        )
-    assert response.status_code == HTTP_OK
-    assert calls == [(True, "claude")]
+    assert probed == ["claude"]
+    assert response.usage is not None
+    assert response.usage.checked_at == "2026-07-18T00:00:00+00:00"
+    assert response.usage.windows[1].label == "Fable"
+    assert response.usage.windows[1].resets_at == "2026-07-24T00:00:00+00:00"
+    assert response.usage.windows[1].window_minutes == 10_080
 
 
 def test_scenario_diagnostics_endpoint_uses_runtime(tmp_path: Path) -> None:

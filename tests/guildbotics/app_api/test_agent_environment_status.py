@@ -683,7 +683,8 @@ async def test_usage_result_is_shared_by_card_and_alerts(
     runtime = AppRuntime(EventBus(), diagnostics_store=store)
     monkeypatch.setattr(runtime, "_active_agent_ids", lambda: [])
     monkeypatch.setattr(
-        "guildbotics.app_api.runtime.has_credentials", lambda tool: tool.name == agent
+        "guildbotics.app_api.cli_agent_usage.has_credentials",
+        lambda tool: tool.name == agent,
     )
     failed = True
     calls = 0
@@ -708,7 +709,7 @@ async def test_usage_result_is_shared_by_card_and_alerts(
 
     assert runtime.get_system_alerts().alerts == []
     assert tool().usage_check is None
-    assert (await runtime.get_cli_agent_usage()).usages == []
+    assert (await runtime.get_cli_agent_usage(agent)).usage is None
     check = tool().usage_check
     assert check.status == "failed"
     assert check.checked_at
@@ -720,7 +721,7 @@ async def test_usage_result_is_shared_by_card_and_alerts(
     )
     assert "provider detail" not in tool().problem
     assert tool().usage_supported
-    await runtime.get_cli_agent_usage()
+    await runtime.get_cli_agent_usage(agent)
     assert calls == 1
 
     original = module.device_status()
@@ -744,7 +745,7 @@ async def test_usage_result_is_shared_by_card_and_alerts(
 
     monkeypatch.setattr(module, "device_status", lambda **_: original)
     failed = False
-    await runtime.get_cli_agent_usage(refresh=True, agent_name=agent)
+    await runtime.get_cli_agent_usage(agent, refresh=True)
     assert calls == 2
     assert tool().usage_check.status == "succeeded"
     assert tool().problem == ""
@@ -759,7 +760,9 @@ async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
     from guildbotics.intelligences.agent_runtime import usage
 
     runtime = AppRuntime(EventBus())
-    monkeypatch.setattr("guildbotics.app_api.runtime.has_credentials", lambda _: True)
+    monkeypatch.setattr(
+        "guildbotics.app_api.cli_agent_usage.has_credentials", lambda _: True
+    )
     calls = []
     for name in usage.CLI_AGENT_USAGE_READERS:
 
@@ -771,13 +774,14 @@ async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
 
         monkeypatch.setitem(usage.CLI_AGENT_USAGE_READERS, name, read)
 
-    first = await runtime.get_cli_agent_usage()
+    for name in usage.CLI_AGENT_USAGE_READERS:
+        await runtime.get_cli_agent_usage(name)
     calls.clear()
-    second = await runtime.get_cli_agent_usage(refresh=True, agent_name="claude")
+    second = await runtime.get_cli_agent_usage("claude", refresh=True)
     assert calls == ["claude"]
-    assert second == first
-    await runtime.get_cli_agent_usage()
+    assert second.usage is not None
+    await runtime.get_cli_agent_usage("claude")
     assert calls == ["claude"]
     with pytest.raises(AppApiError):
-        await runtime.get_cli_agent_usage(refresh=True, agent_name="unknown")
+        await runtime.get_cli_agent_usage("unknown", refresh=True)
     assert calls == ["claude"]

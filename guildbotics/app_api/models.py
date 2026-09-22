@@ -1102,8 +1102,18 @@ class CliAgentUsageCheck(BaseModel):
     trace_id: str = ""
 
 
-class CliAgentUsagesResponse(BaseModel):
-    usages: list[CliAgentUsage] = Field(default_factory=list)
+class CliAgentUsageResponse(BaseModel):
+    """One tool's usage: the last successful reading and the latest probe.
+
+    ``usage`` is older than ``check`` when the latest probe failed; the screen
+    shows it as the previous reading, never as current. ``refreshing`` says a
+    newer probe is running.
+    """
+
+    agent: str
+    usage: CliAgentUsage | None = None
+    check: CliAgentUsageCheck | None = None
+    refreshing: bool = False
 
 
 class EffortFieldSpec(BaseModel):

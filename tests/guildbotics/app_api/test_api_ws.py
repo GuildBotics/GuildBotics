@@ -29,6 +29,9 @@ class RuntimeStub:
     def stop_scheduler(self, *, force: bool = False) -> None:
         return None
 
+    async def close_cli_agent_usage(self) -> None:
+        return None
+
 
 def _app(event_bus: EventBus):
     return create_app(

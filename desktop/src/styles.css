@@ -1561,6 +1561,19 @@ pre {
   width: 100%;
 }
 
+.activity-member-usage-status {
+  align-items: center;
+  color: var(--color-warning);
+  display: flex;
+  gap: 4px;
+  grid-column: 1 / -1;
+  white-space: nowrap;
+}
+
+.activity-member-usage-previous .activity-member-usage-row {
+  opacity: 0.6;
+}
+
 .activity-member-usage-row {
   color: var(--color-text-subtle);
   display: contents;

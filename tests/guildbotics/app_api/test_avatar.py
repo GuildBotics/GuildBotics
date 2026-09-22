@@ -30,6 +30,9 @@ class RuntimeStub:
     def stop_scheduler(self, *, force: bool = False) -> None:
         pass
 
+    async def close_cli_agent_usage(self) -> None:
+        pass
+
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
 

@@ -478,6 +478,9 @@ const resources = {
           over: "{{points}} pt over pace",
           onPace: "On pace",
           resets: "Resets {{reset}}",
+          checkedAt: "As of {{time}}",
+          refreshing: "Updating · as of {{time}}",
+          refreshFailed: "Update failed · showing {{time}}",
         },
         status: {
           retry_scheduled: "Retry scheduled",
@@ -2563,6 +2566,9 @@ const resources = {
           over: "{{points}}pt超過",
           onPace: "ペース通り",
           resets: "{{reset}}にリセット",
+          checkedAt: "{{time}} 時点",
+          refreshing: "更新中 · {{time}} 時点",
+          refreshFailed: "更新失敗 · {{time}} 時点の値",
         },
         status: {
           retry_scheduled: "再試行待ち",

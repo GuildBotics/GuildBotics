@@ -9,7 +9,7 @@ test("shows usage checks from the real backend without probing missing credentia
 }) => {
   const usageRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("/intelligences/cli-agents/usage"))
+    if (/\/intelligences\/cli-agents\/[^/]+\/usage/.test(request.url()))
       usageRequests.push(request.url());
   });
   await page.goto("/#/setup?section=environment&focus=agent-environment-tool-codex");
