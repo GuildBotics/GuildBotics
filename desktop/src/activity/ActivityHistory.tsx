@@ -5,6 +5,7 @@ import {
   Card,
   Group,
   HoverCard,
+  Loader,
   SegmentedControl,
   Stack,
   Text,
@@ -473,13 +474,19 @@ function ActivityTimelineRow({
     member?.person_id ?? "",
     Boolean(member && member.person_type !== "human" && !team),
   );
-  // Measured usage is the authority when available: the badge follows the
-  // provider's own limit state instead of historical rate-limit events.
-  const activeRateLimit = usage
-    ? rateLimitFromUsage(usage)
-    : member
-      ? activeRateLimitForSessions(sessions, now ?? new Date())
-      : null;
+  const reading = usage?.usage ?? null;
+  // A reading is current until a later probe fails; after that it is only
+  // the previous observation, shown as such.
+  const readingCurrent = usage?.check?.status !== "failed";
+  // A current measured reading is the authority when available: the badge
+  // follows the provider's own limit state instead of historical rate-limit
+  // events.
+  const activeRateLimit =
+    reading && readingCurrent
+      ? rateLimitFromUsage(reading)
+      : member
+        ? activeRateLimitForSessions(sessions, now ?? new Date())
+        : null;
   const activeRateLimitReset = activeRateLimit ? formatRateLimitReset(activeRateLimit) : "";
   return (
     <div className={team ? "activity-row activity-row-events" : "activity-row"}>
@@ -502,7 +509,13 @@ function ActivityTimelineRow({
               {activeRateLimitReset ? <span>{activeRateLimitReset}</span> : null}
             </span>
           ) : null}
-          {usage ? <MemberUsageMeters usage={usage} /> : null}
+          {reading ? (
+            <MemberUsageMeters
+              usage={reading}
+              refreshing={usage?.refreshing ?? false}
+              current={readingCurrent}
+            />
+          ) : null}
           {activeWork ? (
             <MemberActiveWorkStatus work={activeWork} />
           ) : liveWork ? (
@@ -1386,13 +1399,43 @@ function usageWindowDetail(
   return parts.join(" · ");
 }
 
-function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
+// When the reading was taken, and whether a newer one is coming or the last
+// attempt failed, so an old reading never passes for a current one.
+function usageReadingStatus(
+  usage: CliAgentUsage,
+  refreshing: boolean,
+  current: boolean,
+  t: TFunction,
+): string {
+  const time = usage.checked_at ? formatShortTimestamp(usage.checked_at) : "";
+  const key = refreshing ? "refreshing" : current ? "checkedAt" : "refreshFailed";
+  return t(`activity.usage.${key}`, { time });
+}
+
+function MemberUsageMeters({
+  usage,
+  refreshing,
+  current,
+}: {
+  usage: CliAgentUsage;
+  refreshing: boolean;
+  current: boolean;
+}) {
   const { t } = useTranslation();
   if (usage.windows.length === 0) {
     return null;
   }
+  // The reading time is secondary, so it lives in the tooltip; only a reading
+  // that is no longer current earns a line of its own in the narrow cell.
+  const status = usageReadingStatus(usage, refreshing, current, t);
   return (
-    <div className="activity-member-usage">
+    <div className={`activity-member-usage${current ? "" : " activity-member-usage-previous"}`}>
+      {current ? null : (
+        <span className="activity-member-usage-status" role="status">
+          {refreshing ? <Loader size={8} aria-hidden="true" /> : null}
+          {status}
+        </span>
+      )}
       {usage.windows.map((window, index) => {
         const percent = Math.max(0, Math.min(100, Math.round(window.used_percent)));
         const elapsed = usageWindowElapsedPercent(window, usage.checked_at);
@@ -1404,7 +1447,7 @@ function MemberUsageMeters({ usage }: { usage: CliAgentUsage }) {
         // The row uses display:contents, so the native tooltip has to live on
         // the visible cells rather than the row wrapper. On the meter it is
         // also the accessible description.
-        const title = label ? `${label} · ${detail}` : detail;
+        const title = [label, detail, status].filter(Boolean).join(" · ");
         return (
           <span
             key={`${window.window}-${index}`}

@@ -7,8 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildAgentEnvironment,
   getAgentEnvironmentStatus,
-  recheckCliAgentUsage,
-  type CliAgentUsagesResponse,
+  getCliAgentUsage,
+  type CliAgentUsageResponse,
   type AgentEnvironmentStatusResponse,
 } from "../api/client";
 import i18n from "../i18n";
@@ -20,7 +20,7 @@ vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
   getAgentEnvironmentStatus: vi.fn(),
   buildAgentEnvironment: vi.fn(),
-  recheckCliAgentUsage: vi.fn(),
+  getCliAgentUsage: vi.fn(),
 }));
 
 const t = i18n.getFixedT("en");
@@ -121,7 +121,7 @@ describe("AgentEnvironmentCard", () => {
   beforeEach(() => {
     vi.mocked(getAgentEnvironmentStatus).mockReset();
     vi.mocked(buildAgentEnvironment).mockReset();
-    vi.mocked(recheckCliAgentUsage).mockReset();
+    vi.mocked(getCliAgentUsage).mockReset();
   });
 
   it.each(["en", "ja"])(
@@ -195,8 +195,8 @@ describe("AgentEnvironmentCard", () => {
         problem: "Usage retrieval failed.",
       };
       vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
-      let finish!: (value: CliAgentUsagesResponse) => void;
-      vi.mocked(recheckCliAgentUsage).mockImplementation(
+      let finish!: (value: CliAgentUsageResponse) => void;
+      vi.mocked(getCliAgentUsage).mockImplementation(
         () =>
           new Promise((resolve) => {
             finish = resolve;
@@ -223,11 +223,11 @@ describe("AgentEnvironmentCard", () => {
       await user.click(
         screen.getByRole("button", { name: tr("setup.intelligence.environment.refresh") }),
       );
-      expect(recheckCliAgentUsage).not.toHaveBeenCalled();
+      expect(getCliAgentUsage).not.toHaveBeenCalled();
       await user.click(
         row.getByRole("button", { name: tr("setup.intelligence.environment.recheck") }),
       );
-      expect(recheckCliAgentUsage).toHaveBeenCalledWith("codex");
+      expect(getCliAgentUsage).toHaveBeenCalledWith("codex", true);
       expect(row.getByText(tr("setup.intelligence.environment.usageChecking"))).toBeVisible();
       expect(
         row.getByRole("button", { name: tr("setup.intelligence.environment.recheck") }),
@@ -243,8 +243,16 @@ describe("AgentEnvironmentCard", () => {
       });
       vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(recovered);
       const invalidate = vi.spyOn(client, "invalidateQueries");
-      await act(async () => finish({ usages: [] }));
+      const reading: CliAgentUsageResponse = {
+        agent: "codex",
+        usage: null,
+        check: recovered.tools[0].usage_check,
+        refreshing: false,
+      };
+      await act(async () => finish(reading));
       await screen.findByText(tr("setup.intelligence.environment.usageSucceeded"));
+      // The activity view's query for the same tool shows the new reading.
+      expect(client.getQueryData(["cli-agent-usage", "codex"])).toEqual(reading);
       expect(screen.queryByText("Usage retrieval failed.")).not.toBeInTheDocument();
       expect(
         screen.queryByRole("link", { name: tr("setup.intelligence.environment.errorDetails") }),
@@ -267,7 +275,7 @@ describe("AgentEnvironmentCard", () => {
       problem: "Previous failure",
     };
     vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
-    vi.mocked(recheckCliAgentUsage).mockRejectedValue(new Error("offline"));
+    vi.mocked(getCliAgentUsage).mockRejectedValue(new Error("offline"));
     renderCard();
     await userEvent.click(
       await screen.findByRole("button", { name: t("setup.intelligence.environment.recheck") }),

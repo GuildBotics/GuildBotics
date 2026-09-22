@@ -29,6 +29,7 @@ from guildbotics.app_api.agent_environment_status import (
     agent_environment_status,
 )
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
+from guildbotics.app_api.cli_agent_usage import CliAgentUsageCache
 from guildbotics.app_api.command_files import CommandFileService, file_revision
 from guildbotics.app_api.command_input_files import command_cwd
 from guildbotics.app_api.config_revisions import apply_config_write
@@ -43,10 +44,8 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentUsage,
     CliAgentUsageCheck,
-    CliAgentUsagesResponse,
-    CliAgentUsageWindow,
+    CliAgentUsageResponse,
     CommandAuthoringApplyRequest,
     CommandAuthoringApplyResponse,
     CommandAuthoringChange,
@@ -148,7 +147,6 @@ from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.intelligences.agent_environment.contract import exchange_dir
-from guildbotics.intelligences.agent_environment.provider_state import has_credentials
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     doctor,
@@ -158,12 +156,6 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
-)
-from guildbotics.intelligences.agent_runtime.usage import (
-    CLI_AGENT_USAGE_READERS,
-    CliAgentUsageError,
-    CliAgentUsageSnapshot,
-    read_cli_agent_usage,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
@@ -229,27 +221,8 @@ class _UseProcessDataDir:
 
 _USE_PROCESS_DATA_DIR = _UseProcessDataDir()
 
-_CLI_AGENT_USAGE_TTL_SECONDS = 300.0
 #: Lines of build output the status card can show.
 ENVIRONMENT_BUILD_OUTPUT_LINES = 200
-
-
-def _cli_agent_usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
-    return CliAgentUsage(
-        agent=snapshot.agent,
-        windows=[
-            CliAgentUsageWindow(
-                window=window.window,
-                used_percent=window.used_percent,
-                resets_at=window.resets_at,
-                window_minutes=window.window_minutes,
-                label=window.label,
-            )
-            for window in snapshot.windows
-        ],
-        limit_reached=snapshot.limit_reached,
-        checked_at=snapshot.checked_at,
-    )
 
 
 def _activity_sync_state_path() -> Path:
@@ -299,10 +272,13 @@ class AppRuntime:
         self.on_workspace_changed: Callable[[Path], None] | None = None
         self._execution_status = ExecutionStatusPublisher()
         self._execution = TaskRunCoordinator(self._execution_status)
-        self._cli_agent_usage_lock = asyncio.Lock()
-        self._cli_agent_usage_cache: dict[
-            str, tuple[float, CliAgentUsage | None, CliAgentUsageCheck]
-        ] = {}
+        self._cli_agent_usage = CliAgentUsageCache(
+            lambda: (
+                self._diagnostics_store.latest_system_trace_id() or ""
+                if self._diagnostics_store is not None
+                else ""
+            )
+        )
         self._environment_build_lock = threading.Lock()
         self._environment_build: threading.Thread | None = None
         #: The tail of the build this process last ran, for the status card.
@@ -1119,10 +1095,7 @@ class AppRuntime:
         )
 
     def _usage_checks(self) -> dict[str, CliAgentUsageCheck]:
-        # Status endpoints run in worker threads while probes update the cache.
-        return {
-            name: entry[2] for name, entry in self._cli_agent_usage_cache.copy().items()
-        }
+        return self._cli_agent_usage.checks()
 
     def _active_agent_ids(self) -> list[str]:
         try:
@@ -1803,60 +1776,14 @@ class AppRuntime:
             await context.aclose()
 
     async def get_cli_agent_usage(
-        self, refresh: bool = False, agent_name: str | None = None
-    ) -> CliAgentUsagesResponse:
-        """Return account usage per AI CLI tool, cached separately for a short TTL.
+        self, agent_name: str, refresh: bool = False
+    ) -> CliAgentUsageResponse:
+        """Return one AI CLI tool's account usage (see :class:`CliAgentUsageCache`)."""
+        return await self._cli_agent_usage.read(agent_name, refresh)
 
-        Only tools with a structured usage interface (the readers in
-        ``CLI_AGENT_USAGE_READERS``) appear in the response; the frontend
-        shows nothing for the rest. ``agent_name`` limits the probe to that tool;
-        the response still includes the other tools' cached snapshots.
-        """
-        async with self._cli_agent_usage_lock:
-            if agent_name is not None and agent_name not in CLI_AGENT_USAGE_READERS:
-                raise AppApiError("validation_error", status_code=422)
-            for agent in CLI_AGENTS:
-                if agent_name is not None and agent.name != agent_name:
-                    continue
-                reader = CLI_AGENT_USAGE_READERS.get(agent.name)
-                if reader is None or not has_credentials(agent):
-                    self._cli_agent_usage_cache.pop(agent.name, None)
-                    continue
-                cached = self._cli_agent_usage_cache.get(agent.name)
-                if (
-                    not refresh
-                    and cached
-                    and time.monotonic() - cached[0] < _CLI_AGENT_USAGE_TTL_SECONDS
-                ):
-                    continue
-                usage = None
-                try:
-                    snapshot = await read_cli_agent_usage(agent.name)
-                    usage = _cli_agent_usage_model(snapshot)
-                except CliAgentUsageError as exc:
-                    logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
-                        "Could not read %s usage: %s", agent.name, exc
-                    )
-                self._cli_agent_usage_cache[agent.name] = (
-                    time.monotonic(),
-                    usage,
-                    CliAgentUsageCheck(
-                        status="succeeded" if usage is not None else "failed",
-                        checked_at=datetime.now(UTC).isoformat(),
-                        trace_id=(
-                            self._diagnostics_store.latest_system_trace_id() or ""
-                        )
-                        if self._diagnostics_store is not None
-                        else "",
-                    ),
-                )
-            return CliAgentUsagesResponse(
-                usages=[
-                    entry[1]
-                    for entry in self._cli_agent_usage_cache.values()
-                    if entry[1] is not None
-                ]
-            )
+    async def close_cli_agent_usage(self) -> None:
+        """Cancel running usage probes so their environments are released."""
+        await self._cli_agent_usage.aclose()
 
     def is_github_integration_enabled(self) -> bool:
         try:

@@ -31,6 +31,7 @@ import {
 } from "../api/client";
 import type {
   ActivityHistoryResponse,
+  CliAgentUsageResponse,
   CliAgentUsageWindow,
   RuntimeActiveWork,
   RuntimeStatus,
@@ -291,7 +292,7 @@ beforeEach(() => {
     access: { documents: [], paths: [], denied: [], problem: "" },
     members: [],
   });
-  vi.mocked(getCliAgentUsage).mockResolvedValue({ usages: [] });
+  vi.mocked(getCliAgentUsage).mockReset();
   vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([]));
   vi.mocked(getTraceDetail).mockResolvedValue({
     trace_id: "trace-live",
@@ -732,7 +733,17 @@ describe("ActivityHistoryPage", () => {
       limit_reached: boolean;
       checked_at?: string;
     },
+    state: Partial<Pick<CliAgentUsageResponse, "check" | "refreshing">> = {},
   ) {
+    // Only tools the device reports as having a usage interface are read.
+    const environment = vi.mocked(getAgentEnvironmentStatus).getMockImplementation()!;
+    vi.mocked(getAgentEnvironmentStatus).mockImplementation(async () => {
+      const status = await environment();
+      return {
+        ...status,
+        tools: [{ ...status.tools[0], name: agent, usage_supported: true }],
+      };
+    });
     vi.mocked(getIntelligenceConfig).mockResolvedValue({
       config_dir: "",
       revisions: {},
@@ -745,24 +756,28 @@ describe("ActivityHistoryPage", () => {
       brain_mapping: [],
     });
     vi.mocked(getCliAgentUsage).mockResolvedValue({
-      usages: [
-        {
-          agent,
-          checked_at: usage.checked_at ?? "2026-07-01T11:59:00Z",
-          limit_reached: usage.limit_reached,
-          windows: usage.windows.map((window) => ({
-            resets_at: "",
-            window_minutes: null,
-            label: "",
-            ...window,
-          })),
-        },
-      ],
+      agent,
+      usage: {
+        agent,
+        checked_at: usage.checked_at ?? "2026-07-01T11:59:00Z",
+        limit_reached: usage.limit_reached,
+        windows: usage.windows.map((window) => ({
+          resets_at: "",
+          window_minutes: null,
+          label: "",
+          ...window,
+        })),
+      },
+      check: { status: "succeeded", checked_at: "2026-07-01T11:59:00Z", trace_id: "" },
+      refreshing: false,
+      ...state,
     });
   }
 
-  const mockCodexMember = (usage: Parameters<typeof mockMemberUsage>[1]) =>
-    mockMemberUsage("codex", usage);
+  const mockCodexMember = (
+    usage: Parameters<typeof mockMemberUsage>[1],
+    state?: Parameters<typeof mockMemberUsage>[2],
+  ) => mockMemberUsage("codex", usage, state);
 
   it("shows usage meters for members whose AI CLI tool reports usage", async () => {
     mockCodexMember({
@@ -886,6 +901,74 @@ describe("ActivityHistoryPage", () => {
     expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
   });
 
+  it("reads only the member's own tool and says when the reading was taken", async () => {
+    mockCodexMember({
+      windows: [{ window: "primary", used_percent: 42, window_minutes: 300 }],
+      limit_reached: false,
+    });
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 42%" })).toBeInTheDocument();
+    expect(getCliAgentUsage).toHaveBeenCalledWith("codex");
+    expect(vi.mocked(getCliAgentUsage).mock.calls.every(([agent]) => agent === "codex")).toBe(true);
+    // The reading time is in the tooltip, not a line of its own.
+    expect(screen.getByRole("meter", { name: "5h 42%" })).toHaveAttribute(
+      "title",
+      expect.stringContaining(`As of ${localeShortDateTime("2026-07-01T11:59:00Z")}`),
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("does not read usage for a tool without a usage interface", async () => {
+    renderActivity();
+
+    await screen.findByText("Alice");
+    expect(getCliAgentUsage).not.toHaveBeenCalled();
+  });
+
+  it("keeps showing the last reading while a newer one is on its way", async () => {
+    mockCodexMember(
+      {
+        windows: [{ window: "primary", used_percent: 42, window_minutes: 300 }],
+        limit_reached: false,
+      },
+      { refreshing: true },
+    );
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 42%" })).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "5h 42%" })).toHaveAttribute(
+      "title",
+      expect.stringContaining(`Updating · as of ${localeShortDateTime("2026-07-01T11:59:00Z")}`),
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("marks a reading as previous after a failed refresh and stops trusting its limit", async () => {
+    mockCodexMember(
+      {
+        windows: [
+          {
+            window: "primary",
+            used_percent: 100,
+            resets_at: "2026-07-01T13:17:00Z",
+            window_minutes: 300,
+          },
+        ],
+        limit_reached: true,
+      },
+      { check: { status: "failed", checked_at: "2026-07-01T12:30:00Z", trace_id: "t" } },
+    );
+    renderActivity();
+
+    expect(await screen.findByRole("meter", { name: "5h 100%" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      `Update failed · showing ${localeShortDateTime("2026-07-01T11:59:00Z")}`,
+    );
+    expect(document.querySelector(".activity-member-usage-previous")).not.toBe(null);
+    expect(document.querySelector(".activity-member-rate-limit")).toBe(null);
+  });
+
   it("shows the member badge when measured usage reports the limit reached", async () => {
     mockCodexMember({
       windows: [
@@ -993,7 +1076,13 @@ describe("ActivityHistoryPage", () => {
     expect(screen.getByRole("meter", { name: "1w Claude and GPT models 0%" })).toBeInTheDocument();
   });
 
-  const usageDetail = (used: number, elapsed: number, resetsAt: string) => {
+  // The tooltip ends with when the reading was taken.
+  const usageDetail = (
+    used: number,
+    elapsed: number,
+    resetsAt: string,
+    checkedAt = "2026-07-01T11:59:00Z",
+  ) => {
     const headroom = elapsed - used;
     return [
       i18n.t("activity.usage.used", { percent: used }),
@@ -1004,6 +1093,7 @@ describe("ActivityHistoryPage", () => {
             points: Math.abs(headroom),
           }),
       i18n.t("activity.usage.resets", { reset: localeShortDateTime(resetsAt) }),
+      i18n.t("activity.usage.checkedAt", { time: localeShortDateTime(checkedAt) }),
     ].join(" · ");
   };
 
@@ -1103,7 +1193,7 @@ describe("ActivityHistoryPage", () => {
     const meter = await screen.findByRole("meter", { name: `5h ${used}%` });
     expect(elapsedMarker(meter)).toBe(`${elapsed}%`);
     expect(meter).toHaveAccessibleDescription(
-      `5h · ${usageDetail(used, elapsed, "2026-07-01T14:00:00Z")}`,
+      `5h · ${usageDetail(used, elapsed, "2026-07-01T14:00:00Z", checkedAt)}`,
     );
     // Reaching the limit stays the loudest state; pace never recolors the bar.
     const row = meter.closest(".activity-member-usage-row");
