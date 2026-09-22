@@ -10,10 +10,13 @@ from typing import Any
 
 import pytest
 
+from guildbotics.capabilities.member_github import PR_INSPECT_FEEDBACK_SOURCES
 from guildbotics.integrations.github.pull_request_patrol import (
     FEEDBACK,
     MAX_REVIEW_ROUNDS,
     PULL_REQUEST_QUERY,
+    PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
+    PULL_REQUEST_FEEDBACK_SOURCES,
     REVIEW,
     REVIEW_LIMIT,
     PullRequest,
@@ -170,15 +173,17 @@ def test_query_asks_for_everything_the_decision_reads():
     for field in (
         "headRefOid",
         "reviewRequests",
-        "reviews(last: 100)",
         "replyTo",
-        "comments(last: 100)",
-        "reviewThreads(first: 100)",
         "participants: comments",
         "latest: comments(last: 1)",
         "reactions(first: 100)",
+        *PULL_REQUEST_FEEDBACK_SOURCE_QUERIES.values(),
     ):
         assert field in PULL_REQUEST_QUERY, field
+
+
+def test_patrol_and_pr_inspect_expose_the_same_feedback_sources():
+    assert PULL_REQUEST_FEEDBACK_SOURCES == PR_INSPECT_FEEDBACK_SOURCES
 
 
 # --- author role --------------------------------------------------------- #

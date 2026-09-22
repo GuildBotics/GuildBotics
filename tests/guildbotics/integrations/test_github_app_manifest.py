@@ -8,6 +8,9 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from guildbotics.integrations.github import app_manifest
 
 HTTP_NOT_FOUND = 404
+APP_ID = 1978826
+PAGE_SIZE = 100
+PAGINATED_INSTALLATION_COUNT = PAGE_SIZE + 1
 
 
 def _pem_bytes() -> bytes:
@@ -72,7 +75,7 @@ async def test_convert_manifest_code_parses_credentials() -> None:
         return httpx.Response(
             201,
             json={
-                "id": 1978826,
+                "id": APP_ID,
                 "slug": "my-bot",
                 "html_url": "https://github.com/apps/my-bot",
                 "pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
@@ -88,7 +91,7 @@ async def test_convert_manifest_code_parses_credentials() -> None:
     assert request.method == "POST"
     assert request.url.path == "/app-manifests/tmp-code/conversions"
     assert request.headers["Accept"] == "application/vnd.github.v3+json"
-    assert conversion.app_id == 1978826
+    assert conversion.app_id == APP_ID
     assert conversion.slug == "my-bot"
     assert conversion.html_url == "https://github.com/apps/my-bot"
     assert conversion.pem.startswith("-----BEGIN RSA PRIVATE KEY-----")
@@ -128,3 +131,32 @@ async def test_list_app_installations_uses_app_jwt() -> None:
     assert [i.installation_id for i in installations] == [86632391, 12]
     assert installations[0].account_login == "acme"
     assert installations[1].account_login == ""
+
+
+@pytest.mark.asyncio
+async def test_list_app_installations_paginates_the_full_collection() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        page = int(request.url.params["page"])
+        count = PAGE_SIZE if page == 1 else 1
+        offset = 0 if page == 1 else PAGE_SIZE
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": offset + index + 1,
+                    "account": {"login": f"account-{offset + index + 1}"},
+                }
+                for index in range(count)
+            ],
+        )
+
+    installations = await app_manifest.list_app_installations(
+        "1978826", _pem_bytes(), transport=httpx.MockTransport(handler)
+    )
+
+    assert len(installations) == PAGINATED_INSTALLATION_COUNT
+    assert [request.url.params["page"] for request in requests] == ["1", "2"]
+    assert all(request.url.params["per_page"] == str(PAGE_SIZE) for request in requests)

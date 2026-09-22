@@ -10,7 +10,8 @@ from typing import IO, Any
 
 import httpx
 
-GITHUB_PAGE_SIZE = 100
+from guildbotics.integrations.github.github_utils import paginated_items
+
 _PERMISSION_GUIDANCE = (
     " Check that the token or GitHub App has Actions, Checks, and Commit statuses "
     "read permissions. For a GitHub App, also approve the permission update for "
@@ -49,23 +50,17 @@ class GitHubActionsClient:
         self, owner: str, repo: str, sha: str
     ) -> list[dict[str, Any]]:
         endpoint = f"/repos/{owner}/{repo}/commits/{sha}/status"
-        statuses: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            response = await self._get(
-                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
-            )
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
             _raise_for_status(response, permission_guidance=True)
             payload = response.json()
             if not isinstance(payload, dict):
                 raise GitHubActionsClientError(
                     "Unexpected GitHub commit status response."
                 )
-            page_items = _dict_items(payload, "statuses")
-            statuses.extend(page_items)
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                return statuses
-            page += 1
+            return _dict_items(payload, "statuses")
+
+        return [item async for item in paginated_items(self._get, endpoint, parse_page)]
 
     async def workflow_runs(
         self, owner: str, repo: str, sha: str
@@ -161,26 +156,24 @@ class GitHubActionsClient:
         *,
         extra_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            params = {
-                "per_page": GITHUB_PAGE_SIZE,
-                "page": page,
-                **(extra_params or {}),
-            }
-            response = await self._get(endpoint, params=params)
+        def parse_page(response: Any) -> list[dict[str, Any]]:
             _raise_for_status(response, permission_guidance=True)
             payload = response.json()
             if not isinstance(payload, dict):
                 raise GitHubActionsClientError(
                     f"Unexpected GitHub response for '{key}'."
                 )
-            page_items = _dict_items(payload, key)
-            items.extend(page_items)
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                return items
-            page += 1
+            return _dict_items(payload, key)
+
+        return [
+            item
+            async for item in paginated_items(
+                self._get,
+                endpoint,
+                parse_page,
+                params=extra_params,
+            )
+        ]
 
     async def _get(self, endpoint: str, **kwargs: Any) -> httpx.Response:
         try:

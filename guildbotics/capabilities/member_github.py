@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import stat
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
@@ -18,7 +18,6 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.actions_client import (
-    GITHUB_PAGE_SIZE,
     GitHubActionsClient,
     GitHubActionsClientError,
 )
@@ -27,6 +26,7 @@ from guildbotics.integrations.github.github_utils import (
     get_author_type,
     get_github_username,
     normalize_login,
+    paginated_items,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -62,6 +62,9 @@ _REVIEW_EVENTS = {
     "request-changes": "REQUEST_CHANGES",
     "comment": "COMMENT",
 }
+PR_INSPECT_FEEDBACK_SOURCES = frozenset(
+    {"conversation_comments", "review_summaries", "review_threads"}
+)
 
 
 class MemberCapabilityError(RuntimeError):
@@ -157,14 +160,7 @@ class MemberGitHubCapabilityService:
     async def issue_inspect(self, url: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
         issue = await self._issue(resource)
-        client = await self._get_client()
-        comments_resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments"
-        )
-        _raise_for_status(comments_resp)
-        comments = [
-            self._comment_summary(comment) for comment in _as_list(comments_resp.json())
-        ]
+        comments = await self._issue_comments(resource)
         project_metadata = await self._issue_project_metadata(resource)
         linked_pull_request_candidates = await self._linked_pull_request_candidates(
             resource
@@ -377,20 +373,8 @@ class MemberGitHubCapabilityService:
         return resolved
 
     async def _repository_labels(self, owner: str, repo: str) -> list[str]:
-        client = await self._get_client()
-        names: list[str] = []
-        page = 1
-        while True:
-            resp = await client.get(
-                f"/repos/{owner}/{repo}/labels",
-                params={"per_page": GITHUB_PAGE_SIZE, "page": page},
-            )
-            _raise_for_status(resp)
-            page_items = _as_list(resp.json())
-            names.extend(str(item.get("name", "")) for item in page_items)
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                break
-            page += 1
+        items = await self._paginated_rest_items(f"/repos/{owner}/{repo}/labels")
+        names = [str(item.get("name", "")) for item in items]
         return [name for name in names if name]
 
     async def pr_inspect(
@@ -419,6 +403,7 @@ class MemberGitHubCapabilityService:
         }
         if include_comments:
             result["conversation_comments"] = await self._issue_comments(resource)
+            result["review_summaries"] = await self._review_summaries(resource)
             result["review_threads"] = await self._review_threads(resource)
         if include_diff:
             result["files"] = await self._pull_request_files(resource)
@@ -1344,34 +1329,53 @@ class MemberGitHubCapabilityService:
             self._client = await create_github_client(self.person, self.base_url)
         return self._client
 
-    async def _issue_comments(self, resource: GitHubResource) -> list[dict[str, Any]]:
+    async def _paginated_rest_items(
+        self, endpoint: str, *, headers: dict[str, str] | None = None
+    ) -> list[dict[str, Any]]:
+        return [
+            item
+            async for item in self._iter_paginated_rest_items(endpoint, headers=headers)
+        ]
+
+    async def _iter_paginated_rest_items(
+        self, endpoint: str, *, headers: dict[str, str] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
         client = await self._get_client()
-        resp = await client.get(
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            _raise_for_status(response)
+            return _as_list(response.json())
+
+        async for item in paginated_items(
+            client.get,
+            endpoint,
+            parse_page,
+            headers=headers,
+        ):
+            yield item
+
+    async def _issue_comments(self, resource: GitHubResource) -> list[dict[str, Any]]:
+        endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments"
         )
-        _raise_for_status(resp)
-        return [self._comment_summary(comment) for comment in _as_list(resp.json())]
+        comments = await self._paginated_rest_items(endpoint)
+        return [self._comment_summary(comment) for comment in comments]
+
+    async def _review_summaries(self, resource: GitHubResource) -> list[dict[str, Any]]:
+        endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/reviews"
+        )
+        reviews = await self._paginated_rest_items(endpoint)
+        return [self._review_summary(review) for review in reviews]
 
     async def _pull_request_files(
         self, resource: GitHubResource
     ) -> list[dict[str, Any]]:
-        client = await self._get_client()
         endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/pulls/{resource.number}/files"
         )
-        files: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            resp = await client.get(
-                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
-            )
-            _raise_for_status(resp)
-            page_items = _as_list(resp.json())
-            files.extend(self._pull_request_file_summary(item) for item in page_items)
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                break
-            page += 1
-        return files
+        files = await self._paginated_rest_items(endpoint)
+        return [self._pull_request_file_summary(item) for item in files]
 
     async def _review_threads(self, resource: GitHubResource) -> list[dict[str, Any]]:
         query = """
@@ -1482,18 +1486,21 @@ class MemberGitHubCapabilityService:
         return candidates
 
     async def _linked_pull_request_urls(self, resource: GitHubResource) -> list[str]:
-        client = await self._get_client()
-        resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline",
-            headers={"Accept": "application/vnd.github+json"},
+        endpoint = (
+            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline"
         )
+        events: list[dict[str, Any]] = []
         try:
-            resp.raise_for_status()
-        except Exception:
-            return []
+            async for event in self._iter_paginated_rest_items(
+                endpoint,
+                headers={"Accept": "application/vnd.github+json"},
+            ):
+                events.append(event)
+        except MemberCapabilityError:
+            pass
 
         urls: list[str] = []
-        for event in _as_list(resp.json()):
+        for event in events:
             source = event.get("source", {})
             issue = source.get("issue", {}) if isinstance(source, dict) else {}
             if "pull_request" in issue and issue.get("html_url"):
@@ -1569,6 +1576,21 @@ class MemberGitHubCapabilityService:
             "author_type": get_author_type(self.person, login) if login else "",
             "created_at": comment.get("created_at"),
             "html_url": comment.get("html_url"),
+        }
+
+    def _review_summary(self, review: dict[str, Any]) -> dict[str, Any]:
+        body = str(review.get("body") or "")
+        user = review.get("user") or {}
+        login = str(user.get("login") or "")
+        return {
+            "id": review.get("id"),
+            "body": body,
+            "author": login,
+            "author_type": get_author_type(self.person, login) if login else "",
+            "state": review.get("state", ""),
+            "submitted_at": review.get("submitted_at"),
+            "html_url": review.get("html_url"),
+            "commit_id": review.get("commit_id"),
         }
 
     def _pull_request_file_summary(self, file: dict[str, Any]) -> dict[str, Any]:

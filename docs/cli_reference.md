@@ -81,7 +81,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
+| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
@@ -1177,7 +1177,7 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including review threads and diff comment coordinates. |
+| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
@@ -1242,7 +1242,7 @@ guildbotics member github pr create [OPTIONS]
 
 ## `guildbotics member github pr inspect`
 
-Read a PR, optionally including review threads and diff comment coordinates.
+Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates.
 
 ```text
 guildbotics member github pr inspect [OPTIONS]
@@ -1252,7 +1252,7 @@ guildbotics member github pr inspect [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
-| `--include-comments` | Include review threads with their reply target ids. |
+| `--include-comments` | Include conversation comments, review summaries, and review threads with their reply target ids. |
 | `--include-diff` | Include the diff with commentable line coordinates. |
 | `--format [json\|markdown]` | Output format. [default: markdown] |
 | `--help` | Show this message and exit. |

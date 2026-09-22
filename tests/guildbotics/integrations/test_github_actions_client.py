@@ -47,11 +47,41 @@ class FakeResponse:
 class FakeClient:
     def __init__(self, responses):
         self.responses = responses
+        self.response_sequences = {}
         self.gets = []
 
     async def get(self, endpoint, **kwargs):
         self.gets.append((endpoint, kwargs))
+        if endpoint in self.response_sequences:
+            return self.response_sequences[endpoint].pop(0)
         return self.responses[endpoint]
+
+
+@pytest.mark.asyncio
+async def test_action_collections_and_commit_statuses_share_pagination():
+    checks_endpoint = "/repos/owner/repo/commits/abc/check-runs"
+    statuses_endpoint = "/repos/owner/repo/commits/abc/status"
+    api = FakeClient({})
+    api.response_sequences[checks_endpoint] = [
+        FakeResponse(payload={"check_runs": [{"id": index} for index in range(100)]}),
+        FakeResponse(payload={"check_runs": [{"id": 100}]}),
+    ]
+    api.response_sequences[statuses_endpoint] = [
+        FakeResponse(payload={"statuses": [{"id": index} for index in range(100)]}),
+        FakeResponse(payload={"statuses": [{"id": 100}]}),
+    ]
+    client = GitHubActionsClient(api)
+
+    checks = await client.check_runs("owner", "repo", "abc")
+    statuses = await client.commit_statuses("owner", "repo", "abc")
+
+    assert [item["id"] for item in checks] == list(range(101))
+    assert [item["id"] for item in statuses] == list(range(101))
+    for endpoint in (checks_endpoint, statuses_endpoint):
+        assert [call for call in api.gets if call[0] == endpoint] == [
+            (endpoint, {"params": {"per_page": 100, "page": 1}}),
+            (endpoint, {"params": {"per_page": 100, "page": 2}}),
+        ]
 
 
 @pytest.mark.asyncio

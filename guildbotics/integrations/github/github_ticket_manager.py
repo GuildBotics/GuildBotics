@@ -16,6 +16,7 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_name,
     normalize_login,
+    paginated_items,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
     MAX_REVIEW_ROUNDS,
@@ -37,6 +38,10 @@ from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
+
+
+class _IncompleteGitHubCollection(RuntimeError):
+    """A best-effort GitHub collection stopped before all pages were read."""
 
 
 class GitHubTicketManager(TicketManager):
@@ -653,10 +658,22 @@ class GitHubTicketManager(TicketManager):
     async def _load_issue_comments(
         self, client: AsyncClient, task: Task, issue_number: int
     ) -> list[Message]:
-        comments_resp = await client.get(
-            f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
-        )
-        comments_data = comments_resp.json()
+        endpoint = f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            if response.status_code >= HTTP_BAD_REQUEST:
+                raise RuntimeError(
+                    f"GitHub issue comments request failed with status "
+                    f"{response.status_code}"
+                )
+            page_items = response.json()
+            if not isinstance(page_items, list):
+                raise RuntimeError("Unexpected GitHub issue comments response")
+            return [item for item in page_items if isinstance(item, dict)]
+
+        comments_data = [
+            item async for item in paginated_items(client.get, endpoint, parse_page)
+        ]
         comments_data.sort(key=lambda c: c.get("created_at") or "")
 
         comments = []
@@ -722,15 +739,30 @@ class GitHubTicketManager(TicketManager):
     ) -> list[dict[str, Any]]:
         client = await self.login()
         repo = task.repository
-        resp = await client.get(
-            f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline",
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        if resp.status_code >= HTTP_BAD_REQUEST:
-            return []
+        endpoint = f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline"
+        events: list[dict[str, Any]] = []
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            if response.status_code >= HTTP_BAD_REQUEST:
+                raise _IncompleteGitHubCollection
+            page_items = response.json()
+            if not isinstance(page_items, list):
+                raise _IncompleteGitHubCollection
+            return [item for item in page_items if isinstance(item, dict)]
+
+        try:
+            async for event in paginated_items(
+                client.get,
+                endpoint,
+                parse_page,
+                headers={"Accept": "application/vnd.github+json"},
+            ):
+                events.append(event)
+        except _IncompleteGitHubCollection:
+            pass
 
         urls: list[str] = []
-        for event in resp.json():
+        for event in events:
             source = event.get("source", {})
             issue = source.get("issue", {}) if isinstance(source, dict) else {}
             if issue.get("pull_request") and issue.get("html_url"):
