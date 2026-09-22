@@ -162,9 +162,15 @@ class _RestGetVisitor(ast.NodeVisitor):
                 "_get",
             }:
                 callee = ast.unparse(call.func)
+                endpoint = _request_endpoint(call)
+            elif isinstance(call.func, ast.Attribute) and call.func.attr == "request":
+                callee = ast.unparse(call.func)
+                endpoint = _generic_get_endpoint(call)
             elif isinstance(call.func, ast.Name) and call.func.id == "get_page":
                 callee = call.func.id
-            endpoint = _request_endpoint(call)
+                endpoint = _request_endpoint(call)
+            else:
+                endpoint = None
             if (
                 callee
                 and endpoint is not None
@@ -201,14 +207,27 @@ class _RestGetVisitor(ast.NodeVisitor):
 
 
 def _request_endpoint(call: ast.Call) -> ast.expr | None:
-    if call.args:
-        return call.args[0]
+    return _argument(call, 0, {"endpoint", "url"})
+
+
+def _generic_get_endpoint(call: ast.Call) -> ast.expr | None:
+    method = _argument(call, 0, {"method"})
+    if not (
+        isinstance(method, ast.Constant)
+        and isinstance(method.value, str)
+        and method.value.upper() == "GET"
+    ):
+        return None
+    return _argument(call, 1, {"url"})
+
+
+def _argument(
+    call: ast.Call, position: int, keyword_names: set[str]
+) -> ast.expr | None:
+    if len(call.args) > position:
+        return call.args[position]
     return next(
-        (
-            keyword.value
-            for keyword in call.keywords
-            if keyword.arg in {"endpoint", "url"}
-        ),
+        (keyword.value for keyword in call.keywords if keyword.arg in keyword_names),
         None,
     )
 
@@ -269,7 +288,8 @@ def test_github_rest_get_finder_accepts_a_keyword_url_outside_provider_modules()
     tree = ast.parse(
         """
 async def load(client, owner, repo):
-    return await client.get(url=f"/repos/{owner}/{repo}/milestones")
+    await client.get(url=f"/repos/{owner}/{repo}/milestones")
+    return await client.request("GET", f"/repos/{owner}/{repo}/labels")
 """
     )
     visitor = _RestGetVisitor("guildbotics/app_api/example.py", provider_source=False)
@@ -283,6 +303,12 @@ async def load(client, owner, repo):
                 "load",
                 "client.get",
                 _expression_shape('f"/repos/{owner}/{repo}/milestones"'),
-            ): 1
+            ): 1,
+            (
+                "guildbotics/app_api/example.py",
+                "load",
+                "client.request",
+                _expression_shape('f"/repos/{owner}/{repo}/labels"'),
+            ): 1,
         }
     )
