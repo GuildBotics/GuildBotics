@@ -9,6 +9,8 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
+    render_workflow_status_comment,
+    workflow_status_comment_payload,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -770,15 +772,11 @@ async def test_sync_agent_field_adds_missing_option_preserving_existing():
 
 
 def _status_comment(reason: str) -> str:
-    from guildbotics.integrations.workflow_status_comment import (
-        WORKFLOW_STATUS_CODE_BLOCK,
-    )
-
-    return (
-        f"```{WORKFLOW_STATUS_CODE_BLOCK}\n"
-        '{"kind": "workflow_error", "routing": "suppress", '
-        f'"reason": "{reason}", "person_id": "aiko"}}\n'
-        "```\n"
+    return render_workflow_status_comment(
+        body="status",
+        payload=workflow_status_comment_payload(
+            reason=reason, person_id="aiko", run_id="run-1"
+        ),
     )
 
 

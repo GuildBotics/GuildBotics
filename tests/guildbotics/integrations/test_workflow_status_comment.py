@@ -5,7 +5,7 @@ from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_ROUTING_SUPPRESS,
 )
 from guildbotics.integrations.workflow_status_comment import (
-    WORKFLOW_STATUS_CODE_BLOCK,
+    WORKFLOW_STATUS_MARKER,
     WorkflowStatusComment,
     parse_workflow_status_comment,
     render_workflow_status_comment,
@@ -48,10 +48,14 @@ def test_render_and_parse_workflow_status_comment_round_trip():
     body = "@user\n\nSome human readable text.\n\n⚙aiko"
     rendered = render_workflow_status_comment(body=body, payload=payload)
 
-    assert WORKFLOW_STATUS_CODE_BLOCK in rendered
-    assert "Some human readable text." in rendered
+    assert rendered.startswith(f"<!-- {WORKFLOW_STATUS_MARKER}\n")
+    assert rendered.endswith(body)
+    assert "```" not in rendered
+    assert "**GuildBotics workflow status**" not in rendered
 
-    parsed = parse_workflow_status_comment(rendered)
+    # GitHubTicketManager prefixes the ticket author's mention after rendering.
+    posted = f"@author\n\n{rendered}"
+    parsed = parse_workflow_status_comment(posted)
     assert parsed == WorkflowStatusComment(
         reason="rate_limited",
         routing=WORKFLOW_STATUS_ROUTING_SUPPRESS,
@@ -63,13 +67,22 @@ def test_render_and_parse_workflow_status_comment_round_trip():
     )
 
 
-def test_parse_workflow_status_comment_returns_none_when_no_fenced_block():
+def test_parse_workflow_status_comment_returns_none_when_no_hidden_marker():
     body = "Just a normal comment.\nNo special block here."
     assert parse_workflow_status_comment(body) is None
 
 
 def test_parse_workflow_status_comment_returns_none_when_broken_json():
-    body = f"```{WORKFLOW_STATUS_CODE_BLOCK}\n{{broken: json,\n```"
+    body = f"<!-- {WORKFLOW_STATUS_MARKER}\n{{broken: json,\n-->"
+    assert parse_workflow_status_comment(body) is None
+
+
+def test_parse_workflow_status_comment_rejects_old_fenced_block():
+    body = (
+        f"```{WORKFLOW_STATUS_MARKER}\n"
+        '{"kind":"workflow_error","routing":"suppress","reason":"failed"}\n'
+        "```"
+    )
     assert parse_workflow_status_comment(body) is None
 
 
