@@ -273,7 +273,8 @@ async def main(context: Context) -> AgentResponse | None:
                 task = Task(**payload["task"])
 
     if task is None:
-        task = await ticket_manager.get_task_to_work_on()
+        candidates = await ticket_manager.get_task_candidates()
+        task = candidates[0] if candidates else None
 
     if task is None:
         return None

@@ -74,7 +74,7 @@ class TaskScheduler:
         self._cancel_event = threading.Event()
         #: The last reason AI CLI work was deferred here, so it is logged once.
         self._environment_refusal = ""
-        self._ticket_patrol_candidates: dict[str, list[WorkflowInvocation]] = {}
+        self._ticket_patrol_candidates: dict[str, list[Task]] = {}
         self._threads: list[threading.Thread] = []
         # Queued chat events are executed here, in each member's single worker
         # thread, so a member's chat / ticket / scheduled / routine work shares
@@ -324,11 +324,7 @@ class TaskScheduler:
         pending_ticket_patrol = bool(
             self._ticket_patrol_candidates.get(person.person_id)
         )
-        routine_due = (
-            pending_ticket_patrol
-            or next_routine_time is None
-            or start_time >= next_routine_time
-        )
+        routine_due = next_routine_time is None or start_time >= next_routine_time
         routine_command = ""
         if self.routine_source_enabled and pending_ticket_patrol:
             routine_command = "workflows/ticket_driven_workflow"

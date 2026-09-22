@@ -136,18 +136,16 @@ def test_task_scheduler_uses_ticket_selector(monkeypatch):
             pass
 
         async def candidates(self, person):
-            return [
-                WorkflowInvocation(
-                    command="workflows/ticket_driven_workflow",
-                    person_id="alice",
-                    source="routine",
-                    trigger_type="ticket",
-                    payload={"task": {"title": "stub", "description": "stub"}},
-                )
-            ]
+            return [Task(title="stub", description="stub")]
 
         async def refresh(self, person, candidate):
-            return candidate
+            return WorkflowInvocation(
+                command="workflows/ticket_driven_workflow",
+                person_id="alice",
+                source="routine",
+                trigger_type="ticket",
+                payload={"task": candidate.model_dump()},
+            )
 
     dispatched = []
 

@@ -902,24 +902,6 @@ class GitHubTicketManager(TicketManager):
         tasks = sorted(tasks)
         return tasks, task_metadata
 
-    async def get_ticket(self, column_name: str, all_items: list[dict]) -> Task | None:
-        """
-        Retrieve a ticket from a specific internal lane.
-
-        get_task_to_work_on() is the primary entrypoint for the simplified workflow;
-        this method remains as a narrow compatibility helper for direct callers.
-        """
-        tasks, task_metadata = self._build_project_tasks(all_items)
-
-        for task in tasks:
-            if task.status != column_name:
-                continue
-            assert task.id, "Task ID must be set"
-            selected = await self._select_actionable_task(task, task_metadata[task.id])
-            if selected:
-                return selected
-        return None
-
     async def _select_actionable_task(
         self, task: Task, metadata: dict[str, Any]
     ) -> Task | None:
@@ -968,20 +950,6 @@ class GitHubTicketManager(TicketManager):
             task.trigger_reason = "issue_mention" if mention_pending else "working_lane"
             return task
         return None
-
-    async def get_task_to_work_on(self) -> Task | None:
-        """
-        Retrieve a ticket that the person can work on.
-
-        Open pull requests the member wrote or reviews come first: they are
-        work in flight that someone is waiting on. Then the ready lane, then
-        the working lane.
-
-        Returns:
-            Task | None: The next available Task or None.
-        """
-        candidates = await self.get_task_candidates()
-        return candidates[0] if candidates else None
 
     async def get_task_candidates(self) -> list[Task]:
         """Return every currently actionable PR and issue in patrol order."""

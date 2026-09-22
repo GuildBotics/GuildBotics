@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import datetime as dt
 from types import SimpleNamespace
 
@@ -288,21 +287,29 @@ def _patrol(scheduler: TaskScheduler) -> tuple[bool, bool]:
         loop.close()
 
 
-def _ticket_invocation() -> WorkflowInvocation:
-    task = Task(
-        id="7",
+def _ticket_task(number: int = 7) -> Task:
+    return Task(
+        id=str(number),
         title="ログイン修正",
         description="",
         repository="o/r",
-        number=7,
-        url="https://github.com/o/r/issues/7",
+        number=number,
+        url=f"https://github.com/o/r/issues/{number}",
     )
+
+
+def _ticket_invocation(task: Task | None = None) -> WorkflowInvocation:
+    task = task or _ticket_task()
     return WorkflowInvocation(
         command="workflows/ticket_driven_workflow",
         person_id="alice",
         source="routine",
         trigger_type="ticket",
-        payload={"task": task.model_dump(), "ticket_url": task.url},
+        payload={
+            "task": task.model_dump(),
+            "ticket_url": task.url,
+            "trigger_reason": task.trigger_reason or "",
+        },
     )
 
 
@@ -332,14 +339,15 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
     from guildbotics.drivers import utils as driver_utils
 
     scheduler = TaskScheduler(_Context(_Person()))
+    task = _ticket_task()
     invocation = _ticket_invocation()
     dispatched: list[tuple[str | None, dict[str, object], list[str], object]] = []
 
     async def fake_candidates(self, person):
-        return [invocation]
+        return [task]
 
     async def fake_refresh(self, person, candidate):
-        assert candidate is invocation
+        assert candidate is task
         return invocation
 
     class FakeDispatcher:
@@ -400,12 +408,9 @@ def test_ticket_patrol_keeps_next_candidate_due_and_uses_distinct_identity(
     person = _Person(["workflows/ticket_driven_workflow"])
     context = _Context(person)
     scheduler = TaskScheduler(context, routine_interval_minutes=10)
-    first = _ticket_invocation()
-    second = copy.deepcopy(first)
-    second.payload["task"]["number"] = 8
-    second.payload["task"]["url"] = "https://github.com/o/r/issues/8"
-    second.payload["ticket_url"] = "https://github.com/o/r/issues/8"
-    second.payload["trigger_reason"] = "issue_comment"
+    first = _ticket_task()
+    second = _ticket_task(8)
+    second.trigger_reason = "issue_comment"
     dispatched: list[WorkflowInvocation] = []
 
     async def fake_candidates(self, selected_person):
@@ -413,7 +418,7 @@ def test_ticket_patrol_keeps_next_candidate_due_and_uses_distinct_identity(
         return [first, second]
 
     async def fake_refresh(self, selected_person, candidate):
-        return candidate
+        return _ticket_invocation(candidate)
 
     class FakeDispatcher:
         def __init__(self, selected_context, service_run_id=None):

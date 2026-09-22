@@ -12,37 +12,28 @@ class TicketSelector:
     def __init__(self, context: Context) -> None:
         self._context = context
 
-    async def candidates(self, person: Person) -> list[WorkflowInvocation]:
+    async def candidates(self, person: Person) -> list[Task]:
         """List actionable ticket work in patrol order."""
         context = self._context.clone_for(person)
         try:
             ticket_manager = context.get_ticket_manager()
-            tasks = await ticket_manager.get_task_candidates()
-            return [
-                await self._invocation(person, ticket_manager, task) for task in tasks
-            ]
+            return await ticket_manager.get_task_candidates()
         finally:
             await context.aclose()
 
     async def refresh(
-        self, person: Person, candidate: WorkflowInvocation
+        self, person: Person, candidate: Task
     ) -> WorkflowInvocation | None:
         """Re-read a candidate and rebuild its invocation if work remains."""
         context = self._context.clone_for(person)
         try:
             ticket_manager = context.get_ticket_manager()
-            task = await ticket_manager.refresh_task(
-                self._task_from_invocation(candidate)
-            )
+            task = await ticket_manager.refresh_task(candidate)
             if task is None:
                 return None
             return await self._invocation(person, ticket_manager, task)
         finally:
             await context.aclose()
-
-    @staticmethod
-    def _task_from_invocation(invocation: WorkflowInvocation) -> Task:
-        return Task.model_validate(invocation.payload["task"])
 
     @staticmethod
     async def _invocation(

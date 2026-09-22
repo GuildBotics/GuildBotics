@@ -121,6 +121,11 @@ class _Manager(GitHubTicketManager):
         node = self.pull_request_nodes.get(int(variables.get("number") or 0))
         return {"repository": {"pullRequest": node}}
 
+    async def first_task(self) -> Task | None:
+        """Return the first patrol candidate for single-selection assertions."""
+        candidates = await self.get_task_candidates()
+        return candidates[0] if candidates else None
+
 
 def _item(
     *,
@@ -198,7 +203,7 @@ def _pull() -> dict[str, Any]:
 async def test_default_todo_assigned_ticket_is_selected():
     manager = _Manager(items=[_item(number=1, status="Todo")])
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.status == Task.READY
@@ -230,7 +235,7 @@ async def test_single_select_priority_field_does_not_break_ticket_retrieval():
         "options": {},
     }
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.status == Task.READY
@@ -257,7 +262,7 @@ async def test_custom_ready_lane_is_selected():
         lane_map={"ready": "Ready", "done": "Completed", "working": "Doing"},
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.status == Task.READY
@@ -272,7 +277,7 @@ async def test_done_lane_and_other_assignee_are_ignored():
         ]
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -281,7 +286,7 @@ async def test_mention_does_not_allow_unassigned_ready_ticket():
         items=[_item(number=1, status="Todo", assignee=None, body="Please ⚙aiko")]
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -291,7 +296,7 @@ async def test_working_ticket_runs_only_when_last_issue_comment_is_not_mine():
         responses=_comments(1, [{"user": "reviewer", "body": "Please update"}]),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "issue_comment"
@@ -301,14 +306,14 @@ async def test_working_ticket_runs_only_when_last_issue_comment_is_not_mine():
         responses=_comments(1, [{"user": "aiko-gh", "body": "Done"}]),
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
 async def test_assigned_working_ticket_without_comments_is_selected():
     manager = _Manager(items=[_item(number=1, status="In Progress")])
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
@@ -321,7 +326,7 @@ async def test_assigned_backlog_ticket_before_ready_lane_is_ignored():
         statuses=["Backlog", "Todo", "In Progress", "Done"],
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -331,7 +336,7 @@ async def test_assigned_icebox_ticket_after_done_lane_is_ignored():
         statuses=["Todo", "In Progress", "Done", "Icebox"],
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -341,7 +346,7 @@ async def test_intermediate_review_lane_is_treated_as_working_without_config():
         statuses=["Todo", "In Progress", "In Review", "Done"],
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.status == Task.IN_PROGRESS
@@ -357,7 +362,7 @@ async def test_backlog_ticket_with_mention_is_ignored():
         statuses=["Backlog", "Todo", "In Progress", "Done"],
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -368,7 +373,7 @@ async def test_backlog_ticket_with_unhandled_comment_is_ignored():
         statuses=["Backlog", "Todo", "In Progress", "Done"],
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -385,7 +390,7 @@ async def test_merged_pr_does_not_move_ticket_when_ticket_is_not_mine():
         }
     ]
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert manager.moved == []
 
 
@@ -403,7 +408,7 @@ async def test_closed_unmerged_pr_does_not_move_ticket_to_done():
         }
     ]
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert manager.moved == []
 
 
@@ -421,7 +426,7 @@ async def test_merged_pr_moves_ticket_to_done_without_triggering():
         }
     ]
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert manager.moved and manager.moved[0][1] == Task.DONE
 
 
@@ -810,7 +815,7 @@ async def test_ready_ticket_is_selected_when_my_comment_predates_the_assignment(
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -844,7 +849,7 @@ async def test_ready_ticket_is_skipped_when_my_comment_follows_the_assignment():
         ),
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -869,7 +874,7 @@ async def test_reassignment_makes_an_earlier_finished_ticket_actionable_again():
         ],
         responses=responses,
     )
-    assert await before.get_task_to_work_on() is None
+    assert await before.first_task() is None
 
     after = _Manager(
         items=[
@@ -884,7 +889,7 @@ async def test_reassignment_makes_an_earlier_finished_ticket_actionable_again():
         responses=responses,
     )
 
-    task = await after.get_task_to_work_on()
+    task = await after.first_task()
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
@@ -914,7 +919,7 @@ async def test_assignee_assignment_time_comes_from_the_assigned_event():
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -944,7 +949,7 @@ async def test_assigned_event_for_another_user_does_not_date_my_assignment():
         ),
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -971,7 +976,7 @@ async def test_working_ticket_with_only_pre_assignment_comments_is_working_lane(
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
@@ -1001,7 +1006,7 @@ async def test_failed_status_comment_before_the_assignment_does_not_suppress():
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -1015,7 +1020,7 @@ async def test_unknown_assignment_time_keeps_every_comment():
         responses=_comments(1, [{"user": "aiko-gh", "body": "Done"}]),
     )
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
 
 
 @pytest.mark.asyncio
@@ -1052,7 +1057,7 @@ async def test_mention_after_the_assignment_overrides_my_own_last_comment():
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -1097,7 +1102,7 @@ async def test_mention_on_second_comment_page_reopens_the_ticket():
         ],
     ]
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -1135,7 +1140,7 @@ async def test_latest_assignment_wins_when_both_paths_assign_this_member():
         ),
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "working_lane"
@@ -1224,7 +1229,7 @@ def _patrol_manager(node: dict[str, Any], items: list[dict] | None = None) -> _M
 async def test_own_pr_with_unanswered_review_thread_is_feedback_work():
     manager = _patrol_manager(_pull_request_node(threads=[_thread("reviewer")]))
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "pull_request_feedback"
@@ -1243,7 +1248,7 @@ async def test_pull_request_work_precedes_the_ready_lane():
         items=[_item(number=1, status="Todo")],
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "pull_request_feedback"
@@ -1322,7 +1327,7 @@ async def test_ready_lane_is_selected_when_no_pull_request_needs_the_member():
         items=[_item(number=1, status="Todo")],
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
@@ -1336,7 +1341,7 @@ async def test_reviewed_pr_with_new_commits_is_review_work():
         )
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.trigger_reason == "pull_request_review"
@@ -1358,7 +1363,7 @@ async def test_review_limit_is_announced_once_and_not_dispatched():
     )
     manager = _patrol_manager(node)
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert len(manager.comments_added) == 1
     task, body = manager.comments_added[0]
     assert task.pull_request_url == "https://github.com/GuildBotics/repo/pull/2"
@@ -1377,7 +1382,7 @@ async def test_review_limit_is_announced_once_and_not_dispatched():
             "createdAt": "2026-01-09T00:00:00Z",
         }
     )
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert len(manager.comments_added) == 1
 
 
@@ -1390,7 +1395,7 @@ async def test_oldest_updated_pull_request_is_served_first():
         3: _pull_request_node(number=3, threads=[_thread("reviewer")]),
     }
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None and task.number == 3
 
@@ -1404,7 +1409,7 @@ async def test_open_pr_keeps_its_issue_out_of_the_working_lane():
     )
     manager.related_pulls = [_pull()]
 
-    assert await manager.get_task_to_work_on() is None
+    assert await manager.first_task() is None
     assert manager.moved == []
 
 
@@ -1521,7 +1526,7 @@ async def test_app_member_is_recognized_under_the_graphql_login():
         github_username="aiko-app[bot]",
     )
 
-    task = await manager.get_task_to_work_on()
+    task = await manager.first_task()
 
     assert task is not None
     assert task.assignee == "aiko"
