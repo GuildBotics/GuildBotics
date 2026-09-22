@@ -401,13 +401,26 @@ uv run --no-sync python -m pytest tests/ -n auto --durations=30
 Windows の全テストは `git-contracts` と `remainder` の 2 shard に分かれている。
 最初の collection で全 node ID がちょうど 1 つの shard に入ることを検証し、その後の
 2 コマンドを両方実行して全件を走らせる。Git repository を作るテストの一時 path が
-`MAX_PATH` を超えないよう、各 shard には短いテスト専用の base directory を指定する:
+`MAX_PATH` を超えないよう、各 shard には短いテスト専用の base directory を指定する。
+pytest は `--basetemp` を実行開始時に空にするだけで終了時には消さないので、
+`%USERPROFILE%\tmp` の下に実行ごとに別名のディレクトリを作り、成否に関わらず最後に削除する
+（固定 path にすると、残骸が残り、並行実行とも衝突する）。`$env:TEMP`
+（`%USERPROFILE%\AppData\Local\Temp`）の下では長すぎて、Hub のテストが `Filename too long` で
+落ちる。pytest が `--basetemp` を実 path へ解決するため、8.3 短縮名や `subst` でも短くならない:
 
 ```powershell
-uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
-uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts --basetemp=C:/gb-pytest-git --junitxml=C:/gb-pytest-git.xml --phase-durations-json=C:/gb-pytest-git-phases.json
-uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder --basetemp=C:/gb-pytest-rest --junitxml=C:/gb-pytest-rest.xml --phase-durations-json=C:/gb-pytest-rest-phases.json
+$run = New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE "tmp\gb-$([guid]::NewGuid().ToString('N').Substring(0, 8))")
+try {
+  uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
+  uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts --basetemp="$run/git"
+  uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder --basetemp="$run/rest"
+} finally {
+  Remove-Item -Recurse -Force $run
+}
 ```
+
+CI が付ける `--junitxml` / `--phase-durations-json` は artifact として shard の所要時間を
+残すためのもので、手元では `--durations=30` の出力で足りる。
 
 CI の Windows check は `test-windows (git-contracts)` と
 `test-windows (remainder)` の 2 つで、両方が成功して初めて Windows の全 pytest を
