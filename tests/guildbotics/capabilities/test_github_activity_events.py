@@ -228,6 +228,7 @@ async def test_closed_pull_request_collection_is_fully_paginated():
                     ),
                     "closed_at": "2026-07-10T01:00:00Z",
                     "merged_at": None,
+                    "updated_at": "2026-07-10T02:00:00Z",
                 }
                 for index in range(count)
             ]
@@ -246,8 +247,48 @@ async def test_closed_pull_request_collection_is_fully_paginated():
         }
     ]
 
-    pull_requests = await poller._closed_pull_requests(Client(), items)
+    pull_requests = await poller._closed_pull_requests(
+        Client(), items, datetime(2026, 7, 10, tzinfo=UTC)
+    )
 
     assert len(pull_requests) == PAGINATED_PULL_REQUEST_COUNT
     assert [request["page"] for request in requests] == [1, 2]
     assert all(request["per_page"] == PAGE_SIZE for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_closed_pull_request_collection_stops_after_the_activity_window():
+    requests: list[dict] = []
+
+    class Client:
+        async def get(self, _endpoint, *, params):
+            requests.append(params)
+            if params["page"] > 1:
+                return SimpleNamespace(json=lambda: [], raise_for_status=lambda: None)
+            payload = [
+                {
+                    "number": index + 1,
+                    "title": f"PR {index + 1}",
+                    "html_url": f"https://github.com/acme/demo/pull/{index + 1}",
+                    "closed_at": "2026-07-10T01:00:00Z",
+                    "merged_at": None,
+                    "updated_at": (
+                        "2026-07-10T02:00:00Z" if index < 3 else "2026-07-09T23:59:59Z"
+                    ),
+                }
+                for index in range(PAGE_SIZE)
+            ]
+            return SimpleNamespace(json=lambda: payload, raise_for_status=lambda: None)
+
+    person = Person(person_id="aiko", name="Aiko")
+    poller = GitHubActivityEventPoller(
+        Team(project=Project(), members=[person]), person
+    )
+    items = [{"repository": {"name": "demo", "owner": {"login": "acme"}}}]
+
+    pull_requests = await poller._closed_pull_requests(
+        Client(), items, datetime(2026, 7, 10, tzinfo=UTC)
+    )
+
+    assert len(pull_requests) == 3
+    assert [request["page"] for request in requests] == [1]

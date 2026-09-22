@@ -44,7 +44,7 @@ class GitHubActivityEventPoller:
         )
         try:
             items = await self._project_items(client, config)
-            pull_requests = await self._closed_pull_requests(client, items)
+            pull_requests = await self._closed_pull_requests(client, items, start)
         finally:
             await client.aclose()
         existing = _existing_activity_ids(start, end)
@@ -122,7 +122,7 @@ class GitHubActivityEventPoller:
             cursor = str(page["endCursor"])
 
     async def _closed_pull_requests(
-        self, client: Any, items: list[dict[str, Any]]
+        self, client: Any, items: list[dict[str, Any]], start: datetime
     ) -> list[dict[str, Any]]:
         def parse_page(response: Any) -> list[dict[str, Any]]:
             response.raise_for_status()
@@ -147,6 +147,11 @@ class GitHubActivityEventPoller:
                     "direction": "desc",
                 },
             ):
+                updated_at = _parse_github_timestamp(
+                    str(pull_request.get("updated_at") or "")
+                )
+                if updated_at is not None and updated_at < start:
+                    break
                 if not pull_request.get("closed_at"):
                     continue
                 pull_requests.append(

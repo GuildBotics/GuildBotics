@@ -14,6 +14,12 @@ ROOT = Path(__file__).parents[3]
 # Adding a raw GET requires both a classification and a concrete reason.
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
+        "guildbotics/app_api/avatar.py",
+        "get_github_avatar_url",
+        "client.get",
+        "f'https://api.github.com/users/{github_username}'",
+    ): "single_resource: one GitHub username identifies one user",
+    (
         "guildbotics/capabilities/member_github.py",
         "context",
         "client.get",
@@ -111,6 +117,12 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "get_page",
         "endpoint",
     ): "paginated: this is the shared page request for every REST collection",
+    (
+        "guildbotics/editions/simple/setup_service.py",
+        "resolve_github_user",
+        "requests.get",
+        "f'https://api.github.com/users/{api_username}'",
+    ): "single_resource: one GitHub username identifies one user",
 }
 
 
@@ -125,10 +137,16 @@ EXPECTED_REST_GETS = Counter(
 
 
 class _RestGetVisitor(ast.NodeVisitor):
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, provider_source: bool) -> None:
         self.path = path
+        self.provider_source = provider_source
         self.functions: list[str] = []
         self.calls: Counter[tuple[str, str, str, str]] = Counter()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.functions.append(node.name)
+        self.generic_visit(node)
+        self.functions.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.functions.append(node.name)
@@ -137,7 +155,7 @@ class _RestGetVisitor(ast.NodeVisitor):
 
     def visit_Await(self, node: ast.Await) -> None:
         call = node.value
-        if isinstance(call, ast.Call) and call.args:
+        if isinstance(call, ast.Call):
             callee = ""
             if isinstance(call.func, ast.Attribute) and call.func.attr in {
                 "get",
@@ -146,16 +164,64 @@ class _RestGetVisitor(ast.NodeVisitor):
                 callee = ast.unparse(call.func)
             elif isinstance(call.func, ast.Name) and call.func.id == "get_page":
                 callee = call.func.id
-            if callee:
+            endpoint = _request_endpoint(call)
+            if (
+                callee
+                and endpoint is not None
+                and (self.provider_source or _is_github_rest_endpoint(endpoint))
+            ):
                 self.calls[
                     (
                         self.path,
                         self.functions[-1],
                         callee,
-                        ast.dump(call.args[0], annotate_fields=False),
+                        ast.dump(endpoint, annotate_fields=False),
                     )
                 ] += 1
         self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "requests"
+            and node.func.attr == "get"
+            and (endpoint := _request_endpoint(node)) is not None
+            and _is_github_rest_endpoint(endpoint)
+        ):
+            self.calls[
+                (
+                    self.path,
+                    self.functions[-1],
+                    ast.unparse(node.func),
+                    ast.dump(endpoint, annotate_fields=False),
+                )
+            ] += 1
+        self.generic_visit(node)
+
+
+def _request_endpoint(call: ast.Call) -> ast.expr | None:
+    if call.args:
+        return call.args[0]
+    return next(
+        (
+            keyword.value
+            for keyword in call.keywords
+            if keyword.arg in {"endpoint", "url"}
+        ),
+        None,
+    )
+
+
+def _is_github_rest_endpoint(endpoint: ast.expr) -> bool:
+    text = "".join(
+        node.value
+        for node in ast.walk(endpoint)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+    return "api.github.com" in text or text.startswith(
+        ("/repos/", "/app/", "/search/", "/rate_limit")
+    )
 
 
 def _imports_github_integration(tree: ast.AST) -> bool:
@@ -167,25 +233,25 @@ def _imports_github_integration(tree: ast.AST) -> bool:
     )
 
 
-def _github_rest_sources() -> list[tuple[str, ast.AST]]:
-    sources: list[tuple[str, ast.AST]] = []
+def _github_rest_sources() -> list[tuple[str, ast.AST, bool]]:
+    sources: list[tuple[str, ast.AST, bool]] = []
     provider_root = ROOT / "guildbotics" / "integrations" / "github"
-    candidates = {
-        *provider_root.rglob("*.py"),
-        *(ROOT / "guildbotics" / "capabilities").glob("*.py"),
-    }
-    for path in sorted(candidates):
+    for path in sorted((ROOT / "guildbotics").rglob("*.py")):
+        if path.name == "_version.py":
+            continue
         relative_path = path.relative_to(ROOT).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        if path.is_relative_to(provider_root) or _imports_github_integration(tree):
-            sources.append((relative_path, tree))
+        provider_source = path.is_relative_to(
+            provider_root
+        ) or _imports_github_integration(tree)
+        sources.append((relative_path, tree, provider_source))
     return sources
 
 
 def test_every_github_rest_get_is_classified_or_paginated():
     observed: Counter[tuple[str, str, str, str]] = Counter()
-    for relative_path, tree in _github_rest_sources():
-        visitor = _RestGetVisitor(relative_path)
+    for relative_path, tree, provider_source in _github_rest_sources():
+        visitor = _RestGetVisitor(relative_path, provider_source=provider_source)
         visitor.visit(tree)
         observed.update(visitor.calls)
 
@@ -196,4 +262,27 @@ def test_every_github_rest_get_is_classified_or_paginated():
         )
         and classification.partition(":")[2].strip()
         for classification in EXPECTED_REST_GET_CLASSIFICATIONS.values()
+    )
+
+
+def test_github_rest_get_finder_accepts_a_keyword_url_outside_provider_modules():
+    tree = ast.parse(
+        """
+async def load(client, owner, repo):
+    return await client.get(url=f"/repos/{owner}/{repo}/milestones")
+"""
+    )
+    visitor = _RestGetVisitor("guildbotics/app_api/example.py", provider_source=False)
+
+    visitor.visit(tree)
+
+    assert visitor.calls == Counter(
+        {
+            (
+                "guildbotics/app_api/example.py",
+                "load",
+                "client.get",
+                _expression_shape('f"/repos/{owner}/{repo}/milestones"'),
+            ): 1
+        }
     )
