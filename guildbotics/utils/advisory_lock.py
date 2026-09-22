@@ -67,6 +67,15 @@ class LockTimeoutError(TimeoutError):
 
 
 _held = threading.local()
+_process_locks_guard = threading.Lock()
+_process_locks: dict[Path, threading.Lock] = {}
+
+
+def _process_lock(path: Path) -> threading.Lock:
+    """Return the in-process mutex for one advisory-lock file."""
+    resolved = Path(os.path.normcase(path.resolve(strict=False)))
+    with _process_locks_guard:
+        return _process_locks.setdefault(resolved, threading.Lock())
 
 
 def _held_depths() -> dict[Hashable, int]:
@@ -83,9 +92,10 @@ def held_lock(
 ) -> Iterator[IO[str]]:
     """Hold the advisory lock at ``path`` for the duration of the block.
 
-    The lock guards a short critical section, not a user-visible edit session,
-    so it carries no owner metadata and no TTL: the OS releases it when the
-    holding process exits.
+    A per-path mutex excludes other threads in this process before the OS lock
+    excludes other processes. The lock guards a short critical section, not a
+    user-visible edit session, so it carries no owner metadata and no TTL: the
+    OS releases its layer when the holding process exits.
 
     Args:
         path (Path): The lock file. Parent directories are created.
@@ -96,27 +106,34 @@ def held_lock(
         IO[str]: The open lock file handle.
 
     Raises:
-        LockTimeoutError: When the lock stays held for longer than ``timeout``.
+        LockTimeoutError: When another thread or process holds the lock for
+            longer than ``timeout``.
     """
-    handle = open_lock_file(path)
     deadline = time.monotonic() + timeout
+    process_lock = _process_lock(path)
+    if not process_lock.acquire(timeout=max(0.0, timeout)):
+        raise LockTimeoutError(f"Timed out waiting for the advisory lock at {path}.")
     try:
-        while True:
-            try:
-                lock_file_nonblocking(handle)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise LockTimeoutError(
-                        f"Timed out waiting for the advisory lock at {path}."
-                    ) from None
-                time.sleep(poll_interval)
+        handle = open_lock_file(path)
         try:
-            yield handle
+            while True:
+                try:
+                    lock_file_nonblocking(handle)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise LockTimeoutError(
+                            f"Timed out waiting for the advisory lock at {path}."
+                        ) from None
+                    time.sleep(poll_interval)
+            try:
+                yield handle
+            finally:
+                unlock_file(handle)
         finally:
-            unlock_file(handle)
+            handle.close()
     finally:
-        handle.close()
+        process_lock.release()
 
 
 @contextmanager
@@ -129,11 +146,10 @@ def reentrant_held_lock(
 ) -> Iterator[None]:
     """Hold ``path`` with thread-local re-entry and a caller-specific error.
 
-    The OS lock remains process-wide. Only a thread that already owns the
-    same logical lock may re-enter it; another thread still waits on the file
-    descriptor just like another process. ``timeout_error`` is evaluated only
-    for an acquisition timeout, never for a matching exception raised by the
-    protected body.
+    Only a thread that already owns the same logical lock may re-enter it;
+    another thread waits on the process mutex, and another process waits on
+    the OS lock. ``timeout_error`` is evaluated only for an acquisition
+    timeout, never for a matching exception raised by the protected body.
     """
     depths = _held_depths()
     if key in depths:
