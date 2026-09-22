@@ -25,8 +25,13 @@ class _Response:
 class _Client:
     def __init__(self, responses: dict[str, Any]):
         self.responses = responses
+        self.response_sequences: dict[str, list[Any]] = {}
+        self.gets: list[tuple[str, dict[str, Any]]] = []
 
     async def get(self, endpoint: str, **kwargs):
+        self.gets.append((endpoint, kwargs))
+        if endpoint in self.response_sequences:
+            return _Response(self.response_sequences[endpoint].pop(0))
         return _Response(self.responses.get(endpoint, []))
 
 
@@ -433,6 +438,60 @@ def test_select_related_pr_prefers_open_then_latest():
     import asyncio
 
     assert asyncio.run(run())["url"] == "open-new"
+
+
+@pytest.mark.asyncio
+async def test_related_pull_request_timeline_paginates():
+    manager = _Manager(
+        items=[],
+        responses={
+            "/repos/GuildBotics/repo/pulls/2": {
+                "html_url": "https://github.com/GuildBotics/repo/pull/2",
+                "state": "open",
+                "merged_at": None,
+                "updated_at": "2026-01-08T00:00:00Z",
+            }
+        },
+    )
+    endpoint = "/repos/GuildBotics/repo/issues/1/timeline"
+    manager.client_stub.response_sequences[endpoint] = [
+        [{"event": "labeled"} for _ in range(100)],
+        [
+            {
+                "source": {
+                    "issue": {
+                        "pull_request": {
+                            "url": "https://api.github.com/repos/GuildBotics/repo/pulls/2"
+                        },
+                        "html_url": "https://github.com/GuildBotics/repo/pull/2",
+                    }
+                }
+            }
+        ],
+    ]
+    task = Task(id="I1", title="T", description="D", repository="repo")
+
+    pulls = await GitHubTicketManager._get_related_pull_requests(manager, task, 1)
+
+    assert [pull["url"] for pull in pulls] == [
+        "https://github.com/GuildBotics/repo/pull/2"
+    ]
+    assert manager.client_stub.gets[:2] == [
+        (
+            endpoint,
+            {
+                "params": {"per_page": 100, "page": 1},
+                "headers": {"Accept": "application/vnd.github+json"},
+            },
+        ),
+        (
+            endpoint,
+            {
+                "params": {"per_page": 100, "page": 2},
+                "headers": {"Accept": "application/vnd.github+json"},
+            },
+        ),
+    ]
 
 
 def _script_graphql(manager: _Manager, handler) -> list[tuple[str, dict]]:
@@ -961,6 +1020,56 @@ async def test_mention_after_the_assignment_overrides_my_own_last_comment():
 
     assert task is not None
     assert task.trigger_reason == "ready_lane"
+
+
+@pytest.mark.asyncio
+async def test_mention_on_second_comment_page_reopens_the_ticket():
+    manager = _Manager(
+        items=[
+            _item(
+                number=1,
+                status="Todo",
+                assignee=None,
+                agent="⚙aiko",
+                agent_updated_at="2026-01-05T00:00:00Z",
+            )
+        ]
+    )
+    endpoint = "/repos/GuildBotics/repo/issues/1/comments"
+    manager.client_stub.response_sequences[endpoint] = [
+        [
+            {
+                "user": {"login": "human"},
+                "body": f"discussion {index}",
+                "created_at": "2026-01-06T00:00:00Z",
+            }
+            for index in range(99)
+        ]
+        + [
+            {
+                "user": {"login": "aiko-gh"},
+                "body": "Done.",
+                "created_at": "2026-01-07T00:00:00Z",
+            }
+        ],
+        [
+            {
+                "user": {"login": "human"},
+                "body": "⚙aiko one more thing",
+                "created_at": "2026-01-08T00:00:00Z",
+            }
+        ],
+    ]
+
+    task = await manager.get_task_to_work_on()
+
+    assert task is not None
+    assert task.trigger_reason == "ready_lane"
+    assert task.comments[-1].content == "⚙aiko one more thing"
+    assert manager.client_stub.gets == [
+        (endpoint, {"params": {"per_page": 100, "page": 1}}),
+        (endpoint, {"params": {"per_page": 100, "page": 2}}),
+    ]
 
 
 @pytest.mark.asyncio

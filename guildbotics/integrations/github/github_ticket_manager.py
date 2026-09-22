@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
+from guildbotics.integrations.github.actions_client import GITHUB_PAGE_SIZE
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_agent_token,
@@ -653,10 +654,20 @@ class GitHubTicketManager(TicketManager):
     async def _load_issue_comments(
         self, client: AsyncClient, task: Task, issue_number: int
     ) -> list[Message]:
-        comments_resp = await client.get(
-            f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
-        )
-        comments_data = comments_resp.json()
+        endpoint = f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
+        comments_data: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            comments_resp = await client.get(
+                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
+            )
+            page_items = comments_resp.json()
+            if not isinstance(page_items, list):
+                raise RuntimeError("Unexpected GitHub issue comments response")
+            comments_data.extend(item for item in page_items if isinstance(item, dict))
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
         comments_data.sort(key=lambda c: c.get("created_at") or "")
 
         comments = []
@@ -722,15 +733,27 @@ class GitHubTicketManager(TicketManager):
     ) -> list[dict[str, Any]]:
         client = await self.login()
         repo = task.repository
-        resp = await client.get(
-            f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline",
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        if resp.status_code >= HTTP_BAD_REQUEST:
-            return []
+        endpoint = f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline"
+        events: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = await client.get(
+                endpoint,
+                params={"per_page": GITHUB_PAGE_SIZE, "page": page},
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            if resp.status_code >= HTTP_BAD_REQUEST:
+                return []
+            page_items = resp.json()
+            if not isinstance(page_items, list):
+                return []
+            events.extend(item for item in page_items if isinstance(item, dict))
+            if len(page_items) < GITHUB_PAGE_SIZE:
+                break
+            page += 1
 
         urls: list[str] = []
-        for event in resp.json():
+        for event in events:
             source = event.get("source", {})
             issue = source.get("issue", {}) if isinstance(source, dict) else {}
             if issue.get("pull_request") and issue.get("html_url"):

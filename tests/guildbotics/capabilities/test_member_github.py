@@ -1839,6 +1839,62 @@ async def test_issue_inspect_pages_through_comments():
 
 
 @pytest.mark.asyncio
+async def test_issue_inspect_pages_through_linked_pull_request_timeline():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "title": "Issue",
+        "body": "Body",
+        "state": "open",
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "assignees": [],
+        "labels": [],
+    }
+    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
+    timeline_endpoint = "/repos/owner/repo/issues/42/timeline"
+    fake.get_sequences[timeline_endpoint] = [
+        [{"event": "labeled"} for _ in range(100)],
+        [
+            {
+                "source": {
+                    "issue": {
+                        "pull_request": {},
+                        "html_url": "https://github.com/owner/repo/pull/5",
+                    }
+                }
+            }
+        ],
+    ]
+    fake.get_payloads["/repos/owner/repo/pulls/5"] = {
+        "title": "PR",
+        "body": "",
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "html_url": "https://github.com/owner/repo/pull/5",
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
+        "base": {"ref": "main"},
+    }
+    service._client = fake
+
+    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
+
+    assert [item["number"] for item in result["linked_pull_request_candidates"]] == [5]
+    assert [call for call in fake.gets if call[0] == timeline_endpoint] == [
+        (
+            timeline_endpoint,
+            {"per_page": 100, "page": 1},
+            {"Accept": "application/vnd.github+json"},
+        ),
+        (
+            timeline_endpoint,
+            {"per_page": 100, "page": 2},
+            {"Accept": "application/vnd.github+json"},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_issue_inspect_returns_linked_pull_request_candidates():
     service = _service()
     fake = FakeClient()
