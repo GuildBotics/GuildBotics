@@ -1,6 +1,7 @@
 import datetime as dt
 import time
-from typing import ClassVar
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, ClassVar
 
 import httpx
 import jwt
@@ -17,6 +18,43 @@ from guildbotics.integrations.github.async_client import (
 from guildbotics.utils.env_loader import workspace_secret_store
 
 HTTP_UNAUTHORIZED = 401
+GITHUB_PAGE_SIZE = 100
+
+PageGetter = Callable[..., Awaitable[Any]]
+PageParser = Callable[[Any], list[dict[str, Any]]]
+
+
+async def paginated_items(
+    get_page: PageGetter,
+    endpoint: str,
+    parse_page: PageParser,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield every item from a GitHub REST collection.
+
+    The caller owns response validation so each integration can retain its
+    public error type. Errors are deliberately allowed to escape after earlier
+    pages have been yielded, which lets best-effort callers keep partial data.
+    """
+    page = 1
+    while True:
+        request_params = {
+            **(params or {}),
+            "per_page": GITHUB_PAGE_SIZE,
+            "page": page,
+        }
+        request_kwargs: dict[str, Any] = {"params": request_params}
+        if headers is not None:
+            request_kwargs["headers"] = headers
+        response = await get_page(endpoint, **request_kwargs)
+        page_items = parse_page(response)
+        for item in page_items:
+            yield item
+        if len(page_items) < GITHUB_PAGE_SIZE:
+            return
+        page += 1
 
 
 class GitHubTokenAuth(httpx.Auth):

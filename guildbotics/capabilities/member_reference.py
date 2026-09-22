@@ -113,7 +113,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             (
                 "guildbotics member github pr inspect --person <person> --url <pr_url> "
                 "[--include-comments] [--include-diff]",
-                "Read a PR, optionally including review threads and diff comment coordinates.",
+                "Read a PR, optionally including conversation comments, review summaries, "
+                "review threads, and diff comment coordinates.",
             ),
             (
                 "guildbotics member github pr checks --person <person> --url <pr_url> "

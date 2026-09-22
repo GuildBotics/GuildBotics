@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Any, cast
 
 from guildbotics.entities.team import Person, Service, Team
-from guildbotics.integrations.github.github_utils import create_github_client
+from guildbotics.integrations.github.github_utils import (
+    create_github_client,
+    paginated_items,
+)
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
@@ -41,7 +44,7 @@ class GitHubActivityEventPoller:
         )
         try:
             items = await self._project_items(client, config)
-            pull_requests = await self._closed_pull_requests(client, items)
+            pull_requests = await self._closed_pull_requests(client, items, start)
         finally:
             await client.aclose()
         existing = _existing_activity_ids(start, end)
@@ -119,32 +122,37 @@ class GitHubActivityEventPoller:
             cursor = str(page["endCursor"])
 
     async def _closed_pull_requests(
-        self, client: Any, items: list[dict[str, Any]]
+        self, client: Any, items: list[dict[str, Any]], start: datetime
     ) -> list[dict[str, Any]]:
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected GitHub pull request response")
+            return [item for item in payload if isinstance(item, dict)]
+
         repositories = {_repository_name(item) for item in items}
         pull_requests: list[dict[str, Any]] = []
         for repository in sorted(
             repository for repository in repositories if repository
         ):
-            response = await client.get(
-                f"/repos/{repository}/pulls",
+            endpoint = f"/repos/{repository}/pulls"
+            async for pull_request in paginated_items(
+                client.get,
+                endpoint,
+                parse_page,
                 params={
                     "state": "closed",
                     "sort": "updated",
                     "direction": "desc",
-                    "per_page": 100,
                 },
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, list):
-                raise RuntimeError(
-                    f"Unexpected GitHub pull request response for {repository}"
+            ):
+                updated_at = _parse_github_timestamp(
+                    str(pull_request.get("updated_at") or "")
                 )
-            for pull_request in payload:
-                if not isinstance(pull_request, dict) or not pull_request.get(
-                    "closed_at"
-                ):
+                if updated_at is not None and updated_at < start:
+                    break
+                if not pull_request.get("closed_at"):
                     continue
                 pull_requests.append(
                     {

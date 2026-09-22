@@ -41,6 +41,12 @@ REVIEW_LIMIT_REASON = "review_limit"
 MAX_REVIEW_ROUNDS = 3
 
 _FEEDBACK_REVIEW_STATES = frozenset({"COMMENTED", "CHANGES_REQUESTED"})
+PULL_REQUEST_FEEDBACK_SOURCE_QUERIES = {
+    "conversation_comments": "comments(last: 100)",
+    "review_summaries": "reviews(last: 100)",
+    "review_threads": "reviewThreads(first: 100)",
+}
+PULL_REQUEST_FEEDBACK_SOURCES = frozenset(PULL_REQUEST_FEEDBACK_SOURCE_QUERIES)
 
 PULL_REQUEST_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {

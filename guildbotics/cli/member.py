@@ -1703,7 +1703,10 @@ def pr() -> None:
 @click.option(
     "--include-comments",
     is_flag=True,
-    help="Include review threads with their reply target ids.",
+    help=(
+        "Include conversation comments, review summaries, and review threads "
+        "with their reply target ids."
+    ),
 )
 @click.option(
     "--include-diff",
