@@ -11,10 +11,11 @@ last word is someone else's, or a review summary / conversation comment newer
 than the member's last reply, is feedback the member has not answered.
 
 Reviewer role (``pull_request_review``): the member is a requested reviewer,
-or author-side activity (a reply in a thread the member took part in, or new
-commits after the member's last review) asks for another review. Author-side
-re-reviews stop after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so once
-on the PR (``REVIEW_LIMIT_REASON``) and only an explicit request reopens it.
+someone else replied in a thread the member took part in, or new commits landed
+after the member's last review. Re-reviews driven by replies from someone else
+or new commits stop after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so
+once on the PR (``REVIEW_LIMIT_REASON``), and only an explicit request reopens
+it.
 
 Workflow status notices (rate limit, failure, review limit) are neither
 feedback nor replies: they only suppress selection or mark the limit.

@@ -431,7 +431,12 @@ def test_thread_reply_after_the_review_limit_notice_asks_nothing():
 
 def test_thread_reply_before_the_review_limit_is_review_work():
     node = _theirs(
-        reviews={"nodes": _rounds(2)},
+        reviews={
+            "nodes": [
+                _review(ME, commit="round-1"),
+                _review(ME, commit="head-2"),
+            ]
+        },
         reviewThreads={"nodes": [_thread(ME, "other")]},
     )
 
