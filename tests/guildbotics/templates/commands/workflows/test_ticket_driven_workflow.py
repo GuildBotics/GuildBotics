@@ -512,7 +512,9 @@ async def test_ticket_rate_limit_posts_status_comment_and_records_event(monkeypa
 
     assert len(tm.commented) == 1
     comment = tm.commented[0][1]
-    assert "guildbotics-workflow-status-v1" in comment
+    assert "<!-- guildbotics-workflow-status-v1" in comment
+    assert "```" not in comment
+    assert "**GuildBotics workflow status**" not in comment
     assert "workflow_error" in comment
     assert "rate_limited" in comment
 

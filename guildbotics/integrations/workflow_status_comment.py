@@ -1,6 +1,6 @@
 """Workflow status comment for GitHub issue comments.
 
-Generates and parses ``guildbotics-workflow-status-v1`` fenced blocks
+Generates and parses hidden ``guildbotics-workflow-status-v1`` HTML comments
 embedded in GitHub issue comment bodies.  The ticket selection logic in
 :mod:`~guildbotics.integrations.github.github_ticket_manager` uses
 :func:`parse_workflow_status_comment` and
@@ -23,11 +23,10 @@ from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_ROUTING_SUPPRESS,
 )
 
-WORKFLOW_STATUS_CODE_BLOCK = "guildbotics-workflow-status-v1"
-WORKFLOW_STATUS_HEADING = "**GuildBotics workflow status**"
+WORKFLOW_STATUS_MARKER = "guildbotics-workflow-status-v1"
 
-_FENCE_PATTERN = re.compile(
-    r"```" + re.escape(WORKFLOW_STATUS_CODE_BLOCK) + r"\s*\n(.*?)\n```",
+_COMMENT_PATTERN = re.compile(
+    r"<!--\s*" + re.escape(WORKFLOW_STATUS_MARKER) + r"\s*\n(.*?)\n\s*-->",
     re.DOTALL,
 )
 
@@ -54,7 +53,7 @@ def workflow_status_comment_payload(
     retry_after_at: str = "",
     retry_after_text: str = "",
 ) -> dict[str, object]:
-    """Build the JSON payload for a workflow status fenced block."""
+    """Build the JSON payload for a workflow status marker."""
     payload: dict[str, object] = {
         "kind": WORKFLOW_STATUS_KIND,
         "routing": WORKFLOW_STATUS_ROUTING_SUPPRESS,
@@ -72,29 +71,21 @@ def workflow_status_comment_payload(
 
 
 def render_workflow_status_comment(*, body: str, payload: dict[str, object]) -> str:
-    """Render a human-readable comment with an embedded status block."""
+    """Render a human-readable comment with a hidden status marker."""
     json_line = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
-    return (
-        f"{WORKFLOW_STATUS_HEADING}\n"
-        f"\n"
-        f"```{WORKFLOW_STATUS_CODE_BLOCK}\n"
-        f"{json_line}\n"
-        f"```\n"
-        f"\n"
-        f"{body}"
-    )
+    return f"<!-- {WORKFLOW_STATUS_MARKER}\n{json_line}\n-->\n\n{body}"
 
 
 def parse_workflow_status_comment(body: str) -> WorkflowStatusComment | None:
     """Extract a :class:`WorkflowStatusComment` from a comment body.
 
-    Returns ``None`` if the body does not contain a valid
-    ``guildbotics-workflow-status-v1`` fenced block, or if the JSON is
-    malformed or has ``kind`` other than :data:`WORKFLOW_STATUS_KIND`.
+    Returns ``None`` if the body does not contain a valid hidden status marker,
+    or if the JSON is malformed or has ``kind`` other than
+    :data:`WORKFLOW_STATUS_KIND`.
     """
-    match = _FENCE_PATTERN.search(body)
+    match = _COMMENT_PATTERN.search(body)
     if match is None:
         return None
     try:
