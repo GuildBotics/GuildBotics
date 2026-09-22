@@ -2,12 +2,6 @@ name: Desktop E2E
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/desktop-e2e.yml"
-      - "desktop/**"
-      - "guildbotics/**"
-      - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       head_ref:
@@ -29,8 +23,44 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Detect E2E changes
+    runs-on: ubuntu-latest
+    outputs:
+      required: ${{ steps.detect.outputs.required }}
+    steps:
+      # The pull request merge commit has the base as its first parent, so
+      # this diff is exactly what merging the pull request would change.
+      - name: Checkout merge commit
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Detect
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          required=true
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            required=false
+            paths=$(git diff --name-only HEAD^1 HEAD)
+            while IFS= read -r path; do
+              case "$path" in
+                .github/workflows/desktop-e2e.yml | desktop/* | guildbotics/* | pyproject.toml | uv.lock)
+                  required=true
+                  ;;
+              esac
+            done <<< "$paths"
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
   e2e:
     name: Playwright (${{ matrix.revision }})
+    needs: changes
+    if: needs.changes.outputs.required == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -122,3 +152,21 @@ jobs:
             desktop/test-results
           if-no-files-found: ignore
           retention-days: 14
+
+  # The single required status check: it always reports, and succeeds only
+  # when E2E was not needed or every Playwright job succeeded.
+  gate:
+    name: Desktop E2E gate
+    needs: [changes, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.required }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          echo "changes=$CHANGES_RESULT required=$REQUIRED e2e=$E2E_RESULT"
+          [ "$CHANGES_RESULT" = "success" ]
+          [ "$REQUIRED" = "false" ] || [ "$E2E_RESULT" = "success" ]
