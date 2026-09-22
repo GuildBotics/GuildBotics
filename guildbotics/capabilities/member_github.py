@@ -160,14 +160,7 @@ class MemberGitHubCapabilityService:
     async def issue_inspect(self, url: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")
         issue = await self._issue(resource)
-        client = await self._get_client()
-        comments_resp = await client.get(
-            f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/comments"
-        )
-        _raise_for_status(comments_resp)
-        comments = [
-            self._comment_summary(comment) for comment in _as_list(comments_resp.json())
-        ]
+        comments = await self._issue_comments(resource)
         project_metadata = await self._issue_project_metadata(resource)
         linked_pull_request_candidates = await self._linked_pull_request_candidates(
             resource

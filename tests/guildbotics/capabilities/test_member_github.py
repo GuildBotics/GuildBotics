@@ -1803,6 +1803,42 @@ async def test_pr_inspect_marks_outdated_thread_replyable():
 
 
 @pytest.mark.asyncio
+async def test_issue_inspect_pages_through_comments():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "title": "Issue",
+        "body": "Body",
+        "state": "open",
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "assignees": [],
+        "labels": [],
+    }
+    comments_endpoint = "/repos/owner/repo/issues/42/comments"
+    fake.get_sequences[comments_endpoint] = [
+        [
+            {
+                "id": index,
+                "body": f"comment {index}",
+                "user": {"login": "reviewer"},
+            }
+            for index in range(100)
+        ],
+        [{"id": 100, "body": "latest comment", "user": {"login": "reviewer"}}],
+    ]
+    fake.get_payloads["/repos/owner/repo/issues/42/timeline"] = []
+    service._client = fake
+
+    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
+
+    assert result["comments"][-1]["body"] == "latest comment"
+    assert [call[:2] for call in fake.gets if call[0] == comments_endpoint] == [
+        (comments_endpoint, {"per_page": 100, "page": 1}),
+        (comments_endpoint, {"per_page": 100, "page": 2}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_issue_inspect_returns_linked_pull_request_candidates():
     service = _service()
     fake = FakeClient()
