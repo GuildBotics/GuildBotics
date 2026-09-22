@@ -40,18 +40,6 @@ class TicketSelector:
         finally:
             await context.aclose()
 
-    async def select(self, person: Person) -> WorkflowInvocation | None:
-        """Select an actionable ticket for the person and build a WorkflowInvocation."""
-        context = self._context.clone_for(person)
-        try:
-            ticket_manager = context.get_ticket_manager()
-            task = await ticket_manager.get_task_to_work_on()
-            if task is None:
-                return None
-            return await self._invocation(person, ticket_manager, task)
-        finally:
-            await context.aclose()
-
     @staticmethod
     def _task_from_invocation(invocation: WorkflowInvocation) -> Task:
         return Task.model_validate(invocation.payload["task"])
