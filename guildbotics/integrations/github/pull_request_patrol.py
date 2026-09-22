@@ -11,10 +11,11 @@ last word is someone else's, or a review summary / conversation comment newer
 than the member's last reply, is feedback the member has not answered.
 
 Reviewer role (``pull_request_review``): the member is a requested reviewer,
-someone replied last in a thread the member took part in, or new commits
-landed after the member's last review. Re-reviews on new commits stop after
-:data:`MAX_REVIEW_ROUNDS` rounds; the member says so once on the PR
-(``REVIEW_LIMIT_REASON``) and only an explicit request reopens it.
+someone else replied in a thread the member took part in, or new commits landed
+after the member's last review. Re-reviews driven by replies from someone else
+or new commits stop after :data:`MAX_REVIEW_ROUNDS` rounds; the member says so
+once on the PR (``REVIEW_LIMIT_REASON``), and only an explicit request reopens
+it.
 
 Workflow status notices (rate limit, failure, review limit) are neither
 feedback nor replies: they only suppress selection or mark the limit.
@@ -329,10 +330,11 @@ def review_limit_announced(pr: PullRequest, me: str) -> bool:
 
 
 def _review_work(pr: PullRequest, me: str) -> str | None:
-    if me in pr.requested_reviewers or _has_unanswered_thread(pr, me, mine_only=True):
+    if me in pr.requested_reviewers:
         return REVIEW
+    has_thread_reply = _has_unanswered_thread(pr, me, mine_only=True)
     rounds = review_rounds(pr, me)
-    if not rounds or pr.head_oid in rounds:
+    if not has_thread_reply and (not rounds or pr.head_oid in rounds):
         return None
     if len(rounds) < MAX_REVIEW_ROUNDS:
         return REVIEW
