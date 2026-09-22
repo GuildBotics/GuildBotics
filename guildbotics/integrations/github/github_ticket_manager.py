@@ -9,7 +9,6 @@ from httpx import AsyncClient
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
-from guildbotics.integrations.github.actions_client import GITHUB_PAGE_SIZE
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_agent_token,
@@ -17,6 +16,7 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
     get_person_name,
     normalize_login,
+    paginated_items,
 )
 from guildbotics.integrations.github.pull_request_patrol import (
     MAX_REVIEW_ROUNDS,
@@ -38,6 +38,10 @@ from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
+
+
+class _IncompleteGitHubCollection(RuntimeError):
+    """A best-effort GitHub collection stopped before all pages were read."""
 
 
 class GitHubTicketManager(TicketManager):
@@ -655,19 +659,21 @@ class GitHubTicketManager(TicketManager):
         self, client: AsyncClient, task: Task, issue_number: int
     ) -> list[Message]:
         endpoint = f"{self._get_issue_path(task.repository)}/{issue_number}/comments"
-        comments_data: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            comments_resp = await client.get(
-                endpoint, params={"per_page": GITHUB_PAGE_SIZE, "page": page}
-            )
-            page_items = comments_resp.json()
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            if response.status_code >= HTTP_BAD_REQUEST:
+                raise RuntimeError(
+                    f"GitHub issue comments request failed with status "
+                    f"{response.status_code}"
+                )
+            page_items = response.json()
             if not isinstance(page_items, list):
                 raise RuntimeError("Unexpected GitHub issue comments response")
-            comments_data.extend(item for item in page_items if isinstance(item, dict))
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                break
-            page += 1
+            return [item for item in page_items if isinstance(item, dict)]
+
+        comments_data = [
+            item async for item in paginated_items(client.get, endpoint, parse_page)
+        ]
         comments_data.sort(key=lambda c: c.get("created_at") or "")
 
         comments = []
@@ -735,22 +741,25 @@ class GitHubTicketManager(TicketManager):
         repo = task.repository
         endpoint = f"/repos/{self.owner}/{repo}/issues/{issue_number}/timeline"
         events: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            resp = await client.get(
-                endpoint,
-                params={"per_page": GITHUB_PAGE_SIZE, "page": page},
-                headers={"Accept": "application/vnd.github+json"},
-            )
-            if resp.status_code >= HTTP_BAD_REQUEST:
-                return []
-            page_items = resp.json()
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            if response.status_code >= HTTP_BAD_REQUEST:
+                raise _IncompleteGitHubCollection
+            page_items = response.json()
             if not isinstance(page_items, list):
-                return []
-            events.extend(item for item in page_items if isinstance(item, dict))
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                break
-            page += 1
+                raise _IncompleteGitHubCollection
+            return [item for item in page_items if isinstance(item, dict)]
+
+        try:
+            async for event in paginated_items(
+                client.get,
+                endpoint,
+                parse_page,
+                headers={"Accept": "application/vnd.github+json"},
+            ):
+                events.append(event)
+        except _IncompleteGitHubCollection:
+            pass
 
         urls: list[str] = []
         for event in events:

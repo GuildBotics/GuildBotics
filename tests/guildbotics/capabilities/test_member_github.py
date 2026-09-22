@@ -59,6 +59,7 @@ class FakeClient:
         self.get_payloads = {}
         self.get_sequences = {}
         self.get_status_codes = {}
+        self.get_status_sequences = {}
         self.post_payloads = {}
         self.patches = []
         self.patch_payloads = {}
@@ -88,9 +89,12 @@ class FakeClient:
             payload.setdefault("head", {}).setdefault("sha", "abc123")
         if "/compare/" in endpoint and endpoint not in self.get_payloads:
             payload = {"behind_by": 0}
+        status_code = self.get_status_codes.get(endpoint, 200)
+        if endpoint in self.get_status_sequences:
+            status_code = self.get_status_sequences[endpoint].pop(0)
         return FakeResponse(
             payload,
-            status_code=self.get_status_codes.get(endpoint, 200),
+            status_code=status_code,
         )
 
     async def post(self, endpoint, json=None, headers=None):
@@ -1892,6 +1896,71 @@ async def test_issue_inspect_pages_through_linked_pull_request_timeline():
             {"Accept": "application/vnd.github+json"},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_issue_inspect_keeps_timeline_results_before_a_later_page_fails():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "title": "Issue",
+        "body": "Body",
+        "state": "open",
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "assignees": [],
+        "labels": [],
+    }
+    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
+    timeline_endpoint = "/repos/owner/repo/issues/42/timeline"
+    linked_event = {
+        "source": {
+            "issue": {
+                "pull_request": {},
+                "html_url": "https://github.com/owner/repo/pull/5",
+            }
+        }
+    }
+    fake.get_sequences[timeline_endpoint] = [
+        [linked_event, *({"event": "labeled"} for _ in range(99))],
+        [],
+    ]
+    fake.get_status_sequences[timeline_endpoint] = [200, 502]
+    fake.get_payloads["/repos/owner/repo/pulls/5"] = {
+        "title": "PR",
+        "body": "",
+        "state": "open",
+        "merged_at": None,
+        "draft": False,
+        "html_url": "https://github.com/owner/repo/pull/5",
+        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
+        "base": {"ref": "main"},
+    }
+    service._client = fake
+
+    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
+
+    assert [item["number"] for item in result["linked_pull_request_candidates"]] == [5]
+
+
+@pytest.mark.asyncio
+async def test_issue_inspect_treats_an_unavailable_timeline_as_no_candidates():
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/issues/42"] = {
+        "title": "Issue",
+        "body": "Body",
+        "state": "open",
+        "html_url": "https://github.com/owner/repo/issues/42",
+        "assignees": [],
+        "labels": [],
+    }
+    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
+    fake.get_status_codes["/repos/owner/repo/issues/42/timeline"] = 404
+    service._client = fake
+
+    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
+
+    assert result["linked_pull_request_candidates"] == []
 
 
 @pytest.mark.asyncio

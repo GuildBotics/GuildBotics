@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import stat
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
@@ -18,7 +18,6 @@ from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
 from guildbotics.entities.team import Person, Service, Team
 from guildbotics.integrations.github.actions_client import (
-    GITHUB_PAGE_SIZE,
     GitHubActionsClient,
     GitHubActionsClientError,
 )
@@ -27,6 +26,7 @@ from guildbotics.integrations.github.github_utils import (
     get_author_type,
     get_github_username,
     normalize_login,
+    paginated_items,
 )
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -1332,21 +1332,27 @@ class MemberGitHubCapabilityService:
     async def _paginated_rest_items(
         self, endpoint: str, *, headers: dict[str, str] | None = None
     ) -> list[dict[str, Any]]:
+        return [
+            item
+            async for item in self._iter_paginated_rest_items(endpoint, headers=headers)
+        ]
+
+    async def _iter_paginated_rest_items(
+        self, endpoint: str, *, headers: dict[str, str] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
         client = await self._get_client()
-        items: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            resp = await client.get(
-                endpoint,
-                params={"per_page": GITHUB_PAGE_SIZE, "page": page},
-                headers=headers,
-            )
-            _raise_for_status(resp)
-            page_items = _as_list(resp.json())
-            items.extend(page_items)
-            if len(page_items) < GITHUB_PAGE_SIZE:
-                return items
-            page += 1
+
+        def parse_page(response: Any) -> list[dict[str, Any]]:
+            _raise_for_status(response)
+            return _as_list(response.json())
+
+        async for item in paginated_items(
+            client.get,
+            endpoint,
+            parse_page,
+            headers=headers,
+        ):
+            yield item
 
     async def _issue_comments(self, resource: GitHubResource) -> list[dict[str, Any]]:
         endpoint = (
@@ -1483,13 +1489,15 @@ class MemberGitHubCapabilityService:
         endpoint = (
             f"/repos/{resource.owner}/{resource.repo}/issues/{resource.number}/timeline"
         )
+        events: list[dict[str, Any]] = []
         try:
-            events = await self._paginated_rest_items(
+            async for event in self._iter_paginated_rest_items(
                 endpoint,
                 headers={"Accept": "application/vnd.github+json"},
-            )
+            ):
+                events.append(event)
         except MemberCapabilityError:
-            return []
+            pass
 
         urls: list[str] = []
         for event in events:

@@ -31,7 +31,8 @@ class _Client:
     async def get(self, endpoint: str, **kwargs):
         self.gets.append((endpoint, kwargs))
         if endpoint in self.response_sequences:
-            return _Response(self.response_sequences[endpoint].pop(0))
+            response = self.response_sequences[endpoint].pop(0)
+            return response if isinstance(response, _Response) else _Response(response)
         return _Response(self.responses.get(endpoint, []))
 
 
@@ -491,6 +492,43 @@ async def test_related_pull_request_timeline_paginates():
                 "headers": {"Accept": "application/vnd.github+json"},
             },
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_related_pull_requests_keep_results_before_a_later_page_fails():
+    manager = _Manager(
+        items=[],
+        responses={
+            "/repos/GuildBotics/repo/pulls/2": {
+                "html_url": "https://github.com/GuildBotics/repo/pull/2",
+                "state": "open",
+                "merged_at": None,
+                "updated_at": "2026-01-08T00:00:00Z",
+            }
+        },
+    )
+    endpoint = "/repos/GuildBotics/repo/issues/1/timeline"
+    linked_event = {
+        "source": {
+            "issue": {
+                "pull_request": {
+                    "url": "https://api.github.com/repos/GuildBotics/repo/pulls/2"
+                },
+                "html_url": "https://github.com/GuildBotics/repo/pull/2",
+            }
+        }
+    }
+    manager.client_stub.response_sequences[endpoint] = [
+        [linked_event, *({"event": "labeled"} for _ in range(99))],
+        _Response([], status_code=502),
+    ]
+    task = Task(id="I1", title="T", description="D", repository="repo")
+
+    pulls = await GitHubTicketManager._get_related_pull_requests(manager, task, 1)
+
+    assert [pull["url"] for pull in pulls] == [
+        "https://github.com/GuildBotics/repo/pull/2"
     ]
 
 
