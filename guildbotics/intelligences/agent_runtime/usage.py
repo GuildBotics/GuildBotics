@@ -44,6 +44,10 @@ from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 LIMIT_REACHED_PERCENT = 100.0
+#: A probe environment boots in seconds. The readers' own timeouts start once
+#: it is up, so a boot that stalls (the host slept mid-boot, say) is cut here
+#: rather than holding the probe for minutes.
+PROBE_START_TIMEOUT_SECONDS = 60.0
 
 
 class CliAgentUsageError(RuntimeError):
@@ -583,14 +587,22 @@ async def _probe(
 ) -> tuple[AgentEnvironment, EnvironmentProcess]:
     """Start ``command`` in the tool's probe environment, or say why not."""
     try:
-        environment = await start_probe_environment(tool)
+        async with asyncio.timeout(PROBE_START_TIMEOUT_SECONDS):
+            environment = await start_probe_environment(tool)
     except AgentRuntimeError as exc:
         raise CliAgentUsageError(str(exc)) from exc
+    except TimeoutError as exc:
+        raise CliAgentUsageError(
+            f"The {cli_agent_info(tool).label} probe environment did not start in time."
+        ) from exc
     try:
         process = await environment.run(*command, limit=STREAM_READ_LIMIT)
-    except AgentEnvironmentError as exc:
+    except BaseException as exc:
+        # Cancellation included: a probe dropped mid-start still releases it.
         await environment.close()
-        raise CliAgentUsageError(f"Could not start {command[0]}: {exc}") from exc
+        if isinstance(exc, AgentEnvironmentError):
+            raise CliAgentUsageError(f"Could not start {command[0]}: {exc}") from exc
+        raise
     return environment, process
 
 

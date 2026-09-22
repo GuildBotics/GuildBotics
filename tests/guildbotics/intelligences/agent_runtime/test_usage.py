@@ -703,6 +703,39 @@ async def test_read_codex_usage_raises_on_rpc_error(
 
 
 @pytest.mark.asyncio
+async def test_a_stalled_probe_environment_boot_fails_in_bounded_time(monkeypatch):
+    async def stall(_tool):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(usage_module, "start_probe_environment", stall)
+    monkeypatch.setattr(usage_module, "PROBE_START_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(CliAgentUsageError, match="did not start in time"):
+        await read_codex_usage()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_probe_start_releases_the_environment(
+    monkeypatch, fake_environment
+) -> None:
+    starting = asyncio.Event()
+
+    async def create_process(*_args, **_kwargs):
+        starting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    probe = asyncio.create_task(read_codex_usage())
+    await starting.wait()
+    probe.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await probe
+    assert fake_environment.started[-1].closed
+
+
+@pytest.mark.asyncio
 async def test_read_codex_usage_raises_when_stream_closes(
     monkeypatch, fake_environment
 ) -> None:

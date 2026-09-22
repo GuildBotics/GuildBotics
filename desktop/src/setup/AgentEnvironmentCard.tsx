@@ -22,7 +22,7 @@ import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import {
   buildAgentEnvironment,
   getAgentEnvironmentStatus,
-  recheckCliAgentUsage,
+  getCliAgentUsage,
   type AgentEnvironmentStatusResponse,
   type EnvironmentImageStatus,
   type EnvironmentToolStatus,
@@ -393,9 +393,9 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const recheck = useMutation({
-    mutationFn: () => recheckCliAgentUsage(tool.name),
+    mutationFn: () => getCliAgentUsage(tool.name, true),
     onSuccess: async (usage) => {
-      queryClient.setQueryData(["cli-agent-usage"], usage);
+      queryClient.setQueryData(["cli-agent-usage", tool.name], usage);
       const updated = await getAgentEnvironmentStatus();
       queryClient.setQueryData(["agent-environment-status"], updated);
       await queryClient.invalidateQueries({ queryKey: ["system-alerts"] });

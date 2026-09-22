@@ -247,8 +247,21 @@ export type CliAgentUsage = {
   checked_at: string;
 };
 
-export type CliAgentUsagesResponse = {
-  usages: CliAgentUsage[];
+export type CliAgentUsageCheck = {
+  status: "succeeded" | "failed";
+  checked_at: string;
+  trace_id: string;
+};
+
+// One tool's usage: the last successful reading, and the latest completed
+// probe. `usage` predates `check` when that probe failed, so it is the
+// previous reading rather than a current one. `refreshing` says a newer
+// probe is running.
+export type CliAgentUsageResponse = {
+  agent: string;
+  usage: CliAgentUsage | null;
+  check: CliAgentUsageCheck | null;
+  refreshing: boolean;
 };
 
 export type Correlation = {
@@ -1054,11 +1067,7 @@ export type EnvironmentToolStatus = {
   // Current guidance, including a past authentication failure that does not block retries.
   problem: string;
   usage_supported: boolean;
-  usage_check: {
-    status: "succeeded" | "failed";
-    checked_at: string;
-    trace_id: string;
-  } | null;
+  usage_check: CliAgentUsageCheck | null;
 };
 
 // The shared declaration of the agent environment: what every device builds.
@@ -1696,12 +1705,14 @@ export async function getMemoryEvents(params?: {
   return request(`/diagnostics/memory-events${suffix ? `?${suffix}` : ""}`);
 }
 
-export async function getCliAgentUsage(): Promise<CliAgentUsagesResponse> {
-  return request("/intelligences/cli-agents/usage");
-}
-
-export async function recheckCliAgentUsage(agent: string): Promise<CliAgentUsagesResponse> {
-  return request(`/intelligences/cli-agents/usage?refresh=true&agent=${encodeURIComponent(agent)}`);
+// `refresh` waits for a new probe instead of answering from the cache.
+export async function getCliAgentUsage(
+  agent: string,
+  refresh = false,
+): Promise<CliAgentUsageResponse> {
+  return request(
+    `/intelligences/cli-agents/${encodeURIComponent(agent)}/usage${refresh ? "?refresh=true" : ""}`,
+  );
 }
 
 export async function getLlmProviders(): Promise<LlmProviderInfo[]> {

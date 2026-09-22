@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getCliAgentUsage,
   ApiRequestError,
   applyCommandAuthoring,
   authorCommand,
@@ -334,6 +335,20 @@ describe("GET query parameter encoding", () => {
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
+  });
+
+  it("reads one tool's usage, and waits for a new probe on refresh", async () => {
+    const { calls } = captureFetch(
+      jsonResponse({ agent: "codex", usage: null, check: null, refreshing: false }),
+    );
+    await getCliAgentUsage("codex");
+    await getCliAgentUsage("codex", true);
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8765/intelligences/cli-agents/codex/usage",
+      "http://127.0.0.1:8765/intelligences/cli-agents/codex/usage?refresh=true",
+    ]);
+    expect(calls[0].init.method).toBe("GET");
   });
 
   it("fetches active system alerts", async () => {

@@ -57,7 +57,7 @@ from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
-    CliAgentUsagesResponse,
+    CliAgentUsageResponse,
     CommandAuthoringApplyRequest,
     CommandAuthoringApplyResponse,
     CommandAuthoringRequest,
@@ -289,6 +289,7 @@ def create_app(
                 try:
                     app_runtime.stop_scheduler(force=True)
                     sync_service.deactivate()
+                    await app_runtime.close_cli_agent_usage()
                 finally:
                     if added_app_handler:
                         logger.removeHandler(log_handler)
@@ -1096,16 +1097,16 @@ def create_app(
         )
 
     @app.get(
-        "/intelligences/cli-agents/usage",
-        response_model=CliAgentUsagesResponse,
+        "/intelligences/cli-agents/{agent}/usage",
+        response_model=CliAgentUsageResponse,
         responses=error_responses,
     )
     async def cli_agent_usage(
+        agent: str,
         refresh: bool = False,
-        agent: str | None = None,
         _: None = Depends(require_token),
-    ) -> CliAgentUsagesResponse:
-        return await app_runtime.get_cli_agent_usage(refresh=refresh, agent_name=agent)
+    ) -> CliAgentUsageResponse:
+        return await app_runtime.get_cli_agent_usage(agent, refresh=refresh)
 
     @app.get(
         "/intelligences/agent-environment",
