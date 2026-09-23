@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import threading
 from pathlib import Path
 
 import pytest
 
+import guildbotics.utils.advisory_lock as advisory_lock_module
 from guildbotics.utils.advisory_lock import (
+    LockTimeoutError,
     held_lock,
     lock_file_nonblocking,
     open_lock_file,
@@ -15,6 +18,35 @@ from guildbotics.utils.advisory_lock import (
     unlock_file,
     write_lock_data,
 )
+
+
+def _attempt_lock(path: str, connection) -> None:
+    try:
+        with held_lock(Path(path), timeout=0.2):
+            connection.send("acquired")
+    except LockTimeoutError:
+        connection.send("blocked")
+    finally:
+        connection.close()
+
+
+def _child_lock_result(path: Path) -> str:
+    process_context = multiprocessing.get_context("spawn")
+    receiver, sender = process_context.Pipe(duplex=False)
+    process = process_context.Process(target=_attempt_lock, args=(str(path), sender))
+    process.start()
+    sender.close()
+    try:
+        assert receiver.poll(5.0), "child process did not report its lock result"
+        result = receiver.recv()
+    finally:
+        receiver.close()
+        process.join(5.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(5.0)
+    assert process.exitcode == 0
+    return result
 
 
 def test_a_lock_file_nothing_has_written_to_is_still_exclusive(tmp_path: Path) -> None:
@@ -80,6 +112,52 @@ def test_concurrent_first_acquisitions_all_succeed(tmp_path: Path) -> None:
 
     assert failures == []
     assert sorted(entered) == [0, 1, 2, 3]
+
+
+def test_threads_are_serialized_without_os_help(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The process mutex covers systems where file locks do not exclude threads."""
+    monkeypatch.setattr(advisory_lock_module, "lock_file_nonblocking", lambda _: None)
+    monkeypatch.setattr(advisory_lock_module, "unlock_file", lambda _: None)
+    path = tmp_path / "advisory.lock"
+    start = threading.Barrier(2)
+    overlap = threading.Barrier(2)
+    failures: list[BaseException] = []
+    entered: list[bool] = []
+    overlapped: list[bool] = []
+
+    def acquire() -> None:
+        try:
+            start.wait()
+            with held_lock(path):
+                entered.append(True)
+                try:
+                    overlap.wait(0.2)
+                except threading.BrokenBarrierError:
+                    return
+                overlapped.append(True)
+        except BaseException as exc:  # pragma: no cover - failure detail
+            failures.append(exc)
+
+    threads = [threading.Thread(target=acquire) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert failures == []
+    assert entered == [True, True]
+    assert overlapped == []
+
+
+def test_a_lock_excludes_another_process(tmp_path: Path) -> None:
+    path = tmp_path / "advisory.lock"
+
+    with held_lock(path):
+        assert _child_lock_result(path) == "blocked"
+
+    assert _child_lock_result(path) == "acquired"
 
 
 def test_lock_data_survives_a_lock_file_acquiring_never_wrote(tmp_path: Path) -> None:
