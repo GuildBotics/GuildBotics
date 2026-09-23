@@ -543,13 +543,19 @@ async def test_an_answer_encoded_despite_asking_for_none_is_not_handed_on(
 async def test_nothing_the_upstream_says_is_logged_as_it_said_it(
     answer: dict[str, Any], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """An upstream that echoes the token in whatever it answers -- a header,
-    the body -- and however the gateway ends up answering the guest, puts it
-    into none of GuildBotics' logs."""
+    """An upstream that echoes the token in whatever it answers -- the status
+    line, a header, the body -- and however the gateway ends up answering the
+    guest, puts it into neither GuildBotics' log nor the status line httpx logs
+    at INFO. (httpcore's DEBUG trace, below any client, is not covered.)"""
     status = answer.pop("status")
     upstream = _Upstream(
         *(
-            _answer(status, REAL.encode(), **{"x-echo": REAL, **answer})
+            httpx.Response(
+                status,
+                headers={"x-echo": REAL, **answer},
+                stream=httpx.ByteStream(REAL.encode()),
+                extensions={"reason_phrase": f"Echo {REAL}".encode()},
+            )
             for _ in range(2)
         )
     )
@@ -562,17 +568,14 @@ async def test_nothing_the_upstream_says_is_logged_as_it_said_it(
             base_url=f"http://127.0.0.1:{gateway.port}",
             headers={"authorization": f"Bearer {STAND_IN}"},
         ) as guest:
-            with caplog.at_level(logging.DEBUG, "guildbotics"):
+            with caplog.at_level(logging.DEBUG):
                 await guest.post("/v1/messages")
     finally:
         await gateway.close()
 
     assert upstream.requests
-    assert not [
-        record
-        for record in caplog.records
-        if record.name.startswith("guildbotics") and REAL in record.getMessage()
-    ]
+    assert "HTTP Request: POST" in caplog.text  # httpx logged the status line.
+    assert REAL not in caplog.text
 
 
 @pytest.mark.asyncio

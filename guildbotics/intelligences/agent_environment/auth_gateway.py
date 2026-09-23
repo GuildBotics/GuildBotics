@@ -80,6 +80,30 @@ _DROPPED_REQUEST_HEADERS = _HOP_BY_HOP | {
 }
 
 
+class _Client(httpx.AsyncClient):
+    """httpx's client, with the token masked in the reason phrase of every
+    answer: httpx logs the status line as the upstream sent it, before the
+    gateway sees the answer. Each transport it picks for a URL -- a proxy's
+    too -- is wrapped."""
+
+    def _transport_for_url(self, url: httpx.URL) -> httpx.AsyncBaseTransport:
+        return _MaskedReason(super()._transport_for_url(url))
+
+
+class _MaskedReason(httpx.AsyncBaseTransport):
+    def __init__(self, transport: httpx.AsyncBaseTransport) -> None:
+        self._transport = transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._transport.handle_async_request(request)
+        token = request.headers["authorization"].removeprefix("Bearer ").encode()
+        if reason := response.extensions.get("reason_phrase"):
+            response.extensions["reason_phrase"] = reason.replace(
+                token, b"*" * len(token)
+            )
+        return response
+
+
 class CredentialUnavailableError(RuntimeError):
     """The login cannot give a token; the message says what to do."""
 
@@ -129,7 +153,7 @@ class CredentialGateway:
                 (GUEST_HOST_ALIAS, *self._broker.relayed_hosts)
             )
         self._authorization = f"Bearer {self.stand_in}"
-        self._client = httpx.AsyncClient(
+        self._client = _Client(
             transport=self._transport, follow_redirects=False, timeout=_TIMEOUT
         )
         try:

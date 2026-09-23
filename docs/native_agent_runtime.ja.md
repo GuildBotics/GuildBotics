@@ -285,7 +285,11 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   何にも使えなくなります。upstreamが401を返したら1回だけ更新して再送します。応答のヘッダーと本文に
   実トークンが現れた場合は同じ長さの伏せ字に置き換えて返し、本文を検査できるようupstreamには
   無圧縮の応答を求めます。それでも圧縮された応答は渡さず（502）、
-  `Gateway refused an encoded answer to METHOD /path`だけをログに残します（upstreamが返した値は載せません）。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
+  `Gateway refused an encoded answer to METHOD /path`だけをログに残します。ゲートウェイのログには
+  upstreamが返した値を載せず、httpxがINFOでログに残すステータス行の文言（reason phrase）も実トークンを
+  伏せ字にします（member brokerが使うMCP SDKがプロセスのroot loggerをINFOにするため、この行は
+  実際に出ます）。httpcoreのDEBUGのtraceは応答のヘッダーをそのまま記録するので、root loggerを
+  DEBUGにして動かす場合は、ログに実値が残りえます。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
   upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。カタログの経路は
   pathの完全一致で、末尾が`/*`の経路（ツールがpathにリポジトリ名などを入れるもの）は、その下の
   通常の名前だけからなるpathを転送します（`.`で始まるsegment、空のsegment、%エンコードや
@@ -293,6 +297,9 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
+  usageを読めなかったときの文言はこの環境でツール（やその先のprovider）が返したものなので、
+  ログインの値（turnに渡してよいフィールドと、認証値にはなり得ない短い値を除く全部）を伏せ字にしてから
+  ログや画面に渡します。
   更新では期限切れと伝えたログインを渡して`claude -p /usage`を実行し、更新されたログインを
   環境を止める前に取り出して暗号化保存します。期限まで5分を切ったログインは、turnのmicroVMと
   ツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があり、Antigravityはその認証を

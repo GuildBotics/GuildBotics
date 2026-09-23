@@ -36,7 +36,7 @@ from guildbotics.intelligences.agent_environment.provider_state import (
 )
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.toolchain import parse_toolchain
-from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.utils.i18n_tool import t
 
 CLAUDE = cli_agent_info("claude")
@@ -1016,3 +1016,63 @@ async def test_a_login_read_from_its_jwts_the_tool_did_not_refresh_is_kept(
 
     assert provider_state._unsealed_login(CODEX)[CODEX_AUTH] == sealed
     assert not provider_state.authentication_failed(CODEX)
+
+
+def _values(data: bytes) -> list[str]:
+    """Every string value of a login file, in order."""
+    document = provider_state._parsed(data)
+    found: list[str] = []
+    pending: list[Any] = [document]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, dict):
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+        elif isinstance(node, str):
+            found.append(node)
+    return found
+
+
+@pytest.mark.parametrize(
+    ("tool", "login", "kept"),
+    [
+        (CLAUDE, _login(), {"user:inference", "user:profile", "max"}),
+        (CODEX, _codex_login(), {"chatgpt", "account-459", "2026-09-01T00:00:00Z"}),
+        (GROK, _grok_login(), {"oidc"}),
+        (ANTIGRAVITY, _google_login(), {"Bearer", "consumer"}),
+        (COPILOT, _github_login(), set()),
+    ],
+    ids=["claude", "codex", "grok", "antigravity", "copilot"],
+)
+def test_what_comes_from_where_a_login_is_held_is_told_with_it_masked(
+    machine: Path, tool: CliAgentInfo, login: bytes, kept: set[str]
+) -> None:
+    """Every value of the login is masked but those a turn is lent anyway,
+    and those too short to be a credential; a credential the file gains in a
+    later version of the tool is masked too."""
+    provider_state._seal_login(tool, {tool.provision.auth: login})
+    said = " | ".join(_values(login))
+
+    told = provider_state.masked(tool, f"failed: {said}")
+
+    assert told.startswith("failed: ") and len(told) == len(f"failed: {said}")
+    for value in _values(login):
+        if value in kept or len(value) < 8:
+            assert value in told, value
+        else:
+            assert value not in told, value
+
+
+def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
+    """A tool may print a token's claims without the rest of it."""
+    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
+    token = _codex_tokens(_codex_login())["access_token"]
+    _header, claims, _signature = token.split(".")
+
+    assert claims not in provider_state.masked(CODEX, f"claims: {claims}")
+
+
+def test_what_cannot_be_masked_is_not_told(machine: Path) -> None:
+    """Without the login to mask it by, nothing of what was said is kept."""
+    assert "REAL-459" not in provider_state.masked(CLAUDE, "failed: REAL-459")

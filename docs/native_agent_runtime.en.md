@@ -350,7 +350,11 @@ and `-p no:xdist`). Nothing is sent off the device.
   headers or body, it is masked to the same length before the answer is passed on, and the
   upstream is asked for an uncompressed answer so that the body can be checked; an answer
   compressed all the same is not passed on (502), and the refusal is logged as
-  `Gateway refused an encoded answer to METHOD /path` alone (nothing the upstream sent). HTTP/1.1 and
+  `Gateway refused an encoded answer to METHOD /path` alone. The gateway's logs carry
+  nothing the upstream sent, and the status line's reason phrase httpx logs at INFO has the real token
+  masked (the line is logged: the MCP SDK the member broker uses sets the process's root
+  logger to INFO). httpcore's DEBUG trace records an answer's headers as they came, so
+  running with the root logger at DEBUG can leave the real value in a log. HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
   upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only. A catalog route
   matches its path exactly; one that ends in `/*` (for a tool that puts a repository or
@@ -360,7 +364,10 @@ and `-p no:xdist`). Nothing is sent off the device.
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
   endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
   an environment of their own that holds the login in memory, mounts no working directory
-  or workspace, and reaches the provider's domains only. A refresh gives it the login marked
+  or workspace, and reaches the provider's domains only. What the tool (or its provider
+  through it) says there of a usage it could not read reaches a log or a screen with the
+  login masked in it: every value of the login but the fields a turn is lent and values too
+  short to be a credential. A refresh gives it the login marked
   as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
   the environment is stopped. A login within five minutes of its expiry is refreshed before
   the turn's microVM and the tool start: a tool reaches its API as soon as it starts, and

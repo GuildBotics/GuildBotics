@@ -88,6 +88,8 @@ SEALED_LOGIN = "login.sealed"
 _ACCOUNT = "default"
 #: A lent token this close to its expiry is refreshed before it is sent.
 _REFRESH_MARGIN_SECONDS = 5 * 60
+#: The shortest value of a login taken for one a credential could be.
+_SHORTEST_CREDENTIAL = 8
 #: How long a refresh or a probe may keep the login to itself, and how long
 #: another one waits for it.
 _LOGIN_HOLD_SECONDS = 90.0
@@ -696,6 +698,56 @@ def _unsealed_login(tool: CliAgentInfo) -> dict[str, bytes]:
     if files is None or tool.provision.auth not in files:
         raise CredentialVaultError("missing")
     return files
+
+
+def masked(tool: CliAgentInfo, text: str) -> str:
+    """``text``, from where the tool's login is held -- the tool, or its
+    provider through it -- with the login masked in it: every value of the
+    login but the fields a turn is lent (``turn_fields``), as a stand-in file
+    is built, so a credential a later version of the tool keeps is masked too,
+    and each part of one a JWT's dots divide. A value too short to be a
+    credential is left, as it could only be words of the text. The login is
+    the one sealed now: a token it replaced meanwhile is no longer one. When
+    it cannot be read to mask the text by, nothing of the text is kept."""
+    try:
+        files = _unsealed_login(tool)
+    except CredentialVaultError:
+        return "(withheld: the login to mask it by could not be read)"
+    broker = tool.provision.credential_broker
+    assert broker is not None
+    for value in sorted(_credentials(broker, files, tool.provision.auth), key=len)[
+        ::-1
+    ]:
+        text = text.replace(value, "*" * len(value))
+    return text
+
+
+def _credentials(
+    broker: CredentialBroker, files: Mapping[str, bytes], auth: str
+) -> set[str]:
+    """Every value of the login's files that a credential could be."""
+    found: set[str] = set()
+    for name, data in files.items():
+        try:
+            document = _parsed(data)
+        except ValueError:  # Not JSON, or not text: it is a value whole.
+            found.add(data.decode(errors="replace"))
+            continue
+        lent = (
+            [_at(document, path) for path in broker.turn_fields] if name == auth else []
+        )
+        found |= _strings(document) - _strings(lent)
+    found |= {part for value in found for part in value.split(".")}
+    return {value for value in found if len(value) >= _SHORTEST_CREDENTIAL}
+
+
+def _strings(node: Any) -> set[str]:
+    """The strings in a JSON document, however deep."""
+    if isinstance(node, dict):
+        node = list(node.values())
+    if isinstance(node, list):
+        return set().union(*map(_strings, node))
+    return {node} if isinstance(node, str) else set()
 
 
 def _access(
