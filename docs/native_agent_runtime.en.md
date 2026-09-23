@@ -340,8 +340,12 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
   an environment of their own that holds the login in memory, mounts no working directory
   or workspace, and reaches the provider's domains only. A refresh gives it the login marked
   as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
-  the environment is stopped. The gateway asks for a refresh five minutes before expiry or
-  when the upstream refuses the token. That environment runs one at a time on the device,
+  the environment is stopped. A login within five minutes of its expiry is refreshed before
+  the turn's microVM and the tool start: a tool reaches its API as soon as it starts, and
+  Antigravity gives up on its sign-in after ten seconds, so the first request never waits
+  for a refresh. During a turn, the gateway asks for a refresh five minutes before expiry
+  or when the upstream refuses the token, and that request waits for it (whether Antigravity
+  bears the wait in the middle of a turn is not verified). That environment runs one at a time on the device,
   across processes (`login.sealed.lock`), so a refresh token is never spent twice. Turns
   themselves are not serialized, so turns of the same account run side by side. A refreshed
   login that cannot be saved is not continued on the old one: it is recorded as an

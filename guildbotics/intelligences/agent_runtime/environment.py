@@ -120,7 +120,7 @@ async def start_turn_environment(
     home = guest_home()
     broker = tool.provision.credential_broker
     assert broker is not None
-    lent = _lend(tool, where)
+    lent = await _lend(tool, where)
     gateway = CredentialGateway(broker, lent.access_token, lent.stand_in)
     await gateway.start()
     try:
@@ -238,14 +238,26 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 
 
-def _lend(tool: CliAgentInfo, where: LoginEnvironment) -> LentLogin:
+async def _lend(tool: CliAgentInfo, where: LoginEnvironment) -> LentLogin:
+    """The login a turn is lent, refreshed first when it is due.
+
+    A tool reaches its API as soon as it starts, and may give up on it
+    sooner than a refresh takes (Antigravity's sign-in waits ten seconds), so
+    the refresh is not left to the first request.
+    """
     try:
-        return LentLogin(tool, where)
+        lent = LentLogin(tool, where)
+        await lent.access_token(None)
     except CredentialVaultError as exc:
         raise AgentRuntimeError(
             AgentRuntimeErrorCategory.AUTHENTICATION,
             vault_problem(exc.state, tool=tool.label, command=login_command(tool.name)),
         ) from exc
+    except CredentialUnavailableError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
+        ) from exc
+    return lent
 
 
 def _ready(tool_name: str) -> tuple[CliAgentInfo, LoginEnvironment]:
