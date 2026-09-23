@@ -106,6 +106,19 @@ def test_record_enforces_shared_boundary_guarantees(
     assert payload["run_id"] == "run-1"
 
 
+def _months_read(store: ActivityEventStore, monkeypatch) -> list[str]:
+    """Record which month directories ``store`` reads from here on."""
+    read: list[str] = []
+    real = store_module.iter_json_objects
+
+    def _observed(directory, pattern):
+        read.append(directory.relative_to(store.root).as_posix())
+        return real(directory, pattern)
+
+    monkeypatch.setattr(store_module, "iter_json_objects", _observed)
+    return read
+
+
 def test_list_between_reads_only_the_months_the_window_can_reach(
     tmp_path, monkeypatch
 ) -> None:
@@ -118,21 +131,15 @@ def test_list_between_reads_only_the_months_the_window_can_reach(
         store.record(
             {"type": "github.push", "timestamp": occurred, "person_id": "aiko"}
         )
-    read: list[str] = []
-    real = store_module.iter_json_objects
-
-    def _observed(directory, pattern):
-        read.append(directory.relative_to(tmp_path / "events").as_posix())
-        return real(directory, pattern)
-
-    monkeypatch.setattr(store_module, "iter_json_objects", _observed)
+    read = _months_read(store, monkeypatch)
 
     events = store.list_between(
         datetime(2026, 7, 1, tzinfo=UTC), datetime(2026, 8, 31, tzinfo=UTC)
     )
 
-    # The window's months, plus the neighbours one day of UTC offset can reach.
-    assert read == ["2026/06", "2026/07", "2026/08", "2026/09"]
+    # The window's months that hold events, plus the neighbours one day of UTC
+    # offset can reach.
+    assert read == ["2026/06", "2026/07", "2026/09"]
     assert [item["occurred_at"] for item in events] == ["2026-07-15T09:00:00Z"]
 
 
@@ -188,3 +195,21 @@ def test_list_between_accepts_an_unbounded_window(tmp_path) -> None:
     )
 
     assert [item["kind"] for item in events] == ["github.push"]
+
+
+def test_an_unbounded_window_reads_only_the_months_the_store_holds(
+    tmp_path, monkeypatch
+) -> None:
+    """Ten thousand years of calendar months are not ten thousand years of
+    lookups: on Windows that alone took seconds per sync status read (#570)."""
+    store = ActivityEventStore(tmp_path / "events")
+    store.record({"type": "github.push", "timestamp": "2026-08-10T08:00:00+00:00"})
+    store.record({"type": "github.push", "timestamp": "2027-01-10T08:00:00+00:00"})
+    read = _months_read(store, monkeypatch)
+
+    events = store.list_between(
+        datetime.min.replace(tzinfo=UTC), datetime.max.replace(tzinfo=UTC)
+    )
+
+    assert len(events) == 2
+    assert read == ["2026/08", "2027/01"]

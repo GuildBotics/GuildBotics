@@ -122,6 +122,20 @@ def memory_sync(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> GitSyncMana
     return manager
 
 
+@pytest.fixture
+def idle_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install the queue a real hub connection activates, without running it.
+
+    These cases exercise Git transport through the endpoints. A running worker
+    starts a cycle of its own as soon as the connection is made, so every later
+    request that pauses or switches the queue waits on that cycle -- dozens of
+    Git processes, which under CI load outlast the stop timeout and turn the
+    request into a 409 unrelated to the case (#570). Queue lifecycle and its
+    stop timeout are covered separately.
+    """
+    monkeypatch.setattr(GitSyncManager, "start", lambda _self: True)
+
+
 def _json(response) -> dict:
     assert response.status_code == HTTP_OK, response.text
     return response.json()
@@ -211,6 +225,7 @@ def test_making_this_machine_a_hub_reports_an_address_to_share(
     )
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_a_local_hub_reports_the_workspaces_it_holds(client: TestClient) -> None:
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
@@ -257,6 +272,7 @@ def test_a_workspace_starts_out_unsynchronized(client: TestClient) -> None:
     assert payload["device_id"]
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_enabling_registers_the_workspace_and_starts_the_queue(
     client: TestClient, workspace: Path
 ) -> None:
@@ -270,6 +286,7 @@ def test_enabling_registers_the_workspace_and_starts_the_queue(
     assert payload["hub_url"]
     assert payload["ahead_count"] == 0
     assert payload["workspace_id"]
+    assert current_sync_manager() is not None
 
 
 def test_enabling_without_a_hub_reports_why(
@@ -376,16 +393,9 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     assert payload["state"] == "idle"
 
 
-def test_a_hub_that_fails_reports_what_it_printed(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The Desktop shows why the hub failed, in the words Git used.
-
-    This is a real Git transport test. Queue lifecycle and its stop timeout are
-    covered separately, so starting a worker here would only make moving the
-    Hub depend on CI load before the transport failure can be exercised.
-    """
-    monkeypatch.setattr(GitSyncManager, "start", lambda _self: True)
+@pytest.mark.usefixtures("idle_queue")
+def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
+    """The Desktop shows why the hub failed, in the words Git used."""
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
     hub_root().rename(hub_root().with_name("gone"))
@@ -479,6 +489,7 @@ def test_status_operations_keep_one_workspace_while_a_switch_starts(
 # -- Taking a workspace from a hub --------------------------------------------
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_a_copy_becomes_the_selected_workspace(
     client: TestClient, workspace: Path, tmp_path: Path
 ) -> None:
@@ -504,6 +515,7 @@ def test_a_copy_becomes_the_selected_workspace(
     assert (destination / ".guildbotics" / CONFIG).read_text() == "name: demo\n"
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_a_copy_lands_in_a_folder_this_device_has_only_opened(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -581,6 +593,7 @@ def _reject(workspace: Path) -> str:
     return rejection_id
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_the_displaced_commits_this_device_holds_are_reported(
     client: TestClient, workspace: Path
 ) -> None:
@@ -602,6 +615,7 @@ def test_the_displaced_commits_this_device_holds_are_reported(
     assert held[0]["occurred_at"]
 
 
+@pytest.mark.usefixtures("idle_queue")
 def test_the_user_can_say_they_are_done_with_a_displaced_commit(
     client: TestClient, workspace: Path
 ) -> None:
