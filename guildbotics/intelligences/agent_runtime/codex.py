@@ -649,7 +649,8 @@ def _gateway_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     authenticated as the ChatGPT login (the stand-in) is.
     """
     assert _BROKER is not None
-    base = spec.env[_BROKER.base_url_env]
+    (variable,) = _BROKER.base_url_env
+    base = spec.env[variable]
     return {
         "chatgpt_base_url": f"{base}/",
         "model_provider": _MODEL_PROVIDER,

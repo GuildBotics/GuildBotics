@@ -303,10 +303,6 @@ def login_command(tool: str) -> None:
         raise click.ClickException(str(exc)) from exc
     if code != 0:
         raise click.ClickException(f"{info.label} login exited with code {code}.")
-    if not provider_state.has_credentials(info):
-        raise click.ClickException(
-            f"{info.label} login finished but stored no credentials."
-        )
     click.echo(
         t("intelligences.agent_environment.tool.credentials_saved", tool=info.label)
     )

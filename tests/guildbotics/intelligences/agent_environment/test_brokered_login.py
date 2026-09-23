@@ -929,3 +929,71 @@ async def test_a_google_login_is_refreshed_reading_its_usage(machine: Path) -> N
     assert held["token"]["refresh_token"] == "REAL-AGY-459-REFRESH"
     (environment,) = _Environment.instances
     assert environment.commands == [("agy", "-p", "/usage", "--output-format", "json")]
+
+
+# --- a login that neither expires nor refreshes (GitHub Copilot) ----------------
+
+COPILOT = cli_agent_info("copilot")
+COPILOT_AUTH = COPILOT.provision.auth
+
+
+def _github_login(token: str = "gho_REAL459") -> bytes:
+    """What `copilot login` leaves: comments above a JSON document."""
+    document = {
+        "authTokens": {"https://github.com:synthetic459": {"token": token}},
+        "lastLoggedInUser": {"host": "https://github.com", "login": "synthetic459"},
+        "firstLaunchAt": "2026-09-23T00:00:00.000Z",
+    }
+    return (
+        "// User settings belong in settings.json.\n"
+        "// This file is managed automatically.\n" + json.dumps(document, indent=2)
+    ).encode()
+
+
+@pytest.mark.asyncio
+async def test_a_login_that_never_expires_is_lent_in_a_variable_of_its_shape(
+    machine: Path,
+) -> None:
+    provider_state._seal_login(COPILOT, {COPILOT_AUTH: _github_login()})
+    assert credential_state(COPILOT) == "saved"
+    lent = LentLogin(COPILOT, WHERE)
+
+    assert await lent.access_token(None) == "gho_REAL459"
+    assert lent.stand_in_files() == {}
+    assert lent.stand_in_environment() == {"COPILOT_GITHUB_TOKEN": lent.stand_in}
+    # Copilot takes only a token that looks like GitHub's.
+    assert lent.stand_in.startswith("gho_") and "REAL459" not in lent.stand_in
+    assert _Environment.instances == []
+
+
+@pytest.mark.asyncio
+async def test_a_login_that_never_expires_is_logged_in_again_once_refused(
+    machine: Path,
+) -> None:
+    """There is nothing to refresh it with: a refused one is revoked."""
+    provider_state._seal_login(COPILOT, {COPILOT_AUTH: _github_login()})
+    lent = LentLogin(COPILOT, WHERE)
+
+    for _ in range(2):
+        with pytest.raises(CredentialUnavailableError) as refused:
+            await lent.access_token("gho_REAL459")
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.tool.login_refused",
+        tool=COPILOT.label,
+        command=provider_state.login_command("copilot"),
+    )
+    assert _Environment.instances == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'  // indented\n{"a": {"//b": "kept"}}',
+        b'{"a": {"//b": "kept"}}',
+    ],
+    ids=["indented-comment", "no-comment"],
+)
+def test_a_credentials_file_is_read_past_its_lines_of_comments(data: bytes) -> None:
+    """Only a whole line of comment goes; a key that begins alike stays."""
+    assert provider_state._parsed(data) == {"a": {"//b": "kept"}}

@@ -55,7 +55,9 @@ class FakeEnvironment:
         # A brokered tool's gateway, as the turn's environment names it.
         broker = cli_agent_info(self.tool).provision.credential_broker
         env = (
-            {broker.base_url_env: f"http://gateway.test{broker.base_url_path}"}
+            dict.fromkeys(
+                broker.base_url_env, f"http://gateway.test{broker.base_url_path}"
+            )
             if broker is not None
             else {}
         )

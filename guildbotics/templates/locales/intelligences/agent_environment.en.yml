@@ -60,6 +60,7 @@ en:
     credentials_corrupt: "The %{tool} login saved on this device cannot be opened; log in again with `%{command}`."
     login_not_an_account: "%{tool} login finished without an account login GuildBotics can keep; log in with your account."
     refresh_failed: "The %{tool} login on this device could not be refreshed; log in again with `%{command}`."
+    login_refused: "%{tool} refused the login on this device; log in again with `%{command}`."
   grants:
     not_a_domain: "'%{domain}' is not a domain name"
     allowlist_needs_domain: "mode 'allowlist' needs at least one allowed domain"

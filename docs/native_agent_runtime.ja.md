@@ -193,8 +193,9 @@ rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡しま�
 provisionするたびに実機で確認し、Codexは同梱のbubblewrapで動くことを確認済みです（imageに
 bubblewrapを入れると同梱のものより優先され、Codexのhelperを起動できないため、imageには入れません）。
 
-ターンをまたいで残るのはプロバイダの永続状態（認証情報とセッション）だけで、この端末の
+ターンをまたいで残るのはプロバイダのセッションと、認証情報を含まないアカウント情報だけで、この端末の
 store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
+ログインはturnに置きません（後述の「VMの外で管理するログイン」）。
 プロバイダの設定やskillはsnapshot側のもので、ターンごとに元へ戻ります。読み取り専用ターンは
 member brokerが強制します（person leaseを持たず、書き込み系のmemberコマンドをすべて拒否
 します）。そのターンでプロバイダが自身のファイル操作ツールで何をしたかは承認イベントに
@@ -209,8 +210,7 @@ AI CLIツールは隔離環境の中で動くため、hostにインストール�
 turnには使われません。ログインは環境の中で行います。turnを実行する端末ごとに、ターミナルで
 `guildbotics environment login <tool>`（`codex` / `claude` / `grok` / `copilot` / `antigravity`）を実行すると、そのツール自身の
 ログインコマンドが環境の中で起動し、device code方式でブラウザ承認を案内します。結果は
-端末のstore（`~/.guildbotics/data/agent_environment/<tool>/`）に保存され、その端末の全メンバー・
-全ワークスペースで共有し、turnごとに認証情報とセッションだけを環境へbindします。
+端末に暗号化して保存され（後述）、その端末の全メンバー・全ワークスペースで共有します。
 GuildBoticsのセッション情報や診断記録には複製されません。Desktopはログイン状態と
 実行すべきコマンドを示し、Desktop自身がログインの対話を行うことはありません。
 
@@ -224,27 +224,28 @@ loginの無いprint mode実行がGoogleのサインインURLを表示して認�
 設定カードには、認証情報が保存済みでもログインコマンドとコピー操作が表示されます。
 macOS / Linuxでは管理CLIの絶対パス、WindowsではPATH上の`guildbotics`を使います。
 カードを開いている間、状態は10秒ごとに自動更新されます。**状態を更新** ですぐに読み直すこともできます。
-**認証情報保存済み** はファイルの存在（Codex・Claude Code・Grok Build・Antigravityは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
+**認証情報保存済み** は暗号化保存したログインを開けることだけを表し、有効性の確認ではありません。
 turnの構造化された認証失敗は、端末・ツールごとにプロバイダのマウント領域の外へ保持し、
 `status.py`を通じてカードとalertへ反映します。認証情報が残るログイン完了、または別メンバーを
 含む後続の正常実行で解除します。それ以外のエラーは前回の認証結果を変えません。
 過去の認証失敗は案内として扱い、turnの起動を拒否しないため、再試行できます。
-GitHub Copilotでは、GuildBoticsによる認証probeやトークン更新は行いません。
-トークンの更新はCopilot自身がturnの中で行います。そのため、更新先はturnが常に届く
-プロバイダのドメインに含め、更新した認証情報がstoreへ書き戻されるようにbindします。
-ファイル単位のbindは上書きには追従しますが、別ファイルをrenameで重ねる置き換えは失敗します。
+storeからファイル単位でbindするもの（アカウント情報）は上書きには追従しますが、
+別ファイルをrenameで重ねる置き換えは失敗します。storeとその中の名前は、端末上で解決した先が
+storeの中にあるときだけ使います。loginやturnが残したリンクはguestではなく端末上の場所を指し、
+辿れば端末のディレクトリがturnにbindされてしまうためです。
 
 ### VMの外で管理するログイン
 
-Codex・Claude Code・Grok Build・Antigravityのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
-移行中の構成で、GitHub Copilotは上記のとおりstoreからbindします（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。
-以下はClaude Codeを例に説明します。ツールごとの違いは次の表のとおりです。
+AI CLIツールのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません
+（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。以下はClaude Codeを例に説明します。
+ツールごとの違いは次の表のとおりです。
 
 | ツール | 暗号化保存するもの | turnへの置換用の値の渡し方 | ゲートウェイの転送先 | 更新（refresh）とusage |
 |---|---|---|---|---|
 | Codex | `~/.codex/auth.json`（ChatGPTアカウントでのログイン） | 置換用の`auth.json`。アクセストークンとIDトークンの位置に、期限とアカウントのclaim（メールアドレス・プラン・アカウントID）だけを持つ署名なしのJWTを置き、refresh tokenは空にする（`chatgpt_base_url`と、GuildBotics独自のmodel provider `guildbotics`の`base_url`でゲートウェイを指す） | `https://chatgpt.com`（推論の`/backend-api/codex/responses`、モデル一覧、`/backend-api/wham/usage`） | 更新は、期限を過ぎたと伝えたアクセストークンで`codex debug models`を実行する。usageはApp Serverの`account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | 置換用の認証ファイル（`ANTHROPIC_BASE_URL`でゲートウェイを指す） | `https://api.anthropic.com` | `claude -p /usage` |
 | Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | 置換用の認証ファイル（アクセストークン・`token_type`・期限・`auth_method`だけ。refresh tokenとIDトークンは入れない）。`CLOUD_CODE_URL`でHTTPSのゲートウェイを指し、`www.googleapis.com`はturn内の中継でゲートウェイへ向ける | `https://daily-cloudcode-pa.googleapis.com`（`/v1internal:`の7つのメソッド）と`https://www.googleapis.com/oauth2/v2/userinfo` | 更新もusageも`agy -p /usage`（期限を過ぎたと伝えたログインで実行すると更新する） |
+| GitHub Copilot | `~/.copilot/config.json`（先頭にコメント行があるJSON。アカウント名のキーの下にトークン。期限もrefresh tokenも無い。扱えるアカウントは1つ） | 置換用の値（`gho_`で始まる。Copilotはこの形しか受け付けない）を`COPILOT_GITHUB_TOKEN`で渡す。`COPILOT_DEBUG_GITHUB_API_URL`と`COPILOT_API_URL`でゲートウェイを指す | `https://api.github.com`（`/copilot_internal/user`と`/copilot_internal/managed_settings`）と`https://api.individual.githubcopilot.com`（`/models`と推論の`/chat/completions`・`/responses`・`/v1/messages`。モデルが対応する経路へ送られる） | 更新は無い（拒否されたら再ログインを求める）。usageはCopilot SDK serverの`account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
 turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。接続先の契約（どの要求が差し替えた
@@ -301,20 +302,30 @@ URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合�
   （`lh3.googleusercontent.com`、認証情報を含まない）だけはturnから直接取得します。
   トークンを含むテレメトリー（`play.googleapis.com/log`）はturnから届かず、なくても動きます。
   ゲートウェイは転送しなかった経路を`METHOD /path`だけログに残します（トークン・query・本文は残しません）。
+- **GitHub Copilot固有**: ログインは期限を持たず、refreshもしません。ゲートウェイは拒否された
+  ログインを更新しようとせず、再ログインを求めます。Copilotがホストする読み取り専用のGitHub
+  MCP server（`/mcp/readonly`。利用者のGitHub権限で動く）とテレメトリーは転送しません。
+  個人プラン以外のアカウント（Business・Enterprise）のAPIの転送先は未確認です。
 - **切り替え**: 旧形式の平文（Codexは`~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
   Claude Codeは`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
   Grok Buildは`~/.guildbotics/data/agent_environment/grok/.grok/auth/`、
-  Antigravityは`~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`）は読みもbindもしません。
+  Antigravityは`~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`、
+  GitHub Copilotは`~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`と、
+  強制終了したturnが残した`~/.guildbotics/data/agent_environment/copilot/turns/`）は読みもbindもしません。
   `guildbotics environment login <tool>`で再ログインしてから、これらを削除してください
   （macOS / Linux: `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
   `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`、
+  `rm ~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`、
+  `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`、
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
   `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`。
   Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`、
   `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`、
+  `del %USERPROFILE%\.guildbotics\data\agent_environment\copilot\.copilot\config.json`、
+  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\copilot\turns`、
   `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`、
   `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`）。
-  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`・`antigravity-cli/conversations/`など）や
+  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`・`session-state/`・`antigravity-cli/conversations/`など）や
   cacheは消さないでください。過去のバックアップに残った平文までは消せません。
 - **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
   ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と
@@ -323,30 +334,14 @@ URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合�
   利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。
   hostのメモリやhost管理者に対する保護ではありません。
 
-GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き換え、置き場所は
-`COPILOT_HOME`以外に指定できないため、そこへファイルをbindするとCLIが無言で終了します。
-そのためCopilotのstate rootはturn専用のディレクトリとします。セッション（`session-state/`）は
-他のプロバイダと同じくstoreからその下へbindし、turnはそこへ直接書きます。`config.json`だけを
-storeからそのディレクトリへ複製し、turnの終わりにstoreへ書き戻します。同じrootにある
-instructions・hooks・MCP設定・extensions・plugins・permissions・logなど、turnがそこへ残した
-ものはディレクトリごと破棄します。storeとturnディレクトリの名前は、端末上で解決した先が
-そのディレクトリの中にあるときだけ使います。turnはpromptの指示で書き、loginはstore全体を
-bindして動くので、そこに残されたリンクはguestではなく端末上の場所を指し、辿れば端末の
-ディレクトリがturnにbindされたり、端末のファイルがstoreへ入ったりするためです。
-turnが強制終了された場合はディレクトリが残るため、そのプロバイダの次のturnが、
-実行中のturnのものではありえない古いディレクトリを削除します。
-
-Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、保存済みログインを使う
-`cached_token`だけを選択します。APIキー方式は使用しません。APIキーは環境変数でしか
-プロセスへ届かず、後述のとおりAI CLIツールの環境からは認証情報名の変数を取り除くためです。
-ブラウザを開く`grok.com`の対話認証は、headless実行
-中に自動で開始しません。保存済みの認証がない場合は認証エラーとして停止し、`grok login`
-（または`grok login --device-auth`）の実行を案内します。診断記録に残すのは選択した認証方式の
-識別子だけで、`~/.grok/auth/auth.json`の内容は読み取りません。
+Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、外部認証コマンドの方式
+（`_meta.external_provider`）だけを選択します。turnが持つ置換用の値はこのコマンドから渡るためです。
+ブラウザを開く対話認証やAPIキー方式は使用しません。利用者のいない環境で対話を待つことになり、
+APIキーは環境へ届かないためです。提示されない場合は認証エラーとして停止します。
 
 GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、その付随情報には「端末で
 `copilot login`を実行する」と記載されています。GuildBoticsはこの方式でACPの`authenticate`を
-呼び、保存済みログインの有無だけを確認します。保存済みの認証情報で認証できた場合は即座に応答が返ります。
+呼びます。turnでは`COPILOT_GITHUB_TOKEN`の置換用の値で認証し、即座に応答が返ります。
 対話的なログイン操作をGuildBotics側から開始することはありません。`authenticate`が拒否された
 場合、認証方式が提示されない場合、応答が返らない場合（利用者のいない環境で端末ログインを待って
 いる状態）は、いずれも認証エラーとして停止し、`copilot login`の実行を案内します。診断記録に
@@ -590,8 +585,8 @@ APIが3種別すべてに要求時刻そのものを`resetDate`として返す�
 `chat` / `completions`が`entitlementRequests: 0`と`remainingPercentage: 100`を返します）は
 メーターに載せず、`remainingPercentage`が欠落・非数値・非有限・0〜100の範囲外の枠は捨てます。
 期間の長さは返されないため、リセット日から期間を推測しません。残量0%の枠があれば
-`limit_reached`になります。認証はCopilot CLI自身の保存済みログインに閉じ、GuildBoticsが
-認証ファイルを読んだり独自にHTTP通信したりしません。この取得はターンを開始せず、利用枠を
+`limit_reached`になります。この取得は、ログインをメモリに持つ専用の環境でCopilot CLI自身に
+実行させ、GuildBoticsが独自にHTTP通信することはありません。この取得はターンを開始せず、利用枠を
 消費しません。
 
 Antigravityはターンごとのトークン使用量（`input_tokens` / `output_tokens` /

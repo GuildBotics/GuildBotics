@@ -44,9 +44,12 @@ class CredentialBroker(BaseModel):
     The login lives sealed on this device (see ``credential_vault``), and a
     turn holds a stand-in that authenticates nothing: a credentials file of
     the same shape with no refresh token and an expiry far away, or -- for a
-    tool that takes its login from a command (``stand_in_command_env``) -- a
-    command that prints it. Either way the tool never tries to refresh it.
-    The tool is pointed at a gateway outside the microVM (``base_url_env``)
+    tool that takes its login from a command (``stand_in_command_env``) or
+    from a variable (``stand_in_env``) -- that. Either way the tool never
+    tries to refresh it. A login with no refresh token and no expiry
+    (``refresh_token``, ``expires_at`` and ``refresh`` left empty) lasts
+    until the user signs out, and one the provider refuses is logged in
+    again. The tool is pointed at a gateway outside the microVM (``base_url_env``)
     that accepts only the stand-in, only for ``routes``, and forwards the
     request to ``upstream`` -- or to the origin the route names -- with the
     real access token.
@@ -84,8 +87,8 @@ class CredentialBroker(BaseModel):
     #: another's.
     format: str
     access_token: tuple[str, ...]
-    refresh_token: tuple[str, ...]
-    expires_at: tuple[str, ...]
+    refresh_token: tuple[str, ...] = ()
+    expires_at: tuple[str, ...] = ()
     #: Milliseconds since the epoch, an RFC 3339 timestamp, or the ``exp``
     #: claim of the JWT at ``expires_at``.
     expires_format: Literal["epoch_ms", "rfc3339", "jwt"] = "epoch_ms"
@@ -104,19 +107,25 @@ class CredentialBroker(BaseModel):
     #: forwards; a query string is not part of the match. Everything else is
     #: refused before it leaves the device.
     routes: tuple[str, ...]
-    base_url_env: str
+    #: The variables that point the tool at the gateway.
+    base_url_env: tuple[str, ...]
     #: Appended to the gateway's origin in ``base_url_env``.
     base_url_path: str = ""
     #: The variable naming a command the tool runs for its login, for a tool
     #: that takes the stand-in that way (it prints ``access_token`` and
     #: ``expires_in`` as JSON) rather than from a file.
     stand_in_command_env: str = ""
+    #: The variable the stand-in itself is given in, for a tool that takes it
+    #: that way.
+    stand_in_env: str = ""
+    #: How a stand-in begins, for a tool that takes only tokens of a shape.
+    stand_in_prefix: str = "guildbotics-stand-in-"
     #: What the tool is told beside the gateway's URL.
     turn_environment: tuple[tuple[str, str], ...] = ()
     tls: bool = False
     relayed_hosts: tuple[str, ...] = ()
     turn_domains: tuple[str, ...] = ()
-    refresh: tuple[str, ...]
+    refresh: tuple[str, ...] = ()
 
     @field_validator("routes")
     @classmethod
@@ -137,8 +146,17 @@ class CredentialBroker(BaseModel):
         return routes
 
     @model_validator(mode="after")
-    def _relayed_hosts_are_answered_over_tls(self) -> CredentialBroker:
-        """A relayed host is reached at a URL of its own, which is HTTPS."""
+    def _names_one_way_for_each(self) -> CredentialBroker:
+        """A login that expires is refreshed, and one that does not never is;
+        a stand-in reaches the turn one way; a relayed host is reached at a
+        URL of its own, which is HTTPS."""
+        refreshed = (self.refresh_token, self.expires_at, self.refresh)
+        if any(refreshed) and not all(refreshed):
+            raise ValueError("refresh_token, expires_at and refresh go together")
+        if self.empty_refresh_token and not self.refresh_token:
+            raise ValueError("an empty refresh token needs its place")
+        if self.stand_in_env and self.stand_in_command_env:
+            raise ValueError("a stand-in reaches the turn one way")
         if self.relayed_hosts and not self.tls:
             raise ValueError("relayed hosts are answered over TLS only")
         return self
@@ -175,31 +193,19 @@ class CliAgentProvision(BaseModel):
 
     The tool keeps its state under ``state_root`` in the home directory (the
     directory ``state_root_env`` points it at). Only the entries in
-    ``persisted`` outlive a turn, bound from this device's own store:
-    ``auth`` and the session directories (spelled with a trailing slash).
-    Everything else under the root -- settings, skills, plugins -- is the
-    snapshot's and returns to it every turn, so nothing an agent changes
-    there reaches the next turn or another member.
+    ``persisted`` outlive a turn, bound from this device's own store: the
+    session directories (spelled with a trailing slash) and the account files
+    that hold no credential. A persisted file is bound as that one file: the
+    tool may rewrite it in place, but replacing it by renaming another file
+    over it fails (``EBUSY``). Everything else under the root -- settings,
+    skills, plugins -- is the snapshot's and returns to it every turn, so
+    nothing an agent changes there reaches the next turn or another member.
 
-    The tool refreshes its login in the middle of turns, so a turn must reach
-    the refresh endpoint (it belongs in ``api_domains``) and the refreshed
-    credentials must land in the store -- unless the login is brokered
-    (``credential_broker``), when a turn holds none of it and the refresh
-    happens where the login is. A persisted file is bound as that one
-    file: the tool may rewrite it in place, but replacing it by renaming
-    another file over it fails (``EBUSY``) and the refresh is lost. A tool that
-    renames its credentials into place keeps them in a persisted directory of
-    their own instead, where ``auth_env`` points it.
-
-    ``writable_root`` is for the tool that can be pointed nowhere else and
-    renames a file into the state root itself (Copilot's ``config.json``): a
-    file bound there makes it fail, and binding the root would make the whole
-    root -- the tool's instructions, hooks, MCP servers, plugins, permissions
-    -- outlive the turn. Such a tool gets a directory of its own for the turn
-    as its root. The persisted directories are bound under it from the store
-    as for every other tool; the persisted files are copied into it and, when
-    the turn ends, copied back. ``persisted`` stays the allowlist either way,
-    so what a turn leaves anywhere else under the root is gone with the turn.
+    The login is ``auth``, the file the tool's login command leaves under the
+    state root (where ``auth_env`` points it, for a tool that keeps it
+    elsewhere). It never enters a turn: it is sealed on this device and lent
+    to turns through a gateway, as ``credential_broker`` says. A provisioned
+    tool always has one.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -210,26 +216,18 @@ class CliAgentProvision(BaseModel):
     install: str = ""
     state_root: str = ""
     state_root_env: str = ""
-    #: The file whose presence means the tool is logged in: persisted itself,
-    #: or inside a persisted directory.
     auth: str = ""
     #: The variable that points the tool at ``auth``, for a tool whose
     #: credentials do not stay at their default place under the state root.
     auth_env: str = ""
     persisted: tuple[str, ...] = ()
-    #: Whether the state root itself must be a writable directory of the
-    #: turn's own, because the tool renames files into it.
-    writable_root: bool = False
     #: The login command, run interactively inside the environment.
     login: tuple[str, ...] = ()
-    #: The provider's own domains, which every turn may reach whatever its
-    #: network mode: the tool is nothing without its API. ``*.example.com``
-    #: is a suffix. GuildBotics' list, not the user's. A tool whose login is
-    #: brokered reaches them only from the environment that holds its login;
-    #: a turn reaches its API through the gateway instead.
+    #: The provider's own domains, which the environments that hold the
+    #: login reach: the login, its refresh, and the tool's questions about
+    #: its account. ``*.example.com`` is a suffix. A turn reaches the API
+    #: through the gateway instead.
     api_domains: tuple[str, ...] = ()
-    #: A tool whose login never enters a turn's microVM; ``auth`` is then the
-    #: file its login leaves, which is sealed rather than kept.
     credential_broker: CredentialBroker | None = None
 
     @field_validator("persisted")
@@ -239,10 +237,8 @@ class CliAgentProvision(BaseModel):
     ) -> tuple[str, ...]:
         """Every persisted entry names something strictly under the state root.
 
-        The root itself is never one of them. A tool whose root must be
-        writable says so with ``writable_root`` and still names what of it is
-        kept; an entry that is the root, or climbs out of it, would make that
-        allowlist say nothing.
+        The root itself is never one of them: an entry that is the root, or
+        climbs out of it, would make that allowlist say nothing.
         """
         for entry in persisted:
             if not _names_a_place_inside(entry):
@@ -263,6 +259,12 @@ class CliAgentProvision(BaseModel):
             raise ValueError(f"'{value}' is not a place inside the directory above it")
         return value
 
+    @model_validator(mode="after")
+    def _a_provisioned_login_is_brokered(self) -> CliAgentProvision:
+        if self.provisioned and self.credential_broker is None:
+            raise ValueError("a provisioned tool's login is brokered")
+        return self
+
     @property
     def provisioned(self) -> bool:
         """Whether the snapshot puts this tool into the environment."""
@@ -270,10 +272,10 @@ class CliAgentProvision(BaseModel):
 
     @property
     def turn_domains(self) -> tuple[str, ...]:
-        """What every turn of the tool reaches directly: its API, or for a
-        brokered login only what carries no credential of it."""
+        """What every turn of the tool reaches directly: nothing that carries
+        a credential of it."""
         broker = self.credential_broker
-        return self.api_domains if broker is None else broker.turn_domains
+        return broker.turn_domains if broker else ()
 
     def environment(self, home: str) -> dict[str, str]:
         """The variables that point the tool at its state under ``home``."""
@@ -357,7 +359,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     "GET /backend-api/codex/models",
                     "GET /backend-api/wham/usage",
                 ),
-                base_url_env="GUILDBOTICS_CODEX_BASE_URL",
+                base_url_env=("GUILDBOTICS_CODEX_BASE_URL",),
                 base_url_path="/backend-api",
                 refresh=("codex", "debug", "models"),
             ),
@@ -403,7 +405,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 ),
                 upstream="https://api.anthropic.com",
                 routes=("POST /v1/messages", "POST /v1/messages/count_tokens"),
-                base_url_env="ANTHROPIC_BASE_URL",
+                base_url_env=("ANTHROPIC_BASE_URL",),
                 # What else Claude Code sends goes to the account endpoints
                 # with the stand-in, where it can only fail.
                 turn_environment=(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),),
@@ -466,7 +468,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     "GET /v1/subagents/bundle",
                     "POST /v1/responses",
                 ),
-                base_url_env="GROK_CLI_CHAT_PROXY_BASE_URL",
+                base_url_env=("GROK_CLI_CHAT_PROXY_BASE_URL",),
                 base_url_path="/v1",
                 stand_in_command_env="GROK_AUTH_PROVIDER_COMMAND",
                 # Lists the models without a turn; it needs the login, so a
@@ -483,26 +485,44 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
         # Without a system credential store -- there is none in the
         # environment -- the login keeps its token in `config.json` at the
-        # state root, which Copilot rewrites by renaming a new file over it at
-        # every start (a file bound there makes the CLI exit at once, without
-        # a word). COPILOT_HOME is the only place it can be pointed at, so the
-        # root is the turn's own writable directory and the credentials and
-        # the sessions are what is kept of it. The rest of the root is
-        # Copilot's instructions, hooks, MCP servers, extensions, plugins,
-        # permissions and logs, and stays the turn's.
+        # state root (after a line of comments), under a key named for the
+        # account. It neither expires nor refreshes. The login is brokered:
+        # a turn takes the stand-in from COPILOT_GITHUB_TOKEN, which must look
+        # like a GitHub token, and both of its API URLs -- GitHub's and
+        # Copilot's own -- point at the gateway. What it reads of the GitHub
+        # API is the account and its policy; Copilot's hosted GitHub MCP
+        # server, which would act on GitHub as the user, stays closed, as does
+        # the telemetry.
         provision=CliAgentProvision(
             package="@github/copilot@1.0.86",
             state_root=".copilot",
             state_root_env="COPILOT_HOME",
-            auth="config.json",  # holds `authTokens` beside the login names
-            persisted=("config.json", "session-state/"),
-            writable_root=True,
+            auth="config.json",
+            persisted=("session-state/",),
             login=("copilot", "login", "--device-code"),
             api_domains=(
                 "github.com",
                 "api.github.com",
                 "*.githubcopilot.com",
                 "*.githubusercontent.com",
+            ),
+            credential_broker=CredentialBroker(
+                format="copilot-oauth",
+                access_token=("authTokens", "*", "token"),
+                upstream="https://api.individual.githubcopilot.com",
+                # Inference goes where the model's supported endpoints say.
+                routes=(
+                    "GET https://api.github.com/copilot_internal/user",
+                    "GET https://api.github.com/copilot_internal/managed_settings",
+                    "GET /models",
+                    "POST /chat/completions",
+                    "POST /responses",
+                    "POST /v1/messages",
+                ),
+                base_url_env=("COPILOT_DEBUG_GITHUB_API_URL", "COPILOT_API_URL"),
+                stand_in_env="COPILOT_GITHUB_TOKEN",
+                # 1.0.86 takes `gho_` followed by URL-safe characters.
+                stand_in_prefix="gho_",
             ),
         ),
     ),
@@ -577,7 +597,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     "POST /v1internal:streamGenerateContent",
                     "GET https://www.googleapis.com/oauth2/v2/userinfo",
                 ),
-                base_url_env="CLOUD_CODE_URL",
+                base_url_env=("CLOUD_CODE_URL",),
                 tls=True,
                 relayed_hosts=("www.googleapis.com",),
                 turn_domains=("lh3.googleusercontent.com",),

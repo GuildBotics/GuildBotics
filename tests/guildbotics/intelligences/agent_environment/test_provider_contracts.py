@@ -50,7 +50,6 @@ from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
 STAND_IN = "guildbotics-stand-in-SYNTHETIC-459"
-_COPILOT_STAND_IN = "gho_SYNTHETIC459standin"
 #: Where the guest finds the run's CA; outside every state root.
 _CA = "/etc/contract-probe-ca.pem"
 
@@ -322,7 +321,7 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
     for name, data in lent.stand_in_files().items():
         await guest.write(f"{home}/.codex/{name}", data)
     spec = SimpleNamespace(
-        env={broker.base_url_env: recorder.url + broker.base_url_path}
+        env=dict.fromkeys(broker.base_url_env, recorder.url + broker.base_url_path)
     )
     configured = shlex.join(_config_arguments(_gateway_overrides(spec)))
 
@@ -428,44 +427,144 @@ async def test_codex_refreshes_a_login_told_it_has_expired_by_listing_models(
     assert token == fresh and expires > time.time() + 800000
 
 
-async def test_copilot_follows_its_api_urls_and_answers_quota_from_the_user_api(
-    boot,
-) -> None:
-    def answer(host: str, method: str, path: str):
-        if path.startswith("/copilot_internal/user"):
-            return json_answer(
-                {
-                    "login": "synthetic459",
-                    "id": 459,
-                    "copilot_plan": "individual",
-                    "chat_enabled": True,
-                    "endpoints": {
-                        "api": "https://api.individual.githubcopilot.com",
-                        "telemetry": "https://telemetry.individual.githubcopilot.com",
-                    },
-                    "quota_snapshots": {"chat": {"unlimited": True}},
-                }
-            )
-        if path.startswith("/copilot_internal/managed_settings"):
-            return json_answer({})
-        return None
+def _copilot_answer(host: str, method: str, path: str):
+    """What Copilot needs answered to start: the account and its policy, and
+    models whose endpoints send inference each of its ways."""
+    if path.startswith("/copilot_internal/user"):
+        return json_answer(
+            {
+                "login": "synthetic459",
+                "id": 459,
+                "copilot_plan": "individual",
+                "chat_enabled": True,
+                "endpoints": {
+                    "api": "https://api.individual.githubcopilot.com",
+                    "telemetry": "https://telemetry.individual.githubcopilot.com",
+                },
+                "quota_snapshots": {"chat": {"unlimited": True}},
+            }
+        )
+    if path.startswith("/copilot_internal/managed_settings"):
+        return json_answer({})
+    if path.startswith("/models"):
+        return json_answer({"data": [_model(*m) for m in _COPILOT_MODELS]})
+    return None
 
-    recorder = Recorder(answer)
+
+#: A model for each way Copilot sends inference: its supported endpoints.
+_COPILOT_MODELS = (
+    ("gpt-5.2-codex", "/responses", "OpenAI"),
+    ("claude-sonnet-4.5", "/v1/messages", "Anthropic"),
+    ("gpt-5-mini", "/chat/completions", "OpenAI"),
+)
+
+
+def _model(name: str, endpoint: str, vendor: str) -> dict[str, object]:
+    return {
+        "id": name,
+        "name": name,
+        "vendor": vendor,
+        "version": "1",
+        "object": "model",
+        "preview": False,
+        "model_picker_enabled": True,
+        "policy": {"state": "enabled"},
+        "supported_endpoints": [endpoint],
+        "capabilities": {
+            "type": "chat",
+            "family": name,
+            "supports": {"streaming": True, "tool_calls": True},
+            "limits": {"max_prompt_tokens": 100000, "max_output_tokens": 8000},
+        },
+    }
+
+
+async def test_copilot_reaches_github_and_its_api_through_the_gateway(
+    boot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn as GuildBotics sets it up: the stand-in in the variable a
+    synthetic login lends, and both API URLs at the gateway."""
+    copilot = cli_agent_info("copilot")
+    broker = copilot.provision.credential_broker
+    assert broker is not None
+    login = b'// comment\n{"authTokens": {"https://github.com:s": {"token": "gho_R"}}}'
+    monkeypatch.setattr(
+        provider_state, "_unsealed_login", lambda _: {copilot.provision.auth: login}
+    )
+    lent = LentLogin(copilot, None)  # type: ignore[arg-type]
+    recorder = Recorder(_copilot_answer)
     home = guest_path(_REAL_HOME.resolve())
     guest = await boot(
         recorder,
         ".copilot",
         {
             "COPILOT_HOME": f"{home}/.copilot",
-            # Copilot takes only a GitHub-shaped token.
-            "COPILOT_GITHUB_TOKEN": _COPILOT_STAND_IN,
+            **dict.fromkeys(broker.base_url_env, recorder.url),
+            **lent.stand_in_environment(),
+        },
+    )
+
+    for name, _endpoint, _vendor in _COPILOT_MODELS:
+        await guest.sh(
+            "timeout 60 copilot --no-auto-update -p 'Synthetic fixture.'"
+            f" --allow-all-tools --model {name}"
+        )
+    initialize = {"protocolVersion": 1, "clientCapabilities": {}}
+    answered = await guest.sh(
+        "(cat; sleep 15) | timeout 25 copilot --acp --no-auto-update",
+        stdin="".join(
+            json.dumps({"jsonrpc": "2.0", "id": n, "method": m, "params": p}) + "\n"
+            for n, m, p in (
+                (1, "initialize", initialize),
+                (2, "authenticate", {"methodId": "copilot-login"}),
+                (3, "session/new", {"cwd": f"{home}/work", "mcpServers": []}),
+            )
+        ).encode(),
+    )
+
+    replies = _replies(answered)
+    assert "result" in replies[2] and "result" in replies[3], answered
+    # Every credentialed request but the hosted GitHub MCP server, which acts
+    # on GitHub as the user, is one the gateway forwards; nothing else goes
+    # anywhere but the gateway.
+    authenticated = {
+        (s.method, s.path.split("?")[0]) for s in recorder.requests() if s.authorization
+    }
+    assert authenticated - {("POST", "/mcp/readonly")} <= set(broker.forwarded)
+    assert {("POST", endpoint) for _, endpoint, _ in _COPILOT_MODELS} <= authenticated
+    assert recorder.carrying(lent.stand_in) == {GUEST_HOST_ALIAS}, recorder.seen
+
+
+async def test_copilot_answers_its_quota_from_the_login_it_leaves(boot) -> None:
+    """Where the login is held, the tool reads it from the file its login
+    left, comments and all, and its quota from the user API."""
+    recorder = Recorder(_copilot_answer)
+    home = guest_path(_REAL_HOME.resolve())
+    guest = await boot(
+        recorder,
+        ".copilot",
+        {
+            "COPILOT_HOME": f"{home}/.copilot",
+            # Moved here only to record what the login is sent with.
             "COPILOT_DEBUG_GITHUB_API_URL": recorder.url,
             "COPILOT_API_URL": recorder.url,
         },
     )
-
-    await guest.sh(
-        "timeout 60 copilot --no-auto-update -p 'Synthetic fixture.' --allow-all-tools"
+    await guest.write(
+        f"{home}/.copilot/config.json",
+        "// This file is managed automatically.\n"
+        + json.dumps(
+            {
+                "authTokens": {"https://github.com:synthetic459": {"token": "gho_R4"}},
+                "lastLoggedInUser": {
+                    "host": "https://github.com",
+                    "login": "synthetic459",
+                },
+                "loggedInUsers": [
+                    {"host": "https://github.com", "login": "synthetic459"}
+                ],
+            }
+        ),
     )
 
     def frame(message: object) -> bytes:
@@ -490,11 +589,8 @@ async def test_copilot_follows_its_api_urls_and_answers_quota_from_the_user_api(
         ),
     )
 
-    for path in ("/copilot_internal/user", "/models"):
-        assert _bearer(recorder, path) == {f"Bearer {_COPILOT_STAND_IN}"}, recorder.seen
     assert '"quotaSnapshots"' in quota, quota
-    # Telemetry bypasses the API URLs, but carries no credential.
-    assert recorder.carrying(_COPILOT_STAND_IN) == {GUEST_HOST_ALIAS}, recorder.seen
+    assert _bearer(recorder, "/copilot_internal/user") == {"Bearer gho_R4"}
 
 
 _PIXEL = base64.b64decode(

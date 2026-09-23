@@ -244,10 +244,10 @@ the microVM's kernel is confirmed per provider as each is provisioned; Codex
 is, through the bubblewrap it bundles (a bubblewrap installed in the image is
 preferred to it and cannot exec Codex's helper, so the image ships none).
 
-Only the provider's persisted state -- its credentials and its sessions --
-survives a turn, bound from this device's store
+Only the provider's sessions and its account files that hold no credential
+survive a turn, bound from this device's store
 (`~/.guildbotics/data/agent_environment/<provider>/`) and shared by every
-member. The provider's settings and skills are the snapshot's and return to it
+member. The login is never in a turn (see "Logins kept outside the microVM"). The provider's settings and skills are the snapshot's and return to it
 every turn. Read-only turns are enforced by the member broker, which holds no
 person lease for them and refuses every write-capable member command; what a
 provider does with its own file tools on such a turn is recorded on the
@@ -264,9 +264,8 @@ host and a host login is not what a turn uses. Logging in happens inside the
 environment: on every device that runs turns, run `guildbotics environment login
 <tool>` (`codex` / `claude` / `grok` / `copilot` / `antigravity`) in a terminal. The tool's own login command starts inside
 the environment and walks you through its device code flow in the browser. The result
-is kept in the device's store (`~/.guildbotics/data/agent_environment/<tool>/`), shared
-by every member and workspace on that device, and only the credentials and sessions
-are bound into each turn. GuildBotics does not copy them into its conversation store or
+is sealed on the device (see below) and shared by every member and workspace on that
+device. GuildBotics does not copy them into its conversation store or
 diagnostics. The Desktop shows the login state and the command to run; it never
 drives the login dialogue itself.
 
@@ -283,23 +282,21 @@ The settings card always offers the login command and copy action, including whe
 credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
 absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
 updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
-only reports file presence (for Codex, Claude Code, Grok Build, and Antigravity, that the sealed login opens), not validity. Structured authentication failures from
+only reports that the sealed login opens, not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
 both the card and alerts through `status.py`. A completed login that leaves
 credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
-not startup refusals, so another turn can retry. For GitHub Copilot, no
-authentication probe or token refresh is performed by GuildBotics.
-Copilot refreshes its own tokens during a turn, so its refresh endpoint
-is among the provider domains every turn reaches, and its credentials are bound so that
-a refresh is written back to the store. A file bind follows a file rewritten in place,
-but renaming another file over it fails.
+not startup refusals, so another turn can retry. A file bound from the store (an
+account file) follows a file rewritten in place, but renaming another file over it
+fails. A name in the store is used only when what it resolves to on the device lies
+inside the store: a link a login or a turn left names a place on the device rather than
+in the guest, and following it would bind a directory of the device into a turn.
 
 ### Logins kept outside the microVM
 
-The logins of Codex, Claude Code, Grok Build, and Antigravity are kept neither in a turn's microVM nor in a
-plain file on the device. This is a transition: GitHub Copilot is still bound from the
-store as above ([#459](https://github.com/GuildBotics/GuildBotics/issues/459)). What follows
+The AI CLI tools' logins are kept neither in a turn's microVM nor in a plain file on the
+device ([#459](https://github.com/GuildBotics/GuildBotics/issues/459)). What follows
 takes Claude Code as the example; the tools differ as this table shows.
 
 | Tool | What is sealed | How a turn gets its stand-in | Gateway upstream | Refresh and usage |
@@ -307,6 +304,7 @@ takes Claude Code as the example; the tools differ as this table shows.
 | Codex | `~/.codex/auth.json` (a ChatGPT account login) | a stand-in `auth.json`: an unsigned JWT that claims only an expiry and the account (email, plan, account ID) stands for both the access token and the ID token, and the refresh token is empty (`chatgpt_base_url` and the `base_url` of a model provider of GuildBotics' own, `guildbotics`, point at the gateway) | `https://chatgpt.com` (inference at `/backend-api/codex/responses`, the model list, `/backend-api/wham/usage`) | refresh by running `codex debug models` with the access token claiming an expiry that has passed; usage through App Server `account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | a stand-in credentials file (`ANTHROPIC_BASE_URL` points at the gateway) | `https://api.anthropic.com` | `claude -p /usage` |
 | Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | a stand-in credentials file (the access token, `token_type`, the expiry, and `auth_method` only; no refresh token and no ID token). `CLOUD_CODE_URL` points at the gateway over HTTPS, and `www.googleapis.com` is relayed to the gateway inside the turn | `https://daily-cloudcode-pa.googleapis.com` (seven `/v1internal:` methods) and `https://www.googleapis.com/oauth2/v2/userinfo` | both through `agy -p /usage`, which refreshes a login it is told has expired |
+| GitHub Copilot | `~/.copilot/config.json` (JSON after lines of comments; the token under a key named for the account, one account only; no expiry and no refresh token) | a stand-in beginning `gho_` (the only shape Copilot takes) in `COPILOT_GITHUB_TOKEN`; `COPILOT_DEBUG_GITHUB_API_URL` and `COPILOT_API_URL` point at the gateway | `https://api.github.com` (`/copilot_internal/user`, `/copilot_internal/managed_settings`) and `https://api.individual.githubcopilot.com` (`/models` and inference at `/chat/completions`, `/responses`, and `/v1/messages`, as each model supports) | no refresh (a refused login asks for a new one); usage through Copilot SDK server `account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
@@ -370,23 +368,34 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
   straight from the turn. Telemetry that carries the token (`play.googleapis.com/log`) is not
   reachable from a turn, which runs without it. The gateway logs the routes it did not forward,
   as `METHOD /path` only (never a token, a query, or a body).
+- **GitHub Copilot specifics**: its login neither expires nor refreshes, so the gateway
+  asks for a new login instead of refreshing a refused one. Copilot's hosted read-only
+  GitHub MCP server (`/mcp/readonly`, which acts with the user's GitHub permissions) and
+  its telemetry are not forwarded. Where the API of an account on another plan (Business,
+  Enterprise) should be forwarded is not verified.
 - **Switching over**: the earlier plain files (Codex's
   `~/.guildbotics/data/agent_environment/codex/.codex/auth.json`, Claude Code's
   `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, Grok Build's
   `~/.guildbotics/data/agent_environment/grok/.grok/auth/`, Antigravity's
-  `~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`)
+  `~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`,
+  GitHub Copilot's `~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`, and
+  the `~/.guildbotics/data/agent_environment/copilot/turns/` a killed turn left)
   are neither read nor bound. Log
   in again with `guildbotics environment login <tool>`, then delete them (macOS / Linux:
   `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`,
   `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`,
+  `rm ~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`,
+  `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`,
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, and
   `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`; Windows:
   `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`,
   `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`,
+  `del %USERPROFILE%\.guildbotics\data\agent_environment\copilot\.copilot\config.json`,
+  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\copilot\turns`,
   `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`, and
   `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`).
   GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
-  the sessions (`sessions/`, `projects/`, `antigravity-cli/conversations/`, and the like) and the cache alone. Copies in past backups cannot be erased.
+  the sessions (`sessions/`, `projects/`, `session-state/`, `antigravity-cli/conversations/`, and the like) and the cache alone. Copies in past backups cannot be erased.
 - **Recovery**: when the state says the keychain is locked, unlock it; when it says the
   login cannot be used, fix the keychain or the disk (free space, for one) and try again.
   A login that cannot be opened (a missing or broken key or record) and a failed refresh
@@ -395,34 +404,16 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
   while it runs, spend the account's quota, and put data into allowed request bodies. This
   does not protect against the host's memory or its administrator.
 
-GitHub Copilot renames `config.json` into place at its state root at every start and
-can be pointed nowhere but `COPILOT_HOME`, so a file bound there makes the CLI exit
-at once without a word. Its root is therefore a directory of the turn's own. The
-sessions (`session-state/`) are bound under it from the store as for every other
-provider, and the turn writes into them directly; `config.json` alone is copied into
-the directory from the store and copied back when the turn ends. Everything else the
-turn left there -- the instructions, hooks, MCP servers, extensions, plugins,
-permissions and logs Copilot reads from the same root -- is discarded with the
-directory. A name in the store or in the turn's directory is used only when what it
-resolves to on the device lies inside that directory: a turn writes under a prompt's
-direction and a login runs with the whole store bound, so a link either leaves names a
-place on the device rather than in the guest, and following it would bind a directory
-of the device into a turn or carry a file of the device into the store. A turn that is
-killed leaves its directory behind, and the next turn of that provider removes what is
-too old to belong to a live one.
-
-For Grok Build, GuildBotics selects only one advertised authentication method: the saved
-login `cached_token`. The API key method is never used -- a key could only reach the
-process through the environment, and credential-named variables are stripped from the AI
-CLI environment as described below. The browser-based `grok.com` flow is never started
-during a headless run; without a saved login the turn fails as an authentication error
-that points at `grok login` (or `grok login --device-auth`). Only the chosen method id
-is recorded; the contents of `~/.grok/auth/auth.json` are never read.
+For Grok Build, GuildBotics selects only the advertised method of the external auth
+provider command (`_meta.external_provider`), which is how a turn's stand-in reaches it.
+The browser sign-in and the API key method are never used: no one is there to answer
+the one, and a key never reaches the environment. When the method is not offered, the
+turn fails as an authentication error.
 
 GitHub Copilot advertises one method, `copilot-login`, whose metadata tells the client
-to run `copilot login` in a terminal. GuildBotics verifies the saved login by calling
-ACP `authenticate` with that method, which a logged-in install answers immediately; it
-never drives the sign-in itself. A rejected `authenticate`, a missing method, or a call
+to run `copilot login` in a terminal. GuildBotics calls ACP `authenticate` with that
+method; a turn authenticates with the stand-in in `COPILOT_GITHUB_TOKEN` and is answered
+immediately. It never drives the sign-in itself. A rejected `authenticate`, a missing method, or a call
 that does not answer promptly -- the terminal login waiting for a user who is not there
 -- all fail the turn as an authentication error pointing at `copilot login`. Only the
 method id is recorded; the contents of the Copilot credential store are never read.
@@ -677,9 +668,9 @@ measured unlimited `chat` / `completions` report `entitlementRequests: 0` with
 `remainingPercentage: 100`) gets no meter, and a snapshot whose
 `remainingPercentage` is missing, non-numeric, non-finite, or outside 0-100 is
 dropped. The period length is not reported, so no duration is guessed from the
-reset date. A budget at 0% remaining sets `limit_reached`. Authentication stays
-inside the Copilot CLI's own saved login: GuildBotics neither reads the credential
-file nor adds a direct HTTP call. The probe starts no turn and spends no quota.
+reset date. A budget at 0% remaining sets `limit_reached`. The Copilot CLI reads it
+itself, in an environment of its own that holds the login in memory; GuildBotics adds
+no direct HTTP call. The probe starts no turn and spends no quota.
 
 Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
 `thinking_tokens`, `cache_read_tokens`, `total_tokens`), which are normalized onto

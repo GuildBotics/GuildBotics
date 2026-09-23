@@ -1,15 +1,18 @@
-"""A provider's store on this device: what a turn binds, and how login fills it."""
+"""A provider's store on this device: what a turn binds, and where login runs."""
 
 from __future__ import annotations
 
 import asyncio
-import os
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.agent_environment import provider_state
+from guildbotics.intelligences.agent_environment import (
+    credential_vault,
+    provider_state,
+)
 from guildbotics.intelligences.agent_environment.provider_state import (
     bind_state,
     cache_dir,
@@ -23,92 +26,57 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.toolchain import parse_toolchain
-from guildbotics.intelligences.cli_agents import (
-    CliAgentInfo,
-    CliAgentProvision,
-    cli_agent_info,
-)
+from guildbotics.intelligences.cli_agents import cli_agent_info
 
 DECLARATION = parse_toolchain({"dns": {"nameservers": ["10.0.0.53"]}}, where="t")
-#: A tool whose login is a plain file in the store, bound into its turns.
-PLAIN = CliAgentInfo(
-    name="plain",
-    label="Plain",
-    provision=CliAgentProvision(
-        package="plain@1",
-        state_root=".plain",
-        state_root_env="PLAIN_HOME",
-        auth="auth.json",
-        persisted=("auth.json", "sessions/"),
-        login=("plain", "login", "--device-auth"),
-    ),
-)
+CLAUDE = cli_agent_info("claude")
 
 
 @pytest.fixture
 def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(
-        provider_state,
-        "get_machine_state_path",
-        lambda *parts: tmp_path.joinpath("data", *parts),
-    )
+    for module in (provider_state, credential_vault):
+        monkeypatch.setattr(
+            module,
+            "get_machine_state_path",
+            lambda *parts: tmp_path.joinpath("data", *parts),
+        )
     return tmp_path
 
 
 def test_the_store_mirrors_the_state_root_under_home(machine: Path) -> None:
-    plain = PLAIN
-
-    assert provider_state_dir(plain) == machine / "data/agent_environment/plain/.plain"
+    assert (
+        provider_state_dir(CLAUDE) == machine / "data/agent_environment/claude/.claude"
+    )
     assert cache_dir() == machine / "data/agent_environment/cache"
 
 
-def test_credentials_saved_means_the_credentials_file_exists(machine: Path) -> None:
-    plain = PLAIN
-    assert not has_credentials(plain)
-
-    store = provider_state_dir(plain)
-    store.mkdir(parents=True)
-    (store / "auth.json").write_text("{}")
-
-    assert has_credentials(plain)
-    assert not has_credentials(cli_agent_info("grok"))
-
-
 def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) -> None:
-    """Directories are made so the first turn can write sessions; a
-    credentials file is bound only once login has written it."""
-    plain = PLAIN
+    """Directories are made so the first turn can write sessions; an account
+    file is bound only once login has written it."""
     home = tmp_path / "home"
-    store = provider_state_dir(plain)
+    store = provider_state_dir(CLAUDE)
+    root = f"{guest_path(home)}/.claude"
 
-    assert bind_state(plain, home).mounts == (
-        EnvironmentMount(
-            f"{guest_path(home)}/.plain/sessions", store / "sessions", False
-        ),
+    assert bind_state(CLAUDE, home) == (
+        EnvironmentMount(f"{root}/projects", store / "projects", False),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
-    assert (store / "sessions").is_dir()
+    assert (store / "projects").is_dir()
 
-    (store / "auth.json").write_text("{}")
-    mounts = bind_state(plain, home).mounts
+    (store / ".claude.json").write_text("{}")
 
-    assert mounts == (
-        EnvironmentMount(
-            f"{guest_path(home)}/.plain/auth.json", store / "auth.json", False
-        ),
-        EnvironmentMount(
-            f"{guest_path(home)}/.plain/sessions", store / "sessions", False
-        ),
+    assert bind_state(CLAUDE, home) == (
+        EnvironmentMount(f"{root}/.claude.json", store / ".claude.json", False),
+        EnvironmentMount(f"{root}/projects", store / "projects", False),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
 
 
-def test_a_brokered_login_the_tool_points_elsewhere_is_never_bound(
+def test_a_login_left_in_the_store_is_neither_counted_nor_bound(
     machine: Path, tmp_path: Path
 ) -> None:
-    """Grok is pointed at its credentials under a directory of their own. Its
-    login is brokered, so a plain one left in the store is neither counted
-    nor bound, and its login lands in memory, where the tool is pointed."""
+    """A plain login an earlier GuildBotics kept, where the tool would read
+    it, stays out of every turn and of the state."""
     grok = cli_agent_info("grok")
     home = tmp_path / "home"
     store = provider_state_dir(grok)
@@ -116,7 +84,7 @@ def test_a_brokered_login_the_tool_points_elsewhere_is_never_bound(
     (store / "auth/auth.json").write_text("{}")
 
     assert not has_credentials(grok)
-    assert all("auth" not in mount.guest for mount in bind_state(grok, home).mounts)
+    assert all("auth" not in mount.guest for mount in bind_state(grok, home))
     login_guest = guest_path(home.resolve())
     spec = login_spec(grok, DECLARATION, home)
     assert spec.mounts == (EnvironmentMount(f"{login_guest}/.grok", None, False),)
@@ -126,259 +94,37 @@ def test_a_brokered_login_the_tool_points_elsewhere_is_never_bound(
     }
 
 
-def test_a_writable_root_binds_the_sessions_under_the_turn_s_own_directory(
-    machine: Path, tmp_path: Path
-) -> None:
-    """Copilot renames `config.json` into place at its state root and can be
-    pointed nowhere else, so the root is a directory of the turn's own. Its
-    sessions are bound under it from the store as for every other provider,
-    the credentials are copied in, and nothing else of the store -- what a
-    login or an earlier boundary left beside them; Copilot reads its
-    instructions, hooks, MCP servers and plugins from the same root --
-    reaches the turn."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    store = provider_state_dir(copilot)
-    (store / "session-state").mkdir(parents=True)
-    (store / "session-state/one.json").write_text('{"turn": 1}')
-    (store / "config.json").write_text('{"authTokens": "..."}')
-    (store / "hooks").mkdir()
-    (store / "hooks/left-behind.sh").write_text("echo taken over")
-    (store / "copilot-instructions.md").write_text("left behind")
-
-    state = bind_state(copilot, home)
-    root = state.mounts[0].host
-
-    assert has_credentials(copilot)
-    assert state.mounts == (
-        EnvironmentMount(f"{guest_path(home)}/.copilot", root, False),
-        EnvironmentMount(
-            f"{guest_path(home)}/.copilot/session-state",
-            store / "session-state",
-            False,
-        ),
-        EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
-    )
-    assert root is not None and root != store and store not in root.parents
-    assert sorted(entry.name for entry in root.iterdir()) == [
-        "config.json",
-        "session-state",
-    ]
-    assert (root / "config.json").read_text() == '{"authTokens": "..."}'
-    assert not any((root / "session-state").iterdir())  # The mount point only.
-    assert copilot.provision.environment(guest_path(home)) == {
-        "COPILOT_HOME": f"{guest_path(home)}/.copilot"
-    }
-
-
-def test_only_the_persisted_entries_of_a_turn_reach_the_store_and_the_next_turn(
-    machine: Path, tmp_path: Path
-) -> None:
-    """A turn writes what it likes into its root -- the credentials it
-    refreshed, and the instructions, hooks and MCP servers a prompt could
-    have told it to write -- and its sessions into the store itself, through
-    the bind. Releasing the turn copies the credentials back and loses the
-    rest, so the next turn's root has no trace of it."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    store = provider_state_dir(copilot)
-    store.mkdir(parents=True)
-    (store / "config.json").write_text('{"authTokens": "old"}')
-
-    turn = bind_state(copilot, home)
-    root = turn.mounts[0].host
-    assert root is not None
-    (root / "config.json").write_text('{"authTokens": "refreshed"}')
-    (store / "session-state/one.json").write_text('{"turn": 1}')
-    (root / "mcp-config.json").write_text('{"servers": {}}')
-    (root / "copilot-instructions.md").write_text("always do this")
-    (root / "hooks").mkdir()
-    (root / "hooks/after-turn.sh").write_text("echo taken over")
-    (root / "logs").mkdir()
-    (root / "logs/turn.log").write_text("noisy")
-
-    turn.release()
-
-    assert not root.exists()
-    assert sorted(entry.name for entry in store.iterdir()) == [
-        "config.json",
-        "session-state",
-    ]
-    assert (store / "config.json").read_text() == '{"authTokens": "refreshed"}'
-    assert (store / "session-state/one.json").read_text() == '{"turn": 1}'
-
-    next_turn = bind_state(copilot, home)
-    next_root = next_turn.mounts[0].host
-
-    assert next_root is not None and next_root != root
-    assert sorted(entry.name for entry in next_root.iterdir()) == [
-        "config.json",
-        "session-state",
-    ]
-    assert next_turn.mounts[1].host == store / "session-state"
-
-
-def test_what_a_turn_reached_through_a_link_stays_out_of_the_store(
-    machine: Path, tmp_path: Path, symlinks
-) -> None:
-    """A turn writes into its root under a prompt's direction, so what it
-    names there is the prompt's to choose -- including a link, which the host
-    resolves on the device rather than in the guest. The copy back reads
-    nothing a name leads to outside the turn's directory, so no file of the
-    device is read into the store by being pointed at."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    store = provider_state_dir(copilot)
-    store.mkdir(parents=True)
-    (store / "config.json").write_text('{"authTokens": "old"}')
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (elsewhere / "secret.txt").write_text("the device's own")
-
-    turn = bind_state(copilot, home)
-    root = turn.mounts[0].host
-    assert root is not None
-    (root / "config.json").unlink()
-    (root / "config.json").symlink_to(elsewhere / "secret.txt")
-
-    turn.release()
-
-    assert (store / "config.json").read_text() == '{"authTokens": "old"}'
-    assert not any(
-        path.is_file() and path.read_bytes() == b"the device's own"
-        for path in store.rglob("*")
-    )
-
-
-def test_a_link_in_the_store_reaches_no_turn_and_is_not_written_through(
-    machine: Path, tmp_path: Path, symlinks
-) -> None:
-    """The other half of the boundary: a link left in the store -- a login
-    runs with the whole store bound -- neither binds a directory of the
-    device into a turn, nor carries a file of the device into the turn's
-    root, nor takes what the turn wrote wherever it points."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    store = provider_state_dir(copilot)
-    store.mkdir(parents=True)
-    elsewhere = tmp_path / "elsewhere"
-    (elsewhere / "sessions").mkdir(parents=True)
-    (elsewhere / "secret.txt").write_text("the device's own")
-    (store / "config.json").symlink_to(elsewhere / "secret.txt")
-    (store / "session-state").symlink_to(
-        elsewhere / "sessions", target_is_directory=True
-    )
-
-    turn = bind_state(copilot, home)
-    root = turn.mounts[0].host
-    assert root is not None
-
-    assert not has_credentials(copilot)
-    assert not (root / "config.json").exists()
-    assert [mount.guest for mount in turn.mounts] == [
-        f"{guest_path(home)}/.copilot",
-        f"{guest_path(home)}/.cache",
-    ]
-
-    (root / "config.json").write_text('{"authTokens": "refreshed"}')
-    turn.release()
-
-    assert (elsewhere / "secret.txt").read_text() == "the device's own"
-    assert (store / "config.json").is_symlink()
-
-
 def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
     machine: Path, tmp_path: Path, symlinks
 ) -> None:
-    """A provider whose entries are bound from the store binds them by name,
-    and a link is a path of the device's rather than the store's: it is
-    neither bound into a turn nor read as a saved login."""
-    plain = PLAIN
+    """Entries are bound from the store by name, and a link is a path of the
+    device's rather than the store's: it is never bound into a turn."""
     home = tmp_path / "home"
-    store = provider_state_dir(plain)
+    store = provider_state_dir(CLAUDE)
     store.mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
-    (elsewhere / "sessions").mkdir(parents=True)
-    (elsewhere / "auth.json").write_text("{}")
-    (store / "auth.json").symlink_to(elsewhere / "auth.json")
-    (store / "sessions").symlink_to(elsewhere / "sessions", target_is_directory=True)
+    (elsewhere / "projects").mkdir(parents=True)
+    (elsewhere / "secret.json").write_text("the device's own")
+    (store / ".claude.json").symlink_to(elsewhere / "secret.json")
+    (store / "projects").symlink_to(elsewhere / "projects", target_is_directory=True)
 
-    mounts = bind_state(plain, home).mounts
-
-    assert not has_credentials(plain)
-    assert mounts == (
+    assert bind_state(CLAUDE, home) == (
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
 
 
-def test_releasing_a_bound_store_leaves_the_store_alone(
+def test_the_login_runs_with_its_state_root_in_memory_and_egress_open(
     machine: Path, tmp_path: Path
 ) -> None:
-    """A provider whose entries are bound from the store wrote into it as the
-    turn went, so there is nothing to take back."""
-    plain = PLAIN
-    home = tmp_path / "home"
-    state = bind_state(plain, home)
-    (provider_state_dir(plain) / "sessions/one.json").write_text('{"turn": 1}')
-
-    state.release()
-
-    assert state.turn_dir is None
-    assert (provider_state_dir(plain) / "sessions/one.json").is_file()
-
-
-def test_what_a_killed_run_left_behind_is_removed_by_the_next_turn(
-    machine: Path, tmp_path: Path
-) -> None:
-    """A run that was killed never released its turn directory; the next turn
-    of that provider removes what is too old to belong to a live one."""
-    copilot = cli_agent_info("copilot")
-    home = tmp_path / "home"
-    turns = machine / "data/agent_environment/copilot/turns"
-    turns.mkdir(parents=True)
-    killed, running = turns / "killed", turns / "running"
-    for left in (killed, running):
-        left.mkdir()
-        (left / "config.json").write_text("{}")
-    os.utime(killed, (0, 0))
-
-    root = bind_state(copilot, home).mounts[0].host
-
-    assert not killed.exists()
-    assert running.is_dir()
-    assert root is not None and root.parent == turns
-
-
-def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
-    machine: Path, tmp_path: Path
-) -> None:
-    plain = PLAIN
     home = tmp_path / "home"
 
-    spec = login_spec(plain, DECLARATION, home)
+    spec = login_spec(CLAUDE, DECLARATION, home)
 
     guest = guest_path(home.resolve())
     assert spec.cwd == spec.home == guest
-    assert spec.mounts == (
-        EnvironmentMount(f"{guest}/.plain", provider_state_dir(plain), False),
-    )
-    assert provider_state_dir(plain).is_dir()
-    assert spec.network.unrestricted
-    assert spec.network.nameservers == ("10.0.0.53",)
-    assert spec.env == {"PLAIN_HOME": f"{guest}/.plain"}
-
-
-def test_a_brokered_login_lands_in_memory_not_in_the_store(
-    machine: Path, tmp_path: Path
-) -> None:
-    claude = cli_agent_info("claude")
-    home = tmp_path / "home"
-
-    spec = login_spec(claude, DECLARATION, home)
-
-    guest = guest_path(home.resolve())
     assert spec.mounts == (EnvironmentMount(f"{guest}/.claude", None, False),)
     assert spec.network.unrestricted
+    assert spec.network.nameservers == ("10.0.0.53",)
     assert spec.env == {"CLAUDE_CONFIG_DIR": f"{guest}/.claude"}
 
 
@@ -390,7 +136,7 @@ def test_the_login_environment_forwards_to_the_devices_resolvers_for_host(
     )
     declaration = parse_toolchain({"dns": {"nameservers": "host"}}, where="t")
 
-    spec = login_spec(PLAIN, declaration, tmp_path / "home")
+    spec = login_spec(CLAUDE, declaration, tmp_path / "home")
 
     assert spec.network.nameservers == ("192.168.3.1",)
 
@@ -422,10 +168,23 @@ class _Process:
         return self.returncode
 
 
+#: What Claude Code's login leaves, synthetic.
+_LOGIN = json.dumps(
+    {
+        "claudeAiOauth": {
+            "accessToken": "REAL-459",
+            "refreshToken": "REFRESH-459",
+            "expiresAt": 4102444800000,
+        }
+    }
+).encode()
+
+
 class _Environment:
     started: dict[str, Any] = {}
     process: _Process
     closed = False
+    spec: Any
 
     @classmethod
     async def start(
@@ -438,7 +197,9 @@ class _Environment:
             "cpus": cpus,
         }
         cls.process = _Process()
-        return cls()
+        environment = cls()
+        environment.spec = spec
+        return environment
 
     async def run(self, *command: str, limit: int, tty: bool = False) -> _Process:
         _Environment.started["command"] = command
@@ -448,6 +209,9 @@ class _Environment:
         )
         return self.process
 
+    async def read_file(self, path: str) -> bytes | None:
+        return _LOGIN if path.endswith("/.credentials.json") else None
+
     async def close(self) -> None:
         _Environment.closed = True
 
@@ -456,13 +220,12 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
     machine: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(provider_state, "AgentEnvironment", _Environment)
-    plain = PLAIN
     typed = iter(["ABCD-1234\n"])
     shown: list[str] = []
 
     code = asyncio.run(
         login(
-            plain,
+            CLAUDE,
             DECLARATION,
             snapshot=tmp_path / "snap",
             read_line=lambda: next(typed, None),
@@ -477,7 +240,7 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
         DECLARATION.resources.memory_mib,
         DECLARATION.resources.cpus,
     )
-    assert _Environment.started["command"] == ("plain", "login", "--device-auth")
+    assert _Environment.started["command"] == CLAUDE.provision.login
     assert _Environment.started["spec"].network.unrestricted
     # A terminal, so a tool that asks before storing credentials can ask.
     assert _Environment.started["tty"] is True
@@ -486,20 +249,14 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
     )
     assert _Environment.process.written == [b"ABCD-1234\n"]
     assert _Environment.closed
+    assert has_credentials(CLAUDE)
 
 
-@pytest.mark.parametrize(
-    "exit_code,stored,cleared", [(0, True, True), (0, False, False), (1, True, False)]
-)
-def test_only_completed_login_with_credentials_clears_failure(
-    machine, monkeypatch, exit_code, stored, cleared
+@pytest.mark.parametrize("exit_code,cleared", [(0, True), (1, False)])
+def test_only_a_completed_login_clears_a_failure(
+    machine, monkeypatch, exit_code, cleared
 ):
-    plain = PLAIN
-    provider_state.record_authentication_outcome(plain, failed=True)
-    if stored:
-        store = provider_state_dir(plain)
-        store.mkdir(parents=True)
-        (store / plain.provision.auth).write_text("{}")
+    provider_state.record_authentication_outcome(CLAUDE, failed=True)
 
     async def wait(self):
         return exit_code
@@ -510,7 +267,7 @@ def test_only_completed_login_with_credentials_clears_failure(
     assert (
         asyncio.run(
             login(
-                plain,
+                CLAUDE,
                 DECLARATION,
                 snapshot=machine / "snap",
                 read_line=lambda: next(typed, None),
@@ -519,17 +276,18 @@ def test_only_completed_login_with_credentials_clears_failure(
         )
         == exit_code
     )
-    assert provider_state.authentication_failed(plain) is not cleared
+    assert provider_state.authentication_failed(CLAUDE) is not cleared
+    assert has_credentials(CLAUDE) is cleared
 
 
 def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     machine, monkeypatch
 ):
-    plain, claude = PLAIN, cli_agent_info("claude")
-    provider_state.record_authentication_outcome(plain, failed=True)
-    assert provider_state.authentication_failed(plain)
-    assert not provider_state.authentication_failed(claude)
-    mounts = bind_state(plain, machine / "home").mounts
+    grok = cli_agent_info("grok")
+    provider_state.record_authentication_outcome(CLAUDE, failed=True)
+    assert provider_state.authentication_failed(CLAUDE)
+    assert not provider_state.authentication_failed(grok)
+    mounts = bind_state(CLAUDE, machine / "home")
     assert all(not str(m.host).endswith("authentication-failed") for m in mounts)
     with monkeypatch.context() as other_device:
         other_device.setattr(
@@ -537,50 +295,8 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
             "get_machine_state_path",
             lambda *parts: machine.joinpath("other-device", *parts),
         )
-        assert not provider_state.authentication_failed(plain)
-        provider_state.record_authentication_outcome(plain, failed=False)
-    assert provider_state.authentication_failed(plain)
-    provider_state.record_authentication_outcome(plain, failed=False)
-    assert not provider_state.authentication_failed(plain)
-
-
-@pytest.mark.parametrize("tool", [PLAIN, cli_agent_info("copilot")])
-def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, tool):
-    store = provider_state_dir(tool)
-    auth = store / tool.provision.auth
-    auth.parent.mkdir(parents=True, exist_ok=True)
-    auth.write_text("credential")
-    for entry in tool.provision.persisted:
-        if entry.endswith("/"):
-            (store / entry).mkdir(parents=True, exist_ok=True)
-            (store / entry / "prior-conversation").write_text("old input")
-    state = bind_state(tool, input_only=True)
-    assert state.turn_dir is not None
-    assert len(state.mounts) == 1
-    assert state.mounts[0].host == state.turn_dir
-    assert (state.turn_dir / tool.provision.auth).read_text() == "credential"
-    assert not list(state.turn_dir.rglob("prior-conversation"))
-    (state.turn_dir / tool.provision.auth).write_text("refreshed")
-    state.release()
-    assert auth.read_text() == "refreshed"
-    assert not state.turn_dir.exists()
-
-
-def test_an_input_only_turn_of_a_brokered_tool_holds_nothing_of_the_store(machine):
-    """Whatever the turn leaves as its credentials file -- the stand-in --
-    never reaches the store."""
-    tool = cli_agent_info("claude")
-    store = provider_state_dir(tool)
-    for entry in tool.provision.persisted:
-        if entry.endswith("/"):
-            (store / entry).mkdir(parents=True, exist_ok=True)
-    state = bind_state(tool, input_only=True)
-    assert state.turn_dir is not None
-    assert [mount.host for mount in state.mounts] == [state.turn_dir]
-    assert not any(state.turn_dir.iterdir())
-    (state.turn_dir / tool.provision.auth).write_text("stand-in")
-
-    state.release()
-
-    assert not (store / tool.provision.auth).exists()
-    assert not state.turn_dir.exists()
+        assert not provider_state.authentication_failed(CLAUDE)
+        provider_state.record_authentication_outcome(CLAUDE, failed=False)
+    assert provider_state.authentication_failed(CLAUDE)
+    provider_state.record_authentication_outcome(CLAUDE, failed=False)
+    assert not provider_state.authentication_failed(CLAUDE)

@@ -240,15 +240,11 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
-        # Persisted itself, or inside a persisted directory -- unless the
-        # login is brokered, when it is sealed and never persisted.
-        brokered = provision.credential_broker is not None
-        assert brokered != (
-            provision.auth in provision.persisted
-            or any(
-                entry.endswith("/") and provision.auth.startswith(entry)
-                for entry in provision.persisted
-            )
+        # The login is sealed, never persisted, nor inside what is.
+        assert provision.credential_broker is not None, agent.name
+        assert not any(
+            provision.auth == entry or provision.auth.startswith(entry)
+            for entry in provision.persisted
         ), agent.name
         expected = (
             {provision.state_root_env: f"/h/{provision.state_root}"}
@@ -302,9 +298,10 @@ def test_a_tool_that_is_not_provisioned_yet_names_nothing() -> None:
         CliAgentProvision(state_root=".tool", persisted=("",))
 
 
-#: Where each tool refreshes its login, as observed from the tool itself.
-#: A tool added to the catalog must be looked up and listed here.
-_REFRESH_HOSTS = {
+#: Where each tool refreshes its login -- or, for one that never refreshes,
+#: reads its account -- as observed from the tool itself. A tool added to the
+#: catalog must be looked up and listed here.
+_ACCOUNT_HOSTS = {
     "codex": "auth.openai.com",
     "claude": "platform.claude.com",
     "grok": "auth.x.ai",
@@ -313,11 +310,12 @@ _REFRESH_HOSTS = {
 }
 
 
-def test_every_tool_reaches_its_login_refresh_from_a_turn() -> None:
-    """A login outlives an access token only if a turn can refresh it."""
-    assert set(_REFRESH_HOSTS) == {agent.name for agent in CLI_AGENTS}
+def test_every_tool_reaches_its_account_where_its_login_is() -> None:
+    """A login outlives an access token only if the environment that holds
+    it can refresh it, and the tool's usage only if it can read it there."""
+    assert set(_ACCOUNT_HOSTS) == {agent.name for agent in CLI_AGENTS}
     for agent in CLI_AGENTS:
-        host = _REFRESH_HOSTS[agent.name]
+        host = _ACCOUNT_HOSTS[agent.name]
         assert any(
             host == domain or (domain.startswith("*.") and host.endswith(domain[1:]))
             for domain in agent.provision.api_domains
@@ -332,7 +330,7 @@ def _broker(*routes: str) -> CredentialBroker:
         expires_at=("e",),
         upstream="https://api.example.test",
         routes=routes,
-        base_url_env="API_URL",
+        base_url_env=("API_URL",),
         refresh=("tool", "refresh"),
     )
 
@@ -373,3 +371,42 @@ def test_a_relayed_host_is_answered_over_tls_only() -> None:
     assert CredentialBroker(
         **{**fields, "relayed_hosts": ("profile.example.test",), "tls": True}
     ).tls
+
+
+def test_a_provisioned_tool_without_a_brokered_login_is_refused() -> None:
+    """A login a turn would hold is the one thing a turn must never hold."""
+    with pytest.raises(ValidationError):
+        CliAgentProvision(package="tool@1", state_root=".tool", auth="auth.json")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"refresh": ()},
+        {"expires_at": ()},
+        {
+            "refresh_token": (),
+            "expires_at": (),
+            "refresh": (),
+            "empty_refresh_token": True,
+        },
+        {"stand_in_env": "TOKEN", "stand_in_command_env": "TOKEN_COMMAND"},
+    ],
+    ids=["expires-unrefreshed", "refreshed-never-expiring", "no-place", "two-ways"],
+)
+def test_a_login_is_lent_and_refreshed_one_whole_way(fields: dict[str, object]) -> None:
+    """A login that expires is refreshed and one that does not never is;
+    anything between fails at a turn instead of here."""
+    with pytest.raises(ValidationError):
+        CredentialBroker(**{**_broker("GET /me").model_dump(), **fields})
+    assert (
+        CredentialBroker(
+            **{
+                **_broker("GET /me").model_dump(),
+                "refresh_token": (),
+                "expires_at": (),
+                "refresh": (),
+            }
+        ).refresh
+        == ()
+    )

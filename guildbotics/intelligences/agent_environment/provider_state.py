@@ -1,32 +1,22 @@
-"""What a provider keeps between turns on this device, and logging in to it.
+"""What a provider keeps between turns on this device, and its login.
 
-The environment is discarded after every turn, so a provider's login and its
-conversation sessions live outside it, in a store this device keeps per
-provider (``~/.guildbotics/data/agent_environment/<provider>/``) and every
-member shares, exactly as they share the provider's state on the host today.
-Only the entries the provider's provision names are ever kept from a turn:
-the credentials and the sessions. The rest of the provider's directory --
-its settings, skills, plugins, and everything else it reads its instructions
-and its tools from -- is the snapshot's, so what an agent changes there is
-gone with the turn.
+The environment is discarded after every turn, so a provider's sessions live
+outside it, in a store this device keeps per provider
+(``~/.guildbotics/data/agent_environment/<provider>/``) and every member
+shares. Only the entries the provider's provision names are ever kept from a
+turn: the sessions, and the account files that hold no credential. The rest
+of the provider's directory -- its settings, skills, plugins, and everything
+else it reads its instructions and its tools from -- is the snapshot's, so
+what an agent changes there is gone with the turn. A persisted directory is
+bound from the store, and a turn writes into it as it goes; so is a persisted
+file, once it exists.
 
-A persisted directory is bound from the store, and a turn writes into it as
-it goes. A persisted file is bound too, unless the provider renames files
-into its state root: a bound file cannot be renamed over, so such a provider
-gets a directory of its own for the turn as its root, the file is copied into
-it, and it is copied back when the turn ends. The directory is then discarded
-with whatever else the turn left in it.
-
-Logging in is the one interactive step: the provider's own login command
-runs inside an environment that mounts nothing but the provider's store and
-has all egress open, because the addresses an OAuth exchange visits are the
-provider's business and change with its versions. There is nothing of the
-user's in that environment to carry anywhere.
-
-A tool whose catalog entry brokers its login (``credential_broker``) never
-has its login in a turn's microVM, nor in a plain file on this device. The
-login command runs with the state root in memory; what it leaves there is
-taken out while the environment still runs and sealed
+A provider's login is in no turn's microVM, nor in a plain file on this
+device. Logging in is the one interactive step: the provider's own login
+command runs inside an environment with its state root in memory, nothing
+else of the device, and all egress open, because the addresses an OAuth
+exchange visits are the provider's business and change with its versions.
+What it leaves is taken out while the environment still runs and sealed
 (:mod:`.credential_vault`). A turn is lent the login through a gateway
 outside its microVM (:mod:`.auth_gateway`) and holds only a stand-in. What
 must hold the real login -- the refresh, and the tool's own ``/usage`` --
@@ -40,11 +30,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import secrets
 import shlex
-import shutil
 import sys
-import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
@@ -91,12 +80,6 @@ from guildbotics.utils.i18n_tool import t
 #: This device's per-provider stores, and the cache turns keep between them.
 STATE_ROOT = ("agent_environment",)
 CACHE_DIR = "cache"
-#: Where a turn's own copy of a writable state root lives: beside the store,
-#: never inside it, so nothing reaches the store by being written there.
-TURNS_DIR = "turns"
-#: A turn directory older than this was left behind by a run that was killed:
-#: no turn lasts a day, and the copy back only ever happens at its end.
-_STALE_TURN_SECONDS = 24 * 60 * 60
 #: Longest line the login command may print.
 _LOGIN_LINE_LIMIT = 1 << 16
 #: Where a brokered tool's login is sealed, beside its store.
@@ -127,13 +110,12 @@ def cache_dir() -> Path:
 def _inside(root: Path, entry: str) -> Path | None:
     """``entry`` under ``root``, or None when it resolves to a place outside.
 
-    A store and a turn's own directory are read, and bound, by what their
-    names resolve to on the device: the runtime binds a mount's resolved
-    path. A link in either was spelled for the guest's file system by
-    whatever wrote it -- a login running with the whole store bound, or a
-    turn under a prompt's direction -- and one that leads out of the root
-    would bind or copy any place on the device into the environment or the
-    store. So it is treated as absent, wherever on the way it stands.
+    The store is bound by what its names resolve to on the device: the
+    runtime binds a mount's resolved path. A link in it was spelled for the
+    guest's file system by whatever wrote it -- a turn under a prompt's
+    direction, or an earlier GuildBotics' login -- and one that leads out of
+    the store would bind any place on the device into the environment. So
+    it is treated as absent, wherever on the way it stands.
     """
     path = root / entry
     return path if path.resolve().is_relative_to(root.resolve()) else None
@@ -142,26 +124,22 @@ def _inside(root: Path, entry: str) -> Path | None:
 def credential_state(tool: CliAgentInfo) -> VaultState:
     """What of the provider's login this device holds.
 
-    A brokered login is read the way a turn would read it, so a locked
+    The sealed login is read the way a turn would read it, so a locked
     keychain, a record that no longer opens, or one that is no longer a
     login is reported, not found out at the next turn.
     """
-    provision = tool.provision
-    if not provision.auth:
+    broker = tool.provision.credential_broker
+    if broker is None:
         return "missing"
-    broker = provision.credential_broker
-    if broker is not None:
-        try:
-            _access(broker, _unsealed_login(tool), tool)
-        except CredentialVaultError as exc:
-            return exc.state
-        return "saved"
-    auth = _inside(provider_state_dir(tool), provision.auth)
-    return "saved" if auth is not None and auth.is_file() else "missing"
+    try:
+        _access(broker, _unsealed_login(tool), tool)
+    except CredentialVaultError as exc:
+        return exc.state
+    return "saved"
 
 
 def has_credentials(tool: CliAgentInfo) -> bool:
-    """Whether the provider's credentials exist in this device's store."""
+    """Whether this device holds a sealed login of the provider that opens."""
     return credential_state(tool) == "saved"
 
 
@@ -210,127 +188,41 @@ def _failure_path(tool: CliAgentInfo) -> Path:
     return get_machine_state_path(*STATE_ROOT, tool.name, "authentication-failed")
 
 
-@dataclass(frozen=True, slots=True)
-class ProviderState:
-    """One turn's hold on the provider's state, and what it gives back.
-
-    ``release`` ends the hold: a turn that wrote into the store directly has
-    nothing to do, and a turn that had a directory of its own gives back the
-    persisted files and loses the rest of it. It is called when the turn's
-    environment is gone, once, whether the turn succeeded or not.
-    """
-
-    mounts: tuple[EnvironmentMount, ...]
-    tool: CliAgentInfo
-    turn_dir: Path | None = None
-    input_only: bool = False
-
-    def release(self) -> None:
-        """Copy the persisted files of a turn directory back and discard it.
-
-        A file is replaced whole, because a half-written credentials file is
-        what the next turn would read as its login. The directories were
-        bound from the store, so what the turn wrote there is there already.
-        """
-        if self.turn_dir is None:
-            return
-        try:
-            store = provider_state_dir(self.tool)
-            for name in _entries(self.tool, input_only=self.input_only):
-                if name.endswith("/"):
-                    continue
-                source = _inside(self.turn_dir, name)
-                target = _inside(store, name)
-                if source is not None and source.is_file() and target is not None:
-                    atomic_write_bytes(target, source.read_bytes())
-        finally:
-            shutil.rmtree(self.turn_dir, ignore_errors=True)
-
-
 def bind_state(
-    tool: CliAgentInfo, home: Path | None = None, *, input_only: bool = False
-) -> ProviderState:
-    """What a turn of ``tool`` binds of this device's store, and how it ends.
+    tool: CliAgentInfo, home: Path | None = None
+) -> tuple[EnvironmentMount, ...]:
+    """What a turn of ``tool`` binds of this device's store.
 
     A persisted directory is created in the store, so a first turn can fill
     it, and bound at its place under the state root. A persisted file is
-    bound only once it exists, because a provider that finds an empty
-    credentials file does not read it as being logged out. A provider that
-    renames files into its state root (``writable_root``) gets a directory
-    of its own as the root, with the persisted directories bound under it
-    and the persisted files copied into it; nothing else of the store is in
-    it, and nothing else of it goes back.
+    bound only once it exists.
     """
     provision = tool.provision
     store = provider_state_dir(tool)
     root = f"{guest_home(home)}/{provision.state_root}"
-    turn_dir = _turn_dir(tool) if provision.writable_root or input_only else None
-    mounts = [] if turn_dir is None else [EnvironmentMount(root, turn_dir, False)]
-    for entry in _entries(tool, input_only=input_only):
-        name = entry.rstrip("/")
-        host = _inside(store, name)
+    mounts = []
+    for entry in provision.persisted:
+        host = _inside(store, entry.rstrip("/"))
         if host is None:
             continue
         if entry.endswith("/"):
             host.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if turn_dir is not None:  # The mount point, under the turn's root.
-                (turn_dir / name).mkdir(parents=True, exist_ok=True, mode=0o700)
         elif not host.is_file():
             continue
-        elif turn_dir is not None:
-            atomic_write_bytes(turn_dir / name, host.read_bytes())
-            continue
-        mounts.append(EnvironmentMount(f"{root}/{name}", host, False))
-    if input_only:
-        return ProviderState(tuple(mounts), tool, turn_dir, input_only=True)
+        mounts.append(EnvironmentMount(f"{root}/{entry.rstrip('/')}", host, False))
     cache = cache_dir()
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))
-    return ProviderState(tuple(mounts), tool, turn_dir)
-
-
-def _entries(tool: CliAgentInfo, *, input_only: bool) -> tuple[str, ...]:
-    """What of the store a turn holds: the persisted entries, or only the
-    login for a turn that evaluates input -- and never a brokered login,
-    which a turn is lent instead."""
-    provision = tool.provision
-    if not input_only:
-        return provision.persisted
-    brokered = provision.credential_broker is not None
-    return () if brokered or not provision.auth else (provision.auth,)
-
-
-def _turn_dir(tool: CliAgentInfo) -> Path:
-    """An empty directory of this turn's own, beside the provider's store.
-
-    What a killed run left behind is removed here, because a turn directory
-    is only ever read by the turn that owns it and the copy back happens at
-    that turn's end.
-    """
-    turns = get_machine_state_path(*STATE_ROOT, tool.name, TURNS_DIR)
-    turns.mkdir(parents=True, exist_ok=True, mode=0o700)
-    stale = time.time() - _STALE_TURN_SECONDS
-    for left in turns.iterdir():
-        with suppress(OSError):  # A turn starting beside this one may win it.
-            if left.is_dir() and left.stat().st_mtime < stale:
-                shutil.rmtree(left, ignore_errors=True)
-    return Path(tempfile.mkdtemp(dir=turns))
+    return tuple(mounts)
 
 
 def login_spec(
     tool: CliAgentInfo, declaration: ToolchainDeclaration, home: Path | None = None
 ) -> AgentEnvironmentSpec:
-    """The environment the provider's login command runs in.
-
-    The whole store is bound at the provider's state root, so whatever the
-    login writes -- the credentials first of all -- lands in the store. A
-    brokered login lands in memory instead, and :func:`login` takes it out.
-    """
-    store = provider_state_dir(tool)
-    store.mkdir(parents=True, exist_ok=True, mode=0o700)
+    """The environment the provider's login command runs in: its state root
+    in memory, where :func:`login` takes the login out of."""
     return _state_root_spec(
         tool,
-        None if tool.provision.credential_broker else store,
         EnvironmentNetwork(
             unrestricted=True,
             domains=(),
@@ -343,18 +235,15 @@ def login_spec(
 
 
 def _state_root_spec(
-    tool: CliAgentInfo,
-    root: Path | None,
-    network: EnvironmentNetwork,
-    home: Path | None = None,
+    tool: CliAgentInfo, network: EnvironmentNetwork, home: Path | None = None
 ) -> AgentEnvironmentSpec:
-    """An environment of the tool's state root alone: ``root`` bound at it,
-    or memory when None, and nothing else of the device."""
+    """An environment of the tool's state root alone, in memory, and nothing
+    else of the device."""
     guest = guest_home(home)
     return AgentEnvironmentSpec(
         cwd=guest,
         home=guest,
-        mounts=(EnvironmentMount(f"{guest}/{tool.provision.state_root}", root, False),),
+        mounts=(EnvironmentMount(f"{guest}/{tool.provision.state_root}", None, False),),
         network=network,
         env=tool.provision.environment(guest),
     )
@@ -415,9 +304,8 @@ async def login(
         try:
             await asyncio.gather(pump(process.stdout), pump(process.stderr))
             code = await process.wait()
-            if code == 0 and tool.provision.credential_broker is not None:
+            if code == 0:
                 await _keep_login(tool, environment)
-            if code == 0 and has_credentials(tool):
                 record_authentication_outcome(tool, failed=False)
             return code
         finally:
@@ -516,16 +404,17 @@ class LentLogin:
 
     @property
     def _login(self) -> Any:
-        return json.loads(self.files[self._tool.provision.auth])
+        return _parsed(self.files[self._tool.provision.auth])
 
     def stand_in_files(self) -> dict[str, bytes]:
         """The login files a turn holds, built from the named fields only:
         the stand-in for the access token, an expiry the turn never reaches,
         and the non-secret fields the catalog names -- never a refresh token
-        (an empty one at most), nor any other credential the file holds. Nothing for a tool that
-        takes its stand-in from a command (:meth:`stand_in_environment`)."""
+        (an empty one at most), nor any other credential the file holds.
+        Nothing for a tool that takes its stand-in from a command or a
+        variable (:meth:`stand_in_environment`)."""
         broker = self._broker
-        if broker.stand_in_command_env:
+        if broker.stand_in_command_env or broker.stand_in_env:
             return {}
         login = self._login
         held: dict[str, Any] = {}
@@ -547,9 +436,11 @@ class LentLogin:
 
     def stand_in_environment(self) -> dict[str, str]:
         """What a turn is told, for a tool that takes its stand-in from a
-        command: the command that prints it and a lifetime the turn never
-        reaches."""
+        variable, or from a command: the command that prints it and a
+        lifetime the turn never reaches."""
         broker = self._broker
+        if broker.stand_in_env:
+            return {broker.stand_in_env: self.stand_in}
         if not broker.stand_in_command_env:
             return {}
         printed = json.dumps(
@@ -573,6 +464,9 @@ class LentLogin:
             if self._failure is None and refused is not None and self._refreshed:
                 # The provider refuses the login it has just refreshed.
                 self._failure = CredentialUnavailableError(_refresh_failed(self._tool))
+            if self._failure is None and not self._broker.refresh:
+                # A login that never expires is refused once it is revoked.
+                self._failure = CredentialUnavailableError(_refused(self._tool))
             if self._failure is not None:
                 raise self._failure
             try:
@@ -706,7 +600,6 @@ async def _boot_login_environment(
     """
     spec = _state_root_spec(
         tool,
-        None,
         EnvironmentNetwork(
             unrestricted=False,
             domains=tool.provision.api_domains,
@@ -809,20 +702,30 @@ def _account_login(
     """
     if auth not in files:
         raise ValueError("no credentials file")
-    document = json.loads(files[auth])
+    document = _parsed(files[auth])
     token = _at(document, broker.access_token)
-    refresh = _at(document, broker.refresh_token)
     if not isinstance(token, str) or not token:
         raise ValueError("no access token")
-    if not isinstance(refresh, str) or not refresh:
-        raise ValueError("no refresh token")
+    if broker.refresh_token:
+        refresh = _at(document, broker.refresh_token)
+        if not isinstance(refresh, str) or not refresh:
+            raise ValueError("no refresh token")
+    if not broker.expires_at:  # A login that lasts until it is revoked.
+        return token, math.inf
     return token, _expires(broker, _at(document, broker.expires_at))
+
+
+def _parsed(data: bytes) -> Any:
+    """A credentials file as JSON, after the lines of comments a tool may
+    write above it (Copilot's)."""
+    lines = data.decode().splitlines()
+    return json.loads("\n".join(x for x in lines if not x.lstrip().startswith("//")))
 
 
 def _expired(broker: CredentialBroker, data: bytes) -> bytes:
     """The credentials file ``data`` as the tool reads a login that has
     expired, so that it refreshes it; everything else of it as it was."""
-    document = json.loads(data)
+    document = _parsed(data)
     path = _resolved(document, broker.expires_at)
     _put(document, path, _expiry(broker, 0, _at(document, path)))
     return json.dumps(document).encode()
@@ -865,7 +768,7 @@ def _minted(broker: CredentialBroker, login: Any) -> str:
     of the account, and an expiry the turn never reaches."""
     secret = secrets.token_urlsafe(32)
     if broker.expires_format != "jwt":
-        return "guildbotics-stand-in-" + secret
+        return broker.stand_in_prefix + secret
     account = _claims(_at(login, broker.stand_in_claims_from))
     claims: dict[str, Any] = {}
     for path in broker.stand_in_claims:
@@ -928,6 +831,14 @@ def _at(document: Any, path: tuple[str, ...]) -> Any:
             return None
         document = document.get(key)
     return document
+
+
+def _refused(tool: CliAgentInfo) -> str:
+    return t(
+        "intelligences.agent_environment.tool.login_refused",
+        tool=tool.label,
+        command=login_command(tool.name),
+    )
 
 
 def _refresh_failed(tool: CliAgentInfo) -> str:

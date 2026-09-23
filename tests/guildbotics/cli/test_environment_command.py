@@ -278,23 +278,6 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     assert saved in _invoke(workspace, "status").output
 
 
-def test_login_that_stores_nothing_is_an_error(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = snapshot.snapshots_dir(workspace) / snapshot_name(ImageStatus())
-    path.mkdir(parents=True)
-
-    async def fake_login(*_: Any, **__: Any) -> int:
-        return 0
-
-    monkeypatch.setattr(provider_state, "login", fake_login)
-
-    result = _invoke(workspace, "login", "claude")
-
-    assert result.exit_code != 0
-    assert "stored no credentials" in result.output
-
-
 def test_remove_lists_what_it_dropped(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

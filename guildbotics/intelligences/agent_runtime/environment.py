@@ -46,7 +46,6 @@ from guildbotics.intelligences.agent_environment.spec import (
     GUEST_HOST_ALIAS,
     AgentEnvironmentSpec,
     EnvironmentMount,
-    EnvironmentNetwork,
     build_environment_spec,
     guest_home,
 )
@@ -120,38 +119,33 @@ async def start_turn_environment(
     tool, where = _ready(tool_name)
     home = guest_home()
     broker = tool.provision.credential_broker
-    lent = _lend(tool, where) if broker is not None else None
-    gateway = (
-        CredentialGateway(broker, lent.access_token, lent.stand_in)
-        if broker is not None and lent is not None
-        else None
-    )
-    state = bind_state(tool, input_only=context.input_only)
+    assert broker is not None
+    lent = _lend(tool, where)
+    gateway = CredentialGateway(broker, lent.access_token, lent.stand_in)
+    await gateway.start()
     try:
-        if gateway is not None:
-            await gateway.start()
         spec = build_environment_spec(
             context.contract,
             context.cwd,
-            host_ports=(*host_ports, *((gateway.port,) if gateway else ())),
-            # A brokered tool reaches its API through the gateway only: what
-            # it would send straight to the provider carries the stand-in.
+            host_ports=(*host_ports, gateway.port),
+            # The tool reaches its API through the gateway only: what it would
+            # send straight to the provider carries the stand-in.
             provider_domains=tool.provision.turn_domains,
             env={
                 **_PROVIDER_ENV,
                 **tool.provision.environment(home),
-                **(gateway.turn_environment() if gateway else {}),
-                **({"SSL_CERT_FILE": _TURN_CAS} if broker and broker.tls else {}),
-                **(lent.stand_in_environment() if lent else {}),
+                **gateway.turn_environment(),
+                **({"SSL_CERT_FILE": _TURN_CAS} if broker.tls else {}),
+                **lent.stand_in_environment(),
                 **env,
             },
             nameservers=where.nameservers,
-            mounts=(*state.mounts, *mounts),
+            # A turn that evaluates input holds nothing of the store: no
+            # session, no account, no cache.
+            mounts=(*(() if context.input_only else bind_state(tool)), *mounts),
         )
     except BaseException:
-        state.release()
-        if gateway is not None:
-            await gateway.close()
+        await gateway.close()
         raise
     relays: list[EnvironmentProcess] = []
 
@@ -161,22 +155,13 @@ async def start_turn_environment(
         for relay in relays:
             with suppress(TimeoutError):
                 await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
-        if gateway is not None:
-            await gateway.close()
+        await gateway.close()
 
     try:
-        environment = await _start(
-            spec,
-            where,
-            on_close=state.release,
-            before_stop=close_gateway if gateway else None,
-        )
+        environment = await _start(spec, where, before_stop=close_gateway)
     except BaseException:
-        if gateway is not None:
-            await gateway.close()
+        await gateway.close()
         raise
-    if broker is None or lent is None or gateway is None:
-        return environment
     root = f"{home}/{tool.provision.state_root}"
     try:
         for name, data in lent.stand_in_files().items():
@@ -239,39 +224,18 @@ async def _relay(
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:
     """Boot an environment for asking the tool about itself: its usage, its
-    model catalog. Only the tool's state is bound, and only its API is open.
-
-    A brokered tool is asked where its login is: in an environment that
+    model catalog. It is asked where its login is: in an environment that
     holds it in memory and nothing else (see ``provider_state``).
     """
     tool, where = _ready(tool_name)
-    if tool.provision.credential_broker is not None:
-        try:
-            return await start_login_environment(tool, where)
-        except CredentialUnavailableError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
-            ) from exc
-        except AgentEnvironmentError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS, str(exc)
-            ) from exc
-    home = guest_home()
-    state = bind_state(tool)
-    spec = AgentEnvironmentSpec(
-        cwd=home,
-        home=home,
-        mounts=state.mounts,
-        network=EnvironmentNetwork(
-            unrestricted=False,
-            domains=tool.provision.api_domains,
-            host_ports=(),
-            local_network=False,
-            nameservers=where.nameservers,
-        ),
-        env={**_PROVIDER_ENV, **tool.provision.environment(home)},
-    )
-    return await _start(spec, where, on_close=state.release)
+    try:
+        return await start_login_environment(tool, where)
+    except CredentialUnavailableError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
+        ) from exc
+    except AgentEnvironmentError as exc:
+        raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 
 
 def _lend(tool: CliAgentInfo, where: LoginEnvironment) -> LentLogin:
@@ -323,8 +287,7 @@ async def _start(
     spec: AgentEnvironmentSpec,
     where: LoginEnvironment,
     *,
-    on_close: Callable[[], None],
-    before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
+    before_stop: Callable[[AgentEnvironment], Awaitable[None]],
 ) -> AgentEnvironment:
     try:
         return await AgentEnvironment.start(
@@ -332,7 +295,6 @@ async def _start(
             snapshot=str(where.snapshot),
             memory_mib=where.memory_mib,
             cpus=where.cpus,
-            on_close=on_close,
             before_stop=before_stop,
         )
     except AgentEnvironmentError as exc:

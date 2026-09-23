@@ -348,7 +348,7 @@ _ELSEWHERE = CredentialBroker(
     expires_at=("e",),
     upstream="https://api.example.test",
     routes=("POST /v1/generate", "GET https://profile.example.test/me"),
-    base_url_env="API_URL",
+    base_url_env=("API_URL",),
     tls=True,
     relayed_hosts=("profile.example.test",),
     refresh=("tool", "refresh"),
@@ -413,3 +413,34 @@ async def test_a_tool_that_takes_https_only_trusts_the_turns_ca_for_its_names_on
                 )
     finally:
         await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_a_login_refused_that_cannot_be_refreshed_is_answered_once() -> None:
+    """A login that never refreshes is not sent again once refused: the
+    guest is told to log in again."""
+    upstream = _Upstream(_answer(401))
+
+    class Revoked(_Tokens):
+        async def __call__(self, refused: str | None) -> str:
+            self.asked.append(refused)
+            if refused is not None:
+                raise CredentialUnavailableError("log in again")
+            return REAL
+
+    gateway = CredentialGateway(
+        BROKER, Revoked(), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    await gateway.start()
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"http://127.0.0.1:{gateway.port}/v1/messages",
+                headers={"authorization": f"Bearer {STAND_IN}"},
+            )
+    finally:
+        await gateway.close()
+
+    assert response.status_code == 401
+    assert response.json()["error"]["message"] == "log in again"
+    assert len(upstream.requests) == 1

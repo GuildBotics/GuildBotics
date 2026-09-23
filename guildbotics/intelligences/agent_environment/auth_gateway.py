@@ -114,10 +114,9 @@ class CredentialGateway:
     def turn_environment(self) -> dict[str, str]:
         """What the tool inside the turn is told: where its API is."""
         scheme = "https" if self._broker.tls else "http"
+        url = f"{scheme}://{GUEST_HOST_ALIAS}:{self.port}{self._broker.base_url_path}"
         return {
-            self._broker.base_url_env: (
-                f"{scheme}://{GUEST_HOST_ALIAS}:{self.port}{self._broker.base_url_path}"
-            ),
+            **dict.fromkeys(self._broker.base_url_env, url),
             **dict(self._broker.turn_environment),
         }
 

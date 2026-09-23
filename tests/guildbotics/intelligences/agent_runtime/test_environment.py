@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from guildbotics.intelligences.agent_runtime import environment, windows_job
-from guildbotics.intelligences.cli_agents import CliAgentInfo, CliAgentProvision
 
 
 class _Process:
@@ -211,8 +210,9 @@ def test_agent_runtime_has_one_subprocess_creation_boundary() -> None:
 async def test_input_only_environment_does_not_mount_the_workspace(
     tmp_path, monkeypatch
 ):
-    from types import SimpleNamespace
-
+    """A turn that evaluates input sees the input only: no workspace, none of
+    the provider's store, closed egress."""
+    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.contract import AccessContract
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
@@ -223,31 +223,22 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         ConversationKey,
     )
 
-    tool = CliAgentInfo(
-        name="plain",
-        provision=CliAgentProvision(
-            package="plain@1",
-            state_root=".plain",
-            auth="auth.json",
-            persisted=("auth.json",),
-            api_domains=("api.plain.test",),
-        ),
-    )
+    tool = environment.cli_agent_info("claude")
     where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
     monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
-    state = SimpleNamespace(
-        mounts=(EnvironmentMount("/auth", tmp_path / "credentials", False),),
-        release=lambda: None,
-    )
+    sealed = {tool.provision.auth: json.dumps(_LOGINS["claude"]).encode()}
+    monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
 
-    def bind(selected, *, input_only):
-        assert input_only and selected == tool
-        return state
+    class Booted:
+        def __init__(self, spec, before_stop):
+            self.spec = spec
+            self.before_stop = before_stop
 
-    monkeypatch.setattr(environment, "bind_state", bind)
+        async def write_file(self, path, data):
+            pass
 
-    async def start(spec, *args, **kwargs):
-        return spec
+    async def start(spec, at, *, before_stop):
+        return Booted(spec, before_stop)
 
     monkeypatch.setattr(environment, "_start", start)
     context = AgentExecutionContext(
@@ -256,19 +247,20 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         cwd=tmp_path / "repository",
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "plain", "manual", "judge"),
+        conversation_key=ConversationKey("aiko", "claude", "manual", "judge"),
         contract=AccessContract(input_only=True),
     )
-    spec = await environment.start_turn_environment(
-        context, "plain", host_ports=(1234,), env={}
+    booted = await environment.start_turn_environment(
+        context, "claude", host_ports=(1234,), env={}
     )
-    assert spec.mounts == (
-        EnvironmentMount(guest_path(context.cwd), None, True),
-        *state.mounts,
-    )
-    assert not spec.network.unrestricted and not spec.network.local_network
-    assert spec.network.domains == tool.provision.api_domains
-    assert spec.network.host_ports == (1234,)
+    try:
+        spec = booted.spec
+        assert spec.mounts == (EnvironmentMount(guest_path(context.cwd), None, True),)
+        assert not spec.network.unrestricted and not spec.network.local_network
+        assert spec.network.domains == ()
+        assert spec.network.host_ports[0] == 1234
+    finally:
+        await booted.before_stop(booted)
 
 
 def _jwt(claims: dict[str, object]) -> str:
@@ -310,6 +302,11 @@ _LOGINS = {
             "accessToken": "REAL-SYNTHETIC-459",
             "refreshToken": "REFRESH-SYNTHETIC-459",
             "expiresAt": 4102444800000,
+        }
+    },
+    "copilot": {
+        "authTokens": {
+            "https://github.com:synthetic459": {"token": "REAL-SYNTHETIC-459"}
         }
     },
     "grok": {
@@ -368,9 +365,8 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
             self.killed = True
 
     class Booted:
-        def __init__(self, spec, on_close, before_stop):
+        def __init__(self, spec, before_stop):
             self.spec = spec
-            self.on_close = on_close
             self.before_stop = before_stop
             self.files: dict[str, bytes] = {
                 "/etc/ssl/certs/ca-certificates.crt": b"SYSTEM-CAS",
@@ -391,11 +387,10 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
 
         async def close(self):
             await self.before_stop(self)
-            self.on_close()
 
-    async def start(spec, at, *, on_close, before_stop):
+    async def start(spec, at, *, before_stop):
         assert at is where
-        return Booted(spec, on_close, before_stop)
+        return Booted(spec, before_stop)
 
     monkeypatch.setattr(environment, "_start", start)
     context = AgentExecutionContext(
@@ -414,7 +409,7 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
 
     spec = booted.spec
     scheme = "https" if broker.tls else "http"
-    base_url = spec.env[broker.base_url_env]
+    (base_url,) = {spec.env[variable] for variable in broker.base_url_env}
     port = int(base_url.removesuffix(broker.base_url_path).rsplit(":", 1)[1])
     assert base_url == f"{scheme}://{GUEST_HOST_ALIAS}:{port}{broker.base_url_path}"
     assert spec.network.host_ports == (1234, port)
@@ -430,7 +425,10 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     ):
         assert secret.encode() not in held
     auth = f"{guest_home()}/{tool.provision.state_root}/{tool.provision.auth}"
-    if broker.stand_in_command_env:
+    if broker.stand_in_env:
+        assert auth not in booted.files
+        stand_in = spec.env[broker.stand_in_env]
+    elif broker.stand_in_command_env:
         assert auth not in booted.files
         command = spec.env[broker.stand_in_command_env]
         stand_in = json.loads(command.removeprefix("echo '").removesuffix("'"))[

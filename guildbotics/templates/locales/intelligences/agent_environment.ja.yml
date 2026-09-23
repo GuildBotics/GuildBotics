@@ -53,6 +53,7 @@ ja:
     credentials_corrupt: "この端末に保存された %{tool} のログインを開けません。`%{command}` で再ログインしてください。"
     login_not_an_account: "%{tool} のログインは完了しましたが、GuildBotics が保管できるアカウントのログインではありませんでした。アカウントでログインしてください。"
     refresh_failed: "この端末の %{tool} のログインを更新できませんでした。`%{command}` で再ログインしてください。"
+    login_refused: "%{tool} がこの端末のログインを受け付けませんでした。`%{command}` で再ログインしてください。"
   grants:
     not_a_domain: "'%{domain}' はドメイン名ではありません"
     allowlist_needs_domain: "mode 'allowlist' には許可ドメインが 1 つ以上必要です"
