@@ -11,7 +11,6 @@ set of words.
 from __future__ import annotations
 
 import os
-import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,13 +26,18 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_shared_grants,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment.credential_vault import (
+    VaultState,
+    vault_problem,
+)
 from guildbotics.intelligences.agent_environment.image import (
     ImageStatus,
     image_status,
 )
 from guildbotics.intelligences.agent_environment.provider_state import (
     authentication_failed,
-    has_credentials,
+    credential_state,
+    login_command,
 )
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentHealth,
@@ -45,7 +49,10 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     load_toolchain,
     upstream_nameservers,
 )
-from guildbotics.intelligences.cli_agents import CLI_AGENTS, CliAgentInfo
+from guildbotics.intelligences.cli_agents import (
+    CLI_AGENTS,
+    CliAgentInfo,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import launching_app_name
 
@@ -74,8 +81,12 @@ class ToolStatus:
     name: str
     label: str
     provisioned: bool
-    credentials_saved: bool
+    credentials: VaultState
     authentication_failed: bool = False
+
+    @property
+    def credentials_saved(self) -> bool:
+        return self.credentials == "saved"
 
     @property
     def problem(self) -> str:
@@ -97,13 +108,9 @@ class ToolStatus:
             return t(
                 "intelligences.agent_environment.tool.not_provisioned", tool=self.label
             )
-        if not self.credentials_saved:
-            return t(
-                "intelligences.agent_environment.tool.credentials_missing",
-                tool=self.label,
-                command=login_command(self.name),
-            )
-        return ""
+        return vault_problem(
+            self.credentials, tool=self.label, command=login_command(self.name)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,30 +281,12 @@ def filesystem_permission_problem(path: Path) -> str:
     return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
-def login_command(name: str, *, platform: str | None = None) -> str:
-    """The terminal login instruction shared by status, alerts, and Desktop.
-
-    Windows installers put the CLI on PATH. Unix Desktop installs it under
-    home; quote its absolute path so spaces and shell metacharacters survive.
-    """
-    if (platform or sys.platform) == "win32":
-        return f"guildbotics environment login {name}"
-    return shlex.join(
-        [
-            str(Path.home() / ".guildbotics/bin/guildbotics"),
-            "environment",
-            "login",
-            name,
-        ]
-    )
-
-
 def _tool_status(agent: CliAgentInfo) -> ToolStatus:
     return ToolStatus(
         name=agent.name,
         label=agent.label,
         provisioned=agent.provision.provisioned,
-        credentials_saved=has_credentials(agent),
+        credentials=credential_state(agent),
         authentication_failed=authentication_failed(agent),
     )
 

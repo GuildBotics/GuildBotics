@@ -5,7 +5,7 @@ import json
 import os
 import socket
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -32,6 +32,7 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.loopback_server import LoopbackServer
 
 
 def _context(tmp_path: Path, *, read_only: bool = False) -> AgentExecutionContext:
@@ -235,7 +236,9 @@ async def test_activate_normalizes_failed_server_task(tmp_path) -> None:
         raise OSError("server failed")
 
     broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
-    broker._serve_task = asyncio.create_task(fail())
+    broker._server = LoopbackServer(
+        cast(Any, None), asyncio.create_task(fail()), port=0
+    )
     await asyncio.sleep(0)
 
     with pytest.raises(

@@ -87,6 +87,15 @@ NOT_SHARED = {
         "one secret value on that same stream; it lands in an OS secret store "
         "and never in the shared history"
     ),
+    "guildbotics/intelligences/agent_environment/auth_gateway.py:_MAX_REQUEST_BYTES": (
+        "a turn's API request passing through the credential gateway in memory"
+    ),
+    "guildbotics/intelligences/agent_environment/credential_vault.py:_KEY_BYTES": (
+        "the length of the device's sealing key, kept in the OS keychain"
+    ),
+    "guildbotics/intelligences/agent_environment/credential_vault.py:_NONCE_BYTES": (
+        "the AES-GCM nonce of a login sealed on this device only"
+    ),
     "guildbotics/intelligences/agent_runtime/antigravity.py:_LOG_TAIL_BYTES": (
         "how much of an agent's log is read back after a failure"
     ),

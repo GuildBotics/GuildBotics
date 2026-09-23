@@ -283,19 +283,75 @@ The settings card always offers the login command and copy action, including whe
 credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
 absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
 updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
-only reports file presence, not validity. Structured authentication failures from
+only reports file presence (for Claude Code, that its sealed login opens), not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
 both the card and alerts through `status.py`. A completed login that leaves
 credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
-not startup refusals, so another turn can retry. No authentication probe or token
-refresh is performed by GuildBotics.
+not startup refusals, so another turn can retry. For every tool but Claude Code, no
+authentication probe or token refresh is performed by GuildBotics.
 Each tool refreshes its own tokens during a turn, so its refresh endpoint is among the
 provider domains every turn reaches, and its credentials are bound so that a refresh is
 written back to the store. A file bind follows a file rewritten in place, but renaming
 another file over it fails. Grok Build renames its credentials into place, so they
 live in a directory of their own (`~/.grok/auth/auth.json`, set through
 `GROK_AUTH_PATH`) that is bound whole.
+
+### Logins kept outside the microVM (Claude Code)
+
+Claude Code's login is kept neither in a turn's microVM nor in a plain file on the
+device. This is a transition: the other tools are still bound from the store as above
+([#459](https://github.com/GuildBotics/GuildBotics/issues/459)).
+
+- **Where it is kept**: `guildbotics environment login claude` runs with the state root
+  (`~/.claude`) in the microVM's memory (tmpfs). The `.credentials.json` the login leaves
+  is taken out through the runtime's file transfer while the environment still runs,
+  sealed with AES-GCM under a key in the device's keychain, and written to
+  `~/.guildbotics/data/agent_environment/claude/login.sealed`. The record binds the tool,
+  the account, and the format as authenticated data, so it never opens as anything else.
+  The account file (`.claude.json`) holds no secret and stays in the store, bound into
+  turns. None of it is a workspace secret, and none of it travels through Git or a Hub.
+- **What a turn holds**: the turn's microVM gets a credentials file whose access token is
+  replaced by a stand-in minted for the turn, whose refresh token is removed, and whose
+  expiry is far away. Claude Code is pointed at a gateway in the GuildBotics process
+  (`auth_gateway.py`) through `ANTHROPIC_BASE_URL`, and the turn's network policy opens
+  only the gateway's host port. Anthropic's domains are not open to the turn (the stand-in
+  authenticates nothing there anyway). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set.
+- **The gateway** forwards only `POST /v1/messages` and `POST /v1/messages/count_tokens`
+  carrying that turn's stand-in, only to `https://api.anthropic.com`, and replaces only the
+  `Authorization` header with the real token. The guest's `Host`, `x-api-key`, and `cookie`
+  are not sent. Redirects are handed back, never followed. Every other destination, route,
+  or value is refused before it reaches the upstream. When the turn's microVM stops, the
+  gateway stops, and the stand-in opens nothing. When the upstream answers 401, the login
+  is refreshed once and the request sent again.
+- **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
+  endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
+  an environment of their own that holds the login in memory, mounts no working directory
+  or workspace, and reaches the provider's domains only. A refresh gives it the login marked
+  as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
+  the environment is stopped. The gateway asks for a refresh five minutes before expiry or
+  when the upstream refuses the token. That environment runs one at a time on the device,
+  across processes (`login.sealed.lock`), so a refresh token is never spent twice. Turns
+  themselves are not serialized, so turns of the same account run side by side. A refreshed
+  login that cannot be saved is not continued on the old one: it is recorded as an
+  authentication failure and asks for a new login.
+- **State**: a locked or unavailable keychain, a missing key, and a record that does not
+  open are told apart from a missing login, in the same words `status.py` gives the CLI,
+  the Desktop, and a refused turn. Nothing falls back to plain text.
+- **Switching over**: the earlier plain file
+  `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json` is neither read
+  nor bound. Log in again with `guildbotics environment login claude`, then delete that
+  file (macOS / Linux: `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`;
+  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`).
+  GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
+  the sessions (`projects/`) and the cache alone. Copies in past backups cannot be erased.
+- **Recovery**: when the state says the keychain is locked, unlock it; when it says the
+  login cannot be used, fix the keychain or the disk (free space, for one) and try again.
+  A login that cannot be opened (a missing or broken key or record) and a failed refresh
+  are replaced by logging in again with `guildbotics environment login claude`.
+- **What remains**: a compromised turn can still use the allowed API through the gateway
+  while it runs, spend the account's quota, and put data into allowed request bodies. This
+  does not protect against the host's memory or its administrator.
 
 GitHub Copilot renames `config.json` into place at its state root at every start and
 can be pointed nowhere but `COPILOT_HOME`, so a file bound there makes the CLI exit

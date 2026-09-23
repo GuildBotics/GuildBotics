@@ -224,17 +224,66 @@ loginの無いprint mode実行がGoogleのサインインURLを表示して認�
 設定カードには、認証情報が保存済みでもログインコマンドとコピー操作が表示されます。
 macOS / Linuxでは管理CLIの絶対パス、WindowsではPATH上の`guildbotics`を使います。
 カードを開いている間、状態は10秒ごとに自動更新されます。**状態を更新** ですぐに読み直すこともできます。
-**認証情報保存済み** はファイルの存在だけを表し、有効性の確認ではありません。
+**認証情報保存済み** はファイルの存在（Claude Codeは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
 turnの構造化された認証失敗は、端末・ツールごとにプロバイダのマウント領域の外へ保持し、
 `status.py`を通じてカードとalertへ反映します。認証情報が残るログイン完了、または別メンバーを
 含む後続の正常実行で解除します。それ以外のエラーは前回の認証結果を変えません。
 過去の認証失敗は案内として扱い、turnの起動を拒否しないため、再試行できます。
-GuildBoticsによる認証probeやトークン更新は行いません。
+Claude Code以外のツールでは、GuildBoticsによる認証probeやトークン更新は行いません。
 トークンの更新はツール自身がturnの中で行います。そのため、各ツールの更新先はturnが常に届く
 プロバイダのドメインに含め、更新した認証情報がstoreへ書き戻されるようにbindします。
 ファイル単位のbindは上書きには追従しますが、別ファイルをrenameで重ねる置き換えは失敗します。
 認証情報をrenameで置き換えるGrok Buildは、認証情報を専用ディレクトリ
 （`~/.grok/auth/auth.json`、`GROK_AUTH_PATH`で指定）に置き、ディレクトリごとbindします。
+
+### VMの外で管理するログイン（Claude Code）
+
+Claude Codeのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
+移行中の構成で、他のツールは上記のとおりstoreからbindします（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。
+
+- **保存場所**: `guildbotics environment login claude`は、state root（`~/.claude`）をmicroVMの
+  メモリ（tmpfs）に置いて動きます。ログインが残した`.credentials.json`は、環境が動いている間に
+  runtimeのファイル転送で取り出し、端末のキーチェーンにある鍵でAES-GCMで暗号化して
+  `~/.guildbotics/data/agent_environment/claude/login.sealed`に保存します。暗号文には
+  ツール・アカウント・形式を認証付きデータとして結び付けるため、別のものとしては開けません。
+  アカウント情報（`.claude.json`）は秘密を含まないためstoreに置き、turnへbindします。
+  Workspaceの共有Secret・Git・Hubの配布対象ではありません。
+- **turnが持つもの**: turnのmicroVMには、アクセストークンを置換用の値（turnごとに生成）に
+  差し替え、refresh tokenを取り除き、期限を十分先にした認証ファイルだけを書き込みます。
+  Claude Codeは`ANTHROPIC_BASE_URL`でGuildBoticsプロセス内のゲートウェイ
+  （`auth_gateway.py`）を指し、turnのnetwork policyはゲートウェイのhost portだけを開けます。
+  Anthropicのドメインはturnからは開けません（置換用の値は直接送っても認証に使えません）。
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`を渡します。
+- **ゲートウェイ**: そのturnの置換用の値を持つ`POST /v1/messages`と
+  `POST /v1/messages/count_tokens`だけを`https://api.anthropic.com`へ転送し、
+  `Authorization`ヘッダーだけを実トークンに差し替えます。guestの`Host`・`x-api-key`・
+  `cookie`は送りません。redirectは辿らずにそのまま返します。それ以外の宛先・経路・値は
+  upstreamへ届く前に拒否します。turnのmicroVMが止まるとゲートウェイも止まり、置換用の値は
+  何にも使えなくなります。upstreamが401を返したら1回だけ更新して再送します。
+- **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
+  ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
+  この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
+  更新では期限切れと伝えたログインを渡して`claude -p /usage`を実行し、更新されたログインを
+  環境を止める前に取り出して暗号化保存します。ゲートウェイは期限の5分前、またはupstreamに
+  拒否されたときに更新を要求します。この環境はprocessをまたいで端末に1つだけ動くように
+  直列化し（`login.sealed.lock`）、同じrefresh tokenを2回使うことはありません。turn全体は
+  直列化しないので、同じアカウントのturnは並行して動きます。更新済みのログインを保存できない
+  場合は古いログインで続けず、認証失敗として再ログインを求めます。
+- **状態**: キーチェーンのロック・利用不可・鍵の欠損・保存データの破損は、未ログインと区別して
+  `status.py`から同じ文言でCLI・Desktop・turnの拒否に表示します。平文へのフォールバックは
+  ありません。
+- **切り替え**: 旧形式の平文`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`は
+  読みもbindもしません。`guildbotics environment login claude`で再ログインしてから、この平文ファイルを
+  削除してください（macOS / Linux: `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
+  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`）。
+  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`projects/`）や
+  cacheは消さないでください。過去のバックアップに残った平文までは消せません。
+- **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
+  ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と
+  更新失敗は、`guildbotics environment login claude`で再ログインすると新しい保存に置き換わります。
+- **残るリスク**: 侵害されたturnは、実行中にゲートウェイ経由で許可されたAPIを使うこと、
+  利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。
+  hostのメモリやhost管理者に対する保護ではありません。
 
 GitHub Copilotは起動のたびにstate rootの`config.json`をrenameで置き換え、置き場所は
 `COPILOT_HOME`以外に指定できないため、そこへファイルをbindするとCLIが無言で終了します。

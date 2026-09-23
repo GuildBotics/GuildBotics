@@ -346,19 +346,33 @@ def test_what_a_killed_run_left_behind_is_removed_by_the_next_turn(
 def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
     machine: Path, tmp_path: Path
 ) -> None:
+    codex = cli_agent_info("codex")
+    home = tmp_path / "home"
+
+    spec = login_spec(codex, DECLARATION, home)
+
+    guest = guest_path(home.resolve())
+    assert spec.cwd == spec.home == guest
+    assert spec.mounts == (
+        EnvironmentMount(f"{guest}/.codex", provider_state_dir(codex), False),
+    )
+    assert provider_state_dir(codex).is_dir()
+    assert spec.network.unrestricted
+    assert spec.network.nameservers == ("10.0.0.53",)
+    assert spec.env == {"CODEX_HOME": f"{guest}/.codex"}
+
+
+def test_a_brokered_login_lands_in_memory_not_in_the_store(
+    machine: Path, tmp_path: Path
+) -> None:
     claude = cli_agent_info("claude")
     home = tmp_path / "home"
 
     spec = login_spec(claude, DECLARATION, home)
 
     guest = guest_path(home.resolve())
-    assert spec.cwd == spec.home == guest
-    assert spec.mounts == (
-        EnvironmentMount(f"{guest}/.claude", provider_state_dir(claude), False),
-    )
-    assert provider_state_dir(claude).is_dir()
+    assert spec.mounts == (EnvironmentMount(f"{guest}/.claude", None, False),)
     assert spec.network.unrestricted
-    assert spec.network.nameservers == ("10.0.0.53",)
     assert spec.env == {"CLAUDE_CONFIG_DIR": f"{guest}/.claude"}
 
 
@@ -524,7 +538,7 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     assert not provider_state.authentication_failed(codex)
 
 
-@pytest.mark.parametrize("name", ["codex", "claude", "grok", "copilot", "antigravity"])
+@pytest.mark.parametrize("name", ["codex", "grok", "copilot", "antigravity"])
 def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, name):
     tool = cli_agent_info(name)
     store = provider_state_dir(tool)
@@ -544,4 +558,24 @@ def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, name
     (state.turn_dir / tool.provision.auth).write_text("refreshed")
     state.release()
     assert auth.read_text() == "refreshed"
+    assert not state.turn_dir.exists()
+
+
+def test_an_input_only_turn_of_a_brokered_tool_holds_nothing_of_the_store(machine):
+    """Whatever the turn leaves as its credentials file -- the stand-in --
+    never reaches the store."""
+    tool = cli_agent_info("claude")
+    store = provider_state_dir(tool)
+    for entry in tool.provision.persisted:
+        if entry.endswith("/"):
+            (store / entry).mkdir(parents=True, exist_ok=True)
+    state = bind_state(tool, input_only=True)
+    assert state.turn_dir is not None
+    assert [mount.host for mount in state.mounts] == [state.turn_dir]
+    assert not any(state.turn_dir.iterdir())
+    (state.turn_dir / tool.provision.auth).write_text("stand-in")
+
+    state.release()
+
+    assert not (store / tool.provision.auth).exists()
     assert not state.turn_dir.exists()

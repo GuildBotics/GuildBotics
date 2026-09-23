@@ -38,6 +38,55 @@ def _names_a_place_inside(value: str) -> bool:
     )
 
 
+class CredentialBroker(BaseModel):
+    """How a tool's login is kept off the turn's microVM and lent to it.
+
+    The login lives sealed on this device (see ``credential_vault``), and a
+    turn gets a credentials file of the same shape whose access token is a
+    stand-in that authenticates nothing: its refresh token is gone and its
+    expiry is far away, so the tool never tries to refresh it. The tool is
+    pointed at a gateway outside the microVM (``base_url_env``) that accepts
+    only the stand-in, only for ``routes``, and forwards the request to
+    ``upstream`` with the real access token.
+
+    What the gateway cannot reach -- refreshing the login, and the tool's
+    own account endpoints its ``/usage`` reads -- runs in an environment of
+    its own that holds the real credentials in memory and nothing of the
+    user's (``refresh`` is the command that makes the tool refresh a login
+    it is told has expired).
+
+    The token fields are JSON paths into the credentials file ``auth``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: Part of the sealed record's identity, so one shape is never read as
+    #: another's.
+    format: str
+    access_token: tuple[str, ...]
+    refresh_token: tuple[str, ...]
+    #: Milliseconds since the epoch.
+    expires_at_ms: tuple[str, ...]
+    #: The origin the gateway forwards to, and the only one.
+    upstream: str
+    #: ``METHOD /path`` the gateway forwards; a query string is not part of
+    #: the match. Everything else is refused before it leaves the device.
+    routes: tuple[str, ...]
+    base_url_env: str
+    #: What the tool is told beside the gateway's URL.
+    turn_environment: tuple[tuple[str, str], ...] = ()
+    refresh: tuple[str, ...]
+
+    @field_validator("routes")
+    @classmethod
+    def _routes_are_method_and_path(cls, routes: tuple[str, ...]) -> tuple[str, ...]:
+        for route in routes:
+            method, _, path = route.partition(" ")
+            if not method.isupper() or not path.startswith("/") or "?" in path:
+                raise ValueError(f"'{route}' is not 'METHOD /path'")
+        return routes
+
+
 class CliAgentProvision(BaseModel):
     """How a tool is put into the agent environment, and what of it persists.
 
@@ -58,7 +107,9 @@ class CliAgentProvision(BaseModel):
 
     The tool refreshes its login in the middle of turns, so a turn must reach
     the refresh endpoint (it belongs in ``api_domains``) and the refreshed
-    credentials must land in the store. A persisted file is bound as that one
+    credentials must land in the store -- unless the login is brokered
+    (``credential_broker``), when a turn holds none of it and the refresh
+    happens where the login is. A persisted file is bound as that one
     file: the tool may rewrite it in place, but replacing it by renaming
     another file over it fails (``EBUSY``) and the refresh is lost. A tool that
     renames its credentials into place keeps them in a persisted directory of
@@ -97,8 +148,13 @@ class CliAgentProvision(BaseModel):
     login: tuple[str, ...] = ()
     #: The provider's own domains, which every turn may reach whatever its
     #: network mode: the tool is nothing without its API. ``*.example.com``
-    #: is a suffix. GuildBotics' list, not the user's.
+    #: is a suffix. GuildBotics' list, not the user's. A tool whose login is
+    #: brokered reaches them only from the environment that holds its login;
+    #: a turn reaches its API through the gateway instead.
     api_domains: tuple[str, ...] = ()
+    #: A tool whose login never enters a turn's microVM; ``auth`` is then the
+    #: file its login leaves, which is sealed rather than kept.
+    credential_broker: CredentialBroker | None = None
 
     @field_validator("persisted")
     @classmethod
@@ -197,12 +253,15 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # under it beside the credentials, so the whole state sits in one root.
         # Claude Code renames its files into place, but writes them in place
         # when the rename fails, so the bound files keep every refresh.
+        # The login itself is brokered: a turn sends its inference through
+        # ANTHROPIC_BASE_URL, while `/usage` and the refresh talk to the
+        # account endpoints directly and so run where the login is.
         provision=CliAgentProvision(
             package="@anthropic-ai/claude-code@2.1.263",
             state_root=".claude",
             state_root_env="CLAUDE_CONFIG_DIR",
             auth=".credentials.json",
-            persisted=(".credentials.json", ".claude.json", "projects/"),
+            persisted=(".claude.json", "projects/"),
             login=("claude", "auth", "login"),
             # A subscription login refreshes through platform.claude.com.
             api_domains=(
@@ -210,6 +269,26 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 "*.anthropic.com",
                 "claude.ai",
                 "platform.claude.com",
+            ),
+            credential_broker=CredentialBroker(
+                format="claude-oauth",
+                access_token=("claudeAiOauth", "accessToken"),
+                refresh_token=("claudeAiOauth", "refreshToken"),
+                expires_at_ms=("claudeAiOauth", "expiresAt"),
+                upstream="https://api.anthropic.com",
+                routes=("POST /v1/messages", "POST /v1/messages/count_tokens"),
+                base_url_env="ANTHROPIC_BASE_URL",
+                # What else Claude Code sends goes to the account endpoints
+                # with the stand-in, where it can only fail.
+                turn_environment=(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),),
+                refresh=(
+                    "claude",
+                    "-p",
+                    "/usage",
+                    "--output-format",
+                    "json",
+                    "--no-session-persistence",
+                ),
             ),
         ),
     ),

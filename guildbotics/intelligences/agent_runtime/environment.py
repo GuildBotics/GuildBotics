@@ -17,17 +17,30 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-from guildbotics.intelligences.agent_environment.provider_state import bind_state
+from guildbotics.intelligences.agent_environment.auth_gateway import (
+    CredentialGateway,
+    CredentialUnavailableError,
+)
+from guildbotics.intelligences.agent_environment.credential_vault import (
+    CredentialVaultError,
+    vault_problem,
+)
+from guildbotics.intelligences.agent_environment.provider_state import (
+    LentLogin,
+    LoginEnvironment,
+    bind_state,
+    login_command,
+    start_login_environment,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
 )
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentMount,
@@ -36,7 +49,6 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_home,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.intelligences.agent_environment.toolchain import EnvironmentResources
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -87,27 +99,87 @@ async def start_turn_environment(
             ``process`` when the microVM does not start. Nothing is widened:
             a turn that cannot be confined does not run.
     """
-    tool, status, nameservers, resources = _ready(tool_name)
+    tool, where = _ready(tool_name)
     home = guest_home()
-    state = (
-        bind_state(tool, input_only=True) if context.input_only else bind_state(tool)
+    broker = tool.provision.credential_broker
+    lent = _lend(tool, where) if broker is not None else None
+    gateway = (
+        CredentialGateway(broker, lent.access_token)
+        if broker is not None and lent is not None
+        else None
     )
-    spec = build_environment_spec(
-        context.contract,
-        context.cwd,
-        host_ports=host_ports,
-        provider_domains=tool.provision.api_domains,
-        env={**_PROVIDER_ENV, **tool.provision.environment(home), **env},
-        nameservers=nameservers,
-        mounts=(*state.mounts, *mounts),
-    )
-    return await _start(spec, status, resources, on_close=state.release)
+    state = bind_state(tool, input_only=context.input_only)
+    try:
+        if gateway is not None:
+            await gateway.start()
+        spec = build_environment_spec(
+            context.contract,
+            context.cwd,
+            host_ports=(*host_ports, *((gateway.port,) if gateway else ())),
+            # A brokered tool reaches its API through the gateway only: what
+            # it would send straight to the provider carries the stand-in.
+            provider_domains=() if gateway else tool.provision.api_domains,
+            env={
+                **_PROVIDER_ENV,
+                **tool.provision.environment(home),
+                **(gateway.turn_environment() if gateway else {}),
+                **env,
+            },
+            nameservers=where.nameservers,
+            mounts=(*state.mounts, *mounts),
+        )
+    except BaseException:
+        state.release()
+        if gateway is not None:
+            await gateway.close()
+        raise
+    try:
+        environment = await _start(
+            spec,
+            where,
+            on_close=state.release,
+            # The stand-in opens nothing from before the microVM is gone.
+            before_stop=(lambda _: gateway.close()) if gateway else None,
+        )
+    except BaseException:
+        if gateway is not None:
+            await gateway.close()
+        raise
+    if lent is None or gateway is None:
+        return environment
+    root = f"{home}/{tool.provision.state_root}"
+    try:
+        for name, data in lent.stand_in(gateway.stand_in).items():
+            await environment.write_file(f"{root}/{name}", data)
+    except BaseException as exc:
+        await environment.close()
+        if isinstance(exc, AgentEnvironmentError):
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS, str(exc)
+            ) from exc
+        raise
+    return environment
 
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:
     """Boot an environment for asking the tool about itself: its usage, its
-    model catalog. Only the tool's state is bound, and only its API is open."""
-    tool, status, nameservers, resources = _ready(tool_name)
+    model catalog. Only the tool's state is bound, and only its API is open.
+
+    A brokered tool is asked where its login is: in an environment that
+    holds it in memory and nothing else (see ``provider_state``).
+    """
+    tool, where = _ready(tool_name)
+    if tool.provision.credential_broker is not None:
+        try:
+            return await start_login_environment(tool, where)
+        except CredentialUnavailableError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
+            ) from exc
+        except AgentEnvironmentError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS, str(exc)
+            ) from exc
     home = guest_home()
     state = bind_state(tool)
     spec = AgentEnvironmentSpec(
@@ -119,16 +191,24 @@ async def start_probe_environment(tool_name: str) -> AgentEnvironment:
             domains=tool.provision.api_domains,
             host_ports=(),
             local_network=False,
-            nameservers=nameservers,
+            nameservers=where.nameservers,
         ),
         env={**_PROVIDER_ENV, **tool.provision.environment(home)},
     )
-    return await _start(spec, status, resources, on_close=state.release)
+    return await _start(spec, where, on_close=state.release)
 
 
-def _ready(
-    tool_name: str,
-) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...], EnvironmentResources]:
+def _lend(tool: CliAgentInfo, where: LoginEnvironment) -> LentLogin:
+    try:
+        return LentLogin(tool, where)
+    except CredentialVaultError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION,
+            vault_problem(exc.state, tool=tool.label, command=login_command(tool.name)),
+        ) from exc
+
+
+def _ready(tool_name: str) -> tuple[CliAgentInfo, LoginEnvironment]:
     """Everything a start needs from this device, or the reason it cannot start.
 
     The reasons are the device's own words (:mod:`..agent_environment.status`),
@@ -154,23 +234,30 @@ def _ready(
             tool_status.refusal,
         )
     assert status.declaration is not None
-    return tool, status.snapshot, status.dns.nameservers, status.declaration.resources
+    resources = status.declaration.resources
+    return tool, LoginEnvironment(
+        snapshot=status.snapshot.path,
+        memory_mib=resources.memory_mib,
+        cpus=resources.cpus,
+        nameservers=status.dns.nameservers,
+    )
 
 
 async def _start(
     spec: AgentEnvironmentSpec,
-    status: SnapshotStatus,
-    resources: EnvironmentResources,
+    where: LoginEnvironment,
     *,
     on_close: Callable[[], None],
+    before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
 ) -> AgentEnvironment:
     try:
         return await AgentEnvironment.start(
             spec,
-            snapshot=str(status.path),
-            memory_mib=resources.memory_mib,
-            cpus=resources.cpus,
+            snapshot=str(where.snapshot),
+            memory_mib=where.memory_mib,
+            cpus=where.cpus,
             on_close=on_close,
+            before_stop=before_stop,
         )
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc

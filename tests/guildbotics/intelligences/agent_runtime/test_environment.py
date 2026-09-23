@@ -221,9 +221,8 @@ async def test_input_only_environment_does_not_mount_the_workspace(
     )
 
     tool = environment.cli_agent_info("codex")
-    monkeypatch.setattr(
-        environment, "_ready", lambda _: (tool, None, ("1.1.1.1",), None)
-    )
+    where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
+    monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
     state = SimpleNamespace(
         mounts=(EnvironmentMount("/auth", tmp_path / "credentials", False),),
         release=lambda: None,
@@ -258,3 +257,97 @@ async def test_input_only_environment_does_not_mount_the_workspace(
     assert not spec.network.unrestricted and not spec.network.local_network
     assert spec.network.domains == tool.provision.api_domains
     assert spec.network.host_ports == (1234,)
+
+
+@pytest.mark.asyncio
+async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
+    tmp_path, monkeypatch
+):
+    """The turn holds the stand-in, is pointed at the gateway, reaches none of
+    the provider's domains itself, and the stand-in opens nothing once the
+    microVM is gone."""
+    import httpx
+
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_environment.spec import (
+        GUEST_HOST_ALIAS,
+        guest_home,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
+    tool = environment.cli_agent_info("claude")
+    where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
+    monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
+
+    class Lent:
+        async def access_token(self, refused):
+            return "REAL-SYNTHETIC-459"
+
+        def stand_in(self, token):
+            return {tool.provision.auth: f"stand-in {token}".encode()}
+
+    monkeypatch.setattr(environment, "_lend", lambda selected, at: Lent())
+
+    class Booted:
+        def __init__(self, spec, on_close, before_stop):
+            self.spec = spec
+            self.on_close = on_close
+            self.before_stop = before_stop
+            self.files: dict[str, bytes] = {}
+
+        async def write_file(self, path, data):
+            self.files[path] = data
+
+        async def close(self):
+            await self.before_stop(self)
+            self.on_close()
+
+    async def start(spec, at, *, on_close, before_stop):
+        assert at is where
+        return Booted(spec, on_close, before_stop)
+
+    monkeypatch.setattr(environment, "_start", start)
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="turn",
+        cwd=tmp_path / "repository",
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "claude", "manual", "turn"),
+        contract=AccessContract(),
+    )
+
+    booted = await environment.start_turn_environment(
+        context, "claude", host_ports=(1234,), env={"IS_SANDBOX": "1"}
+    )
+
+    spec = booted.spec
+    base_url = spec.env["ANTHROPIC_BASE_URL"]
+    port = int(base_url.rsplit(":", 1)[1])
+    assert base_url == f"http://{GUEST_HOST_ALIAS}:{port}"
+    assert spec.network.host_ports == (1234, port)
+    assert not set(tool.provision.api_domains) & set(spec.network.domains)
+    assert spec.env["IS_SANDBOX"] == "1"
+    ((path, held),) = booted.files.items()
+    assert path == f"{guest_home()}/.claude/{tool.provision.auth}"
+    stand_in = held.decode().removeprefix("stand-in ")
+    assert all(
+        mount.host is None or not str(mount.host).endswith(tool.provision.auth)
+        for mount in spec.mounts
+    )
+    async with httpx.AsyncClient() as guest:
+        answer = await guest.post(
+            f"http://127.0.0.1:{port}/v1/oauth/token",
+            headers={"authorization": f"Bearer {stand_in}"},
+        )
+        assert answer.status_code == 403
+
+        await booted.close()
+        with pytest.raises(httpx.HTTPError):
+            await guest.post(
+                f"http://127.0.0.1:{port}/v1/messages",
+                headers={"authorization": f"Bearer {stand_in}"},
+            )

@@ -81,7 +81,7 @@ def _device(
             name=agent.name,
             label=agent.label,
             provisioned=agent.provision.provisioned,
-            credentials_saved=agent.name in credentials_saved,
+            credentials="saved" if agent.name in credentials_saved else "missing",
         )
         for agent in CLI_AGENTS
     )
@@ -651,7 +651,11 @@ def test_card_and_guidance_share_the_login_command(monkeypatch, home, failed):
 
     original = module.device_status()
     tools = tuple(
-        replace(tool, credentials_saved=failed, authentication_failed=failed)
+        replace(
+            tool,
+            credentials="saved" if failed else "missing",
+            authentication_failed=failed,
+        )
         for tool in original.tools
     )
     monkeypatch.setattr(

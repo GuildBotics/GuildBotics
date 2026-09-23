@@ -11,10 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
-import socket
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,7 +21,6 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
-from uvicorn import Config, Server
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.environment import (
@@ -39,9 +35,9 @@ from guildbotics.runtime.person_lease import (
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
 )
+from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
-_HOST = "127.0.0.1"
 _SCOPE = "member:execute"
 _MAX_ARGUMENTS = 128
 _MAX_ARGUMENT_BYTES = 64 * 1024
@@ -104,14 +100,6 @@ class _ScopedTokenVerifier(TokenVerifier):
         )
 
 
-class _EmbeddedServer(Server):
-    """Run uvicorn without replacing the application's signal handlers."""
-
-    @contextmanager
-    def capture_signals(self) -> Generator[None, None, None]:
-        yield
-
-
 class MemberCapabilityBroker:
     """Expose the active turn's member CLI through authenticated localhost MCP."""
 
@@ -123,8 +111,7 @@ class MemberCapabilityBroker:
         self._context: AgentExecutionContext | None = None
         self._command_lock = asyncio.Lock()
         self._process: asyncio.subprocess.Process | None = None
-        self._server: _EmbeddedServer | None = None
-        self._serve_task: asyncio.Task[None] | None = None
+        self._server: LoopbackServer | None = None
         self._url = ""
         self._port = 0
 
@@ -141,7 +128,7 @@ class MemberCapabilityBroker:
         return MemberBrokerEndpoint(
             name=self._name,
             url=self._url,
-            guest_url=self._url.replace(_HOST, GUEST_HOST_ALIAS, 1),
+            guest_url=self._url.replace(LOOPBACK_HOST, GUEST_HOST_ALIAS, 1),
             port=self._port,
             authorization=f"Bearer {self._token}",
         )
@@ -185,7 +172,7 @@ class MemberCapabilityBroker:
             raise MemberCapabilityBrokerError(
                 "Member capability broker already has an active turn."
             )
-        if self._serve_task is None:
+        if self._server is None:
             try:
                 await self._start()
             except asyncio.CancelledError:
@@ -194,11 +181,11 @@ class MemberCapabilityBroker:
                 raise MemberCapabilityBrokerError(
                     "Member capability broker could not start."
                 ) from exc
-        elif self._serve_task.done():
-            if self._serve_task.cancelled():
+        elif self._server.task.done():
+            if self._server.task.cancelled():
                 cause = None
             else:
-                cause = self._serve_task.exception()
+                cause = self._server.task.exception()
             error = MemberCapabilityBrokerError(
                 "Member capability broker stopped unexpectedly."
             )
@@ -291,104 +278,66 @@ class MemberCapabilityBroker:
         process = self._process
         if process is not None and process.returncode is None:
             await terminate_process_tree(process)
-        server, task = self._server, self._serve_task
+        server = self._server
         self._server = None
-        self._serve_task = None
         self._url = ""
         self._port = 0
         self._token = secrets.token_urlsafe(32)
-        if server is None or task is None:
-            return
-        server.should_exit = True
-        try:
-            await asyncio.wait_for(task, timeout=3.0)
-        except TimeoutError:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        if server is not None:
+            await server.stop()
 
     async def _start(self) -> None:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((_HOST, 0))
-        port = int(sock.getsockname()[1])
-        origin = f"http://{_HOST}:{port}"
-        url = f"{origin}/mcp"
-        mcp = MCPServer(
-            "GuildBotics Member",
-            instructions=(
-                "Use guildbotics_member for every command documented as "
-                "`guildbotics member ...`. Pass only the arguments after `member`."
-            ),
-            token_verifier=_ScopedTokenVerifier(self._token),
-            auth=AuthSettings(
-                issuer_url=AnyHttpUrl(origin),
-                resource_server_url=AnyHttpUrl(url),
-                required_scopes=[_SCOPE],
-            ),
-        )
-
-        @mcp.tool(name="guildbotics_member", structured_output=True)
-        async def guildbotics_member(
-            turn_grant: str, arguments: list[str], stdin: str = ""
-        ) -> MemberCommandResult:
-            """Run a trusted `guildbotics member` capability.
-
-            Pass command tokens after `guildbotics member` in ``arguments`` and
-            include the active prompt's ``turn_grant``. Pass content for
-            ``--content-stdin`` in ``stdin``. Never include shell quoting,
-            redirects, heredocs, `guildbotics`, or `member` itself. A request
-            the broker refuses returns ``exit_code`` 2 with the reason in
-            ``stderr``.
-            """
-            return await self.execute(turn_grant, arguments, stdin)
-
-        app = mcp.streamable_http_app(
-            stateless_http=True,
-            max_request_body_size=_MAX_REQUEST_BYTES,
-            # The Host check keeps a rebinding page from reaching a loopback
-            # server; a turn inside the agent environment names this host by
-            # the gateway's alias, which is as much ours as loopback is.
-            transport_security=TransportSecuritySettings(
-                allowed_hosts=[
-                    f"{_HOST}:*",
-                    "localhost:*",
-                    "[::1]:*",
-                    f"{GUEST_HOST_ALIAS}:*",
-                ]
-            ),
-        )
-        server = _EmbeddedServer(
-            Config(
-                app,
-                host=_HOST,
-                port=port,
-                log_config=None,
-                access_log=False,
-                timeout_graceful_shutdown=1,
+        def app(port: int) -> Any:
+            origin = f"http://{LOOPBACK_HOST}:{port}"
+            mcp = MCPServer(
+                "GuildBotics Member",
+                instructions=(
+                    "Use guildbotics_member for every command documented as "
+                    "`guildbotics member ...`. Pass only the arguments after `member`."
+                ),
+                token_verifier=_ScopedTokenVerifier(self._token),
+                auth=AuthSettings(
+                    issuer_url=AnyHttpUrl(origin),
+                    resource_server_url=AnyHttpUrl(f"{origin}/mcp"),
+                    required_scopes=[_SCOPE],
+                ),
             )
-        )
-        task = asyncio.create_task(server.serve(sockets=[sock]))
-        try:
-            for _ in range(100):
-                if server.started:
-                    break
-                if task.done():
-                    await task
-                await asyncio.sleep(0.01)
-            else:
-                raise RuntimeError("Member capability broker did not start.")
-        except BaseException:
-            server.should_exit = True
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            sock.close()
-            raise
+
+            @mcp.tool(name="guildbotics_member", structured_output=True)
+            async def guildbotics_member(
+                turn_grant: str, arguments: list[str], stdin: str = ""
+            ) -> MemberCommandResult:
+                """Run a trusted `guildbotics member` capability.
+
+                Pass command tokens after `guildbotics member` in ``arguments`` and
+                include the active prompt's ``turn_grant``. Pass content for
+                ``--content-stdin`` in ``stdin``. Never include shell quoting,
+                redirects, heredocs, `guildbotics`, or `member` itself. A request
+                the broker refuses returns ``exit_code`` 2 with the reason in
+                ``stderr``.
+                """
+                return await self.execute(turn_grant, arguments, stdin)
+
+            return mcp.streamable_http_app(
+                stateless_http=True,
+                max_request_body_size=_MAX_REQUEST_BYTES,
+                # The Host check keeps a rebinding page from reaching a loopback
+                # server; a turn inside the agent environment names this host by
+                # the gateway's alias, which is as much ours as loopback is.
+                transport_security=TransportSecuritySettings(
+                    allowed_hosts=[
+                        f"{LOOPBACK_HOST}:*",
+                        "localhost:*",
+                        "[::1]:*",
+                        f"{GUEST_HOST_ALIAS}:*",
+                    ]
+                ),
+            )
+
+        server = await LoopbackServer.start(app)
         self._server = server
-        self._serve_task = task
-        self._url = url
-        self._port = port
+        self._url = f"http://{LOOPBACK_HOST}:{server.port}/mcp"
+        self._port = server.port
 
 
 def _member_cli_command() -> tuple[str, ...]:

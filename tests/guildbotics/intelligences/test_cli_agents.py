@@ -239,10 +239,15 @@ def test_every_provisioned_tool_names_its_api_domains_and_login() -> None:
         assert bool(provision.package) != bool(provision.install), agent.name
         assert provision.api_domains, agent.name
         assert provision.login and provision.auth and provision.state_root, agent.name
-        # Persisted itself, or inside a persisted directory.
-        assert provision.auth in provision.persisted or any(
-            entry.endswith("/") and provision.auth.startswith(entry)
-            for entry in provision.persisted
+        # Persisted itself, or inside a persisted directory -- unless the
+        # login is brokered, when it is sealed and never persisted.
+        brokered = provision.credential_broker is not None
+        assert brokered != (
+            provision.auth in provision.persisted
+            or any(
+                entry.endswith("/") and provision.auth.startswith(entry)
+                for entry in provision.persisted
+            )
         ), agent.name
         expected = (
             {provision.state_root_env: f"/h/{provision.state_root}"}

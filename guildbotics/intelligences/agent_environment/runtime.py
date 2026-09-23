@@ -23,7 +23,14 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Iterator,
+    Sequence,
+)
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -44,6 +51,8 @@ _NAME_PREFIX = "guildbotics-"
 _BUILD_NAME = _NAME_PREFIX + "build"
 #: Size of the empty mount that covers a denied directory.
 _COVER_MIB = 1
+#: Size of a writable in-memory directory: a login's state, never a workspace.
+_SCRATCH_MIB = 64
 #: The exit code reported when the guest process ended without one: the
 #: runtime killed it, or its exec session broke.
 _KILLED = -1
@@ -353,10 +362,12 @@ class AgentEnvironment:
         sandbox: Any,
         spec: AgentEnvironmentSpec,
         on_close: Callable[[], None] | None = None,
+        before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._closed = False
         self._on_close = on_close
+        self._before_stop = before_stop
         self.spec = spec
 
     @classmethod
@@ -368,6 +379,7 @@ class AgentEnvironment:
         memory_mib: int,
         cpus: int,
         on_close: Callable[[], None] | None = None,
+        before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
     ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
@@ -375,7 +387,10 @@ class AgentEnvironment:
         turn outlives the turn. ``on_close`` is what the caller has to do
         once the microVM is gone -- take the provider's persisted state out
         of the turn's directory -- and it runs exactly once, whether the boot
-        failed, the turn ended, or the turn was cancelled.
+        failed, the turn ended, or the turn was cancelled. ``before_stop`` is
+        what it has to take out of the microVM's memory while it still runs
+        (a refreshed login), after its processes have ended; it runs at
+        most once, and not when the boot failed.
         """
         import microsandbox
 
@@ -407,7 +422,7 @@ class AgentEnvironment:
                     cpus=cpus,
                 )
             ) from exc
-        environment = cls(sandbox, spec, on_close)
+        environment = cls(sandbox, spec, on_close, before_stop)
         try:
             await _ipv4_only(sandbox)
         except BaseException:
@@ -449,24 +464,59 @@ class AgentEnvironment:
             ) from exc
         return EnvironmentProcess(handle, limit=limit)
 
+    async def write_file(self, path: str, data: bytes) -> None:
+        """Write ``data`` at the guest ``path`` through the runtime, never
+        through a file of the host's."""
+        try:
+            await self._sandbox.fs.write(path, data)
+        except Exception as exc:
+            raise AgentEnvironmentError(
+                t(
+                    "intelligences.agent_environment.runtime.file_failed",
+                    path=path,
+                    error=exc,
+                )
+            ) from exc
+
+    async def read_file(self, path: str) -> bytes | None:
+        """The guest file at ``path``, or None when there is none."""
+        try:
+            if not await self._sandbox.fs.exists(path):
+                return None
+            return bytes(await self._sandbox.fs.read(path))
+        except Exception as exc:
+            raise AgentEnvironmentError(
+                t(
+                    "intelligences.agent_environment.runtime.file_failed",
+                    path=path,
+                    error=exc,
+                )
+            ) from exc
+
     async def close(self) -> None:
         """Stop the microVM; every process inside it ends with it.
 
-        What the caller has to do once the microVM is gone runs even when
-        the stop itself is cancelled, because the turn's state is on this
-        device either way.
+        What the caller takes out of the microVM runs first, while it still
+        runs; the microVM is stopped whether that succeeds or not, and its
+        error is raised once it is gone. What the caller has to do once the
+        microVM is gone runs even when the stop itself is cancelled, because
+        the turn's state is on this device either way.
         """
         if self._closed:
             return
         self._closed = True
         try:
-            await self._sandbox.stop(timeout=_STOP_TIMEOUT)
-        except Exception:
-            with suppress(Exception):
-                await self._sandbox.destroy(force=True)
+            if self._before_stop is not None:
+                await self._before_stop(self)
         finally:
-            if self._on_close is not None:
-                self._on_close()
+            try:
+                await self._sandbox.stop(timeout=_STOP_TIMEOUT)
+            except Exception:
+                with suppress(Exception):
+                    await self._sandbox.destroy(force=True)
+            finally:
+                if self._on_close is not None:
+                    self._on_close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,7 +864,10 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
 
     return {
         mount.guest: (
-            Volume.tmpfs(size_mib=_COVER_MIB, readonly=True)
+            Volume.tmpfs(
+                size_mib=_COVER_MIB if mount.readonly else _SCRATCH_MIB,
+                readonly=mount.readonly,
+            )
             if mount.host is None
             else Volume.bind(str(mount.host.resolve()), readonly=mount.readonly)
         )
