@@ -224,26 +224,27 @@ loginの無いprint mode実行がGoogleのサインインURLを表示して認�
 設定カードには、認証情報が保存済みでもログインコマンドとコピー操作が表示されます。
 macOS / Linuxでは管理CLIの絶対パス、WindowsではPATH上の`guildbotics`を使います。
 カードを開いている間、状態は10秒ごとに自動更新されます。**状態を更新** ですぐに読み直すこともできます。
-**認証情報保存済み** はファイルの存在（Codex・Claude Code・Grok Buildは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
+**認証情報保存済み** はファイルの存在（Codex・Claude Code・Grok Build・Antigravityは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
 turnの構造化された認証失敗は、端末・ツールごとにプロバイダのマウント領域の外へ保持し、
 `status.py`を通じてカードとalertへ反映します。認証情報が残るログイン完了、または別メンバーを
 含む後続の正常実行で解除します。それ以外のエラーは前回の認証結果を変えません。
 過去の認証失敗は案内として扱い、turnの起動を拒否しないため、再試行できます。
-Codex・Claude Code・Grok Build以外のツールでは、GuildBoticsによる認証probeやトークン更新は行いません。
-それらのツールでは、トークンの更新はツール自身がturnの中で行います。そのため、各ツールの更新先はturnが常に届く
+GitHub Copilotでは、GuildBoticsによる認証probeやトークン更新は行いません。
+トークンの更新はCopilot自身がturnの中で行います。そのため、更新先はturnが常に届く
 プロバイダのドメインに含め、更新した認証情報がstoreへ書き戻されるようにbindします。
 ファイル単位のbindは上書きには追従しますが、別ファイルをrenameで重ねる置き換えは失敗します。
 
 ### VMの外で管理するログイン
 
-Codex・Claude Code・Grok Buildのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
-移行中の構成で、他のツールは上記のとおりstoreからbindします（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。
+Codex・Claude Code・Grok Build・Antigravityのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
+移行中の構成で、GitHub Copilotは上記のとおりstoreからbindします（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。
 以下はClaude Codeを例に説明します。ツールごとの違いは次の表のとおりです。
 
 | ツール | 暗号化保存するもの | turnへの置換用の値の渡し方 | ゲートウェイの転送先 | 更新（refresh）とusage |
 |---|---|---|---|---|
 | Codex | `~/.codex/auth.json`（ChatGPTアカウントでのログイン） | 置換用の`auth.json`。アクセストークンとIDトークンの位置に、期限とアカウントのclaim（メールアドレス・プラン・アカウントID）だけを持つ署名なしのJWTを置き、refresh tokenは空にする（`chatgpt_base_url`と、GuildBotics独自のmodel provider `guildbotics`の`base_url`でゲートウェイを指す） | `https://chatgpt.com`（推論の`/backend-api/codex/responses`、モデル一覧、`/backend-api/wham/usage`） | 更新は、期限を過ぎたと伝えたアクセストークンで`codex debug models`を実行する。usageはApp Serverの`account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | 置換用の認証ファイル（`ANTHROPIC_BASE_URL`でゲートウェイを指す） | `https://api.anthropic.com` | `claude -p /usage` |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | 置換用の認証ファイル（アクセストークン・`token_type`・期限・`auth_method`だけ。refresh tokenとIDトークンは入れない）。`CLOUD_CODE_URL`でHTTPSのゲートウェイを指し、`www.googleapis.com`はturn内の中継でゲートウェイへ向ける | `https://daily-cloudcode-pa.googleapis.com`（`/v1internal:`の7つのメソッド）と`https://www.googleapis.com/oauth2/v2/userinfo` | 更新もusageも`agy -p /usage`（期限を過ぎたと伝えたログインで実行すると更新する） |
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
 turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。接続先の契約（どの要求が差し替えた
@@ -290,17 +291,30 @@ URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合�
   始めたthreadも含めて、`thread/resume`で`guildbotics`を指定します。ゲートウェイはプラグイン、
   ChatGPTの連携アプリ（`codex_apps`）、分析の送信を転送しないため、turnではこれらを使えません。
   APIキーでのログインは扱いません（ChatGPTアカウントでのログインだけを保存します）。
+- **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、Antigravityのゲートウェイは
+  turnごとに作るCAの証明書でTLSを話します。turnは`SSL_CERT_FILE`で、システムのCAにこのCAを
+  加えたファイル（`/etc/guildbotics/ca-certificates.crt`）を信頼します。CAの鍵はGuildBoticsプロセスの
+  メモリから出ません。起動時の利用資格の確認は、設定で変えられないURL（`www.googleapis.com`の
+  userinfo）を読むため、turnの中の`/etc/hosts`でこのホストを`127.0.0.2`に向け、そこでNodeの
+  TCP中継がゲートウェイへつなぎます（ゲートウェイはこの名前でも証明書を出します）。`HTTPS_PROXY`は
+  ツールの全通信をhostへ通すことになるため使いません。プロフィール画像
+  （`lh3.googleusercontent.com`、認証情報を含まない）だけはturnから直接取得します。
+  トークンを含むテレメトリー（`play.googleapis.com/log`）はturnから届かず、なくても動きます。
+  ゲートウェイは転送しなかった経路を`METHOD /path`だけログに残します（トークン・query・本文は残しません）。
 - **切り替え**: 旧形式の平文（Codexは`~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
   Claude Codeは`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
-  Grok Buildは`~/.guildbotics/data/agent_environment/grok/.grok/auth/`）は読みもbindもしません。
+  Grok Buildは`~/.guildbotics/data/agent_environment/grok/.grok/auth/`、
+  Antigravityは`~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`）は読みもbindもしません。
   `guildbotics environment login <tool>`で再ログインしてから、これらを削除してください
   （macOS / Linux: `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
+  `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`、
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
   `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`。
   Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`、
+  `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`、
   `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`、
   `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`）。
-  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`）や
+  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`・`antigravity-cli/conversations/`など）や
   cacheは消さないでください。過去のバックアップに残った平文までは消せません。
 - **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
   ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と

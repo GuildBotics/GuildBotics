@@ -15,16 +15,30 @@ When the upstream refuses the token, the login is refreshed once and the
 request sent again. The token itself lives in this process's memory: where
 it comes from, and how it is refreshed, is the login's business
 (:class:`TokenSource`).
+
+A tool that takes its API over HTTPS only is answered over TLS, as the guest
+alias and as each host the turn relays here, with a certificate from a CA
+made for the turn (:attr:`CredentialGateway.ca_pem`). Its key never leaves
+this process's memory but for the moment it takes to load it.
 """
 
 from __future__ import annotations
 
 import json
 import secrets
+import ssl
+import tempfile
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from logging import getLogger
+from pathlib import Path
 from typing import Any
 
 import httpx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.cli_agents import CredentialBroker
@@ -35,6 +49,9 @@ from guildbotics.utils.loopback_server import LoopbackServer
 TokenSource = Callable[[str | None], Awaitable[str]]
 
 _MAX_REQUEST_BYTES = 64 * 1024 * 1024
+#: A turn's CA outlives any turn; it is trusted by that turn's microVM alone.
+_TLS_LIFETIME = timedelta(days=2)
+_LOGGER = getLogger(__name__)
 _TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
 _HOP_BY_HOP = frozenset(
     {
@@ -78,10 +95,12 @@ class CredentialGateway:
     ) -> None:
         self._broker = broker
         self._tokens = tokens
-        self._routes = frozenset(tuple(route.split(" ", 1)) for route in broker.routes)
+        self._routes = broker.forwarded
         self._authorization = ""
         #: The turn's secret: the one credential the gateway takes.
         self.stand_in = stand_in
+        #: The CA a turn trusts the gateway's TLS by, once it is started.
+        self.ca_pem = b""
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._server: LoopbackServer | None = None
@@ -94,21 +113,27 @@ class CredentialGateway:
 
     def turn_environment(self) -> dict[str, str]:
         """What the tool inside the turn is told: where its API is."""
+        scheme = "https" if self._broker.tls else "http"
         return {
             self._broker.base_url_env: (
-                f"http://{GUEST_HOST_ALIAS}:{self.port}{self._broker.base_url_path}"
+                f"{scheme}://{GUEST_HOST_ALIAS}:{self.port}{self._broker.base_url_path}"
             ),
             **dict(self._broker.turn_environment),
         }
 
     async def start(self) -> None:
         """Start accepting the turn's stand-in."""
+        tls = None
+        if self._broker.tls:
+            tls, self.ca_pem = _turn_tls(
+                (GUEST_HOST_ALIAS, *self._broker.relayed_hosts)
+            )
         self._authorization = f"Bearer {self.stand_in}"
         self._client = httpx.AsyncClient(
             transport=self._transport, follow_redirects=False, timeout=_TIMEOUT
         )
         try:
-            self._server = await LoopbackServer.start(lambda _port: self)
+            self._server = await LoopbackServer.start(lambda _port: self, tls=tls)
         except BaseException:
             await self._client.aclose()
             raise
@@ -144,6 +169,8 @@ class CredentialGateway:
             await _refuse(send, 401, "authentication_error", "Unknown credentials.")
             return
         if (scope["method"], scope["path"]) not in self._routes:
+            # What a tool asks for that its catalog does not name, and no more.
+            _LOGGER.info("Gateway refused %s %s", scope["method"], scope["path"])
             await _refuse(send, 403, "permission_error", "Not a forwarded route.")
             return
         try:
@@ -164,7 +191,8 @@ class CredentialGateway:
     ) -> None:
         assert self._client is not None
         query = scope.get("query_string", b"").decode("latin-1")
-        url = self._broker.upstream + scope["path"] + (f"?{query}" if query else "")
+        origin = self._routes[scope["method"], scope["path"]]
+        url = origin + scope["path"] + (f"?{query}" if query else "")
         forwarded = [(k, v) for k, v in headers if k not in _DROPPED_REQUEST_HEADERS]
         refused: str | None = None
         try:
@@ -209,6 +237,74 @@ class CredentialGateway:
             await send({"type": "http.response.body", "body": b""})
         finally:
             await response.aclose()
+
+
+def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
+    """A server context for ``names``, from a CA of its own, and that CA."""
+    now = datetime.now(UTC)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "GuildBotics turn gateway")]
+    )
+    ca = (
+        _certificate(ca_name, ca_name, ca_key.public_key(), now)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])])
+    certificate = (
+        _certificate(subject, ca_name, key.public_key(), now)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(name) for name in names]),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    with tempfile.TemporaryDirectory() as held:  # The context loads files only.
+        chain, private = Path(held, "chain.pem"), Path(held, "key.pem")
+        chain.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+        private.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        context.load_cert_chain(chain, private)
+    return context, ca.public_bytes(serialization.Encoding.PEM)
+
+
+def _certificate(
+    subject: x509.Name, issuer: x509.Name, key: Any, now: datetime
+) -> x509.CertificateBuilder:
+    return (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key)
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + _TLS_LIFETIME)
+    )
 
 
 class _Disconnected(Exception):

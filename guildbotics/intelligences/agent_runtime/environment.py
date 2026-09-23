@@ -40,8 +40,10 @@ from guildbotics.intelligences.agent_environment.provider_state import (
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
+    EnvironmentProcess,
 )
 from guildbotics.intelligences.agent_environment.spec import (
+    GUEST_HOST_ALIAS,
     AgentEnvironmentSpec,
     EnvironmentMount,
     EnvironmentNetwork,
@@ -63,6 +65,7 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.observability import TRACE_ID_ENV
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import terminate_posix_process_group
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
@@ -71,6 +74,21 @@ _WINDOWS = os.name == "nt"
 #: What every provider process starts with, beside the tool's own state
 #: variables: git must never wait for a terminal that is not there.
 _PROVIDER_ENV = {"GIT_TERMINAL_PROMPT": "0"}
+#: The CAs a turn whose gateway answers over TLS trusts: the system's, and
+#: the gateway's own.
+_SYSTEM_CAS = "/etc/ssl/certs/ca-certificates.crt"
+_TURN_CAS = "/etc/guildbotics/ca-certificates.crt"
+#: Where a relayed host resolves inside the turn, and the relay listens.
+_RELAY_ADDRESS = "127.0.0.2"
+#: A TCP relay onto the gateway: ``node -e _RELAY <host> <port>``.
+_RELAY = (
+    "const net=require('net');"
+    "net.createServer(c=>{const u=net.connect(+process.argv[2],process.argv[1]);"
+    "c.pipe(u);u.pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())})"
+    f".listen(443,'{_RELAY_ADDRESS}',()=>console.log('ready'))"
+)
+#: How long the relay has to start, and to stop.
+_RELAY_SECONDS = 10.0
 
 
 async def start_turn_environment(
@@ -118,11 +136,12 @@ async def start_turn_environment(
             host_ports=(*host_ports, *((gateway.port,) if gateway else ())),
             # A brokered tool reaches its API through the gateway only: what
             # it would send straight to the provider carries the stand-in.
-            provider_domains=() if gateway else tool.provision.api_domains,
+            provider_domains=tool.provision.turn_domains,
             env={
                 **_PROVIDER_ENV,
                 **tool.provision.environment(home),
                 **(gateway.turn_environment() if gateway else {}),
+                **({"SSL_CERT_FILE": _TURN_CAS} if broker and broker.tls else {}),
                 **(lent.stand_in_environment() if lent else {}),
                 **env,
             },
@@ -134,24 +153,38 @@ async def start_turn_environment(
         if gateway is not None:
             await gateway.close()
         raise
+    relays: list[EnvironmentProcess] = []
+
+    async def close_gateway(_: AgentEnvironment) -> None:
+        # The stand-in opens nothing from before the microVM is gone; a relay
+        # that does not end goes with the microVM.
+        for relay in relays:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
+        if gateway is not None:
+            await gateway.close()
+
     try:
         environment = await _start(
             spec,
             where,
             on_close=state.release,
-            # The stand-in opens nothing from before the microVM is gone.
-            before_stop=(lambda _: gateway.close()) if gateway else None,
+            before_stop=close_gateway if gateway else None,
         )
     except BaseException:
         if gateway is not None:
             await gateway.close()
         raise
-    if lent is None or gateway is None:
+    if broker is None or lent is None or gateway is None:
         return environment
     root = f"{home}/{tool.provision.state_root}"
     try:
         for name, data in lent.stand_in_files().items():
             await environment.write_file(f"{root}/{name}", data)
+        if broker.tls:
+            await _trust(environment, gateway.ca_pem)
+        if broker.relayed_hosts:
+            relays.append(await _relay(environment, broker.relayed_hosts, gateway.port))
     except BaseException as exc:
         await environment.close()
         if isinstance(exc, AgentEnvironmentError):
@@ -160,6 +193,48 @@ async def start_turn_environment(
             ) from exc
         raise
     return environment
+
+
+async def _trust(environment: AgentEnvironment, ca_pem: bytes) -> None:
+    """Make the turn trust ``ca_pem`` beside the system's CAs.
+
+    Raises:
+        AgentEnvironmentError: When the image has no system CAs to add it to;
+            trusting it alone would fail every other TLS of the turn.
+    """
+    system = await environment.read_file(_SYSTEM_CAS)
+    if not system:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.no_system_cas", path=_SYSTEM_CAS)
+        )
+    await environment.write_file(_TURN_CAS, system + b"\n" + ca_pem)
+
+
+async def _relay(
+    environment: AgentEnvironment, hosts: Iterable[str], port: int
+) -> EnvironmentProcess:
+    """Resolve ``hosts`` inside the turn to a relay onto the gateway's
+    ``port``, which answers for them, and start it.
+
+    Raises:
+        AgentEnvironmentError: When the relay does not start.
+    """
+    known = await environment.read_file("/etc/hosts") or b""
+    lines = "".join(f"{_RELAY_ADDRESS} {host}\n" for host in hosts)
+    await environment.write_file("/etc/hosts", known + b"\n" + lines.encode())
+    relay = await environment.run(
+        "node", "-e", _RELAY, GUEST_HOST_ALIAS, str(port), limit=1 << 10
+    )
+    try:
+        started = await asyncio.wait_for(relay.stdout.readline(), _RELAY_SECONDS)
+    except TimeoutError:
+        started = b""
+    if started.strip() != b"ready":
+        await relay.kill()
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.relay_failed")
+        )
+    return relay
 
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:

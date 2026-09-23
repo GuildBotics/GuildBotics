@@ -39,6 +39,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime import environment
 from guildbotics.intelligences.agent_runtime.codex import (
     _config_arguments,
     _gateway_overrides,
@@ -101,7 +102,12 @@ async def boot(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[object]:
     started: list[AgentEnvironment] = []
 
     async def start(
-        recorder: Recorder, state_root: str, env: dict[str, str], *, proxy: bool = True
+        recorder: Recorder,
+        state_root: str,
+        env: dict[str, str],
+        *,
+        proxy: bool = True,
+        ca: bool = True,
     ) -> Guest:
         home = guest_path(_REAL_HOME.resolve())
         work = Path(tempfile.mkdtemp())
@@ -121,7 +127,7 @@ async def boot(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[object]:
             ),
             env={
                 **(recorder.proxy_environment() if proxy else {}),
-                **recorder.ca_environment(_CA),
+                **(recorder.ca_environment(_CA) if ca else {}),
                 **env,
             },
         )
@@ -496,80 +502,127 @@ _PIXEL = base64.b64decode(
 )
 
 
-async def test_antigravity_needs_its_userinfo_redirected_beside_its_cloud_code_url(
-    boot,
-) -> None:
-    def answer(host: str, method: str, path: str):
-        if path.startswith("/v1internal:loadCodeAssist"):
-            return json_answer(
-                {
-                    "currentTier": {"id": "standard-tier"},
-                    "cloudaicompanionProject": "synthetic-project-459",
-                }
-            )
-        if path.startswith("/oauth2/v2/userinfo"):
-            return json_answer(
-                {
-                    "id": "459",
-                    "email": "synthetic@example.com",
-                    "picture": "https://lh3.googleusercontent.com/a/synthetic",
-                }
-            )
-        if host == "lh3.googleusercontent.com":
-            return 200, {"content-type": "image/png"}, _PIXEL
-        if path.startswith("/v1internal:") and ":tabChat" not in path:
-            return json_answer({})
-        return None
+def _antigravity_answer(host: str, method: str, path: str):
+    """What Antigravity needs answered to run a turn: an account, its
+    profile and picture, and a model; the inference is refused."""
+    if path.startswith("/v1internal:loadCodeAssist"):
+        return json_answer(
+            {
+                "currentTier": {"id": "standard-tier"},
+                "cloudaicompanionProject": "synthetic-project-459",
+            }
+        )
+    if path.startswith("/v1internal:fetchAvailableModels"):
+        return json_answer({"models": {"gemini-3-flash": {"displayName": "Gemini"}}})
+    if path.startswith("/oauth2/v2/userinfo"):
+        return json_answer(
+            {
+                "id": "459",
+                "email": "synthetic@example.com",
+                "picture": "https://lh3.googleusercontent.com/a/synthetic",
+            }
+        )
+    if host == "lh3.googleusercontent.com":
+        return 200, {"content-type": "image/png"}, _PIXEL
+    if path == "/token":
+        return json_answer(
+            {
+                "access_token": "NEW-ACCESS-459",
+                "expires_in": 3599,
+                "token_type": "Bearer",
+            }
+        )
+    if path.startswith("/v1internal:") and ":streamGenerateContent" not in path:
+        return json_answer({})
+    return None
 
-    recorder = Recorder(answer)
+
+_ANTIGRAVITY_LOGIN = {
+    "token": {
+        "access_token": "REAL-SYNTHETIC-459",
+        "token_type": "Bearer",
+        "refresh_token": "REFRESH-SYNTHETIC-459",
+        "expiry": "2099-01-01T00:00:00Z",
+    },
+    "auth_method": "consumer",
+    "id_token": "ID-SYNTHETIC-459",
+}
+
+
+async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
+    boot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn as GuildBotics sets it up: the stand-in files a synthetic login
+    lends, CLOUD_CODE_URL over TLS, the gateway's CA trusted beside the
+    system's, and the userinfo host relayed to the gateway."""
+    tool = cli_agent_info("antigravity")
+    broker = tool.provision.credential_broker
+    assert broker is not None
+    monkeypatch.setattr(
+        provider_state,
+        "_unsealed_login",
+        lambda _: {tool.provision.auth: json.dumps(_ANTIGRAVITY_LOGIN).encode()},
+    )
+    lent = LentLogin(tool, None)  # type: ignore[arg-type]
+    recorder = Recorder(_antigravity_answer)
     home = guest_path(_REAL_HOME.resolve())
     guest = await boot(
         recorder,
         ".gemini",
-        {"CLOUD_CODE_URL": recorder.tls_url},
-        # A proxy would draw www.googleapis.com away from the relay below.
+        {"CLOUD_CODE_URL": recorder.tls_url, "SSL_CERT_FILE": environment._TURN_CAS},
+        # A proxy would draw the relayed hosts away from the relay.
         proxy=False,
+        ca=False,
     )
-    await guest.write(
-        f"{home}/.gemini/antigravity-cli/antigravity-oauth-token",
-        json.dumps(
-            {
-                "token": {
-                    "access_token": STAND_IN,
-                    "token_type": "Bearer",
-                    "expiry": "2099-01-01T00:00:00Z",
-                },
-                "auth_method": "consumer",
-            }
-        ),
-    )
-    # The userinfo URL is fixed in the binary: a relay inside the guest is
-    # the only way to it that does not route every tool through a proxy.
-    relay = (
-        "require('net').createServer(c=>{const u=require('net').connect("
-        f"{recorder.tls_port},'{GUEST_HOST_ALIAS}');c.pipe(u);u.pipe(c);"
-        "c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())})"
-        ".listen(443,'127.0.0.2')"
-    )
-    await guest.sh(
-        "printf '127.0.0.2 www.googleapis.com\\n127.0.0.2 lh3.googleusercontent.com\\n'"
-        f' >> /etc/hosts; (node -e "{relay}" >/dev/null 2>&1 &); sleep 1'
+    for name, data in lent.stand_in_files().items():
+        await guest.write(f"{home}/.gemini/{name}", data)
+    await environment._trust(guest.environment, recorder.ca_pem)
+    # The picture is reached directly from a turn; here, where nothing leaves
+    # the device, it is relayed to the recorder too.
+    relay = await environment._relay(
+        guest.environment,
+        (*broker.relayed_hosts, *broker.turn_domains),
+        recorder.tls_port,
     )
 
     await guest.sh(
         "timeout 70 agy --print 'Synthetic fixture.' --output-format stream-json",
         timeout=100,
     )
+    await relay.kill()
 
-    userinfo = [
-        s
-        for s in recorder.requests("/oauth2/v2/userinfo")
-        if s.host == "www.googleapis.com"
+    userinfo = recorder.requests("/oauth2/v2/userinfo")
+    assert {s.host for s in userinfo} == {"www.googleapis.com"}, recorder.seen
+    assert _bearer(recorder, "/v1internal:") == {f"Bearer {lent.stand_in}"}
+    assert recorder.requests("/v1internal:streamGenerateContent"), recorder.seen
+    assert recorder.carrying(lent.stand_in) == {GUEST_HOST_ALIAS, "www.googleapis.com"}
+    # What a turn needs of it is what the gateway forwards, to where.
+    for seen in recorder.requests():
+        if seen.authorization:
+            origin = broker.forwarded[seen.method, seen.path.split("?")[0]]
+            expected = "daily-cloudcode-pa.googleapis.com"
+            host = GUEST_HOST_ALIAS if origin.endswith(expected) else origin[8:]
+            assert seen.host == host, seen
+
+
+async def test_antigravity_refreshes_a_login_told_it_has_expired_reading_its_usage(
+    boot,
+) -> None:
+    tool = cli_agent_info("antigravity")
+    broker = tool.provision.credential_broker
+    assert broker is not None
+    recorder = Recorder(_antigravity_answer)
+    home = guest_path(_REAL_HOME.resolve())
+    guest = await boot(recorder, ".gemini", {"CLOUD_CODE_URL": recorder.tls_url})
+    auth = f"{home}/.gemini/{tool.provision.auth}"
+    login = json.dumps(_ANTIGRAVITY_LOGIN).encode()
+    await guest.write(auth, provider_state._expired(broker, login))
+
+    await guest.sh(shlex.join(broker.refresh))
+
+    assert [s.host for s in recorder.requests("/token")][:1] == [
+        "oauth2.googleapis.com"
     ]
-    assert userinfo, recorder.seen
-    assert _bearer(recorder, "/v1internal:loadCodeAssist") == {f"Bearer {STAND_IN}"}
-    assert recorder.requests("/v1internal:tabChat"), recorder.seen
-    # Seen through a proxy, the credential also goes straight to
-    # play.googleapis.com (telemetry, which a turn can do without): the one
-    # destination a turn must never be let through to. Nothing else does.
-    assert recorder.carrying(STAND_IN) == {GUEST_HOST_ALIAS, "www.googleapis.com"}
+    left = {tool.provision.auth: await guest.environment.read_file(auth)}
+    token, expires = provider_state._account_login(broker, left, tool.provision.auth)
+    assert token == "NEW-ACCESS-459" and expires > time.time() + 3000

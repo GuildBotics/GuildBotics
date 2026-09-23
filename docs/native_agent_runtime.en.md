@@ -283,22 +283,22 @@ The settings card always offers the login command and copy action, including whe
 credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
 absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
 updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
-only reports file presence (for Codex, Claude Code, and Grok Build, that the sealed login opens), not validity. Structured authentication failures from
+only reports file presence (for Codex, Claude Code, Grok Build, and Antigravity, that the sealed login opens), not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
 both the card and alerts through `status.py`. A completed login that leaves
 credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
-not startup refusals, so another turn can retry. For every tool but Codex, Claude Code, and Grok Build, no
+not startup refusals, so another turn can retry. For GitHub Copilot, no
 authentication probe or token refresh is performed by GuildBotics.
-Each of the other tools refreshes its own tokens during a turn, so its refresh endpoint
+Copilot refreshes its own tokens during a turn, so its refresh endpoint
 is among the provider domains every turn reaches, and its credentials are bound so that
 a refresh is written back to the store. A file bind follows a file rewritten in place,
 but renaming another file over it fails.
 
 ### Logins kept outside the microVM
 
-The logins of Codex, Claude Code, and Grok Build are kept neither in a turn's microVM nor in a
-plain file on the device. This is a transition: the other tools are still bound from the
+The logins of Codex, Claude Code, Grok Build, and Antigravity are kept neither in a turn's microVM nor in a
+plain file on the device. This is a transition: GitHub Copilot is still bound from the
 store as above ([#459](https://github.com/GuildBotics/GuildBotics/issues/459)). What follows
 takes Claude Code as the example; the tools differ as this table shows.
 
@@ -306,6 +306,7 @@ takes Claude Code as the example; the tools differ as this table shows.
 |---|---|---|---|---|
 | Codex | `~/.codex/auth.json` (a ChatGPT account login) | a stand-in `auth.json`: an unsigned JWT that claims only an expiry and the account (email, plan, account ID) stands for both the access token and the ID token, and the refresh token is empty (`chatgpt_base_url` and the `base_url` of a model provider of GuildBotics' own, `guildbotics`, point at the gateway) | `https://chatgpt.com` (inference at `/backend-api/codex/responses`, the model list, `/backend-api/wham/usage`) | refresh by running `codex debug models` with the access token claiming an expiry that has passed; usage through App Server `account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | a stand-in credentials file (`ANTHROPIC_BASE_URL` points at the gateway) | `https://api.anthropic.com` | `claude -p /usage` |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | a stand-in credentials file (the access token, `token_type`, the expiry, and `auth_method` only; no refresh token and no ID token). `CLOUD_CODE_URL` points at the gateway over HTTPS, and `www.googleapis.com` is relayed to the gateway inside the turn | `https://daily-cloudcode-pa.googleapis.com` (seven `/v1internal:` methods) and `https://www.googleapis.com/oauth2/v2/userinfo` | both through `agy -p /usage`, which refreshes a login it is told has expired |
 | Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
@@ -357,19 +358,35 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
   `guildbotics`, for threads started before the switch as well. The gateway forwards no
   plugins, no ChatGPT connected apps (`codex_apps`), and no analytics, so turns go without
   them. An API key login is not kept: only a ChatGPT account login is sealed.
+- **Antigravity specifics**: the Cloud Code API is taken over HTTPS only, so Antigravity's
+  gateway speaks TLS with a certificate from a CA made for the turn. The turn trusts, through
+  `SSL_CERT_FILE`, a file of the system's CAs with that CA added
+  (`/etc/guildbotics/ca-certificates.crt`); the CA's key never leaves the GuildBotics
+  process's memory. The eligibility check at start reads a URL no setting moves (the userinfo
+  on `www.googleapis.com`), so `/etc/hosts` inside the turn points that host at `127.0.0.2`,
+  where a Node TCP relay connects it to the gateway (which presents a certificate for that name
+  too). `HTTPS_PROXY` is not used: it would route every request of the tool through the host.
+  Only the profile picture (`lh3.googleusercontent.com`, which carries no credential) is fetched
+  straight from the turn. Telemetry that carries the token (`play.googleapis.com/log`) is not
+  reachable from a turn, which runs without it. The gateway logs the routes it did not forward,
+  as `METHOD /path` only (never a token, a query, or a body).
 - **Switching over**: the earlier plain files (Codex's
   `~/.guildbotics/data/agent_environment/codex/.codex/auth.json`, Claude Code's
   `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, Grok Build's
-  `~/.guildbotics/data/agent_environment/grok/.grok/auth/`) are neither read nor bound. Log
+  `~/.guildbotics/data/agent_environment/grok/.grok/auth/`, Antigravity's
+  `~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`)
+  are neither read nor bound. Log
   in again with `guildbotics environment login <tool>`, then delete them (macOS / Linux:
   `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`,
+  `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`,
   `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, and
   `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`; Windows:
   `del %USERPROFILE%\.guildbotics\data\agent_environment\codex\.codex\auth.json`,
+  `del %USERPROFILE%\.guildbotics\data\agent_environment\antigravity\.gemini\antigravity-cli\antigravity-oauth-token`,
   `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`, and
   `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`).
   GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
-  the sessions (`sessions/`, `projects/`) and the cache alone. Copies in past backups cannot be erased.
+  the sessions (`sessions/`, `projects/`, `antigravity-cli/conversations/`, and the like) and the cache alone. Copies in past backups cannot be erased.
 - **Recovery**: when the state says the keychain is locked, unlock it; when it says the
   login cannot be used, fix the keychain or the disk (free space, for one) and try again.
   A login that cannot be opened (a missing or broken key or record) and a failed refresh

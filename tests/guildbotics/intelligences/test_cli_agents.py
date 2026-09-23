@@ -8,6 +8,7 @@ from guildbotics.intelligences import cli_agents
 from guildbotics.intelligences.cli_agents import (
     CLI_AGENTS,
     CliAgentProvision,
+    CredentialBroker,
     cli_agent_default_path,
     cli_agent_executable,
     cli_agent_name_from_path,
@@ -321,3 +322,54 @@ def test_every_tool_reaches_its_login_refresh_from_a_turn() -> None:
             host == domain or (domain.startswith("*.") and host.endswith(domain[1:]))
             for domain in agent.provision.api_domains
         ), agent.name
+
+
+def _broker(*routes: str) -> CredentialBroker:
+    return CredentialBroker(
+        format="t",
+        access_token=("a",),
+        refresh_token=("r",),
+        expires_at=("e",),
+        upstream="https://api.example.test",
+        routes=routes,
+        base_url_env="API_URL",
+        refresh=("tool", "refresh"),
+    )
+
+
+def test_a_route_is_forwarded_to_the_origin_it_names_or_to_the_upstream() -> None:
+    broker = _broker("POST /v1:generate", "GET https://profile.example.test/me")
+
+    assert broker.forwarded == {
+        ("POST", "/v1:generate"): "https://api.example.test",
+        ("GET", "/me"): "https://profile.example.test",
+    }
+
+
+@pytest.mark.parametrize(
+    "routes",
+    [
+        ("post /v1",),
+        ("POST v1",),
+        ("POST /v1?x=1",),
+        ("GET http://profile.example.test/me",),
+        ("GET https://profile.example.test",),
+        # One path, two places to send it: which would get the token?
+        ("GET /me", "GET https://profile.example.test/me"),
+    ],
+)
+def test_a_route_that_does_not_name_one_place_is_refused(
+    routes: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValidationError):
+        _broker(*routes)
+
+
+def test_a_relayed_host_is_answered_over_tls_only() -> None:
+    """The relay listens where the tool's own https URL leads."""
+    fields = _broker("GET /me").model_dump()
+    with pytest.raises(ValidationError):
+        CredentialBroker(**{**fields, "relayed_hosts": ("profile.example.test",)})
+    assert CredentialBroker(
+        **{**fields, "relayed_hosts": ("profile.example.test",), "tls": True}
+    ).tls

@@ -3,6 +3,8 @@ the stand-in; the real token goes to the upstream and nowhere else."""
 
 from __future__ import annotations
 
+import logging
+import ssl
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -15,7 +17,7 @@ from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialUnavailableError,
 )
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
-from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.intelligences.cli_agents import CredentialBroker, cli_agent_info
 
 BROKER = cli_agent_info("claude").provision.credential_broker
 assert BROKER is not None
@@ -319,5 +321,95 @@ async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> Non
                 f"http://{GUEST_HOST_ALIAS}:{gateway.port}/v1"
             )
         }
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_route_is_logged_without_what_it_carried(
+    running, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The log says what a tool asked for that its catalog does not name --
+    how a missing route is found -- and never the credential or query."""
+    gateway, _upstream, _tokens, guest = running
+    caplog.set_level(logging.INFO, "guildbotics.intelligences.agent_environment")
+
+    await guest.post("/v1/oauth/token?secret=QUERY-459", content=b"BODY-459")
+
+    assert "POST /v1/oauth/token" in caplog.text
+    for carried in (gateway.stand_in, "QUERY-459", "BODY-459"):
+        assert carried not in caplog.text
+
+
+_ELSEWHERE = CredentialBroker(
+    format="t",
+    access_token=("a",),
+    refresh_token=("r",),
+    expires_at=("e",),
+    upstream="https://api.example.test",
+    routes=("POST /v1/generate", "GET https://profile.example.test/me"),
+    base_url_env="API_URL",
+    tls=True,
+    relayed_hosts=("profile.example.test",),
+    refresh=("tool", "refresh"),
+)
+
+
+@pytest.mark.asyncio
+async def test_a_route_that_names_its_origin_is_forwarded_there() -> None:
+    upstream = _Upstream()
+    gateway = CredentialGateway(
+        _ELSEWHERE, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    await gateway.start()
+    try:
+        trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        async with httpx.AsyncClient(
+            base_url=f"https://127.0.0.1:{gateway.port}",
+            headers={"authorization": f"Bearer {STAND_IN}"},
+            verify=trust,
+            # A connection of its own per name, so each is its own handshake.
+            limits=httpx.Limits(max_keepalive_connections=0),
+        ) as guest:
+            for method, path, name in (
+                ("POST", "/v1/generate", GUEST_HOST_ALIAS),
+                ("GET", "/me", "profile.example.test"),
+            ):
+                response = await guest.request(
+                    method, path, extensions={"sni_hostname": name}
+                )
+                assert response.status_code == 200
+    finally:
+        await gateway.close()
+
+    assert [str(r.url) for r in upstream.requests] == [
+        "https://api.example.test/v1/generate",
+        "https://profile.example.test/me",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_takes_https_only_trusts_the_turns_ca_for_its_names_only() -> (
+    None
+):
+    gateway = CredentialGateway(_ELSEWHERE, _Tokens(REAL), STAND_IN)
+    await gateway.start()
+    try:
+        assert gateway.turn_environment() == {
+            "API_URL": f"https://{GUEST_HOST_ALIAS}:{gateway.port}"
+        }
+        trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        async with httpx.AsyncClient(verify=trust) as guest:
+            with pytest.raises(httpx.ConnectError):
+                await guest.get(
+                    f"https://127.0.0.1:{gateway.port}/me",
+                    extensions={"sni_hostname": "evil.example.test"},
+                )
+        async with httpx.AsyncClient() as untrusting:  # The system's CAs alone.
+            with pytest.raises(httpx.ConnectError):
+                await untrusting.get(
+                    f"https://127.0.0.1:{gateway.port}/me",
+                    extensions={"sni_hostname": GUEST_HOST_ALIAS},
+                )
     finally:
         await gateway.close()

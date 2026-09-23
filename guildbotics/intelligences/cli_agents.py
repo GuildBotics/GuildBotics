@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
 
@@ -48,7 +48,15 @@ class CredentialBroker(BaseModel):
     command that prints it. Either way the tool never tries to refresh it.
     The tool is pointed at a gateway outside the microVM (``base_url_env``)
     that accepts only the stand-in, only for ``routes``, and forwards the
-    request to ``upstream`` with the real access token.
+    request to ``upstream`` -- or to the origin the route names -- with the
+    real access token.
+
+    A tool that takes its API over HTTPS only (``tls``) is answered over TLS,
+    with a certificate from a CA of the turn's own that the turn trusts
+    beside the system's. A host the tool reaches at a URL of its own that no
+    setting moves (``relayed_hosts``) resolves, inside the turn, to a relay
+    onto the gateway, which answers for that name too. What else a turn
+    must reach with no credential in it is ``turn_domains``.
 
     What the gateway cannot reach -- refreshing the login, and the tool's
     own account endpoints its ``/usage`` reads -- runs in an environment of
@@ -90,10 +98,11 @@ class CredentialBroker(BaseModel):
     #: replaces as well as the access token.
     stand_in_claims_from: tuple[str, ...] = ()
     stand_in_claims: tuple[tuple[str, ...], ...] = ()
-    #: The origin the gateway forwards to, and the only one.
+    #: The origin the gateway forwards a route to unless the route names one.
     upstream: str
-    #: ``METHOD /path`` the gateway forwards; a query string is not part of
-    #: the match. Everything else is refused before it leaves the device.
+    #: ``METHOD /path``, or ``METHOD https://origin/path``, the gateway
+    #: forwards; a query string is not part of the match. Everything else is
+    #: refused before it leaves the device.
     routes: tuple[str, ...]
     base_url_env: str
     #: Appended to the gateway's origin in ``base_url_env``.
@@ -104,16 +113,54 @@ class CredentialBroker(BaseModel):
     stand_in_command_env: str = ""
     #: What the tool is told beside the gateway's URL.
     turn_environment: tuple[tuple[str, str], ...] = ()
+    tls: bool = False
+    relayed_hosts: tuple[str, ...] = ()
+    turn_domains: tuple[str, ...] = ()
     refresh: tuple[str, ...]
 
     @field_validator("routes")
     @classmethod
     def _routes_are_method_and_path(cls, routes: tuple[str, ...]) -> tuple[str, ...]:
+        seen: set[tuple[str, str]] = set()
         for route in routes:
-            method, _, path = route.partition(" ")
-            if not method.isupper() or not path.startswith("/") or "?" in path:
-                raise ValueError(f"'{route}' is not 'METHOD /path'")
+            method, _, target = route.partition(" ")
+            origin, path = _split_origin(target)
+            if (
+                not method.isupper()
+                or not path.startswith("/")
+                or "?" in path
+                or (origin and not origin.startswith("https://"))
+                or (method, path) in seen
+            ):
+                raise ValueError(f"'{route}' is not a 'METHOD /path' of its own")
+            seen.add((method, path))
         return routes
+
+    @model_validator(mode="after")
+    def _relayed_hosts_are_answered_over_tls(self) -> CredentialBroker:
+        """A relayed host is reached at a URL of its own, which is HTTPS."""
+        if self.relayed_hosts and not self.tls:
+            raise ValueError("relayed hosts are answered over TLS only")
+        return self
+
+    @property
+    def forwarded(self) -> dict[tuple[str, str], str]:
+        """The origin each ``(METHOD, /path)`` is forwarded to."""
+        forwarded: dict[tuple[str, str], str] = {}
+        for route in self.routes:
+            method, _, target = route.partition(" ")
+            origin, path = _split_origin(target)
+            forwarded[method, path] = origin or self.upstream
+        return forwarded
+
+
+def _split_origin(target: str) -> tuple[str, str]:
+    """``https://origin/path`` as its origin and path; a bare path has none."""
+    if target.startswith("/"):
+        return "", target
+    scheme, _, rest = target.partition("://")
+    host, slash, path = rest.partition("/")
+    return f"{scheme}://{host}", slash + path
 
 
 class CliAgentProvision(BaseModel):
@@ -220,6 +267,13 @@ class CliAgentProvision(BaseModel):
     def provisioned(self) -> bool:
         """Whether the snapshot puts this tool into the environment."""
         return bool(self.package or self.install)
+
+    @property
+    def turn_domains(self) -> tuple[str, ...]:
+        """What every turn of the tool reaches directly: its API, or for a
+        brokered login only what carries no credential of it."""
+        broker = self.credential_broker
+        return self.api_domains if broker is None else broker.turn_domains
 
     def environment(self, home: str) -> dict[str, str]:
         """The variables that point the tool at its state under ``home``."""
@@ -487,20 +541,47 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             state_root=".gemini",
             auth="antigravity-cli/antigravity-oauth-token",
             persisted=(
-                "antigravity-cli/antigravity-oauth-token",
                 "antigravity-cli/conversations/",
                 "antigravity-cli/brain/",
                 "antigravity-cli/cache/",
                 "config/",
             ),
             login=("agy", "--print", "Reply with OK."),
-            # The eligibility check at start fetches the account's profile
-            # picture from googleusercontent.com; without it no turn starts.
             api_domains=(
                 "cloudcode-pa.googleapis.com",
                 "*.googleapis.com",
                 "accounts.google.com",
                 "*.googleusercontent.com",
+            ),
+            # The login is brokered. CLOUD_CODE_URL moves the Cloud Code API,
+            # over HTTPS only; the eligibility check at start reads the
+            # account's profile from a URL no setting moves, and then its
+            # picture, which carries no credential. Its telemetry carries the
+            # token and a turn goes without it. `/usage` reads the quota
+            # without a turn, refreshing a login that has expired.
+            credential_broker=CredentialBroker(
+                format="antigravity-oauth",
+                access_token=("token", "access_token"),
+                refresh_token=("token", "refresh_token"),
+                expires_at=("token", "expiry"),
+                expires_format="rfc3339",
+                turn_fields=(("token", "token_type"), ("auth_method",)),
+                upstream="https://daily-cloudcode-pa.googleapis.com",
+                routes=(
+                    "POST /v1internal:loadCodeAssist",
+                    "POST /v1internal:fetchAvailableModels",
+                    "POST /v1internal:fetchAdminControls",
+                    "POST /v1internal:fetchUserInfo",
+                    "POST /v1internal:retrieveUserQuotaSummary",
+                    "POST /v1internal:listExperiments",
+                    "POST /v1internal:streamGenerateContent",
+                    "GET https://www.googleapis.com/oauth2/v2/userinfo",
+                ),
+                base_url_env="CLOUD_CODE_URL",
+                tls=True,
+                relayed_hosts=("www.googleapis.com",),
+                turn_domains=("lh3.googleusercontent.com",),
+                refresh=("agy", "-p", "/usage", "--output-format", "json"),
             ),
         ),
     ),

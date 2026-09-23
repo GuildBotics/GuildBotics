@@ -544,9 +544,7 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     assert not provider_state.authentication_failed(plain)
 
 
-@pytest.mark.parametrize(
-    "tool", [PLAIN, cli_agent_info("copilot"), cli_agent_info("antigravity")]
-)
+@pytest.mark.parametrize("tool", [PLAIN, cli_agent_info("copilot")])
 def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, tool):
     store = provider_state_dir(tool)
     auth = store / tool.provision.auth

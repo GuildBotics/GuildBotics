@@ -284,6 +284,16 @@ _CODEX_ACCESS = _jwt({"exp": 4102444800, "secret": "REAL-SYNTHETIC-459"})
 _CODEX_ID = _jwt({"email": "a@example.com", "secret": "REAL-SYNTHETIC-459"})
 #: A synthetic login of each brokered tool, as it is sealed.
 _LOGINS = {
+    "antigravity": {
+        "token": {
+            "access_token": "REAL-SYNTHETIC-459",
+            "token_type": "Bearer",
+            "refresh_token": "REFRESH-SYNTHETIC-459",
+            "expiry": "2100-01-01T00:00:00.123456789Z",
+        },
+        "auth_method": "consumer",
+        "id_token": "REAL-SYNTHETIC-459-ID",
+    },
     "codex": {
         "auth_mode": "chatgpt",
         "OPENAI_API_KEY": None,
@@ -320,7 +330,9 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     """The turn holds the stand-in -- as a file, or as the command a tool
     takes its login from -- is pointed at the gateway, reaches none of the
     provider's domains itself, and the stand-in opens nothing once the
-    microVM is gone."""
+    microVM is gone. A gateway that answers over TLS is trusted by the turn,
+    as the names it answers for, and a host the tool fixes is relayed to it."""
+    import ssl
     from functools import reduce
 
     import httpx
@@ -346,15 +358,36 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     sealed = {tool.provision.auth: json.dumps(_LOGINS[tool_name]).encode()}
     monkeypatch.setattr(provider_state, "_unsealed_login", lambda selected: sealed)
 
+    class Relay:
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.stdout.feed_data(b"ready\n")
+            self.killed = False
+
+        async def kill(self) -> None:
+            self.killed = True
+
     class Booted:
         def __init__(self, spec, on_close, before_stop):
             self.spec = spec
             self.on_close = on_close
             self.before_stop = before_stop
-            self.files: dict[str, bytes] = {}
+            self.files: dict[str, bytes] = {
+                "/etc/ssl/certs/ca-certificates.crt": b"SYSTEM-CAS",
+                "/etc/hosts": b"127.0.0.1 localhost",
+            }
+            self.relays: list[tuple[tuple[str, ...], Relay]] = []
 
         async def write_file(self, path, data):
             self.files[path] = data
+
+        async def read_file(self, path):
+            return self.files.get(path)
+
+        async def run(self, *command, limit):
+            relay = Relay()
+            self.relays.append((command, relay))
+            return relay
 
         async def close(self):
             await self.before_stop(self)
@@ -380,48 +413,140 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     )
 
     spec = booted.spec
+    scheme = "https" if broker.tls else "http"
     base_url = spec.env[broker.base_url_env]
     port = int(base_url.removesuffix(broker.base_url_path).rsplit(":", 1)[1])
-    assert base_url == f"http://{GUEST_HOST_ALIAS}:{port}{broker.base_url_path}"
+    assert base_url == f"{scheme}://{GUEST_HOST_ALIAS}:{port}{broker.base_url_path}"
     assert spec.network.host_ports == (1234, port)
-    assert not set(tool.provision.api_domains) & set(spec.network.domains)
+    assert set(spec.network.domains) == set(broker.turn_domains)
     assert spec.env["IS_SANDBOX"] == "1"
     held = b"".join(booted.files.values()) + json.dumps(dict(spec.env)).encode()
     for secret in (
         "REAL-SYNTHETIC-459",
         "REFRESH-SYNTHETIC-459",
+        "REAL-SYNTHETIC-459-ID",
         _CODEX_ACCESS,
         _CODEX_ID,
     ):
         assert secret.encode() not in held
+    auth = f"{guest_home()}/{tool.provision.state_root}/{tool.provision.auth}"
     if broker.stand_in_command_env:
-        assert booted.files == {}
+        assert auth not in booted.files
         command = spec.env[broker.stand_in_command_env]
         stand_in = json.loads(command.removeprefix("echo '").removesuffix("'"))[
             "access_token"
         ]
     else:
-        ((path, data),) = booted.files.items()
-        assert (
-            path == f"{guest_home()}/{tool.provision.state_root}/{tool.provision.auth}"
-        )
         stand_in = reduce(
-            lambda at, key: at[key], broker.access_token, json.loads(data)
+            lambda at, key: at[key], broker.access_token, json.loads(booted.files[auth])
         )
+    names = [GUEST_HOST_ALIAS]
+    verify: ssl.SSLContext | bool = False
+    if broker.tls:
+        trusted = booted.files[spec.env["SSL_CERT_FILE"]]
+        assert trusted.startswith(b"SYSTEM-CAS\n")
+        verify = ssl.create_default_context(cadata=trusted.split(b"\n", 1)[1].decode())
+        names.extend(broker.relayed_hosts)
+    else:
+        assert "SSL_CERT_FILE" not in spec.env
+    if broker.relayed_hosts:
+        ((command, relay),) = booted.relays
+        assert command[:2] == ("node", "-e")
+        assert command[-2:] == (GUEST_HOST_ALIAS, str(port))
+        for host in broker.relayed_hosts:
+            assert f"127.0.0.2 {host}".encode() in booted.files["/etc/hosts"]
+    else:
+        assert booted.relays == []
     assert all(
         mount.host is None or not str(mount.host).endswith(tool.provision.auth)
         for mount in spec.mounts
     )
-    async with httpx.AsyncClient() as guest:
-        answer = await guest.post(
-            f"http://127.0.0.1:{port}/v1/oauth/token",
-            headers={"authorization": f"Bearer {stand_in}"},
-        )
-        assert answer.status_code == 403
+    # A connection of its own per name, so each is its own TLS handshake.
+    fresh = httpx.Limits(max_keepalive_connections=0)
+    async with httpx.AsyncClient(verify=verify, limits=fresh) as guest:
+        for name in names:  # Each name it answers for, as the turn trusts it.
+            answer = await guest.post(
+                f"{scheme}://127.0.0.1:{port}/v1/oauth/token",
+                headers={"authorization": f"Bearer {stand_in}"},
+                extensions={"sni_hostname": name},
+            )
+            assert answer.status_code == 403
 
         await booted.close()
+        assert all(relay.killed for _, relay in booted.relays)
         with pytest.raises(httpx.HTTPError):
             await guest.post(
-                f"http://127.0.0.1:{port}/v1/messages",
+                f"{scheme}://127.0.0.1:{port}/v1/messages",
                 headers={"authorization": f"Bearer {stand_in}"},
             )
+
+
+@pytest.mark.asyncio
+async def test_a_relay_that_does_not_start_stops_the_turn(monkeypatch) -> None:
+    """A tool whose host cannot be relayed would reach nothing it needs, or
+    the host itself with the stand-in; neither is a turn."""
+    from guildbotics.intelligences.agent_environment.runtime import (
+        AgentEnvironmentError,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    monkeypatch.setattr(environment, "_RELAY_SECONDS", 0.05)
+
+    class Silent:
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.killed = False
+
+        async def kill(self) -> None:
+            self.killed = True
+
+    class Guest:
+        def __init__(self) -> None:
+            self.relay = Silent()
+
+        async def read_file(self, path):
+            return None
+
+        async def write_file(self, path, data):
+            pass
+
+        async def run(self, *command, limit):
+            return self.relay
+
+    guest = Guest()
+    with pytest.raises(AgentEnvironmentError) as refused:
+        await environment._relay(guest, ("www.example.test",), 1234)
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.relay_failed"
+    )
+    assert guest.relay.killed
+
+
+@pytest.mark.asyncio
+async def test_an_image_without_system_cas_stops_the_turn() -> None:
+    """The turn CA alone would fail every other TLS the turn makes."""
+    from guildbotics.intelligences.agent_environment.runtime import (
+        AgentEnvironmentError,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    class Guest:
+        def __init__(self) -> None:
+            self.written: dict[str, bytes] = {}
+
+        async def read_file(self, path):
+            return None
+
+        async def write_file(self, path, data):
+            self.written[path] = data
+
+    guest = Guest()
+    with pytest.raises(AgentEnvironmentError) as refused:
+        await environment._trust(guest, b"TURN-CA")
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.no_system_cas",
+        path="/etc/ssl/certs/ca-certificates.crt",
+    )
+    assert guest.written == {}

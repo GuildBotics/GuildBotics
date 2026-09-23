@@ -161,7 +161,7 @@ def test_failed_command_records_unmatched_destination_candidates(
     }
 
 
-def test_allowed_provider_user_and_local_destinations_are_not_candidates(
+def test_allowed_user_and_local_destinations_are_not_candidates(
     recorded: list[dict[str, Any]],
 ) -> None:
     contract = AccessContract(
@@ -175,10 +175,7 @@ def test_allowed_provider_user_and_local_destinations_are_not_candidates(
         AgentEvent(
             AgentEventKind.FAILED,
             "provider",
-            message=(
-                "https://api.openai.com/v1 failed; "
-                "https://cdn.example.com/file failed; 192.168.1.20:443 failed"
-            ),
+            message="https://cdn.example.com/file failed; 192.168.1.20:443 failed",
         ),
         recorded,
         contract=contract,
@@ -273,3 +270,33 @@ def test_failed_event_candidates_are_bounded(recorded: list[dict[str, Any]]) -> 
     payload = recorded[0]["payload"]
     assert payload["evidence"] == "failed_event"
     assert len(payload["candidates"]) == diagnostics.MAX_NETWORK_CANDIDATES
+
+
+def test_a_provider_destination_is_a_candidate_unless_its_turn_opens_it(
+    recorded: list[dict[str, Any]],
+) -> None:
+    """A brokered turn reaches its API through the gateway, not by name: a
+    destination there is as unmatched as any other, unlike what the turn
+    opens directly."""
+    key = ConversationKey("aiko", "antigravity", "ticket", "issue-1")
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="run-1",
+        cwd=Path("."),
+        workspace_root=Path("."),
+        workspace_data_root=Path("."),
+        conversation_key=key,
+    )
+    diagnostics.record_network_egress_candidates(
+        text=(
+            "https://accounts.google.com/o/oauth2 failed; "
+            "https://lh3.googleusercontent.com/a/picture failed"
+        ),
+        context=context,
+        adapter_name="antigravity",
+        evidence="failed_event",
+    )
+
+    (call,) = recorded
+    hosts = [c["destination"] for c in call["payload"]["candidates"]]
+    assert hosts == ["accounts.google.com"]

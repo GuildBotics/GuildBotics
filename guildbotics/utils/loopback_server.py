@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import ssl
 from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
 from typing import Any
@@ -36,8 +37,11 @@ class LoopbackServer:
         self.port = port
 
     @classmethod
-    async def start(cls, make_app: Callable[[int], Any]) -> LoopbackServer:
-        """Serve the app ``make_app`` builds for its port, once it accepts.
+    async def start(
+        cls, make_app: Callable[[int], Any], *, tls: ssl.SSLContext | None = None
+    ) -> LoopbackServer:
+        """Serve the app ``make_app`` builds for its port, once it accepts;
+        over TLS when ``tls`` is given.
 
         Raises:
             RuntimeError: When the server does not start.
@@ -46,16 +50,17 @@ class LoopbackServer:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((LOOPBACK_HOST, 0))
         port = int(sock.getsockname()[1])
-        server = _EmbeddedServer(
-            Config(
-                make_app(port),
-                host=LOOPBACK_HOST,
-                port=port,
-                log_config=None,
-                access_log=False,
-                timeout_graceful_shutdown=1,
-            )
+        config = Config(
+            make_app(port),
+            host=LOOPBACK_HOST,
+            port=port,
+            log_config=None,
+            access_log=False,
+            timeout_graceful_shutdown=1,
         )
+        config.load()
+        config.ssl = tls  # uvicorn takes certificates from files only.
+        server = _EmbeddedServer(config)
         task = asyncio.create_task(server.serve(sockets=[sock]))
         try:
             for _ in range(_START_POLLS):

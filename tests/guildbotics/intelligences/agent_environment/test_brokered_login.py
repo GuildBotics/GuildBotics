@@ -864,3 +864,68 @@ def test_a_login_whose_access_token_claims_no_expiry_is_not_a_login(
     provider_state._seal_login(CODEX, {CODEX_AUTH: json.dumps(login).encode()})
 
     assert credential_state(CODEX) == "corrupt"
+
+
+# --- a Google login (Antigravity) ------------------------------------------------
+
+ANTIGRAVITY = cli_agent_info("antigravity")
+ANTIGRAVITY_AUTH = ANTIGRAVITY.provision.auth
+
+
+def _google_login(token: str = "REAL-AGY-459", expires_in: float = 3600) -> bytes:
+    expires = dt.datetime.fromtimestamp(time.time() + expires_in, dt.UTC)
+    return json.dumps(
+        {
+            "token": {
+                "access_token": token,
+                "token_type": "Bearer",
+                "refresh_token": f"{token}-REFRESH",
+                # Nanoseconds, as Antigravity writes them.
+                "expiry": expires.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z",
+            },
+            "auth_method": "consumer",
+            "id_token": "ID-SECRET-459",
+        }
+    ).encode()
+
+
+def test_a_google_login_is_lent_without_its_refresh_or_id_token(machine: Path) -> None:
+    provider_state._seal_login(ANTIGRAVITY, {ANTIGRAVITY_AUTH: _google_login()})
+    lent = LentLogin(ANTIGRAVITY, WHERE)
+
+    ((name, data),) = lent.stand_in_files().items()
+
+    held = json.loads(data)
+    assert name == ANTIGRAVITY_AUTH
+    expiry = dt.datetime.fromisoformat(held["token"].pop("expiry"))
+    assert expiry.timestamp() > time.time() + 300 * 24 * 60 * 60
+    assert held == {
+        "token": {"access_token": lent.stand_in, "token_type": "Bearer"},
+        "auth_method": "consumer",
+    }
+    for secret in (b"REAL-AGY-459", b"ID-SECRET-459"):
+        assert secret not in data
+
+
+@pytest.mark.asyncio
+async def test_a_google_login_is_refreshed_reading_its_usage(machine: Path) -> None:
+    provider_state._seal_login(
+        ANTIGRAVITY, {ANTIGRAVITY_AUTH: _google_login(expires_in=60)}
+    )
+    given: list[dict[str, Any]] = []
+
+    def act(files: dict[str, bytes], root: str) -> None:
+        path = f"{root}/{ANTIGRAVITY_AUTH}"
+        given.append(json.loads(files[path]))
+        files[path] = _google_login("NEW-AGY-459")
+
+    _Environment.act = staticmethod(act)
+    lent = LentLogin(ANTIGRAVITY, WHERE)
+
+    assert await lent.access_token(None) == "NEW-AGY-459"
+
+    (held,) = given
+    assert held["token"]["expiry"] == "1970-01-01T00:00:00Z"
+    assert held["token"]["refresh_token"] == "REAL-AGY-459-REFRESH"
+    (environment,) = _Environment.instances
+    assert environment.commands == [("agy", "-p", "/usage", "--output-format", "json")]
