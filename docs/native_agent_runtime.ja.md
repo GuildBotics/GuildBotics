@@ -293,8 +293,8 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   環境を止める前に取り出して暗号化保存します。期限まで5分を切ったログインは、turnのmicroVMと
   ツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があり、Antigravityはその認証を
   10秒で打ち切るため、最初の要求の中で更新を待たせません）。turnの途中では、ゲートウェイが期限の
-  5分前、またはupstreamに拒否されたときに更新を要求します（その要求は更新を待ちます。Antigravityが
-  turnの途中の待ちに耐えるかは未確認です）。この環境はprocessをまたいで端末に1つだけ動くように
+  5分前、またはupstreamに拒否されたときに更新を要求し、その要求は更新を待ちます（refreshするツールはすべて、
+  turnの途中の待ちのあともturnを続けることを実アカウントで確認済みです）。この環境はprocessをまたいで端末に1つだけ動くように
   直列化し（`login.sealed.lock`）、同じrefresh tokenを2回使うことはありません。turn全体は
   直列化しないので、同じアカウントのturnは並行して動きます。更新済みのログインを保存できない
   場合は古いログインで続けず、認証失敗として再ログインを求めます。
@@ -353,7 +353,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   （`/api/oauth/profile`）を読めません。Grok Buildの利用量はturnでは読めず、ログインを持つ環境で
   読みます。GitHub CopilotはCopilotがホストするGitHub MCP（`/mcp/readonly`）とテレメトリーを使えず、
   Business・Enterpriseのアカウントの転送先は未確認です。Antigravityはトークンを含むテレメトリーを
-  送れず、turnの途中のrefreshに耐えるかは未確認です。GitHub Copilotのログインに期限とrefreshが無いのは
+  送れません。GitHub Copilotのログインに期限とrefreshが無いのは
   provider自身の仕様です。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、外部認証コマンドの方式

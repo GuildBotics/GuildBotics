@@ -361,8 +361,8 @@ and `-p no:xdist`). Nothing is sent off the device.
   the turn's microVM and the tool start: a tool reaches its API as soon as it starts, and
   Antigravity gives up on its sign-in after ten seconds, so the first request never waits
   for a refresh. During a turn, the gateway asks for a refresh five minutes before expiry
-  or when the upstream refuses the token, and that request waits for it (whether Antigravity
-  bears the wait in the middle of a turn is not verified). That environment runs one at a time on the device,
+  or when the upstream refuses the token, and that request waits for it (every tool that refreshes
+  has been seen, with real accounts, to carry on with its turn after that wait). That environment runs one at a time on the device,
   across processes (`login.sealed.lock`), so a refresh token is never spent twice. Turns
   themselves are not serialized, so turns of the same account run side by side. A refreshed
   login that cannot be saved is not continued on the old one: it is recorded as an
@@ -429,8 +429,7 @@ and `-p no:xdist`). Nothing is sent off the device.
   read the account's profile (`/api/oauth/profile`). Grok Build's usage cannot be read in a
   turn; it is read where the login is held. GitHub Copilot goes without its hosted GitHub MCP
   server (`/mcp/readonly`) and its telemetry, and where Business and Enterprise accounts go is
-  not verified. Antigravity sends no telemetry that carries the token, and whether it bears a
-  refresh in the middle of a turn is not verified. That GitHub Copilot's login has neither an
+  not verified. Antigravity sends no telemetry that carries the token. That GitHub Copilot's login has neither an
   expiry nor a refresh is the provider's own design.
 
 For Grok Build, GuildBotics selects only the advertised method of the external auth
