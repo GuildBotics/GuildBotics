@@ -248,10 +248,19 @@ AI CLIツールのログインは、turnのmicroVMにも、この端末の平文
 | GitHub Copilot | `~/.copilot/config.json`（先頭にコメント行があるJSON。アカウント名のキーの下にトークン。期限もrefresh tokenも無い。扱えるアカウントは1つ） | 置換用の値（`gho_`で始まる。Copilotはこの形しか受け付けない）を`COPILOT_GITHUB_TOKEN`で渡す。`COPILOT_DEBUG_GITHUB_API_URL`と`COPILOT_API_URL`でゲートウェイを指す | `https://api.github.com`（`/copilot_internal/user`と`/copilot_internal/managed_settings`）と`https://api.individual.githubcopilot.com`（`/models`と推論の`/chat/completions`・`/responses`・`/v1/messages`。モデルが対応する経路へ送られる） | 更新は無い（拒否されたら再ログインを求める）。usageはCopilot SDK serverの`account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
-turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。接続先の契約（どの要求が差し替えた
-URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合成値で確かめる任意実行のテスト
-`tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`（`GUILDBOTICS_CONTRACT_PROBE=1`）に
-まとめてあります。固定版を上げたときはこれを実行します。
+turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。これを支える前提は、
+合成の秘密で実microVMを動かす任意実行のテストで確かめます。固定版を上げたときと、ゲートウェイや環境の
+組み立てを変えたときに実行します（snapshotのある端末で、`GUILDBOTICS_CONTRACT_PROBE=1`と、snapshotのある
+ワークスペースの`GUILDBOTICS_CONFIG_DIR`を付け、`-p no:xdist`で）。端末の外へは何も送りません。
+
+- `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`：接続先の契約。
+  本番の置換用の値と設定で、どの要求がゲートウェイへ届き、置換用の値がほかのどこへも運ばれないか。
+  refreshの起こし方
+- `tests/guildbotics/intelligences/agent_environment/test_credential_boundary.py`：保護境界。
+  turnのmicroVMの全ファイルと全プロセスに実値が無いこと、実トークンを折り返すupstreamを相手にしても
+  応答に実値が無いこと、ログインを持つ環境の動作中にディスク上の書き込み層とログへ実値が書かれないこと
+  （電源断で残るもの）、cancel・timeout・GuildBoticsのprocessのkillで環境が残らないこと、snapshotに
+  混入しないこと。検査が働いていることは、同じ場所にわざと置いた印を見つけることで毎回確かめます
 
 - **保存場所**: `guildbotics environment login claude`は、state root（`~/.claude`）をmicroVMの
   メモリ（tmpfs）に置いて動きます。ログインが残した`.credentials.json`は、環境が動いている間に
@@ -273,7 +282,10 @@ URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合�
   `Authorization`ヘッダーだけを実トークンに差し替えます。guestの`Host`・`x-api-key`・
   `cookie`は送りません。redirectは辿らずにそのまま返します。それ以外の宛先・経路・値は
   upstreamへ届く前に拒否します。turnのmicroVMが止まるとゲートウェイも止まり、置換用の値は
-  何にも使えなくなります。upstreamが401を返したら1回だけ更新して再送します。
+  何にも使えなくなります。upstreamが401を返したら1回だけ更新して再送します。応答のヘッダーと本文に
+  実トークンが現れた場合は同じ長さの伏せ字に置き換えて返し、本文を検査できるようupstreamには
+  無圧縮の応答を求めます（これに従わないupstreamの応答の本文は検査できません）。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketは
+  ハンドシェイクで拒否します。転送しなかった経路は`METHOD /path`だけをログに残します。
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
@@ -336,6 +348,13 @@ URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合�
 - **残るリスク**: 侵害されたturnは、実行中にゲートウェイ経由で許可されたAPIを使うこと、
   利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。
   hostのメモリやhost管理者に対する保護ではありません。
+- **この方式による機能制約**: Codexはturnでプラグイン、ChatGPTの連携アプリ（`codex_apps`）、
+  分析の送信を使えず、APIキーでのログインは扱いません。Claude Codeはturnからアカウントのprofile
+  （`/api/oauth/profile`）を読めません。Grok Buildの利用量はturnでは読めず、ログインを持つ環境で
+  読みます。GitHub CopilotはCopilotがホストするGitHub MCP（`/mcp/readonly`）とテレメトリーを使えず、
+  Business・Enterpriseのアカウントの転送先は未確認です。Antigravityはトークンを含むテレメトリーを
+  送れず、turnの途中のrefreshに耐えるかは未確認です。GitHub Copilotのログインに期限とrefreshが無いのは
+  provider自身の仕様です。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、外部認証コマンドの方式
 （`_meta.external_provider`）だけを選択します。turnが持つ置換用の値はこのコマンドから渡るためです。

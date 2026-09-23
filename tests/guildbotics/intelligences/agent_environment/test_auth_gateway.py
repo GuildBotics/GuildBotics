@@ -3,6 +3,7 @@ the stand-in; the real token goes to the upstream and nowhere else."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import ssl
 from collections.abc import AsyncIterator
@@ -444,3 +445,71 @@ async def test_a_login_refused_that_cannot_be_refreshed_is_answered_once() -> No
     assert response.status_code == 401
     assert response.json()["error"]["message"] == "log in again"
     assert len(upstream.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_answer_that_echoes_the_token_reaches_the_guest_masked(
+    running,
+) -> None:
+    """The token never comes back into the turn, even from an upstream that
+    echoes it -- in a header, or in a body where a chunk ends mid-token."""
+    _gateway, upstream, _tokens, guest = running
+    half = len(REAL) // 2
+    body = [b'{"seen": "Bearer ' + REAL[:half].encode(), REAL[half:].encode() + b'"}']
+    upstream.responses = [
+        httpx.Response(
+            200,
+            headers={
+                "x-echo": f"Bearer {REAL}",
+                "content-length": str(sum(map(len, body))),
+            },
+            stream=_Chunks(body),
+        )
+    ]
+
+    response = await guest.post("/v1/messages", headers={"accept-encoding": "gzip"})
+
+    (sent,) = upstream.requests
+    assert sent.headers["accept-encoding"] == "identity"
+    assert REAL not in response.headers["x-echo"]
+    assert REAL not in response.text
+    assert response.text == '{"seen": "Bearer ' + "*" * len(REAL) + '"}'
+    assert int(response.headers["content-length"]) == len(response.content)
+
+
+class _Chunks(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_neither_http2_nor_a_websocket_is_taken() -> None:
+    """What the gateway does not carry is refused, not half-carried."""
+    gateway = CredentialGateway(_ELSEWHERE, _Tokens(REAL), STAND_IN)
+    await gateway.start()
+    try:
+        trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        trust.set_alpn_protocols(["h2", "http/1.1"])
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", gateway.port, ssl=trust, server_hostname=GUEST_HOST_ALIAS
+        )
+        assert writer.get_extra_info("ssl_object").selected_alpn_protocol() == (
+            "http/1.1"
+        )
+        writer.write(
+            b"GET /v1/generate HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+            b"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Version: 13\r\n"
+            b"Authorization: Bearer " + STAND_IN.encode() + b"\r\n\r\n"
+        )
+        await writer.drain()
+        status = await asyncio.wait_for(reader.readline(), 5)
+        writer.close()
+    finally:
+        await gateway.close()
+
+    assert status.startswith(b"HTTP/1.1 403"), status

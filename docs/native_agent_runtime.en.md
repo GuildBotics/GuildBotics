@@ -308,10 +308,22 @@ takes Claude Code as the example; the tools differ as this table shows.
 | Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
-API. The contract that relies on (which requests reach the moved URL, and where else the
-stand-in is carried) is checked with synthetic values by an opt-in test,
-`tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`
-(`GUILDBOTICS_CONTRACT_PROBE=1`); run it when a pinned version changes.
+API. What that relies on is checked by opt-in tests that run real microVMs with synthetic
+secrets; run them when a pinned version changes, and when the gateway or the way an
+environment is put together changes (on a device with a snapshot, with
+`GUILDBOTICS_CONTRACT_PROBE=1`, `GUILDBOTICS_CONFIG_DIR` at a workspace with the snapshot,
+and `-p no:xdist`). Nothing is sent off the device.
+
+- `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`: the
+  connection contracts. With the production stand-in and settings, which requests reach the
+  gateway, that the stand-in is carried nowhere else, and how a refresh is made.
+- `tests/guildbotics/intelligences/agent_environment/test_credential_boundary.py`: the
+  protection boundary. No real value in any file or process of a turn's microVM; none in an
+  answer, even from an upstream that echoes the real token; none written to the writable
+  layer or logs on the disk while an environment that holds the login runs (what a power cut
+  leaves); nothing of an environment left after a cancel, a timeout, or the GuildBotics
+  process being killed; and none in the snapshot. That each check works is shown every time
+  by its finding a mark planted where it looks.
 
 - **Where it is kept**: `guildbotics environment login claude` runs with the state root
   (`~/.claude`) in the microVM's memory (tmpfs). The `.credentials.json` the login leaves
@@ -334,7 +346,12 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
   are not sent. Redirects are handed back, never followed. Every other destination, route,
   or value is refused before it reaches the upstream. When the turn's microVM stops, the
   gateway stops, and the stand-in opens nothing. When the upstream answers 401, the login
-  is refreshed once and the request sent again.
+  is refreshed once and the request sent again. Should the real token appear in an answer's
+  headers or body, it is masked to the same length before the answer is passed on, and the
+  upstream is asked for an uncompressed answer so that the body can be checked (the body of
+  an answer from an upstream that ignores this goes unchecked). HTTP/1.1 and
+  streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket refused at its
+  handshake. The routes not forwarded are logged as `METHOD /path` only.
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
   endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
   an environment of their own that holds the login in memory, mounts no working directory
@@ -407,6 +424,14 @@ stand-in is carried) is checked with synthetic values by an opt-in test,
 - **What remains**: a compromised turn can still use the allowed API through the gateway
   while it runs, spend the account's quota, and put data into allowed request bodies. This
   does not protect against the host's memory or its administrator.
+- **Limits of this scheme**: Codex turns go without plugins, ChatGPT's connected apps
+  (`codex_apps`), and analytics, and an API key login is not kept. A Claude Code turn cannot
+  read the account's profile (`/api/oauth/profile`). Grok Build's usage cannot be read in a
+  turn; it is read where the login is held. GitHub Copilot goes without its hosted GitHub MCP
+  server (`/mcp/readonly`) and its telemetry, and where Business and Enterprise accounts go is
+  not verified. Antigravity sends no telemetry that carries the token, and whether it bears a
+  refresh in the middle of a turn is not verified. That GitHub Copilot's login has neither an
+  expiry nor a refresh is the provider's own design.
 
 For Grok Build, GuildBotics selects only the advertised method of the external auth
 provider command (`_meta.external_provider`), which is how a turn's stand-in reaches it.

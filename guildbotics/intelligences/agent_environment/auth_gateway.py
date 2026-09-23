@@ -67,14 +67,16 @@ _HOP_BY_HOP = frozenset(
     }
 )
 #: What of the guest's request never reaches the upstream: the name it used
-#: for the gateway, the credentials it holds, and a length the forwarded
-#: body sets again.
+#: for the gateway, the credentials it holds, a length the forwarded body
+#: sets again, and the encodings it takes -- an answer comes back plain, so
+#: that the token is found in it wherever it is.
 _DROPPED_REQUEST_HEADERS = _HOP_BY_HOP | {
     "host",
     "authorization",
     "x-api-key",
     "cookie",
     "content-length",
+    "accept-encoding",
 }
 
 
@@ -155,6 +157,10 @@ class CredentialGateway:
                 await send({"type": "lifespan.startup.complete"})
             await send({"type": "lifespan.shutdown.complete"})
             return
+        if scope["type"] == "websocket":  # Not carried: refused at the handshake.
+            await receive()
+            await send({"type": "websocket.close"})
+            return
         if scope["type"] != "http":
             return
         headers = [
@@ -200,7 +206,11 @@ class CredentialGateway:
                 request = self._client.build_request(
                     scope["method"],
                     url,
-                    headers=[*forwarded, ("authorization", f"Bearer {token}")],
+                    headers=[
+                        *forwarded,
+                        ("accept-encoding", "identity"),
+                        ("authorization", f"Bearer {token}"),
+                    ],
                     content=body,
                 )
                 response = await self._client.send(request, stream=True)
@@ -217,25 +227,42 @@ class CredentialGateway:
         except httpx.HTTPError as exc:
             await _refuse(send, 502, "api_error", type(exc).__name__)
             return
+        # An answer never carries the token back into the turn, even one that
+        # echoes it: it is masked, to the same length, wherever it stands.
+        secret = token.encode()
+        mask = b"*" * len(secret)
         try:
             await send(
                 {
                     "type": "http.response.start",
                     "status": response.status_code,
                     "headers": [
-                        (name, value)
+                        (name, value.replace(secret, mask))
                         for name, value in response.headers.raw
                         if name.decode("latin-1").lower() not in _HOP_BY_HOP
                     ],
                 }
             )
+            held = b""
             async for chunk in response.aiter_raw():
+                data = (held + chunk).replace(secret, mask)
+                # What may be the start of the token is held for the next chunk.
+                cut = len(data) - _partial(data, secret)
+                data, held = data[:cut], data[cut:]
                 await send(
-                    {"type": "http.response.body", "body": chunk, "more_body": True}
+                    {"type": "http.response.body", "body": data, "more_body": True}
                 )
-            await send({"type": "http.response.body", "body": b""})
+            await send({"type": "http.response.body", "body": held})
         finally:
             await response.aclose()
+
+
+def _partial(data: bytes, secret: bytes) -> int:
+    """How long an end of ``data`` is that ``secret`` begins with."""
+    for length in range(min(len(data), len(secret) - 1), 0, -1):
+        if data.endswith(secret[:length]):
+            return length
+    return 0
 
 
 def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
@@ -278,6 +305,7 @@ def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
         .sign(ca_key, hashes.SHA256())
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.set_alpn_protocols(["http/1.1"])  # HTTP/2 is refused, not guessed.
     with tempfile.TemporaryDirectory() as held:  # The context loads files only.
         chain, private = Path(held, "chain.pem"), Path(held, "key.pem")
         chain.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
