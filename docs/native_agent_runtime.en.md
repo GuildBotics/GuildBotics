@@ -312,8 +312,9 @@ device. This is a transition: the other tools are still bound from the store as 
   The account file (`.claude.json`) holds no secret and stays in the store, bound into
   turns. None of it is a workspace secret, and none of it travels through Git or a Hub.
 - **What a turn holds**: the turn's microVM gets a credentials file whose access token is
-  replaced by a stand-in minted for the turn, whose refresh token is removed, and whose
-  expiry is far away. Claude Code is pointed at a gateway in the GuildBotics process
+  a stand-in minted for the turn and whose expiry is far away. The file is built from the
+  non-secret fields the catalog names (`scopes`, `subscriptionType`, `rateLimitTier`) alone,
+  so neither the refresh token nor any credential a later version adds to the file is in it. Claude Code is pointed at a gateway in the GuildBotics process
   (`auth_gateway.py`) through `ANTHROPIC_BASE_URL`, and the turn's network policy opens
   only the gateway's host port. Anthropic's domains are not open to the turn (the stand-in
   authenticates nothing there anyway). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set.

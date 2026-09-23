@@ -248,8 +248,10 @@ Claude Codeのログインは、turnのmicroVMにも、この端末の平文フ�
   ツール・アカウント・形式を認証付きデータとして結び付けるため、別のものとしては開けません。
   アカウント情報（`.claude.json`）は秘密を含まないためstoreに置き、turnへbindします。
   Workspaceの共有Secret・Git・Hubの配布対象ではありません。
-- **turnが持つもの**: turnのmicroVMには、アクセストークンを置換用の値（turnごとに生成）に
-  差し替え、refresh tokenを取り除き、期限を十分先にした認証ファイルだけを書き込みます。
+- **turnが持つもの**: turnのmicroVMには、置換用の値（turnごとに生成）をアクセストークンとし、
+  期限を十分先にした認証ファイルだけを書き込みます。このファイルは、カタログが挙げた非秘密の
+  フィールド（`scopes`・`subscriptionType`・`rateLimitTier`）だけから組み立てます。refresh tokenや、
+  将来のバージョンで認証ファイルに増えた未知の認証値は入りません。
   Claude Codeは`ANTHROPIC_BASE_URL`でGuildBoticsプロセス内のゲートウェイ
   （`auth_gateway.py`）を指し、turnのnetwork policyはゲートウェイのhost portだけを開けます。
   Anthropicのドメインはturnからは開けません（置換用の値は直接送っても認証に使えません）。

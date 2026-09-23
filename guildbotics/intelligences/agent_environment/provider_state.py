@@ -424,7 +424,8 @@ async def _keep_login(tool: CliAgentInfo, environment: AgentEnvironment) -> None
     """Take a brokered login out of the login's environment and seal it.
 
     The rest of what the login left under the state root is kept only as far
-    as the tool's persisted files name it (Claude Code's account file).
+    as the tool's persisted files name it (Claude Code's account file). Both
+    are written under the login's hold, as a refresh's are.
 
     Raises:
         AgentEnvironmentError: When the login is not an account login that
@@ -445,17 +446,28 @@ async def _keep_login(tool: CliAgentInfo, environment: AgentEnvironment) -> None
                 tool=tool.label,
             )
         ) from exc
+    kept = {
+        name: data
+        for name in provision.persisted
+        if not name.endswith("/")
+        and (data := await environment.read_file(f"{root}/{name}")) is not None
+    }
+    # Under the login's hold: a refresh still running on the login this one
+    # replaces must not seal over it afterwards.
+    try:
+        hold = await _hold_login(tool)
+    except CredentialUnavailableError as exc:
+        raise AgentEnvironmentError(str(exc)) from exc
     try:
         _seal_login(tool, files)
+        store = provider_state_dir(tool)
+        for name, data in kept.items():
+            if (target := _inside(store, name)) is not None:
+                atomic_write_bytes(target, data)
     except CredentialVaultError as exc:
-        raise AgentEnvironmentError(str(exc)) from exc
-    store = provider_state_dir(tool)
-    for name in provision.persisted:
-        target = _inside(store, name)
-        if name.endswith("/") or target is None:
-            continue
-        if (kept := await environment.read_file(f"{root}/{name}")) is not None:
-            atomic_write_bytes(target, kept)
+        raise AgentEnvironmentError(_vault_refusal(tool, exc)) from exc
+    finally:
+        hold.release()
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,22 +507,24 @@ class LentLogin:
         return broker
 
     def stand_in(self, token: str) -> dict[str, bytes]:
-        """The login as a turn holds it: ``token`` for the access token, no
-        refresh token, an expiry the turn never reaches, and nothing of the
-        file beyond the login itself."""
+        """The login as a turn holds it, built from the named fields only:
+        ``token`` for the access token, an expiry the turn never reaches,
+        and the non-secret fields the catalog names -- never a refresh token,
+        nor any other credential the file holds."""
         broker = self._broker
         auth = self._tool.provision.auth
-        document = json.loads(
-            _rewritten(
-                broker,
-                self.files[auth],
-                token=token,
-                expires_at_ms=int(time.time() * 1000) + _STAND_IN_LIFETIME_MS,
-                keep_refresh=False,
-            )
+        login = json.loads(self.files[auth])
+        held: dict[str, Any] = {}
+        _put(held, broker.access_token, token)
+        _put(
+            held,
+            broker.expires_at_ms,
+            int(time.time() * 1000) + _STAND_IN_LIFETIME_MS,
         )
-        login = {broker.access_token[0], broker.expires_at_ms[0]}
-        return {auth: json.dumps({k: document[k] for k in login}).encode()}
+        for path in broker.turn_fields:
+            if (value := _at(login, path)) is not None:
+                _put(held, path, value)
+        return {auth: json.dumps(held).encode()}
 
     async def access_token(self, refused: str | None) -> str:
         """The token to send; a refresh first, when it is due.
@@ -564,11 +578,7 @@ async def refresh_login(
         if token != stale and expires - time.time() >= _REFRESH_MARGIN_SECONDS:
             return files
         auth = tool.provision.auth
-        expired = {
-            auth: _rewritten(
-                broker, files[auth], token=None, expires_at_ms=0, keep_refresh=True
-            )
-        }
+        expired = {auth: _expired(broker, files[auth])}
         refreshed: list[dict[str, bytes]] = []
 
         async def take_back(environment: AgentEnvironment) -> None:
@@ -612,10 +622,7 @@ async def start_login_environment(
     """
     broker = tool.provision.credential_broker
     assert broker is not None
-    try:
-        hold = await _hold_login(tool)
-    except CredentialVaultError as exc:
-        raise CredentialUnavailableError(_vault_refusal(tool, exc)) from exc
+    hold = await _hold_login(tool)
     try:
         files = _unsealed_login(tool)
         token, _expires = _access(broker, files, tool)
@@ -637,7 +644,21 @@ async def start_login_environment(
 
 
 async def _hold_login(tool: CliAgentInfo) -> HeldVaultLock:
-    return await held_vault_lock(sealed_login_path(tool), timeout=_LOGIN_WAIT_SECONDS)
+    """Hold the sealed login against every other use of it on this device.
+
+    Every write of the login -- a login, a refresh, a probe that refreshed --
+    is made holding this, so none is sealed over another it did not see.
+
+    Raises:
+        CredentialUnavailableError: When it cannot be held; the message says
+            what to do.
+    """
+    try:
+        return await held_vault_lock(
+            sealed_login_path(tool), timeout=_LOGIN_WAIT_SECONDS
+        )
+    except CredentialVaultError as exc:
+        raise CredentialUnavailableError(_vault_refusal(tool, exc)) from exc
 
 
 async def _boot_login_environment(
@@ -770,23 +791,21 @@ def _account_login(
     return token, expires / 1000
 
 
-def _rewritten(
-    broker: CredentialBroker,
-    data: bytes,
-    *,
-    token: str | None,
-    expires_at_ms: int,
-    keep_refresh: bool,
-) -> bytes:
-    """The credentials file ``data`` with its token, expiry, and refresh
-    token replaced as asked; everything else of it as it was."""
+def _expired(broker: CredentialBroker, data: bytes) -> bytes:
+    """The credentials file ``data`` as the tool reads a login that has
+    expired, so that it refreshes it; everything else of it as it was."""
     document = json.loads(data)
-    if token is not None:
-        _parent(document, broker.access_token)[broker.access_token[-1]] = token
-    _parent(document, broker.expires_at_ms)[broker.expires_at_ms[-1]] = expires_at_ms
-    if not keep_refresh:
-        _parent(document, broker.refresh_token).pop(broker.refresh_token[-1], None)
+    parent = _at(document, broker.expires_at_ms[:-1])
+    if not isinstance(parent, dict):
+        raise ValueError("the credentials file has no expiry")
+    parent[broker.expires_at_ms[-1]] = 0
     return json.dumps(document).encode()
+
+
+def _put(document: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    for key in path[:-1]:
+        document = document.setdefault(key, {})
+    document[path[-1]] = value
 
 
 def _at(document: Any, path: tuple[str, ...]) -> Any:
@@ -795,13 +814,6 @@ def _at(document: Any, path: tuple[str, ...]) -> Any:
             return None
         document = document.get(key)
     return document
-
-
-def _parent(document: Any, path: tuple[str, ...]) -> dict[str, Any]:
-    parent = _at(document, path[:-1])
-    if not isinstance(parent, dict):
-        raise ValueError(f"'{'.'.join(path)}' is not in the credentials file")
-    return parent
 
 
 def _refresh_failed(tool: CliAgentInfo) -> str:

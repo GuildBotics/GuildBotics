@@ -54,6 +54,8 @@ def _login(
                 "expiresAt": int((time.time() + expires_in) * 1000),
                 "scopes": ["user:inference", "user:profile"],
                 "subscriptionType": "max",
+                # A credential the file gains in some later version.
+                "idToken": "ID-SECRET-459",
             },
             "mcpOAuth": {"server": {"accessToken": "MCP-SECRET-459"}},
         }
@@ -219,9 +221,13 @@ def test_a_turn_holds_a_stand_in_that_can_neither_refresh_nor_expire(
     assert "refreshToken" not in held
     assert held["expiresAt"] / 1000 > time.time() + 300 * 24 * 60 * 60
     assert held["scopes"] == ["user:inference", "user:profile"]
-    assert b"REAL-459" not in data and b"REFRESH-459" not in data
-    # Nothing of the file beyond the login itself reaches the turn.
-    assert list(json.loads(data)) == ["claudeAiOauth"]
+    assert held["subscriptionType"] == "max"
+    # Built from the named fields: no credential the file holds, known or
+    # not, reaches the turn.
+    assert json.loads(data) == {"claudeAiOauth": held}
+    assert set(held) == {"accessToken", "expiresAt", "scopes", "subscriptionType"}
+    for secret in (b"REAL-459", b"REFRESH-459", b"ID-SECRET-459", b"MCP-SECRET-459"):
+        assert secret not in data
 
 
 def test_a_login_that_cannot_be_lent_says_why(machine: Path) -> None:
@@ -432,6 +438,74 @@ async def test_a_turn_does_not_refresh_again_after_a_refresh_did_not_help(
             await unrefreshed.access_token("REAL-459")
     assert len(_Environment.instances) == 1
     assert await unrefreshed.access_token(None) == "REAL-459"
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_that_cannot_hold_the_login_says_why(
+    machine: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway answers a login it cannot use; anything else would be a
+    server error with no way back offered."""
+    provider_state._seal_login(CLAUDE, {AUTH: _login()})
+    monkeypatch.setattr(provider_state, "_LOGIN_WAIT_SECONDS", 0.2)
+    holding = await start_login_environment(CLAUDE, WHERE)
+    try:
+        with pytest.raises(CredentialUnavailableError) as refused:
+            await refresh_login(CLAUDE, WHERE, "REAL-459")
+    finally:
+        await holding.close()
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.tool.credentials_unavailable",
+        tool=CLAUDE.label,
+        command=provider_state.login_command("claude"),
+    )
+    assert len(_Environment.instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_login_made_while_a_refresh_runs_is_the_one_kept(
+    machine: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refresh still running on the replaced login seals first, and the
+    new login after it -- never the other way round."""
+    provider_state._seal_login(CLAUDE, {AUTH: _login("OLD-459")})
+
+    def act(files: dict[str, bytes], root: str) -> None:
+        if f"{root}/{AUTH}" in files:  # The refresh, holding the old login.
+            files[f"{root}/{AUTH}"] = _login("OLD-REFRESHED-459")
+        else:  # The login, starting from nothing.
+            files[f"{root}/{AUTH}"] = _login("RELOGIN-459")
+
+    _Environment.act = staticmethod(act)
+    refreshing_ran = asyncio.Event()
+    finish_refresh = asyncio.Event()
+
+    async def communicate(self: _Process) -> tuple[bytes, bytes]:
+        refreshing_ran.set()
+        await finish_refresh.wait()
+        return b"", b""
+
+    monkeypatch.setattr(_Process, "communicate", communicate)
+    refreshing = asyncio.create_task(refresh_login(CLAUDE, WHERE, "OLD-459"))
+    await refreshing_ran.wait()
+    logging_in = asyncio.create_task(
+        login(
+            CLAUDE,
+            DECLARATION,
+            snapshot=machine / "snap",
+            read_line=lambda: None,
+            write=lambda _: None,
+        )
+    )
+    await asyncio.sleep(0.3)
+    assert not logging_in.done()
+
+    finish_refresh.set()
+    await refreshing
+    assert await logging_in == 0
+
+    assert _sealed()["accessToken"] == "RELOGIN-459"
 
 
 # --- asking the tool about its account ---------------------------------------------

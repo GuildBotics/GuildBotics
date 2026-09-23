@@ -55,7 +55,10 @@ class CredentialBroker(BaseModel):
     user's (``refresh`` is the command that makes the tool refresh a login
     it is told has expired).
 
-    The token fields are JSON paths into the credentials file ``auth``.
+    The token fields are JSON paths into the credentials file ``auth``. The
+    stand-in is built from them and from ``turn_fields`` alone -- the
+    non-secret fields the tool needs to run a turn -- so a credential the
+    file gains in a later version of the tool never reaches a turn.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -67,6 +70,8 @@ class CredentialBroker(BaseModel):
     refresh_token: tuple[str, ...]
     #: Milliseconds since the epoch.
     expires_at_ms: tuple[str, ...]
+    #: The non-secret fields the stand-in carries beside the token and expiry.
+    turn_fields: tuple[tuple[str, ...], ...] = ()
     #: The origin the gateway forwards to, and the only one.
     upstream: str
     #: ``METHOD /path`` the gateway forwards; a query string is not part of
@@ -275,6 +280,12 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 access_token=("claudeAiOauth", "accessToken"),
                 refresh_token=("claudeAiOauth", "refreshToken"),
                 expires_at_ms=("claudeAiOauth", "expiresAt"),
+                # What `/usage` and the plan checks read of the login.
+                turn_fields=(
+                    ("claudeAiOauth", "scopes"),
+                    ("claudeAiOauth", "subscriptionType"),
+                    ("claudeAiOauth", "rateLimitTier"),
+                ),
                 upstream="https://api.anthropic.com",
                 routes=("POST /v1/messages", "POST /v1/messages/count_tokens"),
                 base_url_env="ANTHROPIC_BASE_URL",
