@@ -231,7 +231,7 @@ async def test_grok_sends_everything_to_its_chat_proxy_and_refuses_billing(
     # Grok Build serves requests side by side: the session is asked for only
     # once the login has had time to be taken, as the adapter awaits it.
     answered = await guest.sh(
-        "(read -r a; read -r b; printf '%s\\n' \"$a\" \"$b\"; sleep 5; cat; sleep 20)"
+        '(read -r a; read -r b; printf \'%s\\n\' "$a" "$b"; sleep 5; cat; sleep 20)'
         " | timeout 35 grok --no-auto-update agent stdio",
         stdin=rpc(
             initialize,
