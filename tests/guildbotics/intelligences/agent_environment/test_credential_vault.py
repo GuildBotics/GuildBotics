@@ -172,7 +172,9 @@ async def test_threads_of_this_process_exclude_each_other_before_the_os_lock(
 ) -> None:
     """Scheduler workers run their own event loops on their own threads; the
     process's mutex keeps them apart even where the OS lock does not."""
+    # An OS lock that takes nothing, and so has nothing to give back.
     monkeypatch.setattr(credential_vault, "lock_file_nonblocking", lambda handle: None)
+    monkeypatch.setattr(credential_vault, "unlock_file", lambda handle: None)
     record.parent.mkdir(parents=True)
     first = await held_vault_lock(record, timeout=1.0)
 
