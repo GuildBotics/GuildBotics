@@ -164,3 +164,27 @@ async def test_one_holder_at_a_time_and_a_release_lets_the_next_in(
     first.release()
     first.release()
     (await second).release()
+
+
+@pytest.mark.asyncio
+async def test_threads_of_this_process_exclude_each_other_before_the_os_lock(
+    record: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scheduler workers run their own event loops on their own threads; the
+    process's mutex keeps them apart even where the OS lock does not."""
+    monkeypatch.setattr(credential_vault, "lock_file_nonblocking", lambda handle: None)
+    record.parent.mkdir(parents=True)
+    first = await held_vault_lock(record, timeout=1.0)
+
+    def other_thread() -> None:
+        asyncio.run(held_vault_lock(record, timeout=0.2))
+
+    with pytest.raises(CredentialVaultError) as waited:
+        await asyncio.to_thread(other_thread)
+    assert waited.value.state == "unavailable"
+
+    first.release()
+    second = await asyncio.to_thread(
+        lambda: asyncio.run(held_vault_lock(record, timeout=1.0))
+    )
+    second.release()

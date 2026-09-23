@@ -19,6 +19,7 @@ import base64
 import binascii
 import json
 import os
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,6 +32,7 @@ from guildbotics.utils.advisory_lock import (
     held_lock,
     lock_file_nonblocking,
     open_lock_file,
+    process_lock,
     unlock_file,
 )
 from guildbotics.utils.fileio import atomic_write_bytes, get_machine_state_path
@@ -160,47 +162,65 @@ def vault_problem(state: VaultState, *, tool: str, command: str) -> str:
 class HeldVaultLock:
     """This process's hold on a sealed record; see :func:`held_vault_lock`."""
 
-    def __init__(self, handle: IO[str]) -> None:
+    def __init__(self, mutex: threading.Lock, handle: IO[str]) -> None:
+        self._mutex = mutex
         self._handle: IO[str] | None = handle
 
     def release(self) -> None:
         """Let the next holder in; idempotent, and it never waits."""
         handle, self._handle = self._handle, None
-        if handle is not None:
-            try:
-                unlock_file(handle)
-            finally:
-                handle.close()
+        if handle is None:
+            return
+        try:
+            unlock_file(handle)
+        finally:
+            handle.close()
+            self._mutex.release()
 
 
 async def held_vault_lock(path: Path, *, timeout: float) -> HeldVaultLock:
-    """Hold the record at ``path`` against every process on this device.
+    """Hold the record at ``path`` against every thread and process here.
 
     Whoever might refresh the login holds this for as long as the tool can
     refresh it, so two refreshes never spend the same refresh token and a
-    refreshed login is sealed before the next one reads the record. The
-    release is synchronous, so a hold can end in a callback that cannot wait.
+    refreshed login is sealed before the next one reads the record. As with
+    :func:`~guildbotics.utils.advisory_lock.held_lock`, the process's mutex
+    comes first and the OS lock second; both are polled, never waited on, so
+    the event loop runs meanwhile. The release is synchronous, so a hold can
+    end in a callback that cannot wait.
 
     Raises:
         CredentialVaultError: ``unavailable`` when it stays held past
             ``timeout`` seconds.
     """
-    handle = open_lock_file(path.with_name(path.name + ".lock"))
+    lock_path = path.with_name(path.name + ".lock")
+    mutex = process_lock(lock_path)
     deadline = time.monotonic() + timeout
+    while not mutex.acquire(blocking=False):
+        await _wait_until(deadline)
     try:
-        while True:
-            try:
-                lock_file_nonblocking(handle)
-                return HeldVaultLock(handle)
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise CredentialVaultError(
-                        "unavailable", "another use of the login is still running"
-                    ) from None
-                await asyncio.sleep(_LOCK_POLL_SECONDS)
+        handle = open_lock_file(lock_path)
+        try:
+            while True:
+                try:
+                    lock_file_nonblocking(handle)
+                    return HeldVaultLock(mutex, handle)
+                except BlockingIOError:
+                    await _wait_until(deadline)
+        except BaseException:
+            handle.close()
+            raise
     except BaseException:
-        handle.close()
+        mutex.release()
         raise
+
+
+async def _wait_until(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise CredentialVaultError(
+            "unavailable", "another use of the login is still running"
+        )
+    await asyncio.sleep(_LOCK_POLL_SECONDS)
 
 
 def _aad(label: str) -> bytes:
