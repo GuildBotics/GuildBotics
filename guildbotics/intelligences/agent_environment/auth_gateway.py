@@ -157,10 +157,6 @@ class CredentialGateway:
                 await send({"type": "lifespan.startup.complete"})
             await send({"type": "lifespan.shutdown.complete"})
             return
-        if scope["type"] == "websocket":  # Not carried: refused at the handshake.
-            await receive()
-            await send({"type": "websocket.close"})
-            return
         if scope["type"] != "http":
             return
         headers = [

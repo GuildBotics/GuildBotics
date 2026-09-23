@@ -285,8 +285,8 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   何にも使えなくなります。upstreamが401を返したら1回だけ更新して再送します。応答のヘッダーと本文に
   実トークンが現れた場合は同じ長さの伏せ字に置き換えて返し、本文を検査できるようupstreamには
   無圧縮の応答を求めます。それでも圧縮された応答は渡さず（502）、
-  `Gateway refused an answer encoded as ...`をログに残します。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketは
-  ハンドシェイクで拒否します。転送しなかった経路は`METHOD /path`だけをログに残します。
+  `Gateway refused an answer encoded as ...`をログに残します。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
+  upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。

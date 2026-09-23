@@ -25,6 +25,22 @@ class _EmbeddedServer(Server):
         yield
 
 
+def _unlogged(protocol: Any) -> Any:
+    """``protocol``, logging no request.
+
+    uvicorn's own switch for this only empties its access logger, and each
+    connection logs whenever that logger has a handler -- which is up to
+    whatever else in the process configures logging.
+    """
+
+    class Unlogged(protocol):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.access_log = False
+
+    return Unlogged
+
+
 class LoopbackServer:
     """One ASGI app on ``127.0.0.1`` at a port the OS chose, for its owner.
 
@@ -55,11 +71,14 @@ class LoopbackServer:
             host=LOOPBACK_HOST,
             port=port,
             log_config=None,
-            access_log=False,
+            # A WebSocket handshake is logged with its path and query whatever
+            # the app answers: none is upgraded, and each is plain HTTP here.
+            ws="none",
             timeout_graceful_shutdown=1,
         )
         config.load()
         config.ssl = tls  # uvicorn takes certificates from files only.
+        config.http_protocol_class = _unlogged(config.http_protocol_class)
         server = _EmbeddedServer(config)
         task = asyncio.create_task(server.serve(sockets=[sock]))
         try:

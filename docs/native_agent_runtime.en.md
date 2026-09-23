@@ -351,8 +351,8 @@ and `-p no:xdist`). Nothing is sent off the device.
   upstream is asked for an uncompressed answer so that the body can be checked; an answer
   compressed all the same is not passed on (502), and the refusal is logged as
   `Gateway refused an answer encoded as ...`. HTTP/1.1 and
-  streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket refused at its
-  handshake. The routes not forwarded are logged as `METHOD /path` only.
+  streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
+  upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only.
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
   endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
   an environment of their own that holds the login in memory, mounts no working directory
