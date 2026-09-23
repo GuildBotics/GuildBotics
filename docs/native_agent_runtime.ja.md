@@ -362,7 +362,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   GitHub CopilotのGitHub MCP（ログインしたGitHubアカウントの権限での読み取り）と、Codexの連携アプリ
   （ChatGPTアカウントに連携したサービス）も含まれます。
   hostのメモリやhost管理者に対する保護ではありません。
-- **この方式による機能制約**: Codexはturnで分析を送信できず、APIキーでのログインは扱いません。Claude Codeはturnからアカウントのprofile
+- **この方式による機能制約**: Codexはturnで分析を送信できません。Claude Codeはturnからアカウントのprofile
   （`/api/oauth/profile`）を読めません。Grok Buildの利用量はturnでは読めず、ログインを持つ環境で
   読みます。GitHub Copilotはテレメトリーを送れず、
   Business・Enterpriseのアカウントの転送先は未確認です。Antigravityはトークンを含むテレメトリーを

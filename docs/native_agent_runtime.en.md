@@ -441,8 +441,7 @@ and `-p no:xdist`). Nothing is sent off the device.
   account's permissions) and Codex's connected apps (the services linked to the ChatGPT
   account). This
   does not protect against the host's memory or its administrator.
-- **Limits of this scheme**: Codex turns send no analytics, and an API key login is not
-  kept. A Claude Code turn cannot
+- **Limits of this scheme**: Codex turns send no analytics. A Claude Code turn cannot
   read the account's profile (`/api/oauth/profile`). Grok Build's usage cannot be read in a
   turn; it is read where the login is held. GitHub Copilot sends no telemetry, and where Business and Enterprise accounts go is
   not verified. Antigravity sends no telemetry that carries the token. That GitHub Copilot's login has neither an
