@@ -135,14 +135,6 @@ def unseal(path: Path, label: str) -> dict[str, bytes] | None:
         raise CredentialVaultError("corrupt", type(exc).__name__) from exc
 
 
-def vault_state(path: Path, label: str) -> VaultState:
-    """What is sealed at ``path``, read the way a turn would read it."""
-    try:
-        return "saved" if unseal(path, label) is not None else "missing"
-    except CredentialVaultError as exc:
-        return exc.state
-
-
 def vault_problem(state: VaultState, *, tool: str, command: str) -> str:
     """Why a tool in ``state`` cannot start, in the words every caller shows."""
     values = {"tool": tool, "command": command}

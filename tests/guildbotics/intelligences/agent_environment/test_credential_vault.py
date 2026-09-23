@@ -15,9 +15,17 @@ from guildbotics.intelligences.agent_environment.credential_vault import (
     seal,
     unseal,
     vault_problem,
-    vault_state,
 )
 from guildbotics.utils.i18n_tool import t
+
+
+def vault_state(path: Path, label: str) -> str:
+    """What is sealed at ``path``: its files opened, or why not."""
+    try:
+        return "saved" if unseal(path, label) is not None else "missing"
+    except CredentialVaultError as exc:
+        return exc.state
+
 
 LOGIN = {".credentials.json": b'{"accessToken": "SYNTHETIC-SECRET-459"}'}
 LABEL = "claude:default:claude-oauth"

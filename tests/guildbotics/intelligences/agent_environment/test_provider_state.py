@@ -86,35 +86,24 @@ def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) 
     )
 
 
-def test_credentials_the_tool_points_elsewhere_are_bound_as_their_directory(
+def test_a_brokered_login_the_tool_points_elsewhere_is_never_bound(
     machine: Path, tmp_path: Path
 ) -> None:
-    """A tool that renames its credentials into place cannot do so over a
-    file bind, so its credentials directory is bound instead, and the tool
-    is pointed at the file inside it -- in a turn and at login alike."""
+    """Grok is pointed at its credentials under a directory of their own. Its
+    login is brokered, so a plain one left in the store is neither counted
+    nor bound, and its login lands in memory, where the tool is pointed."""
     grok = cli_agent_info("grok")
     home = tmp_path / "home"
     store = provider_state_dir(grok)
-    guest = f"{guest_path(home)}/.grok"
-
     (store / "auth").mkdir(parents=True)
     (store / "auth/auth.json").write_text("{}")
 
-    assert has_credentials(grok)
-    assert (
-        EnvironmentMount(f"{guest}/auth", store / "auth", False)
-        in bind_state(grok, home).mounts
-    )
-    assert not any(
-        mount.guest == f"{guest}/auth/auth.json"
-        for mount in bind_state(grok, home).mounts
-    )
-    assert grok.provision.environment(guest.removesuffix("/.grok")) == {
-        "GROK_HOME": guest,
-        "GROK_AUTH_PATH": f"{guest}/auth/auth.json",
-    }
+    assert not has_credentials(grok)
+    assert all("auth" not in mount.guest for mount in bind_state(grok, home).mounts)
     login_guest = guest_path(home.resolve())
-    assert login_spec(grok, DECLARATION, home).env == {
+    spec = login_spec(grok, DECLARATION, home)
+    assert spec.mounts == (EnvironmentMount(f"{login_guest}/.grok", None, False),)
+    assert spec.env == {
         "GROK_HOME": f"{login_guest}/.grok",
         "GROK_AUTH_PATH": f"{login_guest}/.grok/auth/auth.json",
     }
@@ -538,7 +527,7 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     assert not provider_state.authentication_failed(codex)
 
 
-@pytest.mark.parametrize("name", ["codex", "grok", "copilot", "antigravity"])
+@pytest.mark.parametrize("name", ["codex", "copilot", "antigravity"])
 def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, name):
     tool = cli_agent_info(name)
     store = provider_state_dir(tool)

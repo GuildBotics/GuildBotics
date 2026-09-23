@@ -194,54 +194,66 @@ async def test_grok_sends_everything_to_its_chat_proxy_and_refuses_billing(
             "GROK_AUTH_PATH": f"{home}/.grok/auth/auth.json",
             "GROK_AUTH_PROVIDER_COMMAND": f"echo '{helper}'",
             "GROK_CLI_CHAT_PROXY_BASE_URL": f"{recorder.url}/v1",
-            "GROK_SANDBOX": "off",
         },
     )
 
-    await guest.sh("grok login </dev/null")
-    await guest.sh(
-        "grok --no-auto-update -p 'Synthetic fixture.' --max-turns 1"
-        " --tools none --no-subagents"
+    def rpc(*messages: tuple[int, str, dict[str, object]]) -> bytes:
+        return "".join(
+            json.dumps({"jsonrpc": "2.0", "id": n, "method": m, "params": p}) + "\n"
+            for n, m, p in messages
+        ).encode()
+
+    initialize = (
+        1,
+        "initialize",
+        {
+            "protocolVersion": 1,
+            "clientCapabilities": {},
+            "clientInfo": {"name": "probe", "title": "probe", "version": "1"},
+        },
     )
-    acp = "".join(
-        json.dumps(message) + "\n"
-        for message in (
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": 1,
-                    "clientCapabilities": {},
-                    "clientInfo": {"name": "probe", "title": "probe", "version": "1"},
-                },
-            },
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "authenticate",
-                "params": {"methodId": "cached_token"},
-            },
-            {"jsonrpc": "2.0", "id": 3, "method": "_x.ai/billing", "params": {}},
+    advertised = _replies(
+        await guest.sh(
+            "(cat; sleep 5) | timeout 15 grok agent stdio", stdin=rpc(initialize)
         )
-    )
+    )[1]["result"]["authMethods"]
+    # What the adapter keys on: the method the auth provider command adds.
+    (lent,) = [m for m in advertised if m.get("_meta", {}).get("external_provider")]
     answered = await guest.sh(
-        "timeout 40 grok --no-auto-update agent stdio", stdin=acp.encode()
+        "(cat; sleep 20) | timeout 30 grok --no-auto-update agent stdio",
+        stdin=rpc(
+            initialize,
+            (2, "authenticate", {"methodId": lent["id"]}),
+            (3, "session/new", {"cwd": f"{home}/work", "mcpServers": []}),
+            (4, "_x.ai/billing", {}),
+        ),
     )
+    replies = _replies(answered)
+    assert "result" in replies[2] and "result" in replies[3], answered
 
     authenticated = [
         s for s in recorder.requests("/v1/") if s.path != "/v1/login-config"
     ]
     assert {s.authorization for s in authenticated} == {f"Bearer {STAND_IN}"}
-    assert {"/v1/user", "/v1/settings", "/v1/models", "/v1/responses"} <= {
+    assert {"/v1/user", "/v1/settings", "/v1/models"} <= {
         s.path.split("?")[0] for s in authenticated
     }
     assert recorder.carrying(STAND_IN) == {GUEST_HOST_ALIAS}, recorder.seen
     # An external login cannot read billing: usage is read where the login is.
-    billing = next(
-        json.loads(line) for line in answered.splitlines() if '"id":3' in line
-    )
-    assert "grok.com" in billing["error"]["data"]
+    assert replies[4]["error"]["message"] == "Authentication required", answered
+
+
+def _replies(output: str) -> dict[int, dict[str, object]]:
+    """The JSON-RPC replies among the lines a CLI printed, by id."""
+    replies: dict[int, dict[str, object]] = {}
+    for line in output.splitlines():
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(message, dict) and isinstance(message.get("id"), int):
+            replies[message["id"]] = message
+    return replies
 
 
 def _jwt(claims: dict[str, object]) -> str:

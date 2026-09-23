@@ -259,16 +259,40 @@ async def test_input_only_environment_does_not_mount_the_workspace(
     assert spec.network.host_ports == (1234,)
 
 
+#: A synthetic login of each brokered tool, as it is sealed.
+_LOGINS = {
+    "claude": {
+        "claudeAiOauth": {
+            "accessToken": "REAL-SYNTHETIC-459",
+            "refreshToken": "REFRESH-SYNTHETIC-459",
+            "expiresAt": 4102444800000,
+        }
+    },
+    "grok": {
+        "https://auth.x.ai::00000000-0000-0000-0000-000000000459": {
+            "key": "REAL-SYNTHETIC-459",
+            "refresh_token": "REFRESH-SYNTHETIC-459",
+            "expires_at": "2100-01-01T00:00:00Z",
+        }
+    },
+}
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", sorted(_LOGINS))
 async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, tool_name
 ):
-    """The turn holds the stand-in, is pointed at the gateway, reaches none of
-    the provider's domains itself, and the stand-in opens nothing once the
+    """The turn holds the stand-in -- as a file, or as the command a tool
+    takes its login from -- is pointed at the gateway, reaches none of the
+    provider's domains itself, and the stand-in opens nothing once the
     microVM is gone."""
+    import json
+
     import httpx
 
     from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_environment.provider_state import LentLogin
     from guildbotics.intelligences.agent_environment.spec import (
         GUEST_HOST_ALIAS,
         guest_home,
@@ -278,16 +302,21 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
         ConversationKey,
     )
 
-    tool = environment.cli_agent_info("claude")
+    tool = environment.cli_agent_info(tool_name)
+    broker = tool.provision.credential_broker
+    assert broker is not None
     where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
     monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
 
-    class Lent:
+    class Lent(LentLogin):
+        """The lending as it is, over a login that is not read from a vault."""
+
+        def __init__(self) -> None:
+            self._tool = tool
+            self.files = {tool.provision.auth: json.dumps(_LOGINS[tool_name]).encode()}
+
         async def access_token(self, refused):
             return "REAL-SYNTHETIC-459"
-
-        def stand_in(self, token):
-            return {tool.provision.auth: f"stand-in {token}".encode()}
 
     monkeypatch.setattr(environment, "_lend", lambda selected, at: Lent())
 
@@ -316,24 +345,36 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
         cwd=tmp_path / "repository",
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "claude", "manual", "turn"),
+        conversation_key=ConversationKey("aiko", tool_name, "manual", "turn"),
         contract=AccessContract(),
     )
 
     booted = await environment.start_turn_environment(
-        context, "claude", host_ports=(1234,), env={"IS_SANDBOX": "1"}
+        context, tool_name, host_ports=(1234,), env={"IS_SANDBOX": "1"}
     )
 
     spec = booted.spec
-    base_url = spec.env["ANTHROPIC_BASE_URL"]
-    port = int(base_url.rsplit(":", 1)[1])
-    assert base_url == f"http://{GUEST_HOST_ALIAS}:{port}"
+    base_url = spec.env[broker.base_url_env]
+    port = int(base_url.removesuffix(broker.base_url_path).rsplit(":", 1)[1])
+    assert base_url == f"http://{GUEST_HOST_ALIAS}:{port}{broker.base_url_path}"
     assert spec.network.host_ports == (1234, port)
     assert not set(tool.provision.api_domains) & set(spec.network.domains)
     assert spec.env["IS_SANDBOX"] == "1"
-    ((path, held),) = booted.files.items()
-    assert path == f"{guest_home()}/.claude/{tool.provision.auth}"
-    stand_in = held.decode().removeprefix("stand-in ")
+    held = b"".join(booted.files.values()) + json.dumps(dict(spec.env)).encode()
+    assert b"REAL-SYNTHETIC-459" not in held and b"REFRESH-SYNTHETIC-459" not in held
+    if broker.stand_in_command_env:
+        assert booted.files == {}
+        command = spec.env[broker.stand_in_command_env]
+        stand_in = json.loads(command.removeprefix("echo '").removesuffix("'"))[
+            "access_token"
+        ]
+    else:
+        ((path, data),) = booted.files.items()
+        assert (
+            path == f"{guest_home()}/{tool.provision.state_root}/{tool.provision.auth}"
+        )
+        stand_in = json.loads(data)["claudeAiOauth"]["accessToken"]
+    assert stand_in.startswith("guildbotics-stand-in-")
     assert all(
         mount.host is None or not str(mount.host).endswith(tool.provision.auth)
         for mount in spec.mounts

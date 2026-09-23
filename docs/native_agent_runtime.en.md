@@ -283,25 +283,35 @@ The settings card always offers the login command and copy action, including whe
 credentials are already saved. On macOS / Linux, Desktop shows its managed CLI's
 absolute path; Windows uses `guildbotics` from PATH. While the card is open, status
 updates every 10 seconds. **Refresh status** checks immediately. **Credentials saved**
-only reports file presence (for Claude Code, that its sealed login opens), not validity. Structured authentication failures from
+only reports file presence (for Claude Code and Grok Build, that the sealed login opens), not validity. Structured authentication failures from
 turns are kept per device and tool, outside the provider's mounted store, and feed
 both the card and alerts through `status.py`. A completed login that leaves
 credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
-not startup refusals, so another turn can retry. For every tool but Claude Code, no
+not startup refusals, so another turn can retry. For every tool but Claude Code and Grok Build, no
 authentication probe or token refresh is performed by GuildBotics.
-Each tool refreshes its own tokens during a turn, so its refresh endpoint is among the
-provider domains every turn reaches, and its credentials are bound so that a refresh is
-written back to the store. A file bind follows a file rewritten in place, but renaming
-another file over it fails. Grok Build renames its credentials into place, so they
-live in a directory of their own (`~/.grok/auth/auth.json`, set through
-`GROK_AUTH_PATH`) that is bound whole.
+Each of the other tools refreshes its own tokens during a turn, so its refresh endpoint
+is among the provider domains every turn reaches, and its credentials are bound so that
+a refresh is written back to the store. A file bind follows a file rewritten in place,
+but renaming another file over it fails.
 
-### Logins kept outside the microVM (Claude Code)
+### Logins kept outside the microVM
 
-Claude Code's login is kept neither in a turn's microVM nor in a plain file on the
-device. This is a transition: the other tools are still bound from the store as above
-([#459](https://github.com/GuildBotics/GuildBotics/issues/459)).
+The logins of Claude Code and Grok Build are kept neither in a turn's microVM nor in a
+plain file on the device. This is a transition: the other tools are still bound from the
+store as above ([#459](https://github.com/GuildBotics/GuildBotics/issues/459)). What follows
+takes Claude Code as the example; the tools differ as this table shows.
+
+| Tool | What is sealed | How a turn gets its stand-in | Gateway upstream | Refresh and usage |
+|---|---|---|---|---|
+| Claude Code | `~/.claude/.credentials.json` | a stand-in credentials file (`ANTHROPIC_BASE_URL` points at the gateway) | `https://api.anthropic.com` | `claude -p /usage` |
+| Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
+
+In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
+API. The contract that relies on (which requests reach the moved URL, and where else the
+stand-in is carried) is checked with synthetic values by an opt-in test,
+`tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`
+(`GUILDBOTICS_CONTRACT_PROBE=1`); run it when a pinned version changes.
 
 - **Where it is kept**: `guildbotics environment login claude` runs with the state root
   (`~/.claude`) in the microVM's memory (tmpfs). The `.credentials.json` the login leaves
@@ -339,17 +349,20 @@ device. This is a transition: the other tools are still bound from the store as 
 - **State**: a locked or unavailable keychain, a missing key, and a record that does not
   open are told apart from a missing login, in the same words `status.py` gives the CLI,
   the Desktop, and a refused turn. Nothing falls back to plain text.
-- **Switching over**: the earlier plain file
-  `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json` is neither read
-  nor bound. Log in again with `guildbotics environment login claude`, then delete that
-  file (macOS / Linux: `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`;
-  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`).
+- **Switching over**: the earlier plain files (Claude Code's
+  `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, Grok Build's
+  `~/.guildbotics/data/agent_environment/grok/.grok/auth/`) are neither read nor bound. Log
+  in again with `guildbotics environment login <tool>`, then delete them (macOS / Linux:
+  `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json` and
+  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`; Windows:
+  `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json` and
+  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`).
   GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
   the sessions (`projects/`) and the cache alone. Copies in past backups cannot be erased.
 - **Recovery**: when the state says the keychain is locked, unlock it; when it says the
   login cannot be used, fix the keychain or the disk (free space, for one) and try again.
   A login that cannot be opened (a missing or broken key or record) and a failed refresh
-  are replaced by logging in again with `guildbotics environment login claude`.
+  are replaced by logging in again with `guildbotics environment login <tool>`.
 - **What remains**: a compromised turn can still use the allowed API through the gateway
   while it runs, spend the account's quota, and put data into allowed request bodies. This
   does not protect against the host's memory or its administrator.

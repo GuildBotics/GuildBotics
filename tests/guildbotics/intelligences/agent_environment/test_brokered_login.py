@@ -4,6 +4,7 @@ refreshed and asked about only where it is held in memory."""
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import time
 from collections.abc import Callable
@@ -152,7 +153,8 @@ class _Environment:
 
     async def run(self, *command: str, limit: int, tty: bool = False) -> _Process:
         self.commands.append(command)
-        _Environment.act(self.files, f"{self.spec.home}/.claude")
+        # The tool's state root: the one thing the login's environment mounts.
+        _Environment.act(self.files, self.spec.mounts[0].guest)
         return _Process()
 
     async def close(self) -> None:
@@ -610,3 +612,93 @@ def test_a_login_that_is_not_an_account_login_is_not_kept(machine: Path) -> None
     )
     assert credential_state(CLAUDE) == "missing"
     assert not (provider_state_dir(CLAUDE) / ".claude.json").exists()
+
+
+# --- a login named for its account, lent through a command (Grok Build) -----------
+
+GROK = cli_agent_info("grok")
+GROK_AUTH = GROK.provision.auth
+
+
+def _grok_login(token: str = "REAL-GROK-459", expires_in: float = 3600) -> bytes:
+    expires = dt.datetime.fromtimestamp(time.time() + expires_in, dt.UTC)
+    return json.dumps(
+        {
+            "https://auth.x.ai::00000000-0000-0000-0000-000000000459": {
+                "key": token,
+                "auth_mode": "oidc",
+                "refresh_token": f"{token}-REFRESH",
+                # Nanoseconds, as Grok Build writes them.
+                "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z",
+                "oidc_issuer": "https://auth.x.ai",
+            }
+        }
+    ).encode()
+
+
+def _grok_entry(data: bytes) -> dict[str, Any]:
+    (entry,) = json.loads(data).values()
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_a_login_named_for_its_account_is_lent_through_a_command(
+    machine: Path,
+) -> None:
+    provider_state._seal_login(GROK, {GROK_AUTH: _grok_login()})
+    lent = LentLogin(GROK, WHERE)
+
+    assert await lent.access_token(None) == "REAL-GROK-459"
+    assert lent.stand_in("STAND-IN") == {}
+    ((variable, command),) = lent.stand_in_environment("STAND-IN").items()
+    assert variable == "GROK_AUTH_PROVIDER_COMMAND"
+    printed = json.loads(command.removeprefix("echo '").removesuffix("'"))
+    assert printed["access_token"] == "STAND-IN"
+    assert printed["expires_in"] > 300 * 24 * 60 * 60
+    assert "REAL-GROK-459" not in command
+    assert _Environment.instances == []  # Fresh: nothing was refreshed.
+
+
+@pytest.mark.asyncio
+async def test_a_login_named_for_its_account_is_refreshed_and_kept_whole(
+    machine: Path,
+) -> None:
+    """The refresh is told the RFC 3339 expiry has passed, and what the tool
+    writes back under its account's name is what is sealed."""
+    provider_state._seal_login(GROK, {GROK_AUTH: _grok_login(expires_in=60)})
+    given: list[dict[str, Any]] = []
+
+    def act(files: dict[str, bytes], root: str) -> None:
+        path = f"{root}/{GROK_AUTH}"
+        given.append(_grok_entry(files[path]))
+        files[path] = _grok_login("NEW-GROK-459")
+
+    _Environment.act = staticmethod(act)
+    lent = LentLogin(GROK, WHERE)
+
+    assert await lent.access_token(None) == "NEW-GROK-459"
+
+    (held,) = given
+    assert held["expires_at"] == "1970-01-01T00:00:00Z"
+    assert held["refresh_token"] == "REAL-GROK-459-REFRESH"
+    (environment,) = _Environment.instances
+    assert environment.commands == [GROK.provision.credential_broker.refresh]
+    sealed = _grok_entry(provider_state._unsealed_login(GROK)[GROK_AUTH])
+    assert (sealed["key"], sealed["refresh_token"]) == (
+        "NEW-GROK-459",
+        "NEW-GROK-459-REFRESH",
+    )
+
+
+def test_a_login_file_with_more_than_one_account_is_not_a_login(
+    machine: Path,
+) -> None:
+    (entry,) = json.loads(_grok_login()).values()
+    two = json.dumps({"a": entry, "b": entry}).encode()
+    provider_state._seal_login(GROK, {GROK_AUTH: two})
+
+    # The status says so, in the words a turn is refused with.
+    assert credential_state(GROK) == "corrupt"
+    with pytest.raises(CredentialVaultError) as refused:
+        LentLogin(GROK, WHERE)
+    assert refused.value.state == "corrupt"

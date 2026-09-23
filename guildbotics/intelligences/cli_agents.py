@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path, PureWindowsPath
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -42,12 +42,13 @@ class CredentialBroker(BaseModel):
     """How a tool's login is kept off the turn's microVM and lent to it.
 
     The login lives sealed on this device (see ``credential_vault``), and a
-    turn gets a credentials file of the same shape whose access token is a
-    stand-in that authenticates nothing: its refresh token is gone and its
-    expiry is far away, so the tool never tries to refresh it. The tool is
-    pointed at a gateway outside the microVM (``base_url_env``) that accepts
-    only the stand-in, only for ``routes``, and forwards the request to
-    ``upstream`` with the real access token.
+    turn holds a stand-in that authenticates nothing: a credentials file of
+    the same shape with no refresh token and an expiry far away, or -- for a
+    tool that takes its login from a command (``stand_in_command_env``) -- a
+    command that prints it. Either way the tool never tries to refresh it.
+    The tool is pointed at a gateway outside the microVM (``base_url_env``)
+    that accepts only the stand-in, only for ``routes``, and forwards the
+    request to ``upstream`` with the real access token.
 
     What the gateway cannot reach -- refreshing the login, and the tool's
     own account endpoints its ``/usage`` reads -- runs in an environment of
@@ -55,10 +56,12 @@ class CredentialBroker(BaseModel):
     user's (``refresh`` is the command that makes the tool refresh a login
     it is told has expired).
 
-    The token fields are JSON paths into the credentials file ``auth``. The
-    stand-in is built from them and from ``turn_fields`` alone -- the
-    non-secret fields the tool needs to run a turn -- so a credential the
-    file gains in a later version of the tool never reaches a turn.
+    The token fields are JSON paths into the credentials file ``auth``; a
+    ``*`` stands for the one key an object has, where the tool names it after
+    the account. A stand-in file is built from them and from ``turn_fields``
+    alone -- the non-secret fields the tool needs to run a turn -- so a
+    credential the file gains in a later version of the tool never reaches a
+    turn.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -68,8 +71,9 @@ class CredentialBroker(BaseModel):
     format: str
     access_token: tuple[str, ...]
     refresh_token: tuple[str, ...]
-    #: Milliseconds since the epoch.
-    expires_at_ms: tuple[str, ...]
+    expires_at: tuple[str, ...]
+    #: Milliseconds since the epoch, or an RFC 3339 timestamp.
+    expires_format: Literal["epoch_ms", "rfc3339"] = "epoch_ms"
     #: The non-secret fields the stand-in carries beside the token and expiry.
     turn_fields: tuple[tuple[str, ...], ...] = ()
     #: The origin the gateway forwards to, and the only one.
@@ -78,6 +82,12 @@ class CredentialBroker(BaseModel):
     #: the match. Everything else is refused before it leaves the device.
     routes: tuple[str, ...]
     base_url_env: str
+    #: Appended to the gateway's origin in ``base_url_env``.
+    base_url_path: str = ""
+    #: The variable naming a command the tool runs for its login, for a tool
+    #: that takes the stand-in that way (it prints ``access_token`` and
+    #: ``expires_in`` as JSON) rather than from a file.
+    stand_in_command_env: str = ""
     #: What the tool is told beside the gateway's URL.
     turn_environment: tuple[tuple[str, str], ...] = ()
     refresh: tuple[str, ...]
@@ -279,7 +289,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 format="claude-oauth",
                 access_token=("claudeAiOauth", "accessToken"),
                 refresh_token=("claudeAiOauth", "refreshToken"),
-                expires_at_ms=("claudeAiOauth", "expiresAt"),
+                expires_at=("claudeAiOauth", "expiresAt"),
                 # What `/usage` and the plan checks read of the login.
                 turn_fields=(
                     ("claudeAiOauth", "scopes"),
@@ -313,8 +323,12 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # takes the version to install and the directory to link it from; the
         # binary itself lands under the home, so it is copied into place and
         # the installer's leftovers are removed from the snapshot's home.
-        # auth.json is renamed into place beside its lock file, so both live
-        # in a directory of their own that is bound whole.
+        # The login is brokered. A turn takes its stand-in from an external
+        # auth provider command and sends everything to the chat proxy, which
+        # GROK_CLI_CHAT_PROXY_BASE_URL points at the gateway; billing (its
+        # usage) needs the real login and is read where the login is. The
+        # sealed login is the auth.json `grok login` leaves, renamed into
+        # place beside its lock file, with one entry named for the account.
         provision=CliAgentProvision(
             install=(
                 "curl -fsSL https://x.ai/cli/install.sh"
@@ -329,9 +343,31 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
             state_root_env="GROK_HOME",
             auth="auth/auth.json",
             auth_env="GROK_AUTH_PATH",
-            persisted=("auth/", "agent_id", "sessions/"),
+            persisted=("agent_id", "sessions/"),
             login=("grok", "login", "--device-auth"),
             api_domains=("x.ai", "*.x.ai", "grok.com", "*.grok.com"),
+            credential_broker=CredentialBroker(
+                format="grok-oidc",
+                access_token=("*", "key"),
+                refresh_token=("*", "refresh_token"),
+                expires_at=("*", "expires_at"),
+                expires_format="rfc3339",
+                upstream="https://cli-chat-proxy.grok.com",
+                routes=(
+                    "GET /v1/user",
+                    "GET /v1/settings",
+                    "GET /v1/models",
+                    "GET /v1/bundle/archive",
+                    "GET /v1/subagents/bundle",
+                    "POST /v1/responses",
+                ),
+                base_url_env="GROK_CLI_CHAT_PROXY_BASE_URL",
+                base_url_path="/v1",
+                stand_in_command_env="GROK_AUTH_PROVIDER_COMMAND",
+                # Lists the models without a turn; it needs the login, so a
+                # login told it has expired is refreshed first.
+                refresh=("grok", "--no-auto-update", "models"),
+            ),
         ),
     ),
     CliAgentInfo(

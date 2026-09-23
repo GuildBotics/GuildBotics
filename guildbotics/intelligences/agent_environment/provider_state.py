@@ -47,6 +47,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from logging import getLogger
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,6 @@ from guildbotics.intelligences.agent_environment.credential_vault import (
     seal,
     unseal,
     vault_problem,
-    vault_state,
 )
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
@@ -108,7 +108,7 @@ _REFRESH_MARGIN_SECONDS = 5 * 60
 _LOGIN_HOLD_SECONDS = 90.0
 _LOGIN_WAIT_SECONDS = 3 * _LOGIN_HOLD_SECONDS
 #: How far ahead a stand-in claims to expire: never, as far as a turn goes.
-_STAND_IN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000
+_STAND_IN_LIFETIME_SECONDS = 365 * 24 * 60 * 60
 _LOGGER = getLogger(__name__)
 
 
@@ -141,15 +141,19 @@ def credential_state(tool: CliAgentInfo) -> VaultState:
     """What of the provider's login this device holds.
 
     A brokered login is read the way a turn would read it, so a locked
-    keychain or a record that no longer opens is reported, not found out
-    at the next turn.
+    keychain, a record that no longer opens, or one that is no longer a
+    login is reported, not found out at the next turn.
     """
     provision = tool.provision
     if not provision.auth:
         return "missing"
     broker = provision.credential_broker
     if broker is not None:
-        return vault_state(sealed_login_path(tool), _label(tool, broker))
+        try:
+            _access(broker, _unsealed_login(tool), tool)
+        except CredentialVaultError as exc:
+            return exc.state
+        return "saved"
     auth = _inside(provider_state_dir(tool), provision.auth)
     return "saved" if auth is not None and auth.is_file() else "missing"
 
@@ -507,24 +511,39 @@ class LentLogin:
         return broker
 
     def stand_in(self, token: str) -> dict[str, bytes]:
-        """The login as a turn holds it, built from the named fields only:
+        """The login files a turn holds, built from the named fields only:
         ``token`` for the access token, an expiry the turn never reaches,
         and the non-secret fields the catalog names -- never a refresh token,
-        nor any other credential the file holds."""
+        nor any other credential the file holds. Nothing for a tool that
+        takes its stand-in from a command (:meth:`stand_in_environment`)."""
         broker = self._broker
+        if broker.stand_in_command_env:
+            return {}
         auth = self._tool.provision.auth
         login = json.loads(self.files[auth])
         held: dict[str, Any] = {}
-        _put(held, broker.access_token, token)
+        _put(held, _resolved(login, broker.access_token), token)
         _put(
             held,
-            broker.expires_at_ms,
-            int(time.time() * 1000) + _STAND_IN_LIFETIME_MS,
+            _resolved(login, broker.expires_at),
+            _expiry(broker, time.time() + _STAND_IN_LIFETIME_SECONDS),
         )
         for path in broker.turn_fields:
             if (value := _at(login, path)) is not None:
-                _put(held, path, value)
+                _put(held, _resolved(login, path), value)
         return {auth: json.dumps(held).encode()}
+
+    def stand_in_environment(self, token: str) -> dict[str, str]:
+        """What a turn is told, for a tool that takes its stand-in from a
+        command: the command that prints ``token`` and a lifetime the turn
+        never reaches."""
+        broker = self._broker
+        if not broker.stand_in_command_env:
+            return {}
+        printed = json.dumps(
+            {"access_token": token, "expires_in": _STAND_IN_LIFETIME_SECONDS}
+        )
+        return {broker.stand_in_command_env: f"echo '{printed}'"}
 
     async def access_token(self, refused: str | None) -> str:
         """The token to send; a refresh first, when it is due.
@@ -781,25 +800,59 @@ def _account_login(
     document = json.loads(files[auth])
     token = _at(document, broker.access_token)
     refresh = _at(document, broker.refresh_token)
-    expires = _at(document, broker.expires_at_ms)
     if not isinstance(token, str) or not token:
         raise ValueError("no access token")
     if not isinstance(refresh, str) or not refresh:
         raise ValueError("no refresh token")
-    if not isinstance(expires, int | float) or isinstance(expires, bool):
-        raise ValueError("no expiry")
-    return token, expires / 1000
+    return token, _expires(broker, _at(document, broker.expires_at))
 
 
 def _expired(broker: CredentialBroker, data: bytes) -> bytes:
     """The credentials file ``data`` as the tool reads a login that has
     expired, so that it refreshes it; everything else of it as it was."""
     document = json.loads(data)
-    parent = _at(document, broker.expires_at_ms[:-1])
-    if not isinstance(parent, dict):
-        raise ValueError("the credentials file has no expiry")
-    parent[broker.expires_at_ms[-1]] = 0
+    _put(document, _resolved(document, broker.expires_at), _expiry(broker, 0))
     return json.dumps(document).encode()
+
+
+def _expires(broker: CredentialBroker, value: Any) -> float:
+    """``value`` of the file's expiry field, in seconds since the epoch.
+
+    Raises:
+        ValueError: When it is not spelled the way the tool spells it.
+    """
+    if broker.expires_format == "rfc3339":
+        moment = datetime.fromisoformat(value) if isinstance(value, str) else None
+        if moment is not None and moment.tzinfo is not None:
+            return moment.timestamp()
+    elif isinstance(value, int | float) and not isinstance(value, bool):
+        return value / 1000
+    raise ValueError("no expiry")
+
+
+def _expiry(broker: CredentialBroker, seconds: float) -> Any:
+    """``seconds`` since the epoch as the file's expiry field spells it."""
+    if broker.expires_format == "rfc3339":
+        return datetime.fromtimestamp(seconds, UTC).isoformat().replace("+00:00", "Z")
+    return int(seconds * 1000)
+
+
+def _resolved(document: Any, path: tuple[str, ...]) -> tuple[str, ...]:
+    """``path`` with each ``*`` replaced by the one key the object there has.
+
+    Raises:
+        ValueError: When a ``*`` stands where there is not exactly one key.
+    """
+    resolved: list[str] = []
+    for step in path:
+        key = step
+        if step == "*":
+            if not isinstance(document, dict) or len(document) != 1:
+                raise ValueError(f"'{'.'.join(path)}' is not in the credentials file")
+            key = next(iter(document))
+        resolved.append(key)
+        document = document.get(key) if isinstance(document, dict) else None
+    return tuple(resolved)
 
 
 def _put(document: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
@@ -809,7 +862,12 @@ def _put(document: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
 
 
 def _at(document: Any, path: tuple[str, ...]) -> Any:
-    for key in path:
+    """The value at ``path``, or None where there is none."""
+    try:
+        resolved = _resolved(document, path)
+    except ValueError:
+        return None
+    for key in resolved:
         if not isinstance(document, dict):
             return None
         document = document.get(key)

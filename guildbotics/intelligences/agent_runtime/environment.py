@@ -123,6 +123,11 @@ async def start_turn_environment(
                 **_PROVIDER_ENV,
                 **tool.provision.environment(home),
                 **(gateway.turn_environment() if gateway else {}),
+                **(
+                    lent.stand_in_environment(gateway.stand_in)
+                    if lent and gateway
+                    else {}
+                ),
                 **env,
             },
             nameservers=where.nameservers,

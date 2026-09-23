@@ -224,22 +224,31 @@ loginの無いprint mode実行がGoogleのサインインURLを表示して認�
 設定カードには、認証情報が保存済みでもログインコマンドとコピー操作が表示されます。
 macOS / Linuxでは管理CLIの絶対パス、WindowsではPATH上の`guildbotics`を使います。
 カードを開いている間、状態は10秒ごとに自動更新されます。**状態を更新** ですぐに読み直すこともできます。
-**認証情報保存済み** はファイルの存在（Claude Codeは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
+**認証情報保存済み** はファイルの存在（Claude CodeとGrok Buildは暗号化保存したログインを開けること）だけを表し、有効性の確認ではありません。
 turnの構造化された認証失敗は、端末・ツールごとにプロバイダのマウント領域の外へ保持し、
 `status.py`を通じてカードとalertへ反映します。認証情報が残るログイン完了、または別メンバーを
 含む後続の正常実行で解除します。それ以外のエラーは前回の認証結果を変えません。
 過去の認証失敗は案内として扱い、turnの起動を拒否しないため、再試行できます。
-Claude Code以外のツールでは、GuildBoticsによる認証probeやトークン更新は行いません。
-トークンの更新はツール自身がturnの中で行います。そのため、各ツールの更新先はturnが常に届く
+Claude CodeとGrok Build以外のツールでは、GuildBoticsによる認証probeやトークン更新は行いません。
+それらのツールでは、トークンの更新はツール自身がturnの中で行います。そのため、各ツールの更新先はturnが常に届く
 プロバイダのドメインに含め、更新した認証情報がstoreへ書き戻されるようにbindします。
 ファイル単位のbindは上書きには追従しますが、別ファイルをrenameで重ねる置き換えは失敗します。
-認証情報をrenameで置き換えるGrok Buildは、認証情報を専用ディレクトリ
-（`~/.grok/auth/auth.json`、`GROK_AUTH_PATH`で指定）に置き、ディレクトリごとbindします。
 
-### VMの外で管理するログイン（Claude Code）
+### VMの外で管理するログイン
 
-Claude Codeのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
+Claude CodeとGrok Buildのログインは、turnのmicroVMにも、この端末の平文ファイルにも置きません。
 移行中の構成で、他のツールは上記のとおりstoreからbindします（[#459](https://github.com/GuildBotics/GuildBotics/issues/459)）。
+以下はClaude Codeを例に説明します。ツールごとの違いは次の表のとおりです。
+
+| ツール | 暗号化保存するもの | turnへの置換用の値の渡し方 | ゲートウェイの転送先 | 更新（refresh）とusage |
+|---|---|---|---|---|
+| Claude Code | `~/.claude/.credentials.json` | 置換用の認証ファイル（`ANTHROPIC_BASE_URL`でゲートウェイを指す） | `https://api.anthropic.com` | `claude -p /usage` |
+| Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
+
+turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。接続先の契約（どの要求が差し替えた
+URLへ届き、置換用の値がほかのどこへ運ばれるか）は、合成値で確かめる任意実行のテスト
+`tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`（`GUILDBOTICS_CONTRACT_PROBE=1`）に
+まとめてあります。固定版を上げたときはこれを実行します。
 
 - **保存場所**: `guildbotics environment login claude`は、state root（`~/.claude`）をmicroVMの
   メモリ（tmpfs）に置いて動きます。ログインが残した`.credentials.json`は、環境が動いている間に
@@ -274,15 +283,18 @@ Claude Codeのログインは、turnのmicroVMにも、この端末の平文フ�
 - **状態**: キーチェーンのロック・利用不可・鍵の欠損・保存データの破損は、未ログインと区別して
   `status.py`から同じ文言でCLI・Desktop・turnの拒否に表示します。平文へのフォールバックは
   ありません。
-- **切り替え**: 旧形式の平文`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`は
-  読みもbindもしません。`guildbotics environment login claude`で再ログインしてから、この平文ファイルを
-  削除してください（macOS / Linux: `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
-  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`）。
+- **切り替え**: 旧形式の平文（Claude Codeは`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
+  Grok Buildは`~/.guildbotics/data/agent_environment/grok/.grok/auth/`）は読みもbindもしません。
+  `guildbotics environment login <tool>`で再ログインしてから、これらを削除してください
+  （macOS / Linux: `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
+  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`。
+  Windows: `del %USERPROFILE%\.guildbotics\data\agent_environment\claude\.claude\.credentials.json`、
+  `rmdir /s %USERPROFILE%\.guildbotics\data\agent_environment\grok\.grok\auth`）。
   GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`projects/`）や
   cacheは消さないでください。過去のバックアップに残った平文までは消せません。
 - **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
   ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と
-  更新失敗は、`guildbotics environment login claude`で再ログインすると新しい保存に置き換わります。
+  更新失敗は、`guildbotics environment login <tool>`で再ログインすると新しい保存に置き換わります。
 - **残るリスク**: 侵害されたturnは、実行中にゲートウェイ経由で許可されたAPIを使うこと、
   利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。
   hostのメモリやhost管理者に対する保護ではありません。

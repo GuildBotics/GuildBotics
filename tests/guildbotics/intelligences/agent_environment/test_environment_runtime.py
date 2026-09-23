@@ -97,6 +97,7 @@ class _Fs:
 
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
+        self.directories: set[str] = {"/"}
         self.error: Exception | None = None
 
     def _check(self) -> None:
@@ -105,11 +106,17 @@ class _Fs:
 
     async def write(self, path: str, data: bytes) -> None:
         self._check()
+        assert (path.rsplit("/", 1)[0] or "/") in self.directories, path
         self.files[path] = data
+
+    async def mkdir(self, path: str) -> None:
+        self._check()
+        assert (path.rsplit("/", 1)[0] or "/") in self.directories, path
+        self.directories.add(path)
 
     async def exists(self, path: str) -> bool:
         self._check()
-        return path in self.files
+        return path in self.files or path in self.directories
 
     async def read(self, path: str) -> bytes:
         self._check()
@@ -698,9 +705,12 @@ async def test_files_cross_through_the_runtime_and_a_missing_one_is_none(
     boundary = await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
     assert sandbox.instance is not None
 
-    await boundary.write_file("/root/.claude/.credentials.json", b"{}")
+    await boundary.write_file("/root/.gemini/antigravity-cli/token", b"{}")
 
-    assert sandbox.instance.fs.files == {"/root/.claude/.credentials.json": b"{}"}
+    # The directories it is in are made first, outermost first.
+    assert sandbox.instance.fs.files == {"/root/.gemini/antigravity-cli/token": b"{}"}
+    assert await boundary.read_file("/root/.gemini/antigravity-cli/token") == b"{}"
+    await boundary.write_file("/root/.claude/.credentials.json", b"{}")
     assert await boundary.read_file("/root/.claude/.credentials.json") == b"{}"
     assert await boundary.read_file("/root/.claude/other") is None
     sandbox.instance.fs.error = microsandbox.MicrosandboxError("agent gone")

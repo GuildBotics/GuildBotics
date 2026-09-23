@@ -93,7 +93,9 @@ class CredentialGateway:
     def turn_environment(self) -> dict[str, str]:
         """What the tool inside the turn is told: where its API is."""
         return {
-            self._broker.base_url_env: f"http://{GUEST_HOST_ALIAS}:{self.port}",
+            self._broker.base_url_env: (
+                f"http://{GUEST_HOST_ALIAS}:{self.port}{self._broker.base_url_path}"
+            ),
             **dict(self._broker.turn_environment),
         }
 

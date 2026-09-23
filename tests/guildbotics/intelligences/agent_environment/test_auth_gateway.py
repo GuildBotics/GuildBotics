@@ -301,3 +301,19 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
         await gateway.close()
 
     assert upstream.requests == [] and tokens.asked == [] and sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> None:
+    grok = cli_agent_info("grok").provision.credential_broker
+    assert grok is not None
+    gateway = CredentialGateway(grok, _Tokens(REAL))
+    await gateway.start()
+    try:
+        assert gateway.turn_environment() == {
+            "GROK_CLI_CHAT_PROXY_BASE_URL": (
+                f"http://{GUEST_HOST_ALIAS}:{gateway.port}/v1"
+            )
+        }
+    finally:
+        await gateway.close()

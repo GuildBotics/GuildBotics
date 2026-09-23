@@ -35,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from importlib.resources import as_file, files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 from guildbotics.intelligences.agent_environment.spec import (
@@ -466,8 +466,11 @@ class AgentEnvironment:
 
     async def write_file(self, path: str, data: bytes) -> None:
         """Write ``data`` at the guest ``path`` through the runtime, never
-        through a file of the host's."""
+        through a file of the host's, making the directories it is in."""
         try:
+            for parent in reversed(PurePosixPath(path).parents):
+                if not await self._sandbox.fs.exists(str(parent)):
+                    await self._sandbox.fs.mkdir(str(parent))
             await self._sandbox.fs.write(path, data)
         except Exception as exc:
             raise AgentEnvironmentError(
