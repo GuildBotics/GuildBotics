@@ -4,6 +4,7 @@ the stand-in; the real token goes to the upstream and nowhere else."""
 from __future__ import annotations
 
 import asyncio
+import gzip
 import logging
 import ssl
 from collections.abc import AsyncIterator
@@ -475,6 +476,42 @@ async def test_an_answer_that_echoes_the_token_reaches_the_guest_masked(
     assert REAL not in response.text
     assert response.text == '{"seen": "Bearer ' + "*" * len(REAL) + '"}'
     assert int(response.headers["content-length"]) == len(response.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["gzip", "identity, gzip", "x-unknown"])
+async def test_an_answer_encoded_despite_asking_for_none_is_not_handed_on(
+    running, encoding: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The mask sees only the bytes as they come: in an encoded answer, the
+    token would reach the turn once the tool decodes it."""
+    _gateway, upstream, _tokens, guest = running
+    body = gzip.compress(b'{"seen": "Bearer ' + REAL.encode() + b'"}')
+    upstream.responses = [_answer(200, body, **{"content-encoding": encoding})]
+
+    with caplog.at_level(logging.WARNING):
+        response = await guest.post("/v1/messages")
+
+    assert response.status_code == 502
+    assert "content-encoding" not in response.headers
+    assert f"Gateway refused an answer encoded as {encoding} to POST /v1/messages" in (
+        caplog.messages
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["", " Identity "])
+async def test_an_answer_said_to_be_plain_is_handed_on_masked(
+    running, encoding: str
+) -> None:
+    _gateway, upstream, _tokens, guest = running
+    body = b'{"seen": "' + REAL.encode() + b'"}'
+    upstream.responses = [_answer(200, body, **{"content-encoding": encoding})]
+
+    response = await guest.post("/v1/messages")
+
+    assert response.status_code == 200
+    assert response.text == '{"seen": "' + "*" * len(REAL) + '"}'
 
 
 class _Chunks(httpx.AsyncByteStream):

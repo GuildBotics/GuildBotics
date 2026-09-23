@@ -175,6 +175,30 @@ async def test_one_holder_at_a_time_and_a_release_lets_the_next_in(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("step", ["open_lock_file", "lock_file_nonblocking"])
+async def test_a_lock_file_that_cannot_be_used_leaves_the_login_unavailable(
+    record: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    """What cannot hold the login is told as the keychain's failures are, and
+    lets the next holder in once it can."""
+
+    usable = getattr(credential_vault, step)
+
+    def refused(*_: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(credential_vault, step, refused)
+    record.parent.mkdir(parents=True)
+
+    with pytest.raises(CredentialVaultError) as failed:
+        await held_vault_lock(record, timeout=1.0)
+
+    assert failed.value.state == "unavailable"
+    monkeypatch.setattr(credential_vault, step, usable)
+    (await held_vault_lock(record, timeout=0.2)).release()
+
+
+@pytest.mark.asyncio
 async def test_threads_of_this_process_exclude_each_other_before_the_os_lock(
     record: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

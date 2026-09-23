@@ -183,7 +183,7 @@ async def held_vault_lock(path: Path, *, timeout: float) -> HeldVaultLock:
 
     Raises:
         CredentialVaultError: ``unavailable`` when it stays held past
-            ``timeout`` seconds.
+            ``timeout`` seconds, or its lock file cannot be used.
     """
     lock_path = path.with_name(path.name + ".lock")
     mutex = process_lock(lock_path)
@@ -202,6 +202,9 @@ async def held_vault_lock(path: Path, *, timeout: float) -> HeldVaultLock:
         except BaseException:
             handle.close()
             raise
+    except OSError as exc:
+        mutex.release()
+        raise CredentialVaultError("unavailable", str(exc)) from exc
     except BaseException:
         mutex.release()
         raise

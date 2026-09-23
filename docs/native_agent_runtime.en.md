@@ -348,8 +348,9 @@ and `-p no:xdist`). Nothing is sent off the device.
   gateway stops, and the stand-in opens nothing. When the upstream answers 401, the login
   is refreshed once and the request sent again. Should the real token appear in an answer's
   headers or body, it is masked to the same length before the answer is passed on, and the
-  upstream is asked for an uncompressed answer so that the body can be checked (the body of
-  an answer from an upstream that ignores this goes unchecked). HTTP/1.1 and
+  upstream is asked for an uncompressed answer so that the body can be checked; an answer
+  compressed all the same is not passed on (502), and the refusal is logged as
+  `Gateway refused an answer encoded as ...`. HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket refused at its
   handshake. The routes not forwarded are logged as `METHOD /path` only.
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account

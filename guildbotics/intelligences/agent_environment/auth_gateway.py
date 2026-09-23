@@ -227,6 +227,19 @@ class CredentialGateway:
         except httpx.HTTPError as exc:
             await _refuse(send, 502, "api_error", type(exc).__name__)
             return
+        encoding = response.headers.get("content-encoding", "").strip()
+        if encoding.lower() not in ("", "identity"):
+            # Only a plain answer is searched for the token: one encoded all
+            # the same would carry it past the mask to where the tool decodes it.
+            await response.aclose()
+            _LOGGER.warning(
+                "Gateway refused an answer encoded as %s to %s %s",
+                encoding,
+                scope["method"],
+                scope["path"],
+            )
+            await _refuse(send, 502, "api_error", "The answer is encoded.")
+            return
         # An answer never carries the token back into the turn, even one that
         # echoes it: it is masked, to the same length, wherever it stands.
         secret = token.encode()
