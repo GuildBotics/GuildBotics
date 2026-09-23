@@ -350,7 +350,7 @@ and `-p no:xdist`). Nothing is sent off the device.
   headers or body, it is masked to the same length before the answer is passed on, and the
   upstream is asked for an uncompressed answer so that the body can be checked; an answer
   compressed all the same is not passed on (502), and the refusal is logged as
-  `Gateway refused an answer encoded as ...`. HTTP/1.1 and
+  `Gateway refused an encoded answer to METHOD /path` alone (nothing the upstream sent). HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
   upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only. A catalog route
   matches its path exactly; one that ends in `/*` (for a tool that puts a repository or

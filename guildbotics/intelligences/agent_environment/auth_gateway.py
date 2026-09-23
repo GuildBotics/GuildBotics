@@ -227,10 +227,11 @@ class CredentialGateway:
         if encoding.lower() not in ("", "identity"):
             # Only a plain answer is searched for the token: one encoded all
             # the same would carry it past the mask to where the tool decodes it.
+            # What the upstream said is not logged either, the encoding included:
+            # the log names only what the guest asked for.
             await response.aclose()
             _LOGGER.warning(
-                "Gateway refused an answer encoded as %s to %s %s",
-                encoding,
+                "Gateway refused an encoded answer to %s %s",
                 scope["method"],
                 scope["path"],
             )

@@ -506,24 +506,73 @@ async def test_an_answer_that_echoes_the_token_reaches_the_guest_masked(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encoding", ["gzip", "identity, gzip", "x-unknown"])
+@pytest.mark.parametrize(
+    "encoding", ["gzip", "identity, gzip", "x-unknown", f"gzip-{REAL}"]
+)
 async def test_an_answer_encoded_despite_asking_for_none_is_not_handed_on(
     running, encoding: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The mask sees only the bytes as they come: in an encoded answer, the
-    token would reach the turn once the tool decodes it."""
+    token would reach the turn once the tool decodes it. The log names what
+    the guest asked for, and nothing the upstream said."""
     _gateway, upstream, _tokens, guest = running
     body = gzip.compress(b'{"seen": "Bearer ' + REAL.encode() + b'"}')
     upstream.responses = [_answer(200, body, **{"content-encoding": encoding})]
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         response = await guest.post("/v1/messages")
 
     assert response.status_code == 502
     assert "content-encoding" not in response.headers
-    assert f"Gateway refused an answer encoded as {encoding} to POST /v1/messages" in (
-        caplog.messages
+    assert "Gateway refused an encoded answer to POST /v1/messages" in caplog.messages
+    assert REAL not in caplog.text and REAL not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"status": 200},
+        {"status": 200, "content-encoding": f"gzip-{REAL}"},
+        {"status": 302, "location": f"https://elsewhere.test/?t={REAL}"},
+        {"status": 401},
+        {"status": 500},
+    ],
+    ids=["answered", "encoded", "redirected", "refused", "failed"],
+)
+async def test_nothing_the_upstream_says_is_logged_as_it_said_it(
+    answer: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """An upstream that echoes the token in whatever it answers -- a header,
+    the body -- and however the gateway ends up answering the guest, puts it
+    into none of GuildBotics' logs."""
+    status = answer.pop("status")
+    upstream = _Upstream(
+        *(
+            _answer(status, REAL.encode(), **{"x-echo": REAL, **answer})
+            for _ in range(2)
+        )
     )
+    gateway = CredentialGateway(
+        BROKER, _Tokens(REAL, REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    await gateway.start()
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers={"authorization": f"Bearer {STAND_IN}"},
+        ) as guest:
+            with caplog.at_level(logging.DEBUG, "guildbotics"):
+                await guest.post("/v1/messages")
+    finally:
+        await gateway.close()
+
+    assert upstream.requests
+    assert not [
+        record
+        for record in caplog.records
+        if record.name.startswith("guildbotics") and REAL in record.getMessage()
+    ]
 
 
 @pytest.mark.asyncio
