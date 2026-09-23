@@ -997,3 +997,21 @@ async def test_a_login_that_never_expires_is_logged_in_again_once_refused(
 def test_a_credentials_file_is_read_past_its_lines_of_comments(data: bytes) -> None:
     """Only a whole line of comment goes; a key that begins alike stays."""
     assert provider_state._parsed(data) == {"a": {"//b": "kept"}}
+
+
+@pytest.mark.asyncio
+async def test_a_login_read_from_its_jwts_the_tool_did_not_refresh_is_kept(
+    machine: Path,
+) -> None:
+    """The login handed to the refresh claims to have expired, so it is no
+    longer the token sealed; left as it was handed, it was not refreshed,
+    and nothing of it is sealed over the login."""
+    sealed = _codex_login(expires_in=60)
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
+    lent = LentLogin(CODEX, WHERE)
+
+    with pytest.raises(CredentialUnavailableError):
+        await lent.access_token(None)
+
+    assert provider_state._unsealed_login(CODEX)[CODEX_AUTH] == sealed
+    assert not provider_state.authentication_failed(CODEX)

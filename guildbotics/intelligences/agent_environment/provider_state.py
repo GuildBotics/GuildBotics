@@ -504,10 +504,13 @@ async def refresh_login(
             return files
         auth = tool.provision.auth
         expired = {auth: _expired(broker, files[auth])}
+        # What the tool is handed, which for a JWT is not the token sealed: a
+        # login left as it was handed over was not refreshed.
+        handed, _expires = _account_login(broker, expired, auth)
         refreshed: list[dict[str, bytes]] = []
 
         async def take_back(environment: AgentEnvironment) -> None:
-            if (login := await _taken_back(tool, environment, token)) is not None:
+            if (login := await _taken_back(tool, environment, handed)) is not None:
                 refreshed.append(login)
 
         environment = await _boot_login_environment(
