@@ -20,6 +20,7 @@ from guildbotics.intelligences.cli_agents import cli_agent_info
 BROKER = cli_agent_info("claude").provision.credential_broker
 assert BROKER is not None
 REAL = "REAL-SYNTHETIC-TOKEN-459"
+STAND_IN = "guildbotics-stand-in-SYNTHETIC-459"
 
 
 class _Tokens:
@@ -60,7 +61,9 @@ async def running() -> AsyncIterator[
 ]:
     upstream = _Upstream()
     tokens = _Tokens(REAL, "REFRESHED-SYNTHETIC-459")
-    gateway = CredentialGateway(BROKER, tokens, transport=httpx.MockTransport(upstream))
+    gateway = CredentialGateway(
+        BROKER, tokens, STAND_IN, transport=httpx.MockTransport(upstream)
+    )
     await gateway.start()
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{gateway.port}",
@@ -209,7 +212,7 @@ async def test_an_unreachable_upstream_is_a_bad_gateway() -> None:
         raise httpx.ConnectError("down", request=request)
 
     gateway = CredentialGateway(
-        BROKER, _Tokens(REAL), transport=httpx.MockTransport(unreachable)
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(unreachable)
     )
     await gateway.start()
     try:
@@ -228,7 +231,7 @@ async def test_an_unreachable_upstream_is_a_bad_gateway() -> None:
 async def test_after_the_turn_the_stand_in_opens_nothing() -> None:
     upstream = _Upstream()
     gateway = CredentialGateway(
-        BROKER, _Tokens(REAL), transport=httpx.MockTransport(upstream)
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
     )
     await gateway.start()
     port, stand_in = gateway.port, gateway.stand_in
@@ -246,13 +249,12 @@ async def test_after_the_turn_the_stand_in_opens_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_every_turn_has_a_stand_in_of_its_own() -> None:
-    first = CredentialGateway(BROKER, _Tokens(REAL))
-    second = CredentialGateway(BROKER, _Tokens(REAL))
+async def test_a_gateway_takes_its_own_turns_stand_in_only() -> None:
+    first = CredentialGateway(BROKER, _Tokens(REAL), STAND_IN)
+    second = CredentialGateway(BROKER, _Tokens(REAL), STAND_IN + "-other")
     await first.start()
     await second.start()
     try:
-        assert first.stand_in != second.stand_in
         async with httpx.AsyncClient() as guest:
             response = await guest.post(
                 f"http://127.0.0.1:{second.port}/v1/messages",
@@ -269,7 +271,9 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
     """A partial body is not sent on with the real token."""
     upstream = _Upstream()
     tokens = _Tokens(REAL)
-    gateway = CredentialGateway(BROKER, tokens, transport=httpx.MockTransport(upstream))
+    gateway = CredentialGateway(
+        BROKER, tokens, STAND_IN, transport=httpx.MockTransport(upstream)
+    )
     await gateway.start()
     messages = iter(
         [
@@ -307,7 +311,7 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
 async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> None:
     grok = cli_agent_info("grok").provision.credential_broker
     assert grok is not None
-    gateway = CredentialGateway(grok, _Tokens(REAL))
+    gateway = CredentialGateway(grok, _Tokens(REAL), STAND_IN)
     await gateway.start()
     try:
         assert gateway.turn_environment() == {

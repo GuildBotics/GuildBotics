@@ -72,6 +72,7 @@ class CredentialGateway:
         self,
         broker: CredentialBroker,
         tokens: TokenSource,
+        stand_in: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -79,7 +80,8 @@ class CredentialGateway:
         self._tokens = tokens
         self._routes = frozenset(tuple(route.split(" ", 1)) for route in broker.routes)
         self._authorization = ""
-        self.stand_in = ""
+        #: The turn's secret: the one credential the gateway takes.
+        self.stand_in = stand_in
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._server: LoopbackServer | None = None
@@ -100,8 +102,7 @@ class CredentialGateway:
         }
 
     async def start(self) -> None:
-        """Mint this turn's stand-in and start accepting it."""
-        self.stand_in = "guildbotics-stand-in-" + secrets.token_urlsafe(32)
+        """Start accepting the turn's stand-in."""
         self._authorization = f"Bearer {self.stand_in}"
         self._client = httpx.AsyncClient(
             transport=self._transport, follow_redirects=False, timeout=_TIMEOUT

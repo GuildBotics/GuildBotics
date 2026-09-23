@@ -62,6 +62,12 @@ class CredentialBroker(BaseModel):
     alone -- the non-secret fields the tool needs to run a turn -- so a
     credential the file gains in a later version of the tool never reaches a
     turn.
+
+    A tool that reads the expiry from the access token itself (``jwt``) is
+    lent a stand-in shaped as one: an unsigned JWT with an expiry of its own
+    and the ``stand_in_claims`` of the JWT at ``stand_in_claims_from`` (the
+    account a tool reads from its id token, which the stand-in replaces
+    too), with the turn's secret where the signature goes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -72,10 +78,18 @@ class CredentialBroker(BaseModel):
     access_token: tuple[str, ...]
     refresh_token: tuple[str, ...]
     expires_at: tuple[str, ...]
-    #: Milliseconds since the epoch, or an RFC 3339 timestamp.
-    expires_format: Literal["epoch_ms", "rfc3339"] = "epoch_ms"
+    #: Milliseconds since the epoch, an RFC 3339 timestamp, or the ``exp``
+    #: claim of the JWT at ``expires_at``.
+    expires_format: Literal["epoch_ms", "rfc3339", "jwt"] = "epoch_ms"
     #: The non-secret fields the stand-in carries beside the token and expiry.
     turn_fields: tuple[tuple[str, ...], ...] = ()
+    #: Whether the stand-in names an empty refresh token, for a tool that
+    #: reads no login without the field.
+    empty_refresh_token: bool = False
+    #: The login's JWT a ``jwt`` stand-in takes ``stand_in_claims`` from, and
+    #: replaces as well as the access token.
+    stand_in_claims_from: tuple[str, ...] = ()
+    stand_in_claims: tuple[tuple[str, ...], ...] = ()
     #: The origin the gateway forwards to, and the only one.
     upstream: str
     #: ``METHOD /path`` the gateway forwards; a query string is not part of
@@ -237,24 +251,61 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         order=10,
         executable="codex",
         config_reference=f"{CLI_AGENT_ROOT}/codex/{CLI_AGENT_DEFAULT_FILENAME}",
-        # auth.json is rewritten in place (truncated, never renamed), so a
-        # file bound over it keeps every refresh. Device auth prints a URL
-        # and a code instead of opening a browser the environment has not.
+        # Device auth prints a URL and a code instead of opening a browser
+        # the environment has not. The login is brokered: a turn holds
+        # stand-in JWTs, and the adapter points ChatGPT and a model provider
+        # of its own at the gateway (`base_url_env` is read by the adapter,
+        # which passes it as configuration). Codex refreshes a login whose
+        # access token has expired whenever it first needs it; listing the
+        # models needs it, and makes no turn.
         provision=CliAgentProvision(
             package="@openai/codex@0.153.4",
             state_root=".codex",
             state_root_env="CODEX_HOME",
             auth="auth.json",
-            persisted=("auth.json", "sessions/"),
+            persisted=("sessions/",),
             login=("codex", "login", "--device-auth"),
-            # A ChatGPT login talks to chatgpt.com, an API key to
-            # api.openai.com, and both refresh through auth.openai.com.
+            # A ChatGPT login talks to chatgpt.com and refreshes through
+            # auth.openai.com.
             api_domains=(
                 "chatgpt.com",
                 "*.chatgpt.com",
                 "api.openai.com",
                 "auth.openai.com",
                 "*.openai.com",
+            ),
+            credential_broker=CredentialBroker(
+                format="codex-chatgpt",
+                access_token=("tokens", "access_token"),
+                refresh_token=("tokens", "refresh_token"),
+                expires_at=("tokens", "access_token"),
+                expires_format="jwt",
+                # Without `last_refresh` Codex sends no token at all.
+                turn_fields=(
+                    ("auth_mode",),
+                    ("tokens", "account_id"),
+                    ("last_refresh",),
+                ),
+                empty_refresh_token=True,
+                # What Codex shows of the account and sends as its headers.
+                stand_in_claims_from=("tokens", "id_token"),
+                stand_in_claims=(
+                    ("email",),
+                    ("https://api.openai.com/auth", "chatgpt_plan_type"),
+                    ("https://api.openai.com/auth", "chatgpt_account_id"),
+                ),
+                upstream="https://chatgpt.com",
+                # Inference (compaction too), the model catalog, and the rate
+                # limits a turn checks first. Plugins, ChatGPT's connected
+                # apps and analytics stay closed.
+                routes=(
+                    "POST /backend-api/codex/responses",
+                    "GET /backend-api/codex/models",
+                    "GET /backend-api/wham/usage",
+                ),
+                base_url_env="GUILDBOTICS_CODEX_BASE_URL",
+                base_url_path="/backend-api",
+                refresh=("codex", "debug", "models"),
             ),
         ),
     ),

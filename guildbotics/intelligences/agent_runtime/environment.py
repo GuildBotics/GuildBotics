@@ -104,7 +104,7 @@ async def start_turn_environment(
     broker = tool.provision.credential_broker
     lent = _lend(tool, where) if broker is not None else None
     gateway = (
-        CredentialGateway(broker, lent.access_token)
+        CredentialGateway(broker, lent.access_token, lent.stand_in)
         if broker is not None and lent is not None
         else None
     )
@@ -123,11 +123,7 @@ async def start_turn_environment(
                 **_PROVIDER_ENV,
                 **tool.provision.environment(home),
                 **(gateway.turn_environment() if gateway else {}),
-                **(
-                    lent.stand_in_environment(gateway.stand_in)
-                    if lent and gateway
-                    else {}
-                ),
+                **(lent.stand_in_environment() if lent else {}),
                 **env,
             },
             nameservers=where.nameservers,
@@ -154,7 +150,7 @@ async def start_turn_environment(
         return environment
     root = f"{home}/{tool.provision.state_root}"
     try:
-        for name, data in lent.stand_in(gateway.stand_in).items():
+        for name, data in lent.stand_in_files().items():
             await environment.write_file(f"{root}/{name}", data)
     except BaseException as exc:
         await environment.close()

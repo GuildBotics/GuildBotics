@@ -4,6 +4,7 @@ refreshed and asked about only where it is held in memory."""
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime as dt
 import json
 import time
@@ -215,11 +216,13 @@ def test_a_turn_holds_a_stand_in_that_can_neither_refresh_nor_expire(
     provider_state._seal_login(CLAUDE, {AUTH: _login()})
     lent = LentLogin(CLAUDE, WHERE)
 
-    ((name, data),) = lent.stand_in("STAND-IN").items()
+    ((name, data),) = lent.stand_in_files().items()
 
     held = _oauth(data)
     assert name == AUTH
-    assert held["accessToken"] == "STAND-IN"
+    assert held["accessToken"] == lent.stand_in
+    assert lent.stand_in.startswith("guildbotics-stand-in-")
+    assert lent.stand_in != LentLogin(CLAUDE, WHERE).stand_in  # The turn's own.
     assert "refreshToken" not in held
     assert held["expiresAt"] / 1000 > time.time() + 300 * 24 * 60 * 60
     assert held["scopes"] == ["user:inference", "user:profile"]
@@ -649,11 +652,11 @@ async def test_a_login_named_for_its_account_is_lent_through_a_command(
     lent = LentLogin(GROK, WHERE)
 
     assert await lent.access_token(None) == "REAL-GROK-459"
-    assert lent.stand_in("STAND-IN") == {}
-    ((variable, command),) = lent.stand_in_environment("STAND-IN").items()
+    assert lent.stand_in_files() == {}
+    ((variable, command),) = lent.stand_in_environment().items()
     assert variable == "GROK_AUTH_PROVIDER_COMMAND"
     printed = json.loads(command.removeprefix("echo '").removesuffix("'"))
-    assert printed["access_token"] == "STAND-IN"
+    assert printed["access_token"] == lent.stand_in
     assert printed["expires_in"] > 300 * 24 * 60 * 60
     assert "REAL-GROK-459" not in command
     assert _Environment.instances == []  # Fresh: nothing was refreshed.
@@ -702,3 +705,162 @@ def test_a_login_file_with_more_than_one_account_is_not_a_login(
     with pytest.raises(CredentialVaultError) as refused:
         LentLogin(GROK, WHERE)
     assert refused.value.state == "corrupt"
+
+
+# --- a login read from its JWTs (Codex) ------------------------------------------
+
+CODEX = cli_agent_info("codex")
+CODEX_AUTH = CODEX.provision.auth
+_ACCOUNT_CLAIM = "https://api.openai.com/auth"
+
+
+def _jwt(claims: dict[str, Any]) -> str:
+    def segment(value: Any) -> str:
+        encoded = base64.urlsafe_b64encode(json.dumps(value).encode())
+        return encoded.rstrip(b"=").decode()
+
+    return f"{segment({'alg': 'RS256', 'kid': 'k'})}.{segment(claims)}.U0lHTkVE"
+
+
+def _claims_of(token: str) -> dict[str, Any]:
+    payload = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+def _codex_login(token: str = "REAL-CODEX-459", expires_in: float = 3600) -> bytes:
+    account = {
+        "chatgpt_plan_type": "pro",
+        "chatgpt_account_id": "account-459",
+        "chatgpt_user_id": "USER-SECRET-459",
+    }
+    exp = int(time.time() + expires_in)
+    return json.dumps(
+        {
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": None,
+            "tokens": {
+                "id_token": _jwt(
+                    {
+                        "email": "a@example.com",
+                        "exp": exp,
+                        "sid": "ID-SECRET-459",
+                        _ACCOUNT_CLAIM: account,
+                    }
+                ),
+                "access_token": _jwt({"exp": exp, "jti": token}),
+                "refresh_token": f"{token}-REFRESH",
+                "account_id": "account-459",
+            },
+            "last_refresh": "2026-09-01T00:00:00Z",
+        }
+    ).encode()
+
+
+def _codex_tokens(data: bytes) -> dict[str, Any]:
+    return json.loads(data)["tokens"]
+
+
+def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
+    machine: Path,
+) -> None:
+    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
+    lent = LentLogin(CODEX, WHERE)
+
+    ((name, data),) = lent.stand_in_files().items()
+
+    held = json.loads(data)
+    assert name == CODEX_AUTH
+    # The stand-in stands for both tokens; the refresh token is there, empty.
+    assert held == {
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "access_token": lent.stand_in,
+            "id_token": lent.stand_in,
+            "refresh_token": "",
+            "account_id": "account-459",
+        },
+        "last_refresh": "2026-09-01T00:00:00Z",
+    }
+    header, _claims, secret = lent.stand_in.split(".")
+    assert json.loads(base64.urlsafe_b64decode(header + "==")) == {
+        "alg": "none",
+        "typ": "JWT",
+    }
+    claimed = _claims_of(lent.stand_in)
+    assert claimed.pop("exp") > time.time() + 300 * 24 * 60 * 60
+    assert claimed == {
+        "email": "a@example.com",
+        _ACCOUNT_CLAIM: {
+            "chatgpt_plan_type": "pro",
+            "chatgpt_account_id": "account-459",
+        },
+    }
+    real = _codex_tokens(_codex_login())
+    for secret_value in (
+        real["access_token"],
+        real["id_token"],
+        real["refresh_token"],
+        "USER-SECRET-459",
+        "ID-SECRET-459",
+    ):
+        assert secret_value.encode() not in data
+        assert secret_value not in json.dumps(claimed)
+    # The turn's own secret, where the signature goes.
+    assert secret != LentLogin(CODEX, WHERE).stand_in.split(".")[2]
+
+
+@pytest.mark.asyncio
+async def test_a_login_read_from_its_jwts_expires_when_its_access_token_does(
+    machine: Path,
+) -> None:
+    """The refresh is handed the access token claiming an expiry that has
+    passed -- everything else of the token and the login as it was."""
+    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login(expires_in=60)})
+    given: list[dict[str, Any]] = []
+
+    def act(files: dict[str, bytes], root: str) -> None:
+        path = f"{root}/{CODEX_AUTH}"
+        given.append(_codex_tokens(files[path]))
+        files[path] = _codex_login("NEW-CODEX-459", expires_in=864000)
+
+    _Environment.act = staticmethod(act)
+    lent = LentLogin(CODEX, WHERE)
+    stale = _codex_tokens(_codex_login(expires_in=60))
+
+    token = await lent.access_token(None)
+
+    assert _claims_of(token)["jti"] == "NEW-CODEX-459"
+    (held,) = given
+    header, _claims, signature = held["access_token"].split(".")
+    assert (header, signature) == tuple(stale["access_token"].split(".")[::2])
+    assert _claims_of(held["access_token"])["exp"] == 0
+    assert _claims_of(held["access_token"])["jti"] == "REAL-CODEX-459"
+    assert {k: v for k, v in held.items() if k != "access_token"} == {
+        k: v for k, v in stale.items() if k != "access_token"
+    }
+    (environment,) = _Environment.instances
+    assert environment.commands == [("codex", "debug", "models")]
+    assert _codex_tokens(provider_state._unsealed_login(CODEX)[CODEX_AUTH])[
+        "refresh_token"
+    ] == ("NEW-CODEX-459-REFRESH")
+    assert await lent.access_token(None) == token
+    assert len(_Environment.instances) == 1
+
+
+@pytest.mark.parametrize(
+    "access_token",
+    [
+        "opaque",
+        _jwt({"sub": "no expiry"}),
+        _jwt({"exp": 4102444800}).replace(".", ".!!!!", 1),
+    ],
+    ids=["opaque", "no-expiry", "not-base64"],
+)
+def test_a_login_whose_access_token_claims_no_expiry_is_not_a_login(
+    machine: Path, access_token: str
+) -> None:
+    login = json.loads(_codex_login())
+    login["tokens"]["access_token"] = access_token
+    provider_state._seal_login(CODEX, {CODEX_AUTH: json.dumps(login).encode()})
+
+    assert credential_state(CODEX) == "corrupt"

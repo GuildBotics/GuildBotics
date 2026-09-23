@@ -23,9 +23,26 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.toolchain import parse_toolchain
-from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.intelligences.cli_agents import (
+    CliAgentInfo,
+    CliAgentProvision,
+    cli_agent_info,
+)
 
 DECLARATION = parse_toolchain({"dns": {"nameservers": ["10.0.0.53"]}}, where="t")
+#: A tool whose login is a plain file in the store, bound into its turns.
+PLAIN = CliAgentInfo(
+    name="plain",
+    label="Plain",
+    provision=CliAgentProvision(
+        package="plain@1",
+        state_root=".plain",
+        state_root_env="PLAIN_HOME",
+        auth="auth.json",
+        persisted=("auth.json", "sessions/"),
+        login=("plain", "login", "--device-auth"),
+    ),
+)
 
 
 @pytest.fixture
@@ -39,48 +56,48 @@ def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_the_store_mirrors_the_state_root_under_home(machine: Path) -> None:
-    codex = cli_agent_info("codex")
+    plain = PLAIN
 
-    assert provider_state_dir(codex) == machine / "data/agent_environment/codex/.codex"
+    assert provider_state_dir(plain) == machine / "data/agent_environment/plain/.plain"
     assert cache_dir() == machine / "data/agent_environment/cache"
 
 
 def test_credentials_saved_means_the_credentials_file_exists(machine: Path) -> None:
-    codex = cli_agent_info("codex")
-    assert not has_credentials(codex)
+    plain = PLAIN
+    assert not has_credentials(plain)
 
-    store = provider_state_dir(codex)
+    store = provider_state_dir(plain)
     store.mkdir(parents=True)
     (store / "auth.json").write_text("{}")
 
-    assert has_credentials(codex)
+    assert has_credentials(plain)
     assert not has_credentials(cli_agent_info("grok"))
 
 
 def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) -> None:
     """Directories are made so the first turn can write sessions; a
     credentials file is bound only once login has written it."""
-    codex = cli_agent_info("codex")
+    plain = PLAIN
     home = tmp_path / "home"
-    store = provider_state_dir(codex)
+    store = provider_state_dir(plain)
 
-    assert bind_state(codex, home).mounts == (
+    assert bind_state(plain, home).mounts == (
         EnvironmentMount(
-            f"{guest_path(home)}/.codex/sessions", store / "sessions", False
+            f"{guest_path(home)}/.plain/sessions", store / "sessions", False
         ),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
     assert (store / "sessions").is_dir()
 
     (store / "auth.json").write_text("{}")
-    mounts = bind_state(codex, home).mounts
+    mounts = bind_state(plain, home).mounts
 
     assert mounts == (
         EnvironmentMount(
-            f"{guest_path(home)}/.codex/auth.json", store / "auth.json", False
+            f"{guest_path(home)}/.plain/auth.json", store / "auth.json", False
         ),
         EnvironmentMount(
-            f"{guest_path(home)}/.codex/sessions", store / "sessions", False
+            f"{guest_path(home)}/.plain/sessions", store / "sessions", False
         ),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
@@ -276,9 +293,9 @@ def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
     """A provider whose entries are bound from the store binds them by name,
     and a link is a path of the device's rather than the store's: it is
     neither bound into a turn nor read as a saved login."""
-    codex = cli_agent_info("codex")
+    plain = PLAIN
     home = tmp_path / "home"
-    store = provider_state_dir(codex)
+    store = provider_state_dir(plain)
     store.mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
     (elsewhere / "sessions").mkdir(parents=True)
@@ -286,9 +303,9 @@ def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
     (store / "auth.json").symlink_to(elsewhere / "auth.json")
     (store / "sessions").symlink_to(elsewhere / "sessions", target_is_directory=True)
 
-    mounts = bind_state(codex, home).mounts
+    mounts = bind_state(plain, home).mounts
 
-    assert not has_credentials(codex)
+    assert not has_credentials(plain)
     assert mounts == (
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
@@ -299,15 +316,15 @@ def test_releasing_a_bound_store_leaves_the_store_alone(
 ) -> None:
     """A provider whose entries are bound from the store wrote into it as the
     turn went, so there is nothing to take back."""
-    codex = cli_agent_info("codex")
+    plain = PLAIN
     home = tmp_path / "home"
-    state = bind_state(codex, home)
-    (provider_state_dir(codex) / "sessions/one.json").write_text('{"turn": 1}')
+    state = bind_state(plain, home)
+    (provider_state_dir(plain) / "sessions/one.json").write_text('{"turn": 1}')
 
     state.release()
 
     assert state.turn_dir is None
-    assert (provider_state_dir(codex) / "sessions/one.json").is_file()
+    assert (provider_state_dir(plain) / "sessions/one.json").is_file()
 
 
 def test_what_a_killed_run_left_behind_is_removed_by_the_next_turn(
@@ -335,20 +352,20 @@ def test_what_a_killed_run_left_behind_is_removed_by_the_next_turn(
 def test_the_login_environment_mounts_the_whole_store_and_opens_egress(
     machine: Path, tmp_path: Path
 ) -> None:
-    codex = cli_agent_info("codex")
+    plain = PLAIN
     home = tmp_path / "home"
 
-    spec = login_spec(codex, DECLARATION, home)
+    spec = login_spec(plain, DECLARATION, home)
 
     guest = guest_path(home.resolve())
     assert spec.cwd == spec.home == guest
     assert spec.mounts == (
-        EnvironmentMount(f"{guest}/.codex", provider_state_dir(codex), False),
+        EnvironmentMount(f"{guest}/.plain", provider_state_dir(plain), False),
     )
-    assert provider_state_dir(codex).is_dir()
+    assert provider_state_dir(plain).is_dir()
     assert spec.network.unrestricted
     assert spec.network.nameservers == ("10.0.0.53",)
-    assert spec.env == {"CODEX_HOME": f"{guest}/.codex"}
+    assert spec.env == {"PLAIN_HOME": f"{guest}/.plain"}
 
 
 def test_a_brokered_login_lands_in_memory_not_in_the_store(
@@ -373,7 +390,7 @@ def test_the_login_environment_forwards_to_the_devices_resolvers_for_host(
     )
     declaration = parse_toolchain({"dns": {"nameservers": "host"}}, where="t")
 
-    spec = login_spec(cli_agent_info("codex"), declaration, tmp_path / "home")
+    spec = login_spec(PLAIN, declaration, tmp_path / "home")
 
     assert spec.network.nameservers == ("192.168.3.1",)
 
@@ -439,13 +456,13 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
     machine: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(provider_state, "AgentEnvironment", _Environment)
-    codex = cli_agent_info("codex")
+    plain = PLAIN
     typed = iter(["ABCD-1234\n"])
     shown: list[str] = []
 
     code = asyncio.run(
         login(
-            codex,
+            plain,
             DECLARATION,
             snapshot=tmp_path / "snap",
             read_line=lambda: next(typed, None),
@@ -460,7 +477,7 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
         DECLARATION.resources.memory_mib,
         DECLARATION.resources.cpus,
     )
-    assert _Environment.started["command"] == ("codex", "login", "--device-auth")
+    assert _Environment.started["command"] == ("plain", "login", "--device-auth")
     assert _Environment.started["spec"].network.unrestricted
     # A terminal, so a tool that asks before storing credentials can ask.
     assert _Environment.started["tty"] is True
@@ -477,12 +494,12 @@ def test_login_runs_the_tool_inside_the_environment_and_relays_its_dialogue(
 def test_only_completed_login_with_credentials_clears_failure(
     machine, monkeypatch, exit_code, stored, cleared
 ):
-    codex = cli_agent_info("codex")
-    provider_state.record_authentication_outcome(codex, failed=True)
+    plain = PLAIN
+    provider_state.record_authentication_outcome(plain, failed=True)
     if stored:
-        store = provider_state_dir(codex)
+        store = provider_state_dir(plain)
         store.mkdir(parents=True)
-        (store / codex.provision.auth).write_text("{}")
+        (store / plain.provision.auth).write_text("{}")
 
     async def wait(self):
         return exit_code
@@ -493,7 +510,7 @@ def test_only_completed_login_with_credentials_clears_failure(
     assert (
         asyncio.run(
             login(
-                codex,
+                plain,
                 DECLARATION,
                 snapshot=machine / "snap",
                 read_line=lambda: next(typed, None),
@@ -502,17 +519,17 @@ def test_only_completed_login_with_credentials_clears_failure(
         )
         == exit_code
     )
-    assert provider_state.authentication_failed(codex) is not cleared
+    assert provider_state.authentication_failed(plain) is not cleared
 
 
 def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
     machine, monkeypatch
 ):
-    codex, claude = cli_agent_info("codex"), cli_agent_info("claude")
-    provider_state.record_authentication_outcome(codex, failed=True)
-    assert provider_state.authentication_failed(codex)
+    plain, claude = PLAIN, cli_agent_info("claude")
+    provider_state.record_authentication_outcome(plain, failed=True)
+    assert provider_state.authentication_failed(plain)
     assert not provider_state.authentication_failed(claude)
-    mounts = bind_state(codex, machine / "home").mounts
+    mounts = bind_state(plain, machine / "home").mounts
     assert all(not str(m.host).endswith("authentication-failed") for m in mounts)
     with monkeypatch.context() as other_device:
         other_device.setattr(
@@ -520,16 +537,17 @@ def test_authentication_outcome_is_device_and_tool_state_outside_mounts(
             "get_machine_state_path",
             lambda *parts: machine.joinpath("other-device", *parts),
         )
-        assert not provider_state.authentication_failed(codex)
-        provider_state.record_authentication_outcome(codex, failed=False)
-    assert provider_state.authentication_failed(codex)
-    provider_state.record_authentication_outcome(codex, failed=False)
-    assert not provider_state.authentication_failed(codex)
+        assert not provider_state.authentication_failed(plain)
+        provider_state.record_authentication_outcome(plain, failed=False)
+    assert provider_state.authentication_failed(plain)
+    provider_state.record_authentication_outcome(plain, failed=False)
+    assert not provider_state.authentication_failed(plain)
 
 
-@pytest.mark.parametrize("name", ["codex", "copilot", "antigravity"])
-def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, name):
-    tool = cli_agent_info(name)
+@pytest.mark.parametrize(
+    "tool", [PLAIN, cli_agent_info("copilot"), cli_agent_info("antigravity")]
+)
+def test_input_only_turn_has_credentials_without_sessions_or_cache(machine, tool):
     store = provider_state_dir(tool)
     auth = store / tool.provision.auth
     auth.parent.mkdir(parents=True, exist_ok=True)

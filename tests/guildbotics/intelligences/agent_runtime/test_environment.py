@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from guildbotics.intelligences.agent_runtime import environment, windows_job
+from guildbotics.intelligences.cli_agents import CliAgentInfo, CliAgentProvision
 
 
 class _Process:
@@ -220,7 +223,16 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         ConversationKey,
     )
 
-    tool = environment.cli_agent_info("codex")
+    tool = CliAgentInfo(
+        name="plain",
+        provision=CliAgentProvision(
+            package="plain@1",
+            state_root=".plain",
+            auth="auth.json",
+            persisted=("auth.json",),
+            api_domains=("api.plain.test",),
+        ),
+    )
     where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
     monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
     state = SimpleNamespace(
@@ -244,11 +256,11 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         cwd=tmp_path / "repository",
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "codex", "manual", "judge"),
+        conversation_key=ConversationKey("aiko", "plain", "manual", "judge"),
         contract=AccessContract(input_only=True),
     )
     spec = await environment.start_turn_environment(
-        context, "codex", host_ports=(1234,), env={}
+        context, "plain", host_ports=(1234,), env={}
     )
     assert spec.mounts == (
         EnvironmentMount(guest_path(context.cwd), None, True),
@@ -259,8 +271,30 @@ async def test_input_only_environment_does_not_mount_the_workspace(
     assert spec.network.host_ports == (1234,)
 
 
+def _jwt(claims: dict[str, object]) -> str:
+    def segment(value: object) -> str:
+        encoded = base64.urlsafe_b64encode(json.dumps(value).encode())
+        return encoded.rstrip(b"=").decode()
+
+    return f"{segment({'alg': 'RS256'})}.{segment(claims)}.U0lHTkFUVVJF"
+
+
+#: Codex's tokens are JWTs; what they claim is as secret as they are.
+_CODEX_ACCESS = _jwt({"exp": 4102444800, "secret": "REAL-SYNTHETIC-459"})
+_CODEX_ID = _jwt({"email": "a@example.com", "secret": "REAL-SYNTHETIC-459"})
 #: A synthetic login of each brokered tool, as it is sealed.
 _LOGINS = {
+    "codex": {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "id_token": _CODEX_ID,
+            "access_token": _CODEX_ACCESS,
+            "refresh_token": "REFRESH-SYNTHETIC-459",
+            "account_id": "account-459",
+        },
+        "last_refresh": "2026-09-23T00:00:00Z",
+    },
     "claude": {
         "claudeAiOauth": {
             "accessToken": "REAL-SYNTHETIC-459",
@@ -287,12 +321,12 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     takes its login from -- is pointed at the gateway, reaches none of the
     provider's domains itself, and the stand-in opens nothing once the
     microVM is gone."""
-    import json
+    from functools import reduce
 
     import httpx
 
+    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.contract import AccessContract
-    from guildbotics.intelligences.agent_environment.provider_state import LentLogin
     from guildbotics.intelligences.agent_environment.spec import (
         GUEST_HOST_ALIAS,
         guest_home,
@@ -308,17 +342,9 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
     monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
 
-    class Lent(LentLogin):
-        """The lending as it is, over a login that is not read from a vault."""
-
-        def __init__(self) -> None:
-            self._tool = tool
-            self.files = {tool.provision.auth: json.dumps(_LOGINS[tool_name]).encode()}
-
-        async def access_token(self, refused):
-            return "REAL-SYNTHETIC-459"
-
-    monkeypatch.setattr(environment, "_lend", lambda selected, at: Lent())
+    # The lending as it is, over a login that is not read from a vault.
+    sealed = {tool.provision.auth: json.dumps(_LOGINS[tool_name]).encode()}
+    monkeypatch.setattr(provider_state, "_unsealed_login", lambda selected: sealed)
 
     class Booted:
         def __init__(self, spec, on_close, before_stop):
@@ -361,7 +387,13 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     assert not set(tool.provision.api_domains) & set(spec.network.domains)
     assert spec.env["IS_SANDBOX"] == "1"
     held = b"".join(booted.files.values()) + json.dumps(dict(spec.env)).encode()
-    assert b"REAL-SYNTHETIC-459" not in held and b"REFRESH-SYNTHETIC-459" not in held
+    for secret in (
+        "REAL-SYNTHETIC-459",
+        "REFRESH-SYNTHETIC-459",
+        _CODEX_ACCESS,
+        _CODEX_ID,
+    ):
+        assert secret.encode() not in held
     if broker.stand_in_command_env:
         assert booted.files == {}
         command = spec.env[broker.stand_in_command_env]
@@ -373,8 +405,9 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
         assert (
             path == f"{guest_home()}/{tool.provision.state_root}/{tool.provision.auth}"
         )
-        stand_in = json.loads(data)["claudeAiOauth"]["accessToken"]
-    assert stand_in.startswith("guildbotics-stand-in-")
+        stand_in = reduce(
+            lambda at, key: at[key], broker.access_token, json.loads(data)
+        )
     assert all(
         mount.host is None or not str(mount.host).endswith(tool.provision.auth)
         for mount in spec.mounts

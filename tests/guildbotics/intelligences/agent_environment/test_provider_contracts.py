@@ -17,15 +17,19 @@ import asyncio
 import base64
 import json
 import os
+import shlex
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from contract_recorder import Recorder, json_answer
 
+from guildbotics.intelligences.agent_environment import provider_state
+from guildbotics.intelligences.agent_environment.provider_state import LentLogin
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironment
 from guildbotics.intelligences.agent_environment.spec import (
     GUEST_HOST_ALIAS,
@@ -35,6 +39,11 @@ from guildbotics.intelligences.agent_environment.spec import (
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime.codex import (
+    _config_arguments,
+    _gateway_overrides,
+)
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
@@ -219,8 +228,11 @@ async def test_grok_sends_everything_to_its_chat_proxy_and_refuses_billing(
     )[1]["result"]["authMethods"]
     # What the adapter keys on: the method the auth provider command adds.
     (lent,) = [m for m in advertised if m.get("_meta", {}).get("external_provider")]
+    # Grok Build serves requests side by side: the session is asked for only
+    # once the login has had time to be taken, as the adapter awaits it.
     answered = await guest.sh(
-        "(cat; sleep 20) | timeout 30 grok --no-auto-update agent stdio",
+        "(read -r a; read -r b; printf '%s\\n' \"$a\" \"$b\"; sleep 5; cat; sleep 20)"
+        " | timeout 35 grok --no-auto-update agent stdio",
         stdin=rpc(
             initialize,
             (2, "authenticate", {"methodId": lent["id"]}),
@@ -266,11 +278,13 @@ def _jwt(claims: dict[str, object]) -> str:
 
 
 async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
-    boot,
+    boot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recorder = Recorder()
-    home = guest_path(_REAL_HOME.resolve())
-    guest = await boot(recorder, ".codex", {"CODEX_HOME": f"{home}/.codex"})
+    """What a turn of Codex holds, and how it is pointed, are the adapter's
+    own: the stand-in files a synthetic login lends, and its configuration."""
+    codex = cli_agent_info("codex")
+    broker = codex.provision.credential_broker
+    assert broker is not None
     claims = {
         "email": "synthetic@example.com",
         "exp": int(time.time()) + 10**8,
@@ -279,34 +293,36 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
             "chatgpt_account_id": "account-459",
         },
     }
-    stand_in = _jwt(claims)
-    await guest.write(
-        f"{home}/.codex/auth.json",
-        json.dumps(
-            {
-                "OPENAI_API_KEY": None,
-                "tokens": {
-                    "id_token": _jwt(claims),
-                    "access_token": stand_in,
-                    "refresh_token": "",
-                    "account_id": "account-459",
-                },
-                "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-        ),
+    login = {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "id_token": _jwt(claims),
+            "access_token": _jwt(claims),
+            "refresh_token": "REFRESH-SYNTHETIC-459",
+            "account_id": "account-459",
+        },
+        "last_refresh": "2026-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(
+        provider_state,
+        "_unsealed_login",
+        lambda tool: {codex.provision.auth: json.dumps(login).encode()},
     )
-    await guest.write(
-        f"{home}/.codex/config.toml",
-        f'chatgpt_base_url = "{recorder.url}/backend-api/"\n'
-        'model_provider = "guildbotics"\n'
-        "[model_providers.guildbotics]\n"
-        'name = "OpenAI"\n'
-        f'base_url = "{recorder.url}/backend-api/codex"\n'
-        'wire_api = "responses"\n'
-        "requires_openai_auth = true\n",
+    lent = LentLogin(codex, None)  # type: ignore[arg-type]
+    recorder = Recorder()
+    home = guest_path(_REAL_HOME.resolve())
+    guest = await boot(recorder, ".codex", {"CODEX_HOME": f"{home}/.codex"})
+    for name, data in lent.stand_in_files().items():
+        await guest.write(f"{home}/.codex/{name}", data)
+    spec = SimpleNamespace(
+        env={broker.base_url_env: recorder.url + broker.base_url_path}
     )
+    configured = shlex.join(_config_arguments(_gateway_overrides(spec)))
 
-    await guest.sh("timeout 60 codex exec --skip-git-repo-check 'Synthetic fixture.'")
+    await guest.sh(
+        f"timeout 60 codex exec {configured} --skip-git-repo-check 'Synthetic fixture.'"
+    )
     rpc = "".join(
         json.dumps(message) + "\n"
         for message in (
@@ -319,22 +335,91 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
                 },
             },
             {"jsonrpc": "2.0", "method": "initialized", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "account/read", "params": {}},
             {
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": 3,
                 "method": "account/rateLimits/read",
                 "params": {},
             },
         )
     )
-    await guest.sh("(cat; sleep 10) | timeout 25 codex app-server", stdin=rpc.encode())
+    answered = await guest.sh(
+        f"(cat; sleep 10) | timeout 25 codex app-server {configured}",
+        stdin=rpc.encode(),
+    )
 
+    # The stand-in is a login Codex takes as its account's.
+    account = _replies(answered)[2]["result"]["account"]
+    assert (account["email"], account["planType"]) == ("synthetic@example.com", "plus")
     responses = recorder.requests("/backend-api/codex/responses")
     assert responses and {s.method for s in responses} == {"POST"}
-    assert _bearer(recorder, "/backend-api/codex/responses") == {f"Bearer {stand_in}"}
+    assert _bearer(recorder, "/backend-api/codex/responses") == {
+        f"Bearer {lent.stand_in}"
+    }
     assert all("chatgpt-account-id" in s.headers for s in responses)
-    assert _bearer(recorder, "/backend-api/wham/usage") == {f"Bearer {stand_in}"}
-    assert recorder.carrying(stand_in) == {GUEST_HOST_ALIAS}, recorder.seen
+    assert _bearer(recorder, "/backend-api/wham/usage") == {f"Bearer {lent.stand_in}"}
+    assert recorder.carrying(lent.stand_in) == {GUEST_HOST_ALIAS}, recorder.seen
+    # Nothing it holds tries to refresh.
+    assert not recorder.requests("/oauth/token"), recorder.seen
+    assert "auth.openai.com" not in recorder.connects(), recorder.seen
+    # What a turn needs of it is what the gateway forwards.
+    needed = {
+        (s.method, s.path.split("?")[0])
+        for prefix in ("/backend-api/codex/", "/backend-api/wham/usage")
+        for s in recorder.requests(prefix)
+        if "analytics" not in s.path
+    }
+    assert needed <= {tuple(route.split(" ", 1)) for route in broker.routes}
+
+
+async def test_codex_refreshes_a_login_told_it_has_expired_by_listing_models(
+    boot,
+) -> None:
+    """The refresh GuildBotics makes Codex run, on the login as the refresh
+    hands it over: its access token claiming an expiry that has passed."""
+    codex = cli_agent_info("codex")
+    broker = codex.provision.credential_broker
+    assert broker is not None
+    stale = _jwt({"exp": int(time.time()) + 3600, "who": "stale"})
+    fresh = _jwt({"exp": int(time.time()) + 864000, "who": "fresh"})
+
+    def answer(host: str, method: str, path: str):
+        if path == "/oauth/token":
+            token = {"access_token": fresh, "id_token": fresh}
+            return json_answer({**token, "refresh_token": "NEW-REFRESH-459"})
+        return None
+
+    recorder = Recorder(answer)
+    home = guest_path(_REAL_HOME.resolve())
+    guest = await boot(
+        recorder,
+        ".codex",
+        {
+            "CODEX_HOME": f"{home}/.codex",
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE": f"{recorder.url}/oauth/token",
+        },
+    )
+    login = {
+        "auth_mode": "chatgpt",
+        "tokens": {
+            "id_token": stale,
+            "access_token": stale,
+            "refresh_token": "OLD-REFRESH-459",
+            "account_id": "account-459",
+        },
+        "last_refresh": "2026-01-01T00:00:00Z",
+    }
+    auth = f"{home}/.codex/{codex.provision.auth}"
+    await guest.write(auth, provider_state._expired(broker, json.dumps(login).encode()))
+
+    await guest.sh(shlex.join(broker.refresh))
+
+    (refreshing,) = recorder.requests("/oauth/token")
+    assert refreshing.method == "POST"
+    left = {codex.provision.auth: await guest.environment.read_file(auth)}
+    token, expires = provider_state._account_login(broker, left, codex.provision.auth)
+    assert token == fresh and expires > time.time() + 800000
 
 
 async def test_copilot_follows_its_api_urls_and_answers_quota_from_the_user_api(

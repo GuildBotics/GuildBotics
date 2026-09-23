@@ -38,7 +38,9 @@ refreshed login is sealed before that environment is stopped.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import secrets
 import shlex
 import shutil
 import sys
@@ -503,6 +505,8 @@ class LentLogin:
         self._refreshed = False
         self.files = _unsealed_login(tool)
         self._token, self._expires = _access(self._broker, self.files, tool)
+        #: What the turn holds for the access token, and its gateway takes.
+        self.stand_in = _minted(self._broker, self._login)
 
     @property
     def _broker(self) -> CredentialBroker:
@@ -510,38 +514,46 @@ class LentLogin:
         assert broker is not None
         return broker
 
-    def stand_in(self, token: str) -> dict[str, bytes]:
+    @property
+    def _login(self) -> Any:
+        return json.loads(self.files[self._tool.provision.auth])
+
+    def stand_in_files(self) -> dict[str, bytes]:
         """The login files a turn holds, built from the named fields only:
-        ``token`` for the access token, an expiry the turn never reaches,
-        and the non-secret fields the catalog names -- never a refresh token,
-        nor any other credential the file holds. Nothing for a tool that
+        the stand-in for the access token, an expiry the turn never reaches,
+        and the non-secret fields the catalog names -- never a refresh token
+        (an empty one at most), nor any other credential the file holds. Nothing for a tool that
         takes its stand-in from a command (:meth:`stand_in_environment`)."""
         broker = self._broker
         if broker.stand_in_command_env:
             return {}
-        auth = self._tool.provision.auth
-        login = json.loads(self.files[auth])
+        login = self._login
         held: dict[str, Any] = {}
-        _put(held, _resolved(login, broker.access_token), token)
-        _put(
-            held,
-            _resolved(login, broker.expires_at),
-            _expiry(broker, time.time() + _STAND_IN_LIFETIME_SECONDS),
-        )
+        _put(held, _resolved(login, broker.access_token), self.stand_in)
+        if broker.stand_in_claims_from:
+            _put(held, _resolved(login, broker.stand_in_claims_from), self.stand_in)
+        if broker.empty_refresh_token:
+            _put(held, _resolved(login, broker.refresh_token), "")
+        if broker.expires_format != "jwt":  # A JWT stand-in carries its own.
+            _put(
+                held,
+                _resolved(login, broker.expires_at),
+                _expiry(broker, time.time() + _STAND_IN_LIFETIME_SECONDS),
+            )
         for path in broker.turn_fields:
             if (value := _at(login, path)) is not None:
                 _put(held, _resolved(login, path), value)
-        return {auth: json.dumps(held).encode()}
+        return {self._tool.provision.auth: json.dumps(held).encode()}
 
-    def stand_in_environment(self, token: str) -> dict[str, str]:
+    def stand_in_environment(self) -> dict[str, str]:
         """What a turn is told, for a tool that takes its stand-in from a
-        command: the command that prints ``token`` and a lifetime the turn
-        never reaches."""
+        command: the command that prints it and a lifetime the turn never
+        reaches."""
         broker = self._broker
         if not broker.stand_in_command_env:
             return {}
         printed = json.dumps(
-            {"access_token": token, "expires_in": _STAND_IN_LIFETIME_SECONDS}
+            {"access_token": self.stand_in, "expires_in": _STAND_IN_LIFETIME_SECONDS}
         )
         return {broker.stand_in_command_env: f"echo '{printed}'"}
 
@@ -811,7 +823,8 @@ def _expired(broker: CredentialBroker, data: bytes) -> bytes:
     """The credentials file ``data`` as the tool reads a login that has
     expired, so that it refreshes it; everything else of it as it was."""
     document = json.loads(data)
-    _put(document, _resolved(document, broker.expires_at), _expiry(broker, 0))
+    path = _resolved(document, broker.expires_at)
+    _put(document, path, _expiry(broker, 0, _at(document, path)))
     return json.dumps(document).encode()
 
 
@@ -825,16 +838,59 @@ def _expires(broker: CredentialBroker, value: Any) -> float:
         moment = datetime.fromisoformat(value) if isinstance(value, str) else None
         if moment is not None and moment.tzinfo is not None:
             return moment.timestamp()
+    elif broker.expires_format == "jwt":
+        claim = _claims(value).get("exp")
+        if isinstance(claim, int | float) and not isinstance(claim, bool):
+            return claim
     elif isinstance(value, int | float) and not isinstance(value, bool):
         return value / 1000
     raise ValueError("no expiry")
 
 
-def _expiry(broker: CredentialBroker, seconds: float) -> Any:
-    """``seconds`` since the epoch as the file's expiry field spells it."""
+def _expiry(broker: CredentialBroker, seconds: float, token: Any = None) -> Any:
+    """``seconds`` since the epoch as the file's expiry field spells it: for
+    a JWT, ``token`` claiming it, as the tool reads it (unverified)."""
     if broker.expires_format == "rfc3339":
         return datetime.fromtimestamp(seconds, UTC).isoformat().replace("+00:00", "Z")
+    if broker.expires_format == "jwt":
+        header, _claimed, signature = str(token).split(".")
+        claims = {**_claims(token), "exp": int(seconds)}
+        return f"{header}.{_segment(claims)}.{signature}"
     return int(seconds * 1000)
+
+
+def _minted(broker: CredentialBroker, login: Any) -> str:
+    """A turn's stand-in: a secret of its own, shaped as the tool reads its
+    access token -- for a JWT, one that claims only what the catalog names
+    of the account, and an expiry the turn never reaches."""
+    secret = secrets.token_urlsafe(32)
+    if broker.expires_format != "jwt":
+        return "guildbotics-stand-in-" + secret
+    account = _claims(_at(login, broker.stand_in_claims_from))
+    claims: dict[str, Any] = {}
+    for path in broker.stand_in_claims:
+        if (value := _at(account, path)) is not None:
+            _put(claims, path, value)
+    claims["exp"] = int(time.time() + _STAND_IN_LIFETIME_SECONDS)
+    return f"{_segment({'alg': 'none', 'typ': 'JWT'})}.{_segment(claims)}.{secret}"
+
+
+def _claims(token: Any) -> dict[str, Any]:
+    """The claims of the JWT ``token``, unverified, or none when it is not one."""
+    if not isinstance(token, str):
+        return {}
+    try:
+        _header, payload, _signature = token.split(".")
+        padded = payload + "=" * (-len(payload) % 4)
+        claims = json.loads(base64.b64decode(padded, altchars=b"-_", validate=True))
+    except ValueError:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def _segment(value: Any) -> str:
+    """``value`` as a JWT segment: base64url JSON, unpadded."""
+    return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
 
 
 def _resolved(document: Any, path: tuple[str, ...]) -> tuple[str, ...]:

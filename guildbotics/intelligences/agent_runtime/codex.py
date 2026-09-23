@@ -41,6 +41,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     EventSink,
 )
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 _MODERN_APPROVAL_METHODS = frozenset(
@@ -56,6 +57,11 @@ _APPROVAL_POLICY = "never"
 #: passed as configuration overrides at launch, so no user `config.toml`
 #: profile is read or written.
 _PERMISSION_PROFILE = "guildbotics"
+#: The model provider every thread runs on: OpenAI's Responses API, reached
+#: through the turn's credential gateway. Codex's built-in provider cannot be
+#: pointed there -- it takes its inference over a WebSocket to chatgpt.com.
+_MODEL_PROVIDER = "guildbotics"
+_BROKER = cli_agent_info("codex").provision.credential_broker
 #: Where Codex looks for skills, relative to the home directory (`.agents`)
 #: and to its config folder (`skills`, `_skills`). Codex injects only the
 #: skill index into the prompt; the agent reads a skill's body itself, from
@@ -358,7 +364,12 @@ class CodexAppServerAdapter:
                 self._executable,
                 "app-server",
                 *_codex_mcp_arguments(self._member_broker),
-                *_config_arguments(_sandbox_overrides(environment.spec)),
+                *_config_arguments(
+                    {
+                        **_gateway_overrides(environment.spec),
+                        **_sandbox_overrides(environment.spec),
+                    }
+                ),
                 limit=STREAM_READ_LIMIT,
             )
         except AgentEnvironmentError as exc:
@@ -397,8 +408,15 @@ class CodexAppServerAdapter:
     ) -> str:
         if conversation.provider_session_id:
             try:
+                # A thread keeps the provider it started on unless told
+                # otherwise, and one started before the gateway would send
+                # its inference straight to chatgpt.com.
                 response = await self._request(
-                    "thread/resume", {"threadId": conversation.provider_session_id}
+                    "thread/resume",
+                    {
+                        "threadId": conversation.provider_session_id,
+                        "modelProvider": _MODEL_PROVIDER,
+                    },
                 )
             except RpcError as exc:
                 raise AgentRuntimeError(
@@ -620,6 +638,28 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
         "-c",
         f'{prefix}.tools.guildbotics_member.approval_mode="approve"',
     )
+
+
+def _gateway_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+    """Point ChatGPT, and the model provider threads run on, at the gateway.
+
+    The turn's environment names the gateway in the catalog's
+    ``base_url_env``; Codex has no variable of its own for it, so it is
+    passed as configuration. The provider is the Responses API over SSE,
+    authenticated as the ChatGPT login (the stand-in) is.
+    """
+    assert _BROKER is not None
+    base = spec.env[_BROKER.base_url_env]
+    return {
+        "chatgpt_base_url": f"{base}/",
+        "model_provider": _MODEL_PROVIDER,
+        f"model_providers.{_MODEL_PROVIDER}": {
+            "name": "OpenAI",  # As Codex's own provider is named.
+            "base_url": f"{base}/codex",
+            "wire_api": "responses",
+            "requires_openai_auth": True,
+        },
+    }
 
 
 def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
