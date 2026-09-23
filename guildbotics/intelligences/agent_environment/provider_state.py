@@ -448,6 +448,10 @@ class LentLogin:
         )
         return {broker.stand_in_command_env: f"echo '{printed}'"}
 
+    def refusal(self) -> str:
+        """Why the login could not be given to the turn, or nothing."""
+        return str(self._failure) if self._failure is not None else ""
+
     async def access_token(self, refused: str | None) -> str:
         """The token to send; a refresh first, when it is due.
 
@@ -456,18 +460,23 @@ class LentLogin:
                 refreshed; the message says what to do.
         """
         async with self._lock:
+            # A login the turn could not use is not lent again: the turn fails
+            # for it, whatever the tool makes of what is answered after.
+            if self._failure is not None:
+                raise self._failure
             stale = self._expires - time.time() < _REFRESH_MARGIN_SECONDS
             if (refused is None and not stale) or (
                 refused is not None and refused != self._token
             ):
                 return self._token
-            if self._failure is None and refused is not None and self._refreshed:
-                # The provider refuses the login it has just refreshed.
-                self._failure = CredentialUnavailableError(_refresh_failed(self._tool))
-            if self._failure is None and not self._broker.refresh:
-                # A login that never expires is refused once it is revoked.
-                self._failure = CredentialUnavailableError(_refused(self._tool))
-            if self._failure is not None:
+            if refused is not None and (self._refreshed or not self._broker.refresh):
+                # The provider refuses the login it has just refreshed, or one
+                # that never expires, which is refused once it is revoked.
+                self._failure = CredentialUnavailableError(
+                    _refresh_failed(self._tool)
+                    if self._refreshed
+                    else _refused(self._tool)
+                )
                 raise self._failure
             try:
                 self.files = await refresh_login(self._tool, self._where, self._token)

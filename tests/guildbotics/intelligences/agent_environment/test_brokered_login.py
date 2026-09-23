@@ -438,11 +438,10 @@ async def test_a_turn_does_not_refresh_again_after_a_refresh_did_not_help(
     _Environment.reset()
     provider_state._seal_login(CLAUDE, {AUTH: _login()})
     unrefreshed = LentLogin(CLAUDE, WHERE)
-    for _ in range(2):
+    for refused in ("REAL-459", "REAL-459", None):
         with pytest.raises(CredentialUnavailableError):
-            await unrefreshed.access_token("REAL-459")
+            await unrefreshed.access_token(refused)
     assert len(_Environment.instances) == 1
-    assert await unrefreshed.access_token(None) == "REAL-459"
 
 
 @pytest.mark.asyncio
@@ -974,9 +973,9 @@ async def test_a_login_that_never_expires_is_logged_in_again_once_refused(
     provider_state._seal_login(COPILOT, {COPILOT_AUTH: _github_login()})
     lent = LentLogin(COPILOT, WHERE)
 
-    for _ in range(2):
+    for token in ("gho_REAL459", "gho_REAL459", None):
         with pytest.raises(CredentialUnavailableError) as refused:
-            await lent.access_token("gho_REAL459")
+            await lent.access_token(token)
 
     assert str(refused.value) == t(
         "intelligences.agent_environment.tool.login_refused",

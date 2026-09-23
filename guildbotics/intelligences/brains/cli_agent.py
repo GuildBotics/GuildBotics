@@ -35,6 +35,8 @@ from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
     AgentExecutionContext,
+    AgentRuntimeError,
+    AgentRuntimeErrorCategory,
     ConversationRecord,
     settings_fingerprint,
 )
@@ -502,6 +504,19 @@ def _tool_of(definition_path: str) -> str:
     return cli_agent_name_from_path(definition_path)
 
 
+def _login_refused(
+    context: AgentExecutionContext, report: str
+) -> AgentRuntimeError | None:
+    """The turn's failure when the login it was lent could not be used,
+    whatever the tool made of that; what the tool said goes along with it."""
+    refusal = context.login.refusal()
+    if not refusal:
+        return None
+    return AgentRuntimeError(
+        AgentRuntimeErrorCategory.AUTHENTICATION, refusal, details={"stderr": report}
+    )
+
+
 def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     if person_id in person_cli_agent_mapping:
         return person_cli_agent_mapping[person_id]
@@ -888,8 +903,6 @@ class CliAgentBrain(Brain):
         from guildbotics.intelligences.agent_runtime.models import (
             AgentEvent,
             AgentEventKind,
-            AgentRuntimeError,
-            AgentRuntimeErrorCategory,
         )
         from guildbotics.intelligences.agent_runtime.registry import get_native_adapter
         from guildbotics.intelligences.agent_runtime.store import ConversationStore
@@ -962,9 +975,15 @@ class CliAgentBrain(Brain):
                 terminal = await adapter.run_turn(
                     native_input, context, conversation, emit
                 )
+            except Exception as exc:
+                if refused := _login_refused(context, str(exc)):
+                    raise refused from exc
+                raise
             finally:
                 if context.input_only:
                     await adapter.close()
+            if refused := _login_refused(context, terminal.output):
+                raise refused
         except asyncio.CancelledError:
             store.mark_unhealthy(conversation, "cancelled")
             raise

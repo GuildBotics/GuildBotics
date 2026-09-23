@@ -622,3 +622,79 @@ async def test_a_login_due_for_refresh_is_refreshed_before_the_turn_starts(
         assert refused.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
         assert str(refused.value) == "log in again"
         assert happened == ["refresh"]
+
+
+@pytest.mark.asyncio
+async def test_a_login_the_gateway_could_not_use_is_told_to_the_turn(
+    tmp_path, monkeypatch
+):
+    """What the tool makes of a refused login is its own affair; the turn
+    learns it from the login it lent."""
+    import httpx
+
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.agent_environment.auth_gateway import (
+        CredentialGateway,
+    )
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    tool = environment.cli_agent_info("copilot")
+    where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
+    monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
+    sealed = {tool.provision.auth: json.dumps(_LOGINS["copilot"]).encode()}
+    monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
+    gateways: list[CredentialGateway] = []
+
+    class Revoked(CredentialGateway):
+        def __init__(self, *args, **kwargs):
+            refuse = httpx.MockTransport(lambda _: httpx.Response(401))
+            super().__init__(*args, transport=refuse, **kwargs)
+            gateways.append(self)
+
+    monkeypatch.setattr(environment, "CredentialGateway", Revoked)
+
+    class Booted:
+        def __init__(self, spec, before_stop):
+            self.spec = spec
+            self.before_stop = before_stop
+
+        async def write_file(self, path, data):
+            pass
+
+    async def start(spec, at, *, before_stop):
+        return Booted(spec, before_stop)
+
+    monkeypatch.setattr(environment, "_start", start)
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="turn",
+        cwd=tmp_path / "repository",
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "copilot", "manual", "turn"),
+        contract=AccessContract(),
+    )
+    booted = await environment.start_turn_environment(
+        context, "copilot", host_ports=(), env={}
+    )
+    try:
+        assert context.login.refusal() == ""
+        (gateway,) = gateways
+        async with httpx.AsyncClient() as guest:
+            await guest.get(
+                f"http://127.0.0.1:{gateway.port}/models",
+                headers={"authorization": f"Bearer {gateway.stand_in}"},
+            )
+    finally:
+        await booted.before_stop(booted)
+
+    assert context.login.refusal() == t(
+        "intelligences.agent_environment.tool.login_refused",
+        tool=tool.label,
+        command=provider_state.login_command("copilot"),
+    )

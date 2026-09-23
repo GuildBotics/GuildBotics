@@ -369,7 +369,13 @@ and `-p no:xdist`). Nothing is sent off the device.
   authentication failure and asks for a new login.
 - **State**: a locked or unavailable keychain, a missing key, and a record that does not
   open are told apart from a missing login, in the same words `status.py` gives the CLI,
-  the Desktop, and a refused turn. Nothing falls back to plain text.
+  the Desktop, and a refused turn. Nothing falls back to plain text. When the gateway
+  could not use the login during a turn (a refresh that failed, or a login that never
+  refreshes being refused), no later request of the turn is given the login either, and
+  the turn is an authentication failure that asks for a new login, whatever the tool
+  reported; what the tool itself said follows the reason. A tool
+  holds only the stand-in, so it may report such a failure as some other error, or return
+  the error text as its answer.
 - **Codex specifics**: Codex's built-in provider sends inference over a WebSocket to
   chatgpt.com and cannot be pointed at the gateway, so a turn passes, with `-c`, a model
   provider of GuildBotics' own, `guildbotics`, that uses the Responses API over SSE. A thread

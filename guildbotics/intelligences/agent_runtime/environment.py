@@ -121,6 +121,7 @@ async def start_turn_environment(
     broker = tool.provision.credential_broker
     assert broker is not None
     lent = await _lend(tool, where)
+    context.login.refusal = lent.refusal
     gateway = CredentialGateway(broker, lent.access_token, lent.stand_in)
     await gateway.start()
     try:
