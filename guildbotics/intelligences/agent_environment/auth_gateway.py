@@ -97,7 +97,6 @@ class CredentialGateway:
     ) -> None:
         self._broker = broker
         self._tokens = tokens
-        self._routes = broker.forwarded
         self._authorization = ""
         #: The turn's secret: the one credential the gateway takes.
         self.stand_in = stand_in
@@ -169,7 +168,8 @@ class CredentialGateway:
         ):
             await _refuse(send, 401, "authentication_error", "Unknown credentials.")
             return
-        if (scope["method"], scope["path"]) not in self._routes:
+        origin = self._broker.origin(scope["method"], scope["path"])
+        if origin is None:
             # What a tool asks for that its catalog does not name, and no more.
             _LOGGER.info("Gateway refused %s %s", scope["method"], scope["path"])
             await _refuse(send, 403, "permission_error", "Not a forwarded route.")
@@ -181,18 +181,18 @@ class CredentialGateway:
         if body is None:
             await _refuse(send, 413, "request_too_large", "Request is too large.")
             return
-        await self._forward(scope, headers, body, send)
+        await self._forward(scope, origin, headers, body, send)
 
     async def _forward(
         self,
         scope: dict[str, Any],
+        origin: str,
         headers: list[tuple[str, str]],
         body: bytes,
         send: Any,
     ) -> None:
         assert self._client is not None
         query = scope.get("query_string", b"").decode("latin-1")
-        origin = self._routes[scope["method"], scope["path"]]
         url = origin + scope["path"] + (f"?{query}" if query else "")
         forwarded = [(k, v) for k, v in headers if k not in _DROPPED_REQUEST_HEADERS]
         refused: str | None = None

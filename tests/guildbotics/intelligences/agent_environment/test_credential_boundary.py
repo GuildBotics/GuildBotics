@@ -321,7 +321,11 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         processes = await _sh(environment, _node(_PROCESSES))
         base = environment.spec.env[broker.base_url_env[0]]
         origin = base.removesuffix(broker.base_url_path)
-        (method, path), _upstream = next(iter(broker.forwarded.items()))
+        # A route of one path to the upstream itself, which the gateway's
+        # origin stands for.
+        method, _, path = next(
+            r for r in broker.routes if " /" in r and "*" not in r
+        ).partition(" ")
         answered = await _sh(
             environment,
             _node(

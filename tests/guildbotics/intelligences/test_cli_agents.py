@@ -338,10 +338,46 @@ def _broker(*routes: str) -> CredentialBroker:
 def test_a_route_is_forwarded_to_the_origin_it_names_or_to_the_upstream() -> None:
     broker = _broker("POST /v1:generate", "GET https://profile.example.test/me")
 
-    assert broker.forwarded == {
-        ("POST", "/v1:generate"): "https://api.example.test",
-        ("GET", "/me"): "https://profile.example.test",
-    }
+    assert broker.origin("POST", "/v1:generate") == "https://api.example.test"
+    assert broker.origin("GET", "/me") == "https://profile.example.test"
+    assert broker.origin("GET", "/v1:generate") is None
+    assert broker.origin("GET", "/me/more") is None
+
+
+@pytest.mark.parametrize(
+    ("path", "forwarded"),
+    [
+        ("/agents/owner/repo", True),
+        ("/agents/owner", True),
+        ("/agents/Owner-1/repo.name_2", True),
+        ("/agents", False),
+        ("/agents/", False),
+        ("/agentsX/owner", False),
+        ("/agents/owner//repo", False),
+        ("/agents/../me", False),
+        ("/agents/owner/../../me", False),
+        ("/agents/./owner", False),
+        ("/agents/owner?x", False),
+        ("/agents/owner#x", False),
+        ("/agents/owner/%2e%2e", False),
+    ],
+)
+def test_a_route_ending_in_a_star_forwards_the_plain_paths_under_it(
+    path: str, forwarded: bool
+) -> None:
+    """Nothing it forwards is a path the upstream would take for another."""
+    broker = _broker("GET /agents/*")
+
+    assert (broker.origin("GET", path) is not None) == forwarded
+    assert broker.origin("POST", "/agents/owner") is None
+
+
+def test_a_path_under_a_star_route_may_be_one_of_its_own() -> None:
+    """Only a path the star route would forward is taken by it."""
+    broker = _broker("GET /me", "GET /me/*", "POST /me/more", "GET /me/.hidden")
+
+    assert broker.origin("GET", "/me") == broker.origin("GET", "/me/more")
+    assert broker.origin("GET", "/me/.hidden") == "https://api.example.test"
 
 
 @pytest.mark.parametrize(
@@ -354,6 +390,12 @@ def test_a_route_is_forwarded_to_the_origin_it_names_or_to_the_upstream() -> Non
         ("GET https://profile.example.test",),
         # One path, two places to send it: which would get the token?
         ("GET /me", "GET https://profile.example.test/me"),
+        ("GET /me/*", "GET https://profile.example.test/me/more"),
+        ("GET /me/more", "GET /me/*"),
+        ("GET /me/*", "GET /me/more/*"),
+        ("GET /me/*", "GET /me/*"),
+        ("GET /*",),
+        ("GET /me/*/more",),
     ],
 )
 def test_a_route_that_does_not_name_one_place_is_refused(
@@ -391,8 +433,17 @@ def test_a_provisioned_tool_without_a_brokered_login_is_refused() -> None:
             "empty_refresh_token": True,
         },
         {"stand_in_env": "TOKEN", "stand_in_command_env": "TOKEN_COMMAND"},
+        {"stand_in_env": "TOKEN", "stand_in_also_env": ("TOKEN",)},
+        {"stand_in_also_env": ("API_URL",)},
     ],
-    ids=["expires-unrefreshed", "refreshed-never-expiring", "no-place", "two-ways"],
+    ids=[
+        "expires-unrefreshed",
+        "refreshed-never-expiring",
+        "no-place",
+        "two-ways",
+        "one-variable-twice",
+        "a-variable-for-two-things",
+    ],
 )
 def test_a_login_is_lent_and_refreshed_one_whole_way(fields: dict[str, object]) -> None:
     """A login that expires is refreshed and one that does not never is;

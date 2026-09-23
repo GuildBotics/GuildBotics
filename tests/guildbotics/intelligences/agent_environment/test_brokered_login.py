@@ -780,6 +780,8 @@ def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
         },
         "last_refresh": "2026-09-01T00:00:00Z",
     }
+    # The connected apps take theirs from a variable, the login from the file.
+    assert lent.stand_in_environment() == {"CODEX_CONNECTORS_TOKEN": lent.stand_in}
     header, _claims, secret = lent.stand_in.split(".")
     assert json.loads(base64.urlsafe_b64decode(header + "==")) == {
         "alg": "none",

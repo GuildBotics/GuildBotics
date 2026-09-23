@@ -435,18 +435,22 @@ class LentLogin:
         return {self._tool.provision.auth: json.dumps(held).encode()}
 
     def stand_in_environment(self) -> dict[str, str]:
-        """What a turn is told, for a tool that takes its stand-in from a
-        variable, or from a command: the command that prints it and a
-        lifetime the turn never reaches."""
+        """The variables a turn is given its stand-in in: the one a tool takes
+        it from, or the command that prints it with a lifetime the turn never
+        reaches, and any it is given in as well."""
         broker = self._broker
+        told = dict.fromkeys(broker.stand_in_also_env, self.stand_in)
         if broker.stand_in_env:
-            return {broker.stand_in_env: self.stand_in}
-        if not broker.stand_in_command_env:
-            return {}
-        printed = json.dumps(
-            {"access_token": self.stand_in, "expires_in": _STAND_IN_LIFETIME_SECONDS}
-        )
-        return {broker.stand_in_command_env: f"echo '{printed}'"}
+            told[broker.stand_in_env] = self.stand_in
+        if broker.stand_in_command_env:
+            printed = json.dumps(
+                {
+                    "access_token": self.stand_in,
+                    "expires_in": _STAND_IN_LIFETIME_SECONDS,
+                }
+            )
+            told[broker.stand_in_command_env] = f"echo '{printed}'"
+        return told
 
     def refusal(self) -> str:
         """Why the login could not be given to the turn, or nothing."""

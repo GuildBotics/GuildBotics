@@ -343,6 +343,33 @@ async def test_a_refused_route_is_logged_without_what_it_carried(
         assert carried not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_a_route_ending_in_a_star_forwards_what_is_under_it_only() -> None:
+    """A path the guest spells to climb out -- its dots encoded, so that no
+    client resolves them first -- is refused before it leaves the device."""
+    upstream = _Upstream()
+    broker = BROKER.model_copy(update={"routes": ("GET /agents/*",)})
+    gateway = CredentialGateway(
+        broker, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    await gateway.start()
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers={"authorization": f"Bearer {STAND_IN}"},
+        ) as guest:
+            forwarded = await guest.get("/agents/owner/repo?x=1")
+            climbed = await guest.get("/agents/owner/%2e%2e/%2e%2e/v1/messages")
+    finally:
+        await gateway.close()
+
+    assert forwarded.status_code == 200
+    assert climbed.status_code == 403
+    assert [str(r.url) for r in upstream.requests] == [
+        "https://api.anthropic.com/agents/owner/repo?x=1"
+    ]
+
+
 _ELSEWHERE = CredentialBroker(
     format="t",
     access_token=("a",),

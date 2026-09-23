@@ -301,10 +301,10 @@ takes Claude Code as the example; the tools differ as this table shows.
 
 | Tool | What is sealed | How a turn gets its stand-in | Gateway upstream | Refresh and usage |
 |---|---|---|---|---|
-| Codex | `~/.codex/auth.json` (a ChatGPT account login) | a stand-in `auth.json`: an unsigned JWT that claims only an expiry and the account (email, plan, account ID) stands for both the access token and the ID token, and the refresh token is empty (`chatgpt_base_url` and the `base_url` of a model provider of GuildBotics' own, `guildbotics`, point at the gateway) | `https://chatgpt.com` (inference at `/backend-api/codex/responses`, the model list, `/backend-api/wham/usage`) | refresh by running `codex debug models` with the access token claiming an expiry that has passed; usage through App Server `account/rateLimits/read` |
+| Codex | `~/.codex/auth.json` (a ChatGPT account login) | a stand-in `auth.json`: an unsigned JWT that claims only an expiry and the account (email, plan, account ID) stands for both the access token and the ID token, and the refresh token is empty (`chatgpt_base_url` and the `base_url` of a model provider of GuildBotics' own, `guildbotics`, point at the gateway); the same stand-in in `CODEX_CONNECTORS_TOKEN` for the connected apps | `https://chatgpt.com` (inference at `/backend-api/codex/responses`, the model list, the rate limits and settings under `/backend-api/wham/`, plugins at `/backend-api/ps/plugins/*` and `/backend-api/plugins/featured`, and the connected apps' MCP server at `/backend-api/ps/mcp`) | refresh by running `codex debug models` with the access token claiming an expiry that has passed; usage through App Server `account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | a stand-in credentials file (`ANTHROPIC_BASE_URL` points at the gateway) | `https://api.anthropic.com` | `claude -p /usage` |
-| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | a stand-in credentials file (the access token, `token_type`, the expiry, and `auth_method` only; no refresh token and no ID token). `CLOUD_CODE_URL` points at the gateway over HTTPS, and `www.googleapis.com` is relayed to the gateway inside the turn | `https://daily-cloudcode-pa.googleapis.com` (seven `/v1internal:` methods) and `https://www.googleapis.com/oauth2/v2/userinfo` | both through `agy -p /usage`, which refreshes a login it is told has expired |
-| GitHub Copilot | `~/.copilot/config.json` (JSON after lines of comments; the token under a key named for the account, one account only; no expiry and no refresh token) | a stand-in beginning `gho_` (the only shape Copilot takes) in `COPILOT_GITHUB_TOKEN`; `COPILOT_DEBUG_GITHUB_API_URL` and `COPILOT_API_URL` point at the gateway | `https://api.github.com` (`/copilot_internal/user`, `/copilot_internal/managed_settings`) and `https://api.individual.githubcopilot.com` (`/models` and inference at `/chat/completions`, `/responses`, and `/v1/messages`, as each model supports) | no refresh (a refused login asks for a new one); usage through Copilot SDK server `account.getQuota` |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | a stand-in credentials file (the access token, `token_type`, the expiry, and `auth_method` only; no refresh token and no ID token). `CLOUD_CODE_URL` points at the gateway over HTTPS, and `www.googleapis.com` is relayed to the gateway inside the turn | `https://daily-cloudcode-pa.googleapis.com` (eight `/v1internal:` methods) and `https://www.googleapis.com/oauth2/v2/userinfo` | both through `agy -p /usage`, which refreshes a login it is told has expired |
+| GitHub Copilot | `~/.copilot/config.json` (JSON after lines of comments; the token under a key named for the account, one account only; no expiry and no refresh token) | a stand-in beginning `gho_` (the only shape Copilot takes) in `COPILOT_GITHUB_TOKEN`; `COPILOT_DEBUG_GITHUB_API_URL` and `COPILOT_API_URL` point at the gateway | `https://api.github.com` (`/copilot_internal/user`, `/copilot_internal/managed_settings`) and `https://api.individual.githubcopilot.com` (`/models` and inference at `/chat/completions`, `/responses`, and `/v1/messages`, as each model supports; also the GitHub MCP server at `/mcp/readonly` and custom agents at `/agents/swe/custom-agents/*`) | no refresh (a refused login asks for a new one); usage through Copilot SDK server `account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
@@ -352,7 +352,11 @@ and `-p no:xdist`). Nothing is sent off the device.
   compressed all the same is not passed on (502), and the refusal is logged as
   `Gateway refused an answer encoded as ...`. HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
-  upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only.
+  upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only. A catalog route
+  matches its path exactly; one that ends in `/*` (for a tool that puts a repository or
+  the like in the path) forwards the paths under it made of plain names only (never one
+  with a segment that is empty or begins with `.`, a percent-encoding, or a character outside
+  ASCII).
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
   endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
   an environment of their own that holds the login in memory, mounts no working directory
@@ -381,9 +385,10 @@ and `-p no:xdist`). Nothing is sent off the device.
   chatgpt.com and cannot be pointed at the gateway, so a turn passes, with `-c`, a model
   provider of GuildBotics' own, `guildbotics`, that uses the Responses API over SSE. A thread
   records the provider it started on and resumes on it, so `thread/resume` names
-  `guildbotics`, for threads started before the switch as well. The gateway forwards no
-  plugins, no ChatGPT connected apps (`codex_apps`), and no analytics, so turns go without
-  them. An API key login is not kept: only a ChatGPT account login is sealed.
+  `guildbotics`, for threads started before the switch as well. The MCP server of ChatGPT's
+  connected apps (`codex_apps`) is authenticated by `CODEX_CONNECTORS_TOKEN` (Codex attaches
+  no login to it from a stand-in), so the same stand-in is given in that variable too.
+  Analytics are not forwarded. An API key login is not kept: only a ChatGPT account login is sealed.
 - **Antigravity specifics**: the Cloud Code API is taken over HTTPS only, so Antigravity's
   gateway speaks TLS with a certificate from a CA made for the turn. The turn trusts, through
   `SSL_CERT_FILE`, a file of the system's CAs with that CA added
@@ -394,12 +399,14 @@ and `-p no:xdist`). Nothing is sent off the device.
   too). `HTTPS_PROXY` is not used: it would route every request of the tool through the host.
   Only the profile picture (`lh3.googleusercontent.com`, which carries no credential) is fetched
   straight from the turn. Telemetry that carries the token (`play.googleapis.com/log`) is not
-  reachable from a turn, which runs without it. The gateway logs the routes it did not forward,
+  reachable from a turn, which runs without it. `/v1internal:writeTrajectoryAcls`, which
+  names a conversation's owner on Google's side (its body is the conversation's ID alone),
+  is forwarded. The gateway logs the routes it did not forward,
   as `METHOD /path` only (never a token, a query, or a body).
 - **GitHub Copilot specifics**: its login neither expires nor refreshes, so the gateway
   asks for a new login instead of refreshing a refused one. Copilot's hosted read-only
   GitHub MCP server (`/mcp/readonly`, which acts with the user's GitHub permissions) and
-  its telemetry are not forwarded. Where the API of an account on another plan (Business,
+  the repository's custom agents are forwarded; its telemetry is not. Where the API of an account on another plan (Business,
   Enterprise) should be forwarded is not verified.
 - **Switching over**: the earlier plain files (Codex's
   `~/.guildbotics/data/agent_environment/codex/.codex/auth.json`, Claude Code's
@@ -429,13 +436,15 @@ and `-p no:xdist`). Nothing is sent off the device.
   A login that cannot be opened (a missing or broken key or record) and a failed refresh
   are replaced by logging in again with `guildbotics environment login <tool>`.
 - **What remains**: a compromised turn can still use the allowed API through the gateway
-  while it runs, spend the account's quota, and put data into allowed request bodies. This
+  while it runs, spend the account's quota, and put data into allowed request bodies. The
+  allowed API includes GitHub Copilot's GitHub MCP server (reading with the logged-in GitHub
+  account's permissions) and Codex's connected apps (the services linked to the ChatGPT
+  account). This
   does not protect against the host's memory or its administrator.
-- **Limits of this scheme**: Codex turns go without plugins, ChatGPT's connected apps
-  (`codex_apps`), and analytics, and an API key login is not kept. A Claude Code turn cannot
+- **Limits of this scheme**: Codex turns send no analytics, and an API key login is not
+  kept. A Claude Code turn cannot
   read the account's profile (`/api/oauth/profile`). Grok Build's usage cannot be read in a
-  turn; it is read where the login is held. GitHub Copilot goes without its hosted GitHub MCP
-  server (`/mcp/readonly`) and its telemetry, and where Business and Enterprise accounts go is
+  turn; it is read where the login is held. GitHub Copilot sends no telemetry, and where Business and Enterprise accounts go is
   not verified. Antigravity sends no telemetry that carries the token. That GitHub Copilot's login has neither an
   expiry nor a refresh is the provider's own design.
 

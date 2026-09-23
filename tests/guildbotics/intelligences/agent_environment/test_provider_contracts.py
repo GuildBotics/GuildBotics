@@ -524,13 +524,12 @@ async def test_copilot_reaches_github_and_its_api_through_the_gateway(
 
     replies = _replies(answered)
     assert "result" in replies[2] and "result" in replies[3], answered
-    # Every credentialed request but the hosted GitHub MCP server, which acts
-    # on GitHub as the user, is one the gateway forwards; nothing else goes
-    # anywhere but the gateway.
+    # Every credentialed request is one the gateway forwards; nothing else
+    # goes anywhere but the gateway.
     authenticated = {
         (s.method, s.path.split("?")[0]) for s in recorder.requests() if s.authorization
     }
-    assert authenticated - {("POST", "/mcp/readonly")} <= set(broker.forwarded)
+    assert all(broker.origin(*request) for request in authenticated), authenticated
     assert {("POST", endpoint) for _, endpoint, _ in _COPILOT_MODELS} <= authenticated
     assert recorder.carrying(lent.stand_in) == {GUEST_HOST_ALIAS}, recorder.seen
 
@@ -695,7 +694,8 @@ async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
     # What a turn needs of it is what the gateway forwards, to where.
     for seen in recorder.requests():
         if seen.authorization:
-            origin = broker.forwarded[seen.method, seen.path.split("?")[0]]
+            origin = broker.origin(seen.method, seen.path.split("?")[0])
+            assert origin is not None, seen
             expected = "daily-cloudcode-pa.googleapis.com"
             host = GUEST_HOST_ALIAS if origin.endswith(expected) else origin[8:]
             assert seen.host == host, seen

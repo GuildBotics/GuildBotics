@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal, cast
@@ -104,8 +105,9 @@ class CredentialBroker(BaseModel):
     #: The origin the gateway forwards a route to unless the route names one.
     upstream: str
     #: ``METHOD /path``, or ``METHOD https://origin/path``, the gateway
-    #: forwards; a query string is not part of the match. Everything else is
-    #: refused before it leaves the device.
+    #: forwards; a query string is not part of the match. A path that ends in
+    #: ``/*`` forwards the paths under it (see :meth:`origin`). Everything else
+    #: is refused before it leaves the device.
     routes: tuple[str, ...]
     #: The variables that point the tool at the gateway.
     base_url_env: tuple[str, ...]
@@ -118,6 +120,9 @@ class CredentialBroker(BaseModel):
     #: The variable the stand-in itself is given in, for a tool that takes it
     #: that way.
     stand_in_env: str = ""
+    #: The variables the stand-in is given in as well, however the tool takes
+    #: its login: for a part of the tool that authenticates by one of its own.
+    stand_in_also_env: tuple[str, ...] = ()
     #: How a stand-in begins, for a tool that takes only tokens of a shape.
     stand_in_prefix: str = "guildbotics-stand-in-"
     #: What the tool is told beside the gateway's URL.
@@ -130,7 +135,7 @@ class CredentialBroker(BaseModel):
     @field_validator("routes")
     @classmethod
     def _routes_are_method_and_path(cls, routes: tuple[str, ...]) -> tuple[str, ...]:
-        seen: set[tuple[str, str]] = set()
+        seen: list[tuple[str, str]] = []
         for route in routes:
             method, _, target = route.partition(" ")
             origin, path = _split_origin(target)
@@ -138,11 +143,21 @@ class CredentialBroker(BaseModel):
                 not method.isupper()
                 or not path.startswith("/")
                 or "?" in path
+                or "*" in path.removesuffix("/*")
+                or path == "/*"
                 or (origin and not origin.startswith("https://"))
-                or (method, path) in seen
+                # Two routes for one path: which would get the token?
+                or any(
+                    method == other
+                    and (
+                        _covers(path, taken.replace("*", "x"))
+                        or _covers(taken, path.replace("*", "x"))
+                    )
+                    for other, taken in seen
+                )
             ):
                 raise ValueError(f"'{route}' is not a 'METHOD /path' of its own")
-            seen.add((method, path))
+            seen.append((method, path))
         return routes
 
     @model_validator(mode="after")
@@ -157,19 +172,42 @@ class CredentialBroker(BaseModel):
             raise ValueError("an empty refresh token needs its place")
         if self.stand_in_env and self.stand_in_command_env:
             raise ValueError("a stand-in reaches the turn one way")
+        told = [
+            *self.stand_in_also_env,
+            *self.base_url_env,
+            *filter(None, (self.stand_in_env, self.stand_in_command_env)),
+        ]
+        if len(set(told)) != len(told):
+            raise ValueError("a variable tells the turn one thing")
         if self.relayed_hosts and not self.tls:
             raise ValueError("relayed hosts are answered over TLS only")
         return self
 
-    @property
-    def forwarded(self) -> dict[tuple[str, str], str]:
-        """The origin each ``(METHOD, /path)`` is forwarded to."""
-        forwarded: dict[tuple[str, str], str] = {}
+    def origin(self, method: str, path: str) -> str | None:
+        """The origin the gateway forwards ``method`` ``path`` to, or None
+        when it forwards it nowhere."""
         for route in self.routes:
-            method, _, target = route.partition(" ")
-            origin, path = _split_origin(target)
-            forwarded[method, path] = origin or self.upstream
-        return forwarded
+            route_method, _, target = route.partition(" ")
+            origin, route_path = _split_origin(target)
+            if route_method == method and _covers(route_path, path):
+                return origin or self.upstream
+        return None
+
+
+#: A segment a ``/*`` route forwards: plain names only, so that no path the
+#: upstream would resolve elsewhere (``..``, an encoded ``/`` or ``?``) is one.
+_SEGMENT = re.compile(r"[A-Za-z0-9_~@:+-][A-Za-z0-9._~@:+-]*")
+
+
+def _covers(route: str, path: str) -> bool:
+    """Whether the route path ``route`` names ``path``: the path itself, or,
+    for one that ends in ``/*``, any path of plain segments under it."""
+    if not route.endswith("/*"):
+        return path == route
+    prefix = route.removesuffix("*")
+    return path.startswith(prefix) and all(
+        _SEGMENT.fullmatch(segment) for segment in path[len(prefix) :].split("/")
+    )
 
 
 def _split_origin(target: str) -> tuple[str, str]:
@@ -351,16 +389,24 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     ("https://api.openai.com/auth", "chatgpt_account_id"),
                 ),
                 upstream="https://chatgpt.com",
-                # Inference (compaction too), the model catalog, and the rate
-                # limits a turn checks first. Plugins, ChatGPT's connected
-                # apps and analytics stay closed.
+                # Inference (compaction too), the model catalog, the rate
+                # limits and settings a turn checks first, the plugins, and
+                # the account's connected apps (an MCP server of ChatGPT's).
+                # Analytics stay closed.
                 routes=(
                     "POST /backend-api/codex/responses",
                     "GET /backend-api/codex/models",
                     "GET /backend-api/wham/usage",
+                    "GET /backend-api/wham/rate-limit-reset-credits",
+                    "GET /backend-api/wham/settings/user",
+                    "GET /backend-api/ps/plugins/*",
+                    "GET /backend-api/plugins/featured",
+                    "POST /backend-api/ps/mcp",
                 ),
                 base_url_env=("GUILDBOTICS_CODEX_BASE_URL",),
                 base_url_path="/backend-api",
+                # The connected apps take the token from here, not the login.
+                stand_in_also_env=("CODEX_CONNECTORS_TOKEN",),
                 refresh=("codex", "debug", "models"),
             ),
         ),
@@ -490,9 +536,9 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # a turn takes the stand-in from COPILOT_GITHUB_TOKEN, which must look
         # like a GitHub token, and both of its API URLs -- GitHub's and
         # Copilot's own -- point at the gateway. What it reads of the GitHub
-        # API is the account and its policy; Copilot's hosted GitHub MCP
-        # server, which would act on GitHub as the user, stays closed, as does
-        # the telemetry.
+        # API is the account and its policy; of Copilot's, beside inference,
+        # the hosted GitHub MCP server (read-only, as the user) and the
+        # repository's custom agents. The telemetry stays closed.
         provision=CliAgentProvision(
             package="@github/copilot@1.0.86",
             state_root=".copilot",
@@ -518,6 +564,8 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     "POST /chat/completions",
                     "POST /responses",
                     "POST /v1/messages",
+                    "POST /mcp/readonly",
+                    "GET /agents/swe/custom-agents/*",
                 ),
                 base_url_env=("COPILOT_DEBUG_GITHUB_API_URL", "COPILOT_API_URL"),
                 stand_in_env="COPILOT_GITHUB_TOKEN",
@@ -595,6 +643,8 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                     "POST /v1internal:retrieveUserQuotaSummary",
                     "POST /v1internal:listExperiments",
                     "POST /v1internal:streamGenerateContent",
+                    # Names a conversation's owner; it carries its ID alone.
+                    "POST /v1internal:writeTrajectoryAcls",
                     "GET https://www.googleapis.com/oauth2/v2/userinfo",
                 ),
                 base_url_env=("CLOUD_CODE_URL",),

@@ -242,10 +242,10 @@ AI CLIツールのログインは、turnのmicroVMにも、この端末の平文
 
 | ツール | 暗号化保存するもの | turnへの置換用の値の渡し方 | ゲートウェイの転送先 | 更新（refresh）とusage |
 |---|---|---|---|---|
-| Codex | `~/.codex/auth.json`（ChatGPTアカウントでのログイン） | 置換用の`auth.json`。アクセストークンとIDトークンの位置に、期限とアカウントのclaim（メールアドレス・プラン・アカウントID）だけを持つ署名なしのJWTを置き、refresh tokenは空にする（`chatgpt_base_url`と、GuildBotics独自のmodel provider `guildbotics`の`base_url`でゲートウェイを指す） | `https://chatgpt.com`（推論の`/backend-api/codex/responses`、モデル一覧、`/backend-api/wham/usage`） | 更新は、期限を過ぎたと伝えたアクセストークンで`codex debug models`を実行する。usageはApp Serverの`account/rateLimits/read` |
+| Codex | `~/.codex/auth.json`（ChatGPTアカウントでのログイン） | 置換用の`auth.json`。アクセストークンとIDトークンの位置に、期限とアカウントのclaim（メールアドレス・プラン・アカウントID）だけを持つ署名なしのJWTを置き、refresh tokenは空にする（`chatgpt_base_url`と、GuildBotics独自のmodel provider `guildbotics`の`base_url`でゲートウェイを指す）。連携アプリ用に同じ値を`CODEX_CONNECTORS_TOKEN`でも渡す | `https://chatgpt.com`（推論の`/backend-api/codex/responses`、モデル一覧、`/backend-api/wham/`の利用枠と設定、プラグインの`/backend-api/ps/plugins/*`と`/backend-api/plugins/featured`、連携アプリのMCP `/backend-api/ps/mcp`） | 更新は、期限を過ぎたと伝えたアクセストークンで`codex debug models`を実行する。usageはApp Serverの`account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | 置換用の認証ファイル（`ANTHROPIC_BASE_URL`でゲートウェイを指す） | `https://api.anthropic.com` | `claude -p /usage` |
-| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | 置換用の認証ファイル（アクセストークン・`token_type`・期限・`auth_method`だけ。refresh tokenとIDトークンは入れない）。`CLOUD_CODE_URL`でHTTPSのゲートウェイを指し、`www.googleapis.com`はturn内の中継でゲートウェイへ向ける | `https://daily-cloudcode-pa.googleapis.com`（`/v1internal:`の7つのメソッド）と`https://www.googleapis.com/oauth2/v2/userinfo` | 更新もusageも`agy -p /usage`（期限を過ぎたと伝えたログインで実行すると更新する） |
-| GitHub Copilot | `~/.copilot/config.json`（先頭にコメント行があるJSON。アカウント名のキーの下にトークン。期限もrefresh tokenも無い。扱えるアカウントは1つ） | 置換用の値（`gho_`で始まる。Copilotはこの形しか受け付けない）を`COPILOT_GITHUB_TOKEN`で渡す。`COPILOT_DEBUG_GITHUB_API_URL`と`COPILOT_API_URL`でゲートウェイを指す | `https://api.github.com`（`/copilot_internal/user`と`/copilot_internal/managed_settings`）と`https://api.individual.githubcopilot.com`（`/models`と推論の`/chat/completions`・`/responses`・`/v1/messages`。モデルが対応する経路へ送られる） | 更新は無い（拒否されたら再ログインを求める）。usageはCopilot SDK serverの`account.getQuota` |
+| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | 置換用の認証ファイル（アクセストークン・`token_type`・期限・`auth_method`だけ。refresh tokenとIDトークンは入れない）。`CLOUD_CODE_URL`でHTTPSのゲートウェイを指し、`www.googleapis.com`はturn内の中継でゲートウェイへ向ける | `https://daily-cloudcode-pa.googleapis.com`（`/v1internal:`の8つのメソッド）と`https://www.googleapis.com/oauth2/v2/userinfo` | 更新もusageも`agy -p /usage`（期限を過ぎたと伝えたログインで実行すると更新する） |
+| GitHub Copilot | `~/.copilot/config.json`（先頭にコメント行があるJSON。アカウント名のキーの下にトークン。期限もrefresh tokenも無い。扱えるアカウントは1つ） | 置換用の値（`gho_`で始まる。Copilotはこの形しか受け付けない）を`COPILOT_GITHUB_TOKEN`で渡す。`COPILOT_DEBUG_GITHUB_API_URL`と`COPILOT_API_URL`でゲートウェイを指す | `https://api.github.com`（`/copilot_internal/user`と`/copilot_internal/managed_settings`）と`https://api.individual.githubcopilot.com`（`/models`と推論の`/chat/completions`・`/responses`・`/v1/messages`。モデルが対応する経路へ送られる。ほかにGitHub MCPの`/mcp/readonly`とcustom agentsの`/agents/swe/custom-agents/*`） | 更新は無い（拒否されたら再ログインを求める）。usageはCopilot SDK serverの`account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
 turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。これを支える前提は、
@@ -286,7 +286,10 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   実トークンが現れた場合は同じ長さの伏せ字に置き換えて返し、本文を検査できるようupstreamには
   無圧縮の応答を求めます。それでも圧縮された応答は渡さず（502）、
   `Gateway refused an answer encoded as ...`をログに残します。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
-  upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。
+  upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。カタログの経路は
+  pathの完全一致で、末尾が`/*`の経路（ツールがpathにリポジトリ名などを入れるもの）は、その下の
+  通常の名前だけからなるpathを転送します（`.`で始まるsegment、空のsegment、%エンコードや
+  ASCII以外の文字を含むpathは断ります）。
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
@@ -309,8 +312,10 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
 - **Codex固有**: Codexの組み込みproviderは推論をchatgpt.comへのWebSocketで送り、ゲートウェイへ
   向けられないため、turnではResponses API（SSE）を使う独自のmodel provider `guildbotics`を
   `-c`で渡します。threadは開始したときのproviderを記録して再開時もそれを使うため、切り替え前に
-  始めたthreadも含めて、`thread/resume`で`guildbotics`を指定します。ゲートウェイはプラグイン、
-  ChatGPTの連携アプリ（`codex_apps`）、分析の送信を転送しないため、turnではこれらを使えません。
+  始めたthreadも含めて、`thread/resume`で`guildbotics`を指定します。ChatGPTの連携アプリ
+  （`codex_apps`）のMCP serverは、ログインのトークンではなく`CODEX_CONNECTORS_TOKEN`で認証するため
+  （ログインの方は、置換用の値では付けません）、同じ置換用の値をこの変数でも渡します。分析の送信は
+  転送しません。
   APIキーでのログインは扱いません（ChatGPTアカウントでのログインだけを保存します）。
 - **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、Antigravityのゲートウェイは
   turnごとに作るCAの証明書でTLSを話します。turnは`SSL_CERT_FILE`で、システムのCAにこのCAを
@@ -321,10 +326,12 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   ツールの全通信をhostへ通すことになるため使いません。プロフィール画像
   （`lh3.googleusercontent.com`、認証情報を含まない）だけはturnから直接取得します。
   トークンを含むテレメトリー（`play.googleapis.com/log`）はturnから届かず、なくても動きます。
+  会話の所有者をGoogle側に登録する`/v1internal:writeTrajectoryAcls`（本文は会話のIDだけ）は転送します。
   ゲートウェイは転送しなかった経路を`METHOD /path`だけログに残します（トークン・query・本文は残しません）。
 - **GitHub Copilot固有**: ログインは期限を持たず、refreshもしません。ゲートウェイは拒否された
   ログインを更新しようとせず、再ログインを求めます。Copilotがホストする読み取り専用のGitHub
-  MCP server（`/mcp/readonly`。利用者のGitHub権限で動く）とテレメトリーは転送しません。
+  MCP server（`/mcp/readonly`。利用者のGitHub権限で動く）と、リポジトリのcustom agentsは転送し、
+  テレメトリーは転送しません。
   個人プラン以外のアカウント（Business・Enterprise）のAPIの転送先は未確認です。
 - **切り替え**: 旧形式の平文（Codexは`~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
   Claude Codeは`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
@@ -351,12 +358,13 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と
   更新失敗は、`guildbotics environment login <tool>`で再ログインすると新しい保存に置き換わります。
 - **残るリスク**: 侵害されたturnは、実行中にゲートウェイ経由で許可されたAPIを使うこと、
-  利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。
+  利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。許可されたAPIには、
+  GitHub CopilotのGitHub MCP（ログインしたGitHubアカウントの権限での読み取り）と、Codexの連携アプリ
+  （ChatGPTアカウントに連携したサービス）も含まれます。
   hostのメモリやhost管理者に対する保護ではありません。
-- **この方式による機能制約**: Codexはturnでプラグイン、ChatGPTの連携アプリ（`codex_apps`）、
-  分析の送信を使えず、APIキーでのログインは扱いません。Claude Codeはturnからアカウントのprofile
+- **この方式による機能制約**: Codexはturnで分析を送信できず、APIキーでのログインは扱いません。Claude Codeはturnからアカウントのprofile
   （`/api/oauth/profile`）を読めません。Grok Buildの利用量はturnでは読めず、ログインを持つ環境で
-  読みます。GitHub CopilotはCopilotがホストするGitHub MCP（`/mcp/readonly`）とテレメトリーを使えず、
+  読みます。GitHub Copilotはテレメトリーを送れず、
   Business・Enterpriseのアカウントの転送先は未確認です。Antigravityはトークンを含むテレメトリーを
   送れません。GitHub Copilotのログインに期限とrefreshが無いのは
   provider自身の仕様です。
