@@ -72,6 +72,20 @@ class ConversationKey:
         return hashlib.sha256(source.encode()).hexdigest()
 
 
+@dataclass(slots=True)
+class TurnLogin:
+    """Whether the login a turn was lent could be used, as its environment
+    knows it.
+
+    The tool holds a stand-in, so it meets a refused login only in what the
+    gateway answers, and reports it in its own words or not at all; the
+    environment knows, and tells the turn here (``refusal`` is why, or
+    nothing).
+    """
+
+    refusal: Callable[[], str] = lambda: ""
+
+
 @dataclass(frozen=True, slots=True)
 class AgentExecutionContext:
     person_id: str
@@ -108,6 +122,7 @@ class AgentExecutionContext:
     read_only: bool = False
     #: What the turn may reach beyond ``cwd``.
     contract: AccessContract = field(default_factory=AccessContract)
+    login: TurnLogin = field(default_factory=TurnLogin)
 
     @property
     def input_only(self) -> bool:

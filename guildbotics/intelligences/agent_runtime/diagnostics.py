@@ -95,7 +95,7 @@ def record_network_egress_candidates(
     if policy.mode == "unrestricted" or not text:
         return
     try:
-        provider_domains = cli_agent_info(adapter_name).provision.api_domains
+        provider_domains = cli_agent_info(adapter_name).provision.turn_domains
     except ValueError:
         provider_domains = ()
     allowed_domains = (

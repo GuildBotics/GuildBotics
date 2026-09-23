@@ -17,26 +17,39 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
-from guildbotics.intelligences.agent_environment.provider_state import bind_state
+from guildbotics.intelligences.agent_environment.auth_gateway import (
+    CredentialGateway,
+    CredentialUnavailableError,
+)
+from guildbotics.intelligences.agent_environment.credential_vault import (
+    CredentialVaultError,
+    vault_problem,
+)
+from guildbotics.intelligences.agent_environment.provider_state import (
+    LentLogin,
+    LoginEnvironment,
+    bind_state,
+    login_command,
+    start_login_environment,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironment,
     AgentEnvironmentError,
+    EnvironmentProcess,
 )
-from guildbotics.intelligences.agent_environment.snapshot import SnapshotStatus
 from guildbotics.intelligences.agent_environment.spec import (
+    GUEST_HOST_ALIAS,
     AgentEnvironmentSpec,
     EnvironmentMount,
-    EnvironmentNetwork,
     build_environment_spec,
     guest_home,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
-from guildbotics.intelligences.agent_environment.toolchain import EnvironmentResources
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -51,6 +64,7 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.observability import TRACE_ID_ENV
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import terminate_posix_process_group
 
 CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
@@ -59,6 +73,21 @@ _WINDOWS = os.name == "nt"
 #: What every provider process starts with, beside the tool's own state
 #: variables: git must never wait for a terminal that is not there.
 _PROVIDER_ENV = {"GIT_TERMINAL_PROMPT": "0"}
+#: The CAs a turn whose gateway answers over TLS trusts: the system's, and
+#: the gateway's own.
+_SYSTEM_CAS = "/etc/ssl/certs/ca-certificates.crt"
+_TURN_CAS = "/etc/guildbotics/ca-certificates.crt"
+#: Where a relayed host resolves inside the turn, and the relay listens.
+_RELAY_ADDRESS = "127.0.0.2"
+#: A TCP relay onto the gateway: ``node -e _RELAY <host> <port>``.
+_RELAY = (
+    "const net=require('net');"
+    "net.createServer(c=>{const u=net.connect(+process.argv[2],process.argv[1]);"
+    "c.pipe(u);u.pipe(c);c.on('error',()=>u.destroy());u.on('error',()=>c.destroy())})"
+    f".listen(443,'{_RELAY_ADDRESS}',()=>console.log('ready'))"
+)
+#: How long the relay has to start, and to stop.
+_RELAY_SECONDS = 10.0
 
 
 async def start_turn_environment(
@@ -87,48 +116,152 @@ async def start_turn_environment(
             ``process`` when the microVM does not start. Nothing is widened:
             a turn that cannot be confined does not run.
     """
-    tool, status, nameservers, resources = _ready(tool_name)
+    tool, where = _ready(tool_name)
     home = guest_home()
-    state = (
-        bind_state(tool, input_only=True) if context.input_only else bind_state(tool)
+    broker = tool.provision.credential_broker
+    assert broker is not None
+    lent = await _lend(tool, where)
+    context.login.refusal = lent.refusal
+    gateway = CredentialGateway(broker, lent.access_token, lent.stand_in)
+    await gateway.start()
+    try:
+        spec = build_environment_spec(
+            context.contract,
+            context.cwd,
+            host_ports=(*host_ports, gateway.port),
+            # The tool reaches its API through the gateway only: what it would
+            # send straight to the provider carries the stand-in.
+            provider_domains=tool.provision.turn_domains,
+            env={
+                **_PROVIDER_ENV,
+                **tool.provision.environment(home),
+                **gateway.turn_environment(),
+                **({"SSL_CERT_FILE": _TURN_CAS} if broker.tls else {}),
+                **lent.stand_in_environment(),
+                **env,
+            },
+            nameservers=where.nameservers,
+            # A turn that evaluates input holds nothing of the store: no
+            # session, no account, no cache.
+            mounts=(*(() if context.input_only else bind_state(tool)), *mounts),
+        )
+    except BaseException:
+        await gateway.close()
+        raise
+    relays: list[EnvironmentProcess] = []
+
+    async def close_gateway(_: AgentEnvironment) -> None:
+        # The stand-in opens nothing from before the microVM is gone; a relay
+        # that does not end goes with the microVM.
+        for relay in relays:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
+        await gateway.close()
+
+    try:
+        environment = await _start(spec, where, before_stop=close_gateway)
+    except BaseException:
+        await gateway.close()
+        raise
+    root = f"{home}/{tool.provision.state_root}"
+    try:
+        for name, data in lent.stand_in_files().items():
+            await environment.write_file(f"{root}/{name}", data)
+        if broker.tls:
+            await _trust(environment, gateway.ca_pem)
+        if broker.relayed_hosts:
+            relays.append(await _relay(environment, broker.relayed_hosts, gateway.port))
+    except BaseException as exc:
+        await environment.close()
+        if isinstance(exc, AgentEnvironmentError):
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS, str(exc)
+            ) from exc
+        raise
+    return environment
+
+
+async def _trust(environment: AgentEnvironment, ca_pem: bytes) -> None:
+    """Make the turn trust ``ca_pem`` beside the system's CAs.
+
+    Raises:
+        AgentEnvironmentError: When the image has no system CAs to add it to;
+            trusting it alone would fail every other TLS of the turn.
+    """
+    system = await environment.read_file(_SYSTEM_CAS)
+    if not system:
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.no_system_cas", path=_SYSTEM_CAS)
+        )
+    await environment.write_file(_TURN_CAS, system + b"\n" + ca_pem)
+
+
+async def _relay(
+    environment: AgentEnvironment, hosts: Iterable[str], port: int
+) -> EnvironmentProcess:
+    """Resolve ``hosts`` inside the turn to a relay onto the gateway's
+    ``port``, which answers for them, and start it.
+
+    Raises:
+        AgentEnvironmentError: When the relay does not start.
+    """
+    known = await environment.read_file("/etc/hosts") or b""
+    lines = "".join(f"{_RELAY_ADDRESS} {host}\n" for host in hosts)
+    await environment.write_file("/etc/hosts", known + b"\n" + lines.encode())
+    relay = await environment.run(
+        "node", "-e", _RELAY, GUEST_HOST_ALIAS, str(port), limit=1 << 10
     )
-    spec = build_environment_spec(
-        context.contract,
-        context.cwd,
-        host_ports=host_ports,
-        provider_domains=tool.provision.api_domains,
-        env={**_PROVIDER_ENV, **tool.provision.environment(home), **env},
-        nameservers=nameservers,
-        mounts=(*state.mounts, *mounts),
-    )
-    return await _start(spec, status, resources, on_close=state.release)
+    try:
+        started = await asyncio.wait_for(relay.stdout.readline(), _RELAY_SECONDS)
+    except TimeoutError:
+        started = b""
+    if started.strip() != b"ready":
+        await relay.kill()
+        raise AgentEnvironmentError(
+            t("intelligences.agent_environment.runtime.relay_failed")
+        )
+    return relay
 
 
 async def start_probe_environment(tool_name: str) -> AgentEnvironment:
     """Boot an environment for asking the tool about itself: its usage, its
-    model catalog. Only the tool's state is bound, and only its API is open."""
-    tool, status, nameservers, resources = _ready(tool_name)
-    home = guest_home()
-    state = bind_state(tool)
-    spec = AgentEnvironmentSpec(
-        cwd=home,
-        home=home,
-        mounts=state.mounts,
-        network=EnvironmentNetwork(
-            unrestricted=False,
-            domains=tool.provision.api_domains,
-            host_ports=(),
-            local_network=False,
-            nameservers=nameservers,
-        ),
-        env={**_PROVIDER_ENV, **tool.provision.environment(home)},
-    )
-    return await _start(spec, status, resources, on_close=state.release)
+    model catalog. It is asked where its login is: in an environment that
+    holds it in memory and nothing else (see ``provider_state``).
+    """
+    tool, where = _ready(tool_name)
+    try:
+        return await start_login_environment(tool, where)
+    except CredentialUnavailableError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
+        ) from exc
+    except AgentEnvironmentError as exc:
+        raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 
 
-def _ready(
-    tool_name: str,
-) -> tuple[CliAgentInfo, SnapshotStatus, tuple[str, ...], EnvironmentResources]:
+async def _lend(tool: CliAgentInfo, where: LoginEnvironment) -> LentLogin:
+    """The login a turn is lent, refreshed first when it is due.
+
+    A tool reaches its API as soon as it starts, and may give up on it
+    sooner than a refresh takes (Antigravity's sign-in waits ten seconds), so
+    the refresh is not left to the first request.
+    """
+    try:
+        lent = LentLogin(tool, where)
+        await lent.access_token(None)
+    except CredentialVaultError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION,
+            vault_problem(exc.state, tool=tool.label, command=login_command(tool.name)),
+        ) from exc
+    except CredentialUnavailableError as exc:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.AUTHENTICATION, str(exc)
+        ) from exc
+    return lent
+
+
+def _ready(tool_name: str) -> tuple[CliAgentInfo, LoginEnvironment]:
     """Everything a start needs from this device, or the reason it cannot start.
 
     The reasons are the device's own words (:mod:`..agent_environment.status`),
@@ -154,23 +287,28 @@ def _ready(
             tool_status.refusal,
         )
     assert status.declaration is not None
-    return tool, status.snapshot, status.dns.nameservers, status.declaration.resources
+    resources = status.declaration.resources
+    return tool, LoginEnvironment(
+        snapshot=status.snapshot.path,
+        memory_mib=resources.memory_mib,
+        cpus=resources.cpus,
+        nameservers=status.dns.nameservers,
+    )
 
 
 async def _start(
     spec: AgentEnvironmentSpec,
-    status: SnapshotStatus,
-    resources: EnvironmentResources,
+    where: LoginEnvironment,
     *,
-    on_close: Callable[[], None],
+    before_stop: Callable[[AgentEnvironment], Awaitable[None]],
 ) -> AgentEnvironment:
     try:
         return await AgentEnvironment.start(
             spec,
-            snapshot=str(status.path),
-            memory_mib=resources.memory_mib,
-            cpus=resources.cpus,
-            on_close=on_close,
+            snapshot=str(where.snapshot),
+            memory_mib=where.memory_mib,
+            cpus=where.cpus,
+            before_stop=before_stop,
         )
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc

@@ -17,6 +17,7 @@ from guildbotics.intelligences.agent_runtime import (
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
 )
+from guildbotics.intelligences.cli_agents import cli_agent_info
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +52,16 @@ class FakeEnvironment:
         context = self.kwargs.get("context")
         home = "/home/member"
         cwd = str(context.cwd) if context is not None else home
-        return type("Spec", (), {"cwd": cwd, "home": home, "mounts": ()})()
+        # A brokered tool's gateway, as the turn's environment names it.
+        broker = cli_agent_info(self.tool).provision.credential_broker
+        env = (
+            dict.fromkeys(
+                broker.base_url_env, f"http://gateway.test{broker.base_url_path}"
+            )
+            if broker is not None
+            else {}
+        )
+        return type("Spec", (), {"cwd": cwd, "home": home, "mounts": (), "env": env})()
 
     async def run(self, command: str, *args: str, limit: int) -> Any:
         self.commands.append((command, *args))

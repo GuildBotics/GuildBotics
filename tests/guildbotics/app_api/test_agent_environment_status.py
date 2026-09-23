@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -81,7 +83,7 @@ def _device(
             name=agent.name,
             label=agent.label,
             provisioned=agent.provision.provisioned,
-            credentials_saved=agent.name in credentials_saved,
+            credentials="saved" if agent.name in credentials_saved else "missing",
         )
         for agent in CLI_AGENTS
     )
@@ -594,9 +596,9 @@ def test_device_authentication_failure_drives_card_and_alert_then_recovers(
     _codex_slot(monkeypatch)
     original = module.device_status()
     tool = cli_agent_info("codex")
-    store = provider_state.provider_state_dir(tool)
-    store.mkdir(parents=True)
-    (store / tool.provision.auth).write_text("{}")
+    claims = base64.urlsafe_b64encode(b'{"exp": 4102444800}').rstrip(b"=").decode()
+    login = {"tokens": {"access_token": f"e30.{claims}.c2ln", "refresh_token": "r"}}
+    provider_state._seal_login(tool, {tool.provision.auth: json.dumps(login).encode()})
     from dataclasses import replace
 
     monkeypatch.setattr(
@@ -651,7 +653,11 @@ def test_card_and_guidance_share_the_login_command(monkeypatch, home, failed):
 
     original = module.device_status()
     tools = tuple(
-        replace(tool, credentials_saved=failed, authentication_failed=failed)
+        replace(
+            tool,
+            credentials="saved" if failed else "missing",
+            authentication_failed=failed,
+        )
         for tool in original.tools
     )
     monkeypatch.setattr(

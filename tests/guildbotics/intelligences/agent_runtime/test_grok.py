@@ -68,8 +68,19 @@ def _member_broker_without_socket(monkeypatch) -> None:
     monkeypatch.setattr(MemberCapabilityBroker, "_start", start)
 
 
+#: What Grok Build 1.0.34 advertises when the environment names an external
+#: auth provider command -- the way a turn is lent its login.
+LENT_LOGIN = {
+    "id": "grok.com",
+    "name": "Grok",
+    "description": "Sign in with Grok",
+    "_meta": {"external_provider": True},
+}
+
+
 def _initialize(**overrides: Any) -> dict[str, Any]:
     payload = copy.deepcopy(FIXTURE)
+    payload["authMethods"] = [LENT_LOGIN]
     payload.update(overrides)
     return payload
 
@@ -979,7 +990,7 @@ async def test_member_broker_start_failure_is_a_process_error(
 
 
 @pytest.mark.asyncio
-async def test_cached_token_is_selected_from_the_advertised_methods(
+async def test_the_lent_login_is_selected_from_the_advertised_methods(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer()
@@ -987,41 +998,31 @@ async def test_cached_token_is_selected_from_the_advertised_methods(
 
     _result, events = await _run(GrokAcpAdapter(), tmp_path)
 
-    assert peer.sent("authenticate")["params"] == {"methodId": "cached_token"}
+    assert peer.sent("authenticate")["params"] == {"methodId": "grok.com"}
     started = next(event for event in events if event.name == "started")
-    assert started.details["auth_method"] == "cached_token"
+    assert started.details["auth_method"] == "grok.com"
     assert started.details["agent_version"] == "0.2.114"
 
 
 @pytest.mark.asyncio
-async def test_interactive_only_auth_is_refused_with_login_guidance(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    "methods",
+    [
+        # The interactive sign-in, which no one would answer.
+        [{"id": "grok.com", "name": "Grok"}],
+        # A saved login of the tool's own, which a turn never holds.
+        [{"id": "cached_token", "name": "cached_token"}],
+        [{"id": "xai.api_key", "name": "API key"}],
+    ],
+)
+async def test_anything_but_the_lent_login_is_refused(
+    monkeypatch, tmp_path, methods
 ) -> None:
-    initialize = _initialize()
-    initialize["authMethods"] = [{"id": "grok.com", "name": "Grok"}]
-    peer = _Peer(initialize=initialize)
-    install(monkeypatch, peer)
-
-    with pytest.raises(AgentRuntimeError) as excinfo:
-        await _run(GrokAcpAdapter(), tmp_path)
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
-    assert "grok login" in str(excinfo.value)
-    assert "authenticate" not in peer.methods()
-    # The interactive method is never offered back as an option.
-    assert excinfo.value.details["advertised_methods"] == []
-
-
-@pytest.mark.asyncio
-async def test_api_key_auth_is_refused_with_login_guidance(
-    monkeypatch, tmp_path
-) -> None:
-    # `XAI_API_KEY` never reaches the Grok process (the isolated environment
-    # strips credential-named variables), so an API-key-only install has no
-    # usable non-interactive login regardless of what the parent shell exports.
+    # `XAI_API_KEY` never reaches the Grok process: the environment is
+    # another machine and inherits nothing of the host's.
     monkeypatch.setenv("XAI_API_KEY", "secret-value")
     initialize = _initialize()
-    initialize["authMethods"] = [{"id": "xai.api_key", "name": "API key"}]
+    initialize["authMethods"] = methods
     peer = _Peer(initialize=initialize)
     install(monkeypatch, peer)
 
@@ -1029,9 +1030,8 @@ async def test_api_key_auth_is_refused_with_login_guidance(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
-    assert "grok login" in str(excinfo.value)
     assert "authenticate" not in peer.methods()
-    assert excinfo.value.details["advertised_methods"] == ["xai.api_key"]
+    assert excinfo.value.details["advertised_methods"] == [m["id"] for m in methods]
     assert "secret-value" not in json.dumps(excinfo.value.details)
 
 
@@ -1046,7 +1046,7 @@ async def test_authenticate_failure_is_an_authentication_error(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
-    assert "grok login" in str(excinfo.value)
+    assert excinfo.value.details["auth_method"] == "grok.com"
 
 
 @pytest.mark.asyncio

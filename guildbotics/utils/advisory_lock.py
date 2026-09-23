@@ -71,7 +71,7 @@ _process_locks_guard = threading.Lock()
 _process_locks: dict[Path, threading.Lock] = {}
 
 
-def _process_lock(path: Path) -> threading.Lock:
+def process_lock(path: Path) -> threading.Lock:
     """Return the in-process mutex for one advisory-lock file."""
     resolved = Path(os.path.normcase(path.resolve(strict=False)))
     with _process_locks_guard:
@@ -110,8 +110,8 @@ def held_lock(
             longer than ``timeout``.
     """
     deadline = time.monotonic() + timeout
-    process_lock = _process_lock(path)
-    if not process_lock.acquire(timeout=max(0.0, timeout)):
+    mutex = process_lock(path)
+    if not mutex.acquire(timeout=max(0.0, timeout)):
         raise LockTimeoutError(f"Timed out waiting for the advisory lock at {path}.")
     try:
         handle = open_lock_file(path)
@@ -133,7 +133,7 @@ def held_lock(
         finally:
             handle.close()
     finally:
-        process_lock.release()
+        mutex.release()
 
 
 @contextmanager

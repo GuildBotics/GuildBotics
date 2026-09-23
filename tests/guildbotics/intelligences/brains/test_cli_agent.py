@@ -1167,3 +1167,83 @@ async def test_input_only_closes_its_adapter_without_evicting_work(
         with pytest.raises(type(failure)):
             await invocation
     adapter.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refused", ["", "log in again"])
+@pytest.mark.parametrize("tool_says", ["answer", "failure", "crash"])
+async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
+    tmp_path, monkeypatch, refused, tool_says
+):
+    """The tool meets a refused login only in what the gateway answers, and
+    reports it as it likes -- as an answer, or as some other failure, or
+    not at all. The
+    turn is an authentication failure all the same, and what the tool said
+    goes along with it."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from guildbotics.intelligences.agent_runtime import factory
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentRuntimeError,
+        AgentRuntimeErrorCategory,
+        AgentTerminalResult,
+        ConversationKey,
+    )
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    monkeypatch.setitem(
+        cli_agent.person_cli_agent_mapping,
+        "judge",
+        {"default": cli_agent.ExecutableInfo(adapter="copilot")},
+    )
+
+    async def run_turn(prompt, context, conversation, emit):
+        context.login.refusal = lambda: refused  # As the environment tells it.
+        if tool_says == "failure":
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS, "error sending request"
+            )
+        if tool_says == "crash":
+            raise TimeoutError("no answer")
+        return AgentTerminalResult(
+            output="Error: Execution failed", events=(), provider_session_id="s"
+        )
+
+    adapter = SimpleNamespace(
+        applied_settings=lambda _: {}, run_turn=run_turn, close=AsyncMock()
+    )
+    monkeypatch.setattr(factory, "create_native_adapter", lambda _: adapter)
+    brain = cli_agent.CliAgentBrain("judge", "chat_decision", _test_logger())
+    context = cli_agent.AgentExecutionContext(
+        person_id="judge",
+        run_id="turn",
+        cwd=tmp_path,
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
+        contract=AccessContract(input_only=True),
+    )
+
+    turn = brain._execute_native_turn(
+        input="work", configured={}, context=context, adapter_name="copilot", run_id="t"
+    )
+    if tool_says == "crash" and not refused:
+        with pytest.raises(TimeoutError):
+            await turn
+        return
+    result = await turn
+
+    said = {
+        "answer": "Error: Execution failed",
+        "failure": "error sending",
+        "crash": "no answer",
+    }[tool_says]
+    if refused:
+        assert result.error_category == "authentication"
+        assert result.stderr.startswith("log in again")
+        assert said in result.stderr
+    elif tool_says == "answer":
+        assert result.error_category == "" and result.stdout == said
+    else:
+        assert result.error_category == "process"

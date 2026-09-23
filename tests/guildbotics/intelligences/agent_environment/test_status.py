@@ -75,10 +75,39 @@ def device(monkeypatch: pytest.MonkeyPatch, tmp_path) -> dict[str, object]:
     monkeypatch.setattr(module, "upstream_nameservers", resolvers)
     monkeypatch.setattr(
         module,
-        "has_credentials",
-        lambda agent: agent.name in parts["credentials_saved"],
+        "credential_state",
+        lambda agent: (
+            "saved" if agent.name in parts["credentials_saved"] else "missing"
+        ),
     )
     return parts
+
+
+@pytest.mark.parametrize("state", ["locked", "unavailable", "corrupt"])
+def test_a_login_that_cannot_be_opened_refuses_the_tool_with_its_reason(
+    device, monkeypatch, state
+) -> None:
+    """A locked keychain or a broken record is not a missing login: the
+    status says which, in the words a refused turn gets."""
+    monkeypatch.setattr(
+        module,
+        "credential_state",
+        lambda agent: state if agent.name == "claude" else "saved",
+    )
+
+    claude = device_status().tool("claude")
+
+    assert not claude.credentials_saved
+    assert (
+        claude.refusal
+        == claude.problem
+        == t(
+            f"intelligences.agent_environment.tool.credentials_{state}",
+            tool="Claude Code",
+            command=login_command("claude"),
+        )
+    )
+    assert device_status().tool("codex").refusal == ""
 
 
 def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
@@ -401,9 +430,11 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
     from guildbotics.intelligences.agent_environment.status import ToolStatus
     from guildbotics.utils.i18n_tool import set_language
 
+    from guildbotics.intelligences.agent_environment import provider_state
+
     home = tmp_path / "A user's home"
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    fake_platform(module, platform)
+    fake_platform(provider_state, platform)
     set_language(language)
     command = login_command("codex")
     if platform == "win32":
@@ -416,5 +447,11 @@ def test_login_guidance_quotes_unix_paths_and_uses_windows_path(
             "codex",
         ]
     for saved in (False, True):
-        tool = ToolStatus("codex", "Codex", True, saved, authentication_failed=True)
+        tool = ToolStatus(
+            "codex",
+            "Codex",
+            True,
+            "saved" if saved else "missing",
+            authentication_failed=True,
+        )
         assert f"`{command}`" in tool.problem

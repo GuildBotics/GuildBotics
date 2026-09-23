@@ -275,6 +275,14 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         assert not any(".env_http_headers=" in value for value in config)
         assert any(value.endswith(".required=true") for value in config)
         assert any('enabled_tools=["guildbotics_member"]' in value for value in config)
+        # ChatGPT and the threads' model provider are the turn's gateway.
+        assert {
+            'chatgpt_base_url="http://gateway.test/backend-api/"',
+            'model_provider="guildbotics"',
+            'model_providers.guildbotics={"name" = "OpenAI", "base_url" = '
+            '"http://gateway.test/backend-api/codex", "wire_api" = "responses", '
+            '"requires_openai_auth" = true}',
+        } <= set(config)
         assert kwargs["env"][MEMBER_BROKER_TOKEN_ENV]
         for key in (
             RUN_ENV,
@@ -312,6 +320,13 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
         "total_tokens": 6,
     }
     assert process.resume_thread == "thread-1"
+    # A thread started before the gateway resumes on it all the same.
+    (resumed,) = [
+        message["params"]
+        for message in process.messages
+        if message.get("method") == "thread/resume"
+    ]
+    assert resumed == {"threadId": "thread-1", "modelProvider": "guildbotics"}
     methods = [message.get("method") for message in process.messages]
     assert methods[:5] == [
         "initialize",

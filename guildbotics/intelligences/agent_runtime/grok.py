@@ -2,7 +2,7 @@
 
 Verified against Grok Build 1.0.34 (``grok agent stdio``): ACP protocol
 version 1, ``loadSession: true``, ``sessionCapabilities.resume: {}``, and the
-``cached_token`` / ``grok.com`` authentication methods. The adapter gates on
+authentication method an external auth provider command adds. The adapter gates on
 those advertised capabilities rather than on the version string, so a newer
 Grok Build that still speaks ACP v1 keeps working.
 
@@ -28,10 +28,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
 )
-
-_CACHED_TOKEN_METHOD = "cached_token"
-#: Interactive sign-in must never be started from a headless run.
-_INTERACTIVE_AUTH_METHODS = frozenset({"grok.com"})
 
 #: ``_x.ai/session_notification`` carries xAI's private session updates. The
 #: kinds below change how GuildBotics treats the conversation, so they are
@@ -118,39 +114,35 @@ class GrokAcpAdapter(AcpAdapterBase):
         return str(as_dict(result.get("_meta")).get("agentVersion", ""))
 
     async def _authenticate(self, result: dict[str, Any]) -> None:
-        # Only the saved login is usable. An API key would have to reach this
-        # process through the environment, and credential-named variables are
-        # stripped from the AI CLI environment on purpose.
-        methods = [
-            str(as_dict(method).get("id", ""))
-            for method in result.get("authMethods", [])
-            if isinstance(method, dict)
-        ]
-        chosen = _CACHED_TOKEN_METHOD if _CACHED_TOKEN_METHOD in methods else ""
+        # A turn's login is lent to it: Grok Build takes the stand-in from the
+        # external auth provider command the environment names, and offers
+        # that as a method of its own. Nothing else is usable in a turn -- an
+        # interactive sign-in has no one to answer it, and an API key would
+        # have to reach the environment, which it never does.
+        methods = [as_dict(method) for method in result.get("authMethods", [])]
+        chosen = next(
+            (
+                str(method.get("id", ""))
+                for method in methods
+                if as_dict(method.get("_meta")).get("external_provider") is True
+            ),
+            "",
+        )
         if not chosen:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.AUTHENTICATION,
-                "Grok Build has no usable saved login. "
-                "Run 'grok login' (or 'grok login --device-auth') as this user.",
-                details={
-                    "advertised_methods": [
-                        method
-                        for method in methods
-                        if method not in _INTERACTIVE_AUTH_METHODS
-                    ]
-                },
+                "Grok Build did not offer the login GuildBotics lends a turn.",
+                details={"advertised_methods": [str(m.get("id", "")) for m in methods]},
             )
         try:
             await self._transport.request("authenticate", {"methodId": chosen})
         except RpcError as exc:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.AUTHENTICATION,
-                "Grok Build authentication failed. "
-                "Run 'grok login' (or 'grok login --device-auth') as this user.",
+                "Grok Build authentication failed.",
                 details={"auth_method": chosen, "provider_error": str(exc)},
             ) from exc
-        # Only the method identifier is recorded; credential values and the
-        # contents of the Grok auth store are never read.
+        # Only the method identifier is recorded.
         self._auth_method = chosen
 
     def _decode_extension(

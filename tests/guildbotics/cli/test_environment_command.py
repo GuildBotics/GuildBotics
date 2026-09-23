@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 
@@ -36,6 +37,7 @@ from guildbotics.intelligences.agent_environment.snapshot import (
     SnapshotStatus,
     snapshot_name,
 )
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.i18n_tool import t
 
 
@@ -56,6 +58,14 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     monkeypatch.setattr(image_module.platform, "machine", lambda: "arm64")
     return root
+
+
+def _save_codex_login() -> None:
+    """Seal a synthetic Codex login, as `environment login codex` would."""
+    tool = cli_agent_info("codex")
+    claims = base64.urlsafe_b64encode(b'{"exp": 4102444800}').rstrip(b"=").decode()
+    login = {"tokens": {"access_token": f"e30.{claims}.c2ln", "refresh_token": "r"}}
+    provider_state._seal_login(tool, {tool.provision.auth: json.dumps(login).encode()})
 
 
 def _invoke(workspace: Path, *arguments: str) -> Any:
@@ -253,9 +263,7 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     async def fake_login(tool: Any, declaration: Any, **kwargs: Any) -> int:
         calls.append({"tool": tool.name, **kwargs})
         kwargs["write"]("Logged in\n")
-        store = provider_state.provider_state_dir(tool)
-        store.mkdir(parents=True)
-        (store / "auth.json").write_text("{}")
+        _save_codex_login()
         return 0
 
     monkeypatch.setattr(provider_state, "login", fake_login)
@@ -268,23 +276,6 @@ def test_login_runs_inside_the_ready_snapshot_and_confirms_the_store(
     saved = t("intelligences.agent_environment.tool.credentials_saved", tool="Codex")
     assert saved in result.output
     assert saved in _invoke(workspace, "status").output
-
-
-def test_login_that_stores_nothing_is_an_error(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = snapshot.snapshots_dir(workspace) / snapshot_name(ImageStatus())
-    path.mkdir(parents=True)
-
-    async def fake_login(*_: Any, **__: Any) -> int:
-        return 0
-
-    monkeypatch.setattr(provider_state, "login", fake_login)
-
-    result = _invoke(workspace, "login", "claude")
-
-    assert result.exit_code != 0
-    assert "stored no credentials" in result.output
 
 
 def test_remove_lists_what_it_dropped(
@@ -615,14 +606,11 @@ def test_image_commands_report_a_runtime_refusal(
 def test_status_reports_failed_authentication_without_blocking_retries(
     workspace, language
 ):
-    from guildbotics.intelligences.cli_agents import cli_agent_info
     from guildbotics.utils.i18n_tool import set_language
 
     set_language(language)
     tool = cli_agent_info("codex")
-    store = provider_state.provider_state_dir(tool)
-    store.mkdir(parents=True)
-    (store / tool.provision.auth).write_text("{}")
+    _save_codex_login()
     provider_state.record_authentication_outcome(tool, failed=True)
     reason = t(
         "intelligences.agent_environment.tool.authentication_failed",

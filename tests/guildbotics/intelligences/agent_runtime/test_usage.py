@@ -1309,3 +1309,30 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     else:
         await usage_module.read_cli_agent_usage(name)
     assert provider_state.authentication_failed(tool) is not succeeded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", list(CLI_AGENT_USAGE_READERS))
+async def test_what_a_tool_says_of_its_usage_is_told_with_its_login_masked(
+    monkeypatch, name
+):
+    """Every tool's usage is read where its login is held: whatever it, or
+    its provider through it, says of a failure is told with the login masked,
+    and nothing of the unmasked text goes along."""
+    from guildbotics.intelligences.cli_agents import cli_agent_info
+
+    async def read():
+        raise CliAgentUsageError("refused SECRET-459")
+
+    monkeypatch.setitem(CLI_AGENT_USAGE_READERS, name, read)
+    monkeypatch.setattr(
+        usage_module,
+        "masked",
+        lambda tool, text: f"{tool.name}:{text.replace('SECRET-459', '***')}",
+    )
+
+    with pytest.raises(CliAgentUsageError) as failed:
+        await usage_module.read_cli_agent_usage(name)
+
+    assert str(failed.value) == f"{cli_agent_info(name).name}:refused ***"
+    assert failed.value.__cause__ is None and failed.value.__suppress_context__

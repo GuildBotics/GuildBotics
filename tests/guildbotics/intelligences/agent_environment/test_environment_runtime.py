@@ -92,6 +92,37 @@ class _Handle:
         return event
 
 
+class _Fs:
+    """The guest's files, as the runtime's direct file transfer sees them."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+        self.directories: set[str] = {"/"}
+        self.error: Exception | None = None
+
+    def _check(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+    async def write(self, path: str, data: bytes) -> None:
+        self._check()
+        assert (path.rsplit("/", 1)[0] or "/") in self.directories, path
+        self.files[path] = data
+
+    async def mkdir(self, path: str) -> None:
+        self._check()
+        assert (path.rsplit("/", 1)[0] or "/") in self.directories, path
+        self.directories.add(path)
+
+    async def exists(self, path: str) -> bool:
+        self._check()
+        return path in self.files or path in self.directories
+
+    async def read(self, path: str) -> bytes:
+        self._check()
+        return self.files[path]
+
+
 class _Sandbox:
     created: dict[str, Any] = {}
     instance: _Sandbox | None = None
@@ -104,6 +135,7 @@ class _Sandbox:
         self.destroyed = False
         self.handle = _Handle([])
         self.stop_error: Exception | None = None
+        self.fs = _Fs()
 
     @classmethod
     async def create(cls, name: str, **kwargs: Any) -> _Sandbox:
@@ -647,3 +679,94 @@ async def test_close_stops_the_sandbox_once_and_destroys_it_when_stopping_fails(
     sandbox.instance.stop_error = microsandbox.MicrosandboxError("stuck")
     await stuck.close()
     assert sandbox.instance.destroyed
+
+
+# --- the login's environment ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_writable_mount_without_a_host_side_is_memory(
+    sandbox: type[_Sandbox],
+) -> None:
+    """A login's state root lives in the microVM's memory, writable, and
+    nothing of it is on the host."""
+    spec = _spec(mounts=(EnvironmentMount("/root/.claude", None, readonly=False),))
+
+    await AgentEnvironment.start(spec, snapshot="s", **_RESOURCES)
+
+    volume = sandbox.created["volumes"]["/root/.claude"]
+    assert (volume.kind, volume.readonly) == (MountKind.TMPFS, False)
+
+
+@pytest.mark.asyncio
+async def test_files_cross_through_the_runtime_and_a_missing_one_is_none(
+    sandbox: type[_Sandbox],
+) -> None:
+    boundary = await AgentEnvironment.start(_spec(), snapshot="s", **_RESOURCES)
+    assert sandbox.instance is not None
+
+    await boundary.write_file("/root/.gemini/antigravity-cli/token", b"{}")
+
+    # The directories it is in are made first, outermost first.
+    assert sandbox.instance.fs.files == {"/root/.gemini/antigravity-cli/token": b"{}"}
+    assert await boundary.read_file("/root/.gemini/antigravity-cli/token") == b"{}"
+    await boundary.write_file("/root/.claude/.credentials.json", b"{}")
+    assert await boundary.read_file("/root/.claude/.credentials.json") == b"{}"
+    assert await boundary.read_file("/root/.claude/other") is None
+    sandbox.instance.fs.error = microsandbox.MicrosandboxError("agent gone")
+    with pytest.raises(AgentEnvironmentError, match="agent gone"):
+        await boundary.read_file("/root/.claude/other")
+    with pytest.raises(AgentEnvironmentError, match="agent gone"):
+        await boundary.write_file("/root/.claude/other", b"")
+
+
+@pytest.mark.asyncio
+async def test_what_is_taken_out_is_taken_while_the_microvm_runs(
+    sandbox: type[_Sandbox],
+) -> None:
+    """Take out, stop, then hand back: a refreshed login is read from the
+    microVM's memory before it is gone, and never after."""
+    steps: list[str] = []
+
+    async def take_out(environment: AgentEnvironment) -> None:
+        assert sandbox.instance is not None and not sandbox.instance.stopped
+        steps.append(f"took {await environment.read_file('/login')!r}")
+
+    boundary = await AgentEnvironment.start(
+        _spec(),
+        snapshot="s",
+        before_stop=take_out,
+        on_close=lambda: steps.append("handed back"),
+        **_RESOURCES,
+    )
+    await boundary.write_file("/login", b"refreshed")
+
+    await boundary.close()
+    await boundary.close()
+
+    assert steps == ["took b'refreshed'", "handed back"]
+    assert sandbox.instance is not None and sandbox.instance.stopped
+
+
+@pytest.mark.asyncio
+async def test_a_failed_take_out_still_stops_the_microvm_and_is_raised(
+    sandbox: type[_Sandbox],
+) -> None:
+    gone: list[str] = []
+
+    async def take_out(environment: AgentEnvironment) -> None:
+        raise AgentEnvironmentError("could not read the login")
+
+    boundary = await AgentEnvironment.start(
+        _spec(),
+        snapshot="s",
+        before_stop=take_out,
+        on_close=lambda: gone.append("handed back"),
+        **_RESOURCES,
+    )
+
+    with pytest.raises(AgentEnvironmentError, match="could not read the login"):
+        await boundary.close()
+
+    assert sandbox.instance is not None and sandbox.instance.stopped
+    assert gone == ["handed back"]

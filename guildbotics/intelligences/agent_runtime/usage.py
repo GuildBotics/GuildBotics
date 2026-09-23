@@ -29,6 +29,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from guildbotics.intelligences.agent_environment.provider_state import (
+    masked,
     record_authentication_outcome,
 )
 from guildbotics.intelligences.agent_environment.runtime import (
@@ -917,11 +918,18 @@ CLI_AGENT_USAGE_READERS: dict[str, Callable[[], Awaitable[CliAgentUsageSnapshot]
 
 
 async def read_cli_agent_usage(name: str) -> CliAgentUsageSnapshot:
-    """Read usage and clear auth failure only on windows or an explicit gate."""
-    snapshot = await CLI_AGENT_USAGE_READERS[name]()
+    """Read usage and clear auth failure only on windows or an explicit gate.
+
+    Raises:
+        CliAgentUsageError: When there is no usage to read; what the tool said
+            of it runs where its login is held, so the login is masked in it.
+    """
+    tool = cli_agent_info(name)
+    try:
+        snapshot = await CLI_AGENT_USAGE_READERS[name]()
+    except CliAgentUsageError as exc:
+        raise CliAgentUsageError(masked(tool, str(exc))) from None
     if not snapshot.windows and not snapshot.limit_reached:
-        raise CliAgentUsageError(
-            f"{cli_agent_info(name).label} reported no usage windows."
-        )
-    record_authentication_outcome(cli_agent_info(name), failed=False)
+        raise CliAgentUsageError(f"{tool.label} reported no usage windows.")
+    record_authentication_outcome(tool, failed=False)
     return snapshot
