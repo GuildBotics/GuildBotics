@@ -9,9 +9,13 @@ Provider credentials therefore remain in the member CLI's trusted process.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -289,19 +293,20 @@ class MemberCapabilityBroker:
     async def _start(self) -> None:
         def app(port: int) -> Any:
             origin = f"http://{LOOPBACK_HOST}:{port}"
-            mcp = MCPServer(
-                "GuildBotics Member",
-                instructions=(
-                    "Use guildbotics_member for every command documented as "
-                    "`guildbotics member ...`. Pass only the arguments after `member`."
-                ),
-                token_verifier=_ScopedTokenVerifier(self._token),
-                auth=AuthSettings(
-                    issuer_url=AnyHttpUrl(origin),
-                    resource_server_url=AnyHttpUrl(f"{origin}/mcp"),
-                    required_scopes=[_SCOPE],
-                ),
-            )
+            with _root_logging_kept():
+                mcp = MCPServer(
+                    "GuildBotics Member",
+                    instructions=(
+                        "Use guildbotics_member for every command documented as "
+                        "`guildbotics member ...`. Pass only the arguments after `member`."
+                    ),
+                    token_verifier=_ScopedTokenVerifier(self._token),
+                    auth=AuthSettings(
+                        issuer_url=AnyHttpUrl(origin),
+                        resource_server_url=AnyHttpUrl(f"{origin}/mcp"),
+                        required_scopes=[_SCOPE],
+                    ),
+                )
 
             @mcp.tool(name="guildbotics_member", structured_output=True)
             async def guildbotics_member(
@@ -338,6 +343,25 @@ class MemberCapabilityBroker:
         self._server = server
         self._url = f"http://{LOOPBACK_HOST}:{server.port}/mcp"
         self._port = server.port
+
+
+#: Members' brokers start on threads of their own, each putting back the root
+#: logger it found: one at a time, or one finds another's MCPServer settings.
+_ROOT_LOGGING = threading.Lock()
+
+
+@contextmanager
+def _root_logging_kept() -> Iterator[None]:
+    """Put the process's root logger back as it was: MCPServer sets it (its
+    level, and a handler of its own) as it is made, which is not its to set."""
+    root = logging.getLogger()
+    with _ROOT_LOGGING:
+        level, handlers = root.level, root.handlers[:]
+        try:
+            yield
+        finally:
+            root.setLevel(level)
+            root.handlers[:] = handlers
 
 
 def _member_cli_command() -> tuple[str, ...]:

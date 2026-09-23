@@ -286,10 +286,11 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   実トークンが現れた場合は同じ長さの伏せ字に置き換えて返し、本文を検査できるようupstreamには
   無圧縮の応答を求めます。それでも圧縮された応答は渡さず（502）、
   `Gateway refused an encoded answer to METHOD /path`だけをログに残します。ゲートウェイのログには
-  upstreamが返した値を載せず、httpxがINFOでログに残すステータス行の文言（reason phrase）も実トークンを
-  伏せ字にします（member brokerが使うMCP SDKがプロセスのroot loggerをINFOにするため、この行は
-  実際に出ます）。httpcoreのDEBUGのtraceは応答のヘッダーをそのまま記録するので、root loggerを
-  DEBUGにして動かす場合は、ログに実値が残りえます。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
+  upstreamが返した値を載せず、httpxがINFOでログに残すステータス行の文言（reason phrase）も、root loggerに
+  INFOを通すハンドラーを付けて動かす場合に備えて実トークンを伏せ字にします（GuildBoticsはroot loggerを設定せず、
+  member brokerが使うMCP SDKが設定したものも元に戻すため、既定ではこの行は出ません）。httpcoreの
+  DEBUGのtraceは応答のヘッダーをそのまま記録するので、root loggerをDEBUGにして動かす場合は、
+  ログに実値が残りえます。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
   upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。カタログの経路は
   pathの完全一致で、末尾が`/*`の経路（ツールがpathにリポジトリ名などを入れるもの）は、その下の
   通常の名前だけからなるpathを転送します（`.`で始まるsegment、空のsegment、%エンコードや

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
+import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -247,6 +250,60 @@ async def test_activate_normalizes_failed_server_task(tmp_path) -> None:
         await broker.activate(_context(tmp_path))
 
     assert isinstance(excinfo.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _can_bind_localhost(), reason="Environment cannot bind a local TCP socket."
+)
+async def test_the_broker_leaves_the_process_logging_as_it_was(
+    monkeypatch, tmp_path
+) -> None:
+    """The MCP server it runs would set the root logger up as it is made --
+    a level and a handler of its own, which every library's records then
+    reach. The process's logging is not the broker's to set."""
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", logging.WARNING)
+    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    context = _context(tmp_path)
+    await broker.activate(context)
+    await broker.deactivate(context)
+
+    assert root.handlers == []
+    assert root.level == logging.WARNING
+
+
+def test_brokers_starting_at_once_leave_the_process_logging_as_it_was(
+    monkeypatch,
+) -> None:
+    """Members' brokers start on threads of their own: one must not take the
+    root logger another's MCPServer set for the one it found."""
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", logging.WARNING)
+    set_up = threading.Event()
+    found: list[list[logging.Handler]] = []
+
+    def first() -> None:
+        with member_broker._root_logging_kept():
+            logging.basicConfig(level=logging.INFO)  # As MCPServer does.
+            set_up.set()
+            time.sleep(0.2)
+
+    def second() -> None:
+        set_up.wait(5)
+        with member_broker._root_logging_kept():
+            found.append(root.handlers[:])
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+    assert found == [[]]
+    assert root.handlers == [] and root.level == logging.WARNING
 
 
 @pytest.mark.asyncio

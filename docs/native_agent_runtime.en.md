@@ -352,8 +352,9 @@ and `-p no:xdist`). Nothing is sent off the device.
   compressed all the same is not passed on (502), and the refusal is logged as
   `Gateway refused an encoded answer to METHOD /path` alone. The gateway's logs carry
   nothing the upstream sent, and the status line's reason phrase httpx logs at INFO has the real token
-  masked (the line is logged: the MCP SDK the member broker uses sets the process's root
-  logger to INFO). httpcore's DEBUG trace records an answer's headers as they came, so
+  masked, for a process run with a root handler that lets INFO through (GuildBotics sets no root
+  logger, and undoes what the MCP SDK the member broker uses sets, so by default the line is
+  not logged). httpcore's DEBUG trace records an answer's headers as they came, so
   running with the root logger at DEBUG can leave the real value in a log. HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
   upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only. A catalog route
