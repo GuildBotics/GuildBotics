@@ -96,10 +96,10 @@ class ActivityEventStore:
         would silently drop the older side of a busy window.
         """
         events: list[dict[str, Any]] = []
-        for year, month in _months_between(
-            _reached(start, -_OFFSET_REACH), _reached(end, _OFFSET_REACH)
+        for directory in _month_directories(
+            self.root, _reached(start, -_OFFSET_REACH), _reached(end, _OFFSET_REACH)
         ):
-            for payload in iter_json_objects(self.root / year / month, "*.json"):
+            for payload in iter_json_objects(directory, "*.json"):
                 if str(payload.get("kind") or "") in COMMAND_LIFECYCLE_EVENT_TYPES:
                     continue
                 occurred = _parse_occurred(payload.get("occurred_at"))
@@ -186,14 +186,21 @@ def _reached(moment: datetime, reach: timedelta) -> datetime:
         return moment
 
 
-def _months_between(start: datetime, end: datetime) -> list[tuple[str, str]]:
-    """The ``(year, month)`` directories a window can hold events in."""
-    months: list[tuple[str, str]] = []
-    year, month = start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        months.append((f"{year:04d}", f"{month:02d}"))
-        year, month = year + month // 12, month % 12 + 1
-    return months
+def _month_directories(root: Path, start: datetime, end: datetime) -> list[Path]:
+    """The ``<year>/<month>`` directories of ``root`` a window can hold events in.
+
+    Listed from the store rather than counted out of the calendar: a caller
+    asking for everything spans ten thousand years, and one lookup per month
+    of that costs seconds on Windows before a single event is read (#570).
+    """
+    first, last = (start.year, start.month), (end.year, end.month)
+    return sorted(
+        directory
+        for directory in root.glob("*/*")
+        if directory.parent.name.isdigit()
+        and directory.name.isdigit()
+        and first <= (int(directory.parent.name), int(directory.name)) <= last
+    )
 
 
 def _year_month(occurred_at: str) -> tuple[str, str]:
