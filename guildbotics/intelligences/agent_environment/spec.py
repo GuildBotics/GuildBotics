@@ -11,8 +11,9 @@ the guest's home directory is the host's home path, so a path means the same
 thing on both sides: what the user typed, what the Desktop shows, and what the
 provider's session state records all agree. The working directory is always
 read-write; a grant is read-only when it says so. Nothing else of the host is
-mounted, so credentials, the workspace configuration, and other members'
-clones are unreachable rather than forbidden. A deny inside an opened tree is
+mounted except what GuildBotics binds itself (``mounts``), so credentials, the
+workspace configuration, and other members' clones are unreachable rather than
+forbidden -- unless a caller lets its turn inspect the workspace's own state. A deny inside an opened tree is
 covered with an empty read-only mount; a deny outside one closes nothing that
 was open. The trees a device's PATH derives are not mounted at all: the
 agent's tools live inside the environment.

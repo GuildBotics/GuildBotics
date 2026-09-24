@@ -3,7 +3,8 @@
 Every adapter starts its provider CLI the same way, through
 :func:`start_turn_environment`: a microVM booted from this device's snapshot
 for the one turn, shaped by the turn's access contract, with the provider's
-persisted state bound in and the member broker's port opened. The adapter
+persisted state bound in, whatever of the workspace's own state the caller lets
+the turn inspect mounted read-only, and the member broker's port opened. The adapter
 runs the CLI inside it and speaks its protocol over the bridged stdio; when
 the turn ends the microVM is discarded. Nothing of the host -- its
 environment variables, its credentials, its PATH -- reaches the provider,
@@ -19,6 +20,7 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
@@ -48,12 +50,14 @@ from guildbotics.intelligences.agent_environment.spec import (
     EnvironmentMount,
     build_environment_spec,
     guest_home,
+    guest_path,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    InspectionScope,
 )
 from guildbotics.intelligences.agent_runtime.windows_job import (
     WindowsJob,
@@ -63,7 +67,13 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.observability import TRACE_ID_ENV
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.runtime.person_lease import lease_directory
+from guildbotics.utils.fileio import (
+    GUILDBOTICS_WORKSPACE_ROOT,
+    get_template_path,
+    get_workspace_config_dir,
+    get_workspace_local_path,
+)
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import terminate_posix_process_group
 
@@ -88,6 +98,64 @@ _RELAY = (
 )
 #: How long the relay has to start, and to stop.
 _RELAY_SECONDS = 10.0
+
+
+def inspected_directories(
+    scopes: Iterable[InspectionScope], workspace_root: Path
+) -> dict[str, Path]:
+    """The host directories a turn inspecting ``scopes`` reads, by name.
+
+    Each is mounted read-only at its own path, the way the guest spells it,
+    so this one table decides both what the turn sees and what it is told to
+    look in; a directory that does not exist yet (no run recorded) is in
+    neither. The workspace's ``.guildbotics`` stays closed otherwise.
+
+    Args:
+        scopes: What the caller lets the turn inspect.
+        workspace_root: The selected workspace.
+
+    Returns:
+        ``diagnostics`` for the recorded runs; ``config`` and ``templates``
+        for the workspace configuration and the packaged defaults commands
+        and settings fall back to.
+    """
+    directories: dict[InspectionScope, dict[str, Path]] = {
+        "diagnostics": {
+            "diagnostics": get_workspace_local_path(
+                "run", workspace_root=workspace_root
+            )
+        },
+        "config": {
+            "config": get_workspace_config_dir(workspace_root),
+            "templates": get_template_path(),
+        },
+    }
+    return {
+        name: path
+        for scope in sorted(scopes)
+        for name, path in directories[scope].items()
+        if path.is_dir()
+    }
+
+
+def _inspected_mounts(context: AgentExecutionContext) -> tuple[EnvironmentMount, ...]:
+    """Read-only mounts for what the turn inspects, with the leases covered.
+
+    The run directory holds the execution leases beside the diagnostics, and a
+    lease's delegation is a grant: the environment never carries one. The
+    lease directory is made first, so a lease taken during the turn still
+    lands under the cover rather than in view.
+    """
+    leases = lease_directory(context.workspace_root)
+    mounts: list[EnvironmentMount] = []
+    for path in inspected_directories(
+        context.inspects, context.workspace_root
+    ).values():
+        mounts.append(EnvironmentMount(guest_path(path), path, readonly=True))
+        if leases.is_relative_to(path):
+            leases.mkdir(parents=True, exist_ok=True)
+            mounts.append(EnvironmentMount(guest_path(leases), None, readonly=True))
+    return tuple(mounts)
 
 
 async def start_turn_environment(
@@ -143,7 +211,11 @@ async def start_turn_environment(
             nameservers=where.nameservers,
             # A turn that evaluates input holds nothing of the store: no
             # session, no account, no cache.
-            mounts=(*(() if context.input_only else bind_state(tool)), *mounts),
+            mounts=(
+                *(() if context.input_only else bind_state(tool)),
+                *_inspected_mounts(context),
+                *mounts,
+            ),
         )
     except BaseException:
         await gateway.close()

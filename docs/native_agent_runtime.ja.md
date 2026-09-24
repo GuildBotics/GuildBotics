@@ -92,6 +92,14 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
 - **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
   `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
   ワークスペースの`.guildbotics/config`や`state`は含みません
+- **調べるための読み取り専用mount**: 呼び出し側が許可したturn（`AgentExecutionContext.inspects`）
+  にだけ、ワークスペース自身の状態の一部をhostと同じパスに読み取り専用でbindします。`diagnostics`は
+  記録済みの実行（`.guildbotics/local/run`。execution leaseの`person-leases`は空のmountで覆います。
+  leaseのdelegationは記録ではなくgrantそのものだからです）、`config`はワークスペースの設定
+  （`.guildbotics/config`）と、それが無いときに使われるパッケージ同梱のテンプレートです。現在許可する
+  呼び出し側はDesktopのトラブルシューティングだけで、記録を、実行時のコマンドや設定と突き合わせて
+  読みます。この許可は`read_only`とは独立しています。turnが何を変更してよいかと、何を読む必要が
+  あるかは別の問いだからです
 - **作業ディレクトリの外**は2つあり、どちらもhostと同じパスに、hostのホームディレクトリと同じ
   パスのホームの下でbindします。**documents**: 作業で読み書きするホームディレクトリ配下の
   ディレクトリ（`read` / `read_write`、相対パスのみ）。無ければターン開始時に作成し、

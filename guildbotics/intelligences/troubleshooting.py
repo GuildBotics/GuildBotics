@@ -1,9 +1,10 @@
 """AI-assisted troubleshooting over recorded diagnostics.
 
 The Desktop diagnostics screen supplies the user's question and whatever they
-are currently looking at. The agent gathers its own evidence through the
-read-only ``guildbotics diagnostics`` commands, so nothing but the question and
-the focus is sent from this side.
+are currently looking at. The agent gathers its own evidence by reading the
+recorded runs and the workspace configuration, which its environment mounts
+read-only, so nothing but the question, the focus, and where to look is sent
+from this side.
 """
 
 from __future__ import annotations
@@ -14,8 +15,18 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.environment import (
+    inspected_directories,
+)
+from guildbotics.intelligences.agent_runtime.models import InspectionScope
 from guildbotics.intelligences.assistants import open_assistant_session
 from guildbotics.runtime import Context
+from guildbotics.utils.fileio import get_workspace_root
+
+#: What a troubleshooting turn reads: the recorded runs, and the commands and
+#: settings they ran with.
+_INSPECTS: tuple[InspectionScope, ...] = ("diagnostics", "config")
 
 
 class TroubleshootingResult(BaseModel):
@@ -63,5 +74,15 @@ async def troubleshoot_turn(
         workspace_data_root=workspace_data_root,
         cwd_name="troubleshooting",
         read_only=True,
+        inspects=_INSPECTS,
     )
-    return await session.send({"question": question, "focus": dict(focus)})
+    directories = inspected_directories(_INSPECTS, get_workspace_root())
+    return await session.send(
+        {
+            "question": question,
+            "focus": dict(focus),
+            "directories": {
+                name: guest_path(path) for name, path in directories.items()
+            },
+        }
+    )

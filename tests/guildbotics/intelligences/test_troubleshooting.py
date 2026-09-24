@@ -8,11 +8,14 @@ from typing import Any
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.assistants import AssistantResponseError
 from guildbotics.intelligences.troubleshooting import (
     TroubleshootingResult,
     troubleshoot_turn,
 )
+
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT, get_template_path
 
 TROUBLESHOOT_PROMPT = Path("guildbotics/templates/commands/functions/troubleshoot")
 
@@ -42,7 +45,13 @@ class _ContextStub:
 
 
 @pytest.mark.asyncio
-async def test_troubleshoot_turn_sends_question_and_focus(tmp_path: Path) -> None:
+async def test_troubleshoot_turn_sends_question_and_focus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    state_dir = tmp_path / ".guildbotics"
+    (state_dir / "local" / "run").mkdir(parents=True)
+    (state_dir / "config").mkdir()
     brain = _BrainStub()
 
     result = await troubleshoot_turn(
@@ -56,14 +65,23 @@ async def test_troubleshoot_turn_sends_question_and_focus(tmp_path: Path) -> Non
 
     assert result.message.startswith("The push failed")
     assert result.trace_ids == ["abc123"]
+    # Where to look is named the way the turn's environment mounts it.
     assert json.loads(brain.message) == {
         "question": "Why did this fail?",
         "focus": {"view": "trace", "trace_id": "abc123", "source": "routine"},
+        "directories": {
+            "diagnostics": guest_path(state_dir / "local" / "run"),
+            "config": guest_path(state_dir / "config"),
+            "templates": guest_path(get_template_path()),
+        },
     }
     state = brain.kwargs["session_state"]["agent_execution_context"]
     assert state["work_kind"] == "troubleshooting"
     assert state["work_identity"] == "conv-1"
     assert state["run_id"] == "trace-1"
+    # It only inspects: the recorded runs and what they ran with.
+    assert state["read_only"] is True
+    assert state["inspects"] == ["config", "diagnostics"]
     assert brain.kwargs["cwd"] == (
         tmp_path / ".guildbotics" / "local" / "work" / "troubleshooting"
     )
@@ -90,15 +108,19 @@ def test_troubleshoot_prompt_teaches_the_read_only_investigation_tools(
         encoding="utf-8"
     )
 
-    # The agent gathers evidence itself; these are the only tools it may use.
-    assert "guildbotics diagnostics traces" in body
-    assert "guildbotics diagnostics trace <trace_id>" in body
-    assert "guildbotics diagnostics system" in body
+    # The agent reads the mounted files itself; no CLI exists in its
+    # environment to run instead.
+    assert "`directories`" in body
+    assert "diagnostics.jsonl" in body
+    assert "sessions/<trace_id>.jsonl" in body
+    assert "sessions/system-*.jsonl" in body
+    assert "team/members/<person_id>/commands/" in body
+    assert "guildbotics diagnostics" not in body
+    # The completion rule the Desktop screens use, stated for the agent.
+    assert "command.finished" in body
     # Record structure it has to interpret.
     assert "trace_id" in body
     assert "span_id" in body
-    assert "diagnostics.jsonl" in body
-    assert "sessions/<trace_id>.jsonl" in body
     # Guardrails.
     assert "guildbotics member" in body
     assert "troubleshooting" in body

@@ -496,6 +496,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
                         "work_kind": "troubleshooting",
                         "workspace_data_root": str(tmp_path),
                         "read_only": True,
+                        "inspects": ["diagnostics"],
                     }
                 }
             },
@@ -507,6 +508,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert not result.error_category
     assert result.stdout == "answer"
     assert captured["context"].read_only is True
+    assert captured["context"].inspects == frozenset({"diagnostics"})
     assert captured["context"].lease_id == ""
     assert captured["context"].cwd == isolated_cwd
     assert captured["context"].workspace_root == workspace_root

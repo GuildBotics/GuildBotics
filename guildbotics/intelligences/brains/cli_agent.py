@@ -873,6 +873,7 @@ class CliAgentBrain(Brain):
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
                 read_only=read_only,
+                inspects=frozenset(configured.get("inspects") or ()),
                 contract=contract,
             )
             return await self._execute_native_turn(
