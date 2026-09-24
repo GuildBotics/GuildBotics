@@ -82,14 +82,22 @@ _current_lease: ContextVar[PersonExecutionLease | None] = ContextVar(
 )
 
 
+def lease_directory(workspace_root: Path | None = None) -> Path:
+    """Where the workspace's execution leases live.
+
+    Each lease file names its delegation, which is a usable grant rather than
+    a label, so whatever shows a turn its workspace's run state closes this.
+    """
+    return get_workspace_local_path(
+        "run", "person-leases", workspace_root=workspace_root
+    )
+
+
 class PersonExecutionLease:
     def __init__(self, person_id: str, workspace_root: Path | None = None) -> None:
         self.person_id = person_id
         self.path = (
-            get_workspace_local_path(
-                "run", "person-leases", workspace_root=workspace_root
-            )
-            / f"{safe_path_component(person_id)}.lock"
+            lease_directory(workspace_root) / f"{safe_path_component(person_id)}.lock"
         )
         self._guard = threading.RLock()
         self._file: IO[str] | None = None
@@ -197,10 +205,7 @@ def validate_delegation(
     run_id = env.get(LEASE_RUN_ENV, "")
     if not lease_id or not delegation_id or not run_id:
         return None
-    path = (
-        get_workspace_local_path("run", "person-leases", workspace_root=workspace_root)
-        / f"{safe_path_component(person_id)}.lock"
-    )
+    path = lease_directory(workspace_root) / f"{safe_path_component(person_id)}.lock"
     handle = _open_lock_file(path)
     try:
         try:

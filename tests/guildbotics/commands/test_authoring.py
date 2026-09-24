@@ -131,6 +131,7 @@ async def test_author_command_turn_sends_scope_and_uses_read_only_session(
         "resume_policy": "auto",
         "workspace_data_root": str(tmp_path),
         "read_only": True,
+        "inspects": [],
     }
     assert brain.kwargs["cwd"] == (
         tmp_path / ".guildbotics" / "local" / "work" / "command-authoring"

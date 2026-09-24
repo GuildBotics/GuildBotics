@@ -9,7 +9,7 @@ the conversation is persisted on this side.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from guildbotics.commands.errors import CommandError
+from guildbotics.intelligences.agent_runtime.models import InspectionScope
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.functions import to_dict
 from guildbotics.runtime import Context
@@ -73,6 +74,7 @@ def open_assistant_session[TResult: BaseModel](
     workspace_data_root: Path,
     cwd_name: str,
     read_only: bool = False,
+    inspects: Iterable[InspectionScope] = (),
 ) -> AssistantSession[TResult]:
     """Open one assistant conversation turn against a member's agent.
 
@@ -88,6 +90,8 @@ def open_assistant_session[TResult: BaseModel](
         read_only: Whether the agent may only inspect recorded state. Adapters
             enforce this at the provider level, and such a turn takes no member
             execution lease.
+        inspects: The workspace's own state the agent may read, mounted
+            read-only into its environment.
 
     Returns:
         A session that can send one or more payloads for this turn.
@@ -100,6 +104,7 @@ def open_assistant_session[TResult: BaseModel](
         "resume_policy": "auto",
         "workspace_data_root": str(workspace_data_root),
         "read_only": read_only,
+        "inspects": sorted(inspects),
     }
     cwd = get_workspace_work_path(cwd_name, workspace_root=workspace_data_root)
     cwd.mkdir(parents=True, exist_ok=True)

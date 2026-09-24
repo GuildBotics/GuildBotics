@@ -45,12 +45,7 @@ _ENVIRONMENT = {"IS_SANDBOX": "1"}
 # allowed below is denied outright in non-interactive mode. The allowlist is the
 # enforcement; the prompt is only a description of it.
 _READ_ONLY_PERMISSION_MODE = "default"
-_READ_ONLY_ALLOWED_TOOLS = (
-    "Read",
-    "Glob",
-    "Grep",
-    "Bash(guildbotics diagnostics:*)",
-)
+_READ_ONLY_ALLOWED_TOOLS = ("Read", "Glob", "Grep")
 _READ_ONLY_DISALLOWED_TOOLS = (
     "Write",
     "Edit",

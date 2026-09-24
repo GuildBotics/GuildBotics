@@ -263,6 +263,126 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         await booted.before_stop(booted)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inspects", [frozenset(), frozenset({"diagnostics", "config"})]
+)
+async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
+    tmp_path, monkeypatch, inspects
+):
+    """The recorded runs and the configuration are mounted read-only only for
+    a turn whose caller lets it inspect them, and the leases beside the runs
+    stay covered: a delegation is a grant, not a record."""
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+    from guildbotics.utils.fileio import get_template_path
+
+    tool = environment.cli_agent_info("claude")
+    where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
+    monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
+    sealed = {tool.provision.auth: json.dumps(_LOGINS["claude"]).encode()}
+    monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
+
+    class Booted:
+        def __init__(self, spec, before_stop):
+            self.spec = spec
+            self.before_stop = before_stop
+
+        async def write_file(self, path, data):
+            pass
+
+    async def start(spec, at, *, before_stop):
+        return Booted(spec, before_stop)
+
+    monkeypatch.setattr(environment, "_start", start)
+    state = tmp_path / ".guildbotics"
+    run = state / "local" / "run"
+    # No lease taken yet: the cover must still be there for one taken later.
+    run.mkdir(parents=True)
+    (state / "config").mkdir()
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="investigate",
+        cwd=state / "local" / "work" / "troubleshooting",
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
+        read_only=True,
+        inspects=inspects,
+    )
+    booted = await environment.start_turn_environment(
+        context, "claude", host_ports=(1234,), env={}
+    )
+    try:
+        mounts = set(booted.spec.mounts)
+        expected = {
+            EnvironmentMount(guest_path(run), run, True),
+            EnvironmentMount(guest_path(run / "person-leases"), None, True),
+            EnvironmentMount(guest_path(state / "config"), state / "config", True),
+            EnvironmentMount(
+                guest_path(get_template_path()), get_template_path(), True
+            ),
+        }
+        if inspects:
+            assert expected <= mounts
+            # The cover is applied over the run directory, so it comes after it.
+            order = list(booted.spec.mounts)
+            assert order.index(
+                EnvironmentMount(guest_path(run), run, True)
+            ) < order.index(
+                EnvironmentMount(guest_path(run / "person-leases"), None, True)
+            )
+        else:
+            assert not expected & mounts
+    finally:
+        await booted.before_stop(booted)
+
+
+def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
+    """Before the first run there is no run directory: the turn is not told to
+    look in a place its environment does not have."""
+    (tmp_path / ".guildbotics" / "config").mkdir(parents=True)
+
+    directories = environment.inspected_directories({"diagnostics", "config"}, tmp_path)
+
+    assert "diagnostics" not in directories
+    assert directories["config"] == tmp_path / ".guildbotics" / "config"
+
+
+def test_inspecting_is_limited_to_known_scopes_and_never_input_only(tmp_path):
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
+    def context(**overrides: Any) -> AgentExecutionContext:
+        return AgentExecutionContext(
+            person_id="aiko",
+            run_id="r1",
+            cwd=tmp_path,
+            workspace_root=tmp_path,
+            workspace_data_root=tmp_path,
+            conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
+            **overrides,
+        )
+
+    with pytest.raises(ValueError, match="Unknown inspection scopes"):
+        context(inspects=frozenset({"secrets"}))
+    with pytest.raises(ValueError, match="input-only"):
+        context(
+            inspects=frozenset({"diagnostics"}),
+            contract=AccessContract(input_only=True),
+        )
+
+
 def _jwt(claims: dict[str, object]) -> str:
     def segment(value: object) -> str:
         encoded = base64.urlsafe_b64encode(json.dumps(value).encode())

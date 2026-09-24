@@ -77,6 +77,7 @@ async def test_session_sends_json_payload_with_resumable_execution_context(
         "resume_policy": "auto",
         "workspace_data_root": str(tmp_path),
         "read_only": False,
+        "inspects": [],
     }
 
 
@@ -134,6 +135,7 @@ async def test_turns_are_writable_unless_declared_read_only(tmp_path: Path) -> N
 
     state = brain.kwargs[0]["session_state"]["agent_execution_context"]
     assert state["read_only"] is False
+    assert state["inspects"] == []
 
 
 @pytest.mark.asyncio
@@ -156,3 +158,5 @@ async def test_read_only_is_declared_to_the_agent_runtime(tmp_path: Path) -> Non
     # The prompt describes the limit; the runtime is what enforces it.
     state = brain.kwargs[0]["session_state"]["agent_execution_context"]
     assert state["read_only"] is True
+    # Read-only says what the turn may change, not what it may read.
+    assert state["inspects"] == []

@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 
@@ -86,6 +86,12 @@ class TurnLogin:
     refusal: Callable[[], str] = lambda: ""
 
 
+#: The workspace's own state a turn may be let inspect: ``diagnostics`` is the
+#: recorded runs, ``config`` the workspace configuration and the packaged
+#: templates it falls back to.
+InspectionScope = Literal["diagnostics", "config"]
+
+
 @dataclass(frozen=True, slots=True)
 class AgentExecutionContext:
     person_id: str
@@ -120,6 +126,11 @@ class AgentExecutionContext:
     # confinement: every turn reads untrusted material, and every turn runs
     # under the same ``contract``.
     read_only: bool = False
+    #: The workspace's own state the caller lets the turn inspect, mounted
+    #: read-only beside the contract's grants. What a turn needs to read is
+    #: its work's business and independent of ``read_only``, which is about
+    #: what it may change.
+    inspects: frozenset[InspectionScope] = frozenset()
     #: What the turn may reach beyond ``cwd``.
     contract: AccessContract = field(default_factory=AccessContract)
     login: TurnLogin = field(default_factory=TurnLogin)
@@ -133,6 +144,10 @@ class AgentExecutionContext:
             raise ValueError("Execution and conversation person_id must match.")
         if not self.run_id.strip():
             raise ValueError("run_id must not be empty.")
+        if unknown := self.inspects - set(get_args(InspectionScope)):
+            raise ValueError(f"Unknown inspection scopes: {sorted(unknown)}.")
+        if self.inspects and self.input_only:
+            raise ValueError("An input-only turn inspects nothing.")
 
 
 def settings_fingerprint(applied: Mapping[str, Any]) -> str:

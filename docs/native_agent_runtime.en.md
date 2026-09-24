@@ -120,6 +120,16 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
   read/write at the same path it has on the host. The workspace's
   `.guildbotics/config` and `state` are not part of it.
+- **Inspected workspace state**: only for a turn whose caller lets it
+  inspect (`AgentExecutionContext.inspects`), parts of the workspace's own state
+  are bound read-only at their host paths. `diagnostics` is the recorded runs
+  (`.guildbotics/local/run`, with its `person-leases` covered by an empty mount:
+  a lease's delegation is a grant, not a record); `config` is the workspace
+  configuration (`.guildbotics/config`) and the packaged templates it falls back
+  to. The Desktop troubleshooting assistant is the only such caller today; it
+  reads the records against the commands and settings they ran with. The grant
+  is independent of `read_only`: what a turn may change and what it needs to
+  read are separate questions.
 - **Beyond the working directory** there are two things, both bound at their
   host paths under a home directory that is the host's own. **documents**:
   directories under the home directory the work reads from or writes to

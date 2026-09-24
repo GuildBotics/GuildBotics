@@ -927,7 +927,9 @@ async def test_claude_read_only_turn_is_confined_by_the_provider(
     assert run_args[run_args.index("--permission-mode") + 1] == "default"
     assert "bypassPermissions" not in run_args
     allowed = run_args[run_args.index("--allowed-tools") + 1 :]
-    assert "Bash(guildbotics diagnostics:*)" in allowed
+    allowed = allowed[: allowed.index("--disallowed-tools")]
+    # The environment has no guildbotics CLI; what a turn inspects is mounted.
+    assert not any(tool.startswith("Bash") for tool in allowed)
     assert "Read" in allowed
     disallowed = run_args[run_args.index("--disallowed-tools") + 1 :]
     for tool in ("Write", "Edit", "WebFetch", "WebSearch"):

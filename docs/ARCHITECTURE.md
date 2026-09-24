@@ -956,9 +956,11 @@ a monorepo on purpose.
   `desktop/src/assistant/` owns the shared chat panel and conversation state; each screen
   keeps its own mutation. Conversations are never persisted on this side.
 - **Troubleshooting assistant**: opened from the diagnostics screen, it answers questions
-  about recorded executions. It is given only the question and the focused view; it
-  gathers its own evidence by running the read-only `guildbotics diagnostics` commands,
-  which keeps prompts small and lets it follow leads into other executions. What it reads
+  about recorded executions. It is given only the question, the focused view and where to
+  look; it gathers its own evidence by reading the recorded runs and the workspace
+  configuration, which its environment mounts read-only for it (`inspects`). This keeps
+  prompts small and lets it follow leads into other executions and into the commands and
+  settings they ran with. What it reads
   is untrusted — logs carry GitHub issue bodies, chat messages and external tool output —
   which is why the read-only confinement above is enforced rather than requested. It returns
   the answer plus the trace ids it read, and the backend drops any id that was never
