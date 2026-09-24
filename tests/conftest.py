@@ -154,6 +154,22 @@ def _isolate_machine_home(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def host_time_zone(monkeypatch) -> str:
+    """Give every agent environment the same host time zone, whatever the
+    machine the suite runs on is set to.
+
+    The host's zone is part of every environment's variables, so without this
+    an assertion on them would pass on one developer's machine and fail on
+    another's. Returns the zone, for the tests that state it.
+    """
+    from guildbotics.intelligences.agent_environment import spec
+
+    monkeypatch.setattr(spec, "reload_localzone", lambda: None)
+    monkeypatch.setattr(spec, "get_localzone_name", lambda: "Asia/Tokyo")
+    return "Asia/Tokyo"
+
+
+@pytest.fixture(autouse=True)
 def _ignore_ambient_workflow_run(monkeypatch):
     """Keep tests off the workflow execution path of the member CLI guard.
 

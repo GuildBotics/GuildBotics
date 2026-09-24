@@ -64,6 +64,7 @@ from guildbotics.intelligences.agent_environment.spec import (
     EnvironmentMount,
     EnvironmentNetwork,
     guest_home,
+    host_environment,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
@@ -271,7 +272,7 @@ def _state_root_spec(
         home=guest,
         mounts=(EnvironmentMount(f"{guest}/{tool.provision.state_root}", None, False),),
         network=network,
-        env=tool.provision.environment(guest),
+        env={**host_environment(), **tool.provision.environment(guest)},
     )
 
 

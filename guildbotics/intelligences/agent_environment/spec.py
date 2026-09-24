@@ -26,13 +26,21 @@ Unrestricted opens all egress; otherwise egress is closed except DNS, the
 domains the contract allows, the provider's own API domains, and the host
 ports GuildBotics itself needs. A read-only turn is allowed no domains of its
 own, whatever the workspace declares.
+
+Environment: nothing of the host's environment is inherited. What the guest
+is told of the host is :func:`host_environment`, which every environment
+starts with.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from logging import getLogger
 from pathlib import Path, PurePath, PurePosixPath
+from zoneinfo import ZoneInfo
+
+from tzlocal import get_localzone_name, reload_localzone
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
@@ -44,6 +52,8 @@ from guildbotics.intelligences.agent_environment.contract import (
 #: opens (the member broker's) is reached from inside. The broker accepts it
 #: as a Host header, and a turn is told the broker's URL with it.
 GUEST_HOST_ALIAS = "host.microsandbox.internal"
+
+_LOGGER = getLogger(__name__)
 
 
 class AgentEnvironmentSpecError(ValueError):
@@ -116,8 +126,9 @@ def build_environment_spec(
             broker), whatever the contract's network mode.
         provider_domains: The provider's own API domains, allowed whenever
             egress is restricted; they are GuildBotics' choice, not the user's.
-        env: The environment the provider process starts with. The host's
-            environment is never inherited: the environment is another machine.
+        env: The environment the provider process starts with, beside
+            :func:`host_environment`. The host's environment is never
+            inherited: the environment is another machine.
         home: The host home directory, which is the guest's home too.
         nameservers: Upstream DNS resolvers for the environment's gateway,
             from the toolchain declaration. Without an explicit upstream,
@@ -146,8 +157,34 @@ def build_environment_spec(
             tuple(provider_domains),
             nameservers,
         ),
-        env=dict(env or {}),
+        env={**host_environment(), **(env or {})},
     )
+
+
+def host_environment() -> dict[str, str]:
+    """What the guest is told of the host it stands in for, as variables.
+
+    The microVM is another machine, but what runs in it works for the person
+    at this one: a time it writes or a date it decides by must be theirs.
+    Every environment starts with these, whatever runs in it, so they are
+    facts of the host rather than settings of a provider.
+
+    Returns:
+        ``TZ``: the host's time zone by its IANA name, which the guest's
+        zoneinfo reads (Windows' own names are mapped to it). It is read
+        afresh each time, since the Desktop outlives a change of zone. A host
+        whose zone has no such name leaves the guest on UTC rather than on a
+        guess.
+    """
+    try:
+        reload_localzone()
+        zone = get_localzone_name()
+        if zone:
+            ZoneInfo(zone)
+    except (LookupError, OSError, ValueError) as exc:
+        _LOGGER.warning("The agent environment runs on UTC: %s", exc)
+        return {}
+    return {"TZ": zone} if zone else {}
 
 
 def guest_home(home: Path | None = None) -> str:
