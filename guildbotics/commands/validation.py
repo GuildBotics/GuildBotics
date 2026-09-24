@@ -4,13 +4,14 @@ Invalid drafts may be saved so users can preserve intermediate work. Validation
 lives in the command domain because it reuses the same metadata parsing and
 argument definition rules as execution. The App API calls it when determining
 whether a saved command can run and blocks execution until the source is valid.
+``.sh`` is a recognized extension and is accepted as written; a syntax mistake
+is reported when the script runs.
 """
 
 from __future__ import annotations
 
 import ast
 import shlex
-import subprocess
 from typing import Any
 
 import yaml
@@ -25,9 +26,6 @@ from guildbotics.commands.metadata import (
     parse_python_metadata_from_module,
 )
 from guildbotics.commands.registry import get_command_types
-from guildbotics.commands.utils import find_shell
-
-SHELL_VALIDATION_TIMEOUT_SECONDS = 5
 
 
 class CommandValidationError(CommandError):
@@ -65,7 +63,9 @@ def validate_command_source(extension: str, content: str) -> None:
     elif ext == ".py":
         validate_python_source(content)
     elif ext == ".sh":
-        validate_shell_source(content)
+        # The extension is enough. A syntax mistake is reported when the script
+        # runs, so saving one does not depend on a host bash.
+        return
     else:
         raise CommandValidationError(
             "command_file_unsupported_format",
@@ -152,42 +152,6 @@ def validate_python_source(content: str) -> None:
         parse_command_argument_definitions(metadata)
     except CommandError as exc:
         raise CommandValidationError("command_file_invalid_source", str(exc)) from exc
-
-
-def validate_shell_source(content: str) -> None:
-    """Validate a shell command with ``bash -n`` without executing it."""
-    shell = find_shell()
-    if shell is None:
-        raise CommandValidationError(
-            "command_file_invalid_source",
-            "Shell command validation requires 'bash', which is unavailable.",
-            {"reason": "shell_validator_unavailable"},
-        )
-    try:
-        # The source goes in as bytes rather than as text: text mode translates
-        # every newline to the platform's, and a carriage return the shell did
-        # not ask for makes an otherwise valid script fail to parse.
-        result = subprocess.run(
-            [shell, "-n"],
-            input=content.encode("utf-8"),
-            capture_output=True,
-            timeout=SHELL_VALIDATION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise CommandValidationError(
-            "command_file_invalid_source",
-            "Shell command validation timed out.",
-            {"reason": "shell_validator_timeout"},
-        ) from exc
-    if result.returncode != 0:
-        # In the shell's own words: what it objected to is the useful half of
-        # this, for the user reading it and for whoever reads a failing run.
-        detail = result.stderr.decode("utf-8", "replace").strip()[:500]
-        raise CommandValidationError(
-            "command_file_invalid_source",
-            f"Shell command has a syntax error: {detail}",
-            {"detail": detail},
-        )
 
 
 def split_frontmatter(content: str) -> tuple[str, str]:
