@@ -127,7 +127,7 @@ Tokens are stored in the OS keychain; everything else is stored in `team/members
 
 Choose an engine under **Setup → LLM / AI CLI tools → Advanced settings → Chat judgment engine**, then save at the top of the section.
 
-- **LLM / AI CLI**: assign an existing slot. Its settings supply the model, parameters, and authentication. AI CLI also requires environment preparation and login on the device.
+- **LLM**: assign an existing slot. Its settings supply the model, parameters, and authentication.
 - **Jev**: uses `jev-latest`. Enter the API key in the field shown when Jev is selected and save it with the settings. A saved key appears masked and is kept unless changed. SecretStore stores it as `TYPESAFE_API_KEY`.
 
 The assignment is stored as `chat_decision` in `intelligences/brain_mapping.yml` and applies to the team unless overridden by member settings. Existing workspaces do not receive it automatically. Without an assignment, all eligible chats go to the response agent. Jev can only be assigned to chat judgment, not text generation.
@@ -136,9 +136,7 @@ Judgment uses the thread history and the entire unread batch, including correcti
 
 The same evaluation determines the required response effort, which the workflow applies through the response configuration. Uncertain work requirements or judgment failures preserve existing settings rather than forcing `high`. This is separate from the judgment engine's own model and reasoning settings. See [Workflow defaults](custom_command_guide.en.md#96-workflow-defaults) for the application rules.
 
-For Jev yes/no judgments, an affirmative probability at or below 0.4 is false, at or above 0.6 is true, and the range between them is unknown. These provisional thresholds prioritize avoiding missed work; they do not guarantee accuracy. Reaction selection takes the highest-probability candidate. Jev probability thresholds do not apply to the true, false, and unknown answers returned by LLM / AI CLI engines.
-
-AI CLI judgment receives only the conversation input, without work files or previous CLI sessions. Its environment is discarded afterward, preserving only CLI authentication updates.
+For Jev yes/no judgments, an affirmative probability at or below 0.4 is false, at or above 0.6 is true, and the range between them is unknown. These provisional thresholds prioritize avoiding missed work; they do not guarantee accuracy. Reaction selection takes the highest-probability candidate. Jev probability thresholds do not apply to the true, false, and unknown answers returned by LLM engines.
 
 Diagnostics show the judgment engine, model, route, and reason. Detailed inputs and raw answers are stored with secrets masked under the workspace's device-local `.guildbotics/local/run/required-io/` and are not shared through Workspace Sync. Recording failures also defer to the agent.
 
@@ -203,7 +201,7 @@ Key points:
 - Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched
 - `chat.participation` corresponds to **When to join** in the GUI. `strict` (default) handles explicit mentions and follow-ups in threads it was already invited to, `social` also allows natural participation without a mention in casual channels, and `muted` handles explicit mentions only
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
-- `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat decisions and reply generation read this profile through the AI CLI tool
+- `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through the AI CLI tool
 
 The Bot Token and App-Level Token are not stored in `person.yml`. They are passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
 

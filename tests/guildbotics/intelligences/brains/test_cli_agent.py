@@ -1041,137 +1041,6 @@ async def test_structured_outcomes_are_shared_across_members(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "adapter_name", ["codex", "claude", "grok", "copilot", "antigravity"]
-)
-async def test_input_only_uses_slot_settings_without_lease_or_resume(
-    tmp_path, monkeypatch, adapter_name
-):
-    from guildbotics.intelligences.agent_runtime.models import ResumePolicy
-
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
-        "judge",
-        {
-            "selected": cli_agent.ExecutableInfo(
-                adapter=adapter_name, parameters={"model": "configured-model"}
-            ),
-        },
-    )
-
-    def forbidden():
-        pytest.fail("Input-only evaluation must not read workspace grants")
-
-    monkeypatch.setattr(cli_agent, "load_shared_grants", forbidden)
-    turns = []
-
-    async def run(self, *, context, configured, **kwargs):
-        turns.append(context)
-        assert configured == {}
-        assert context.input_only and not context.lease_id
-        assert context.resume_policy is ResumePolicy.FRESH
-        assert context.model == "configured-model"
-        return cli_agent.CliAgentExecutionResult(
-            stdout='{"answers": {}}',
-            stderr="",
-            returncode=0,
-            model="effective-model",
-            usage={"input_tokens": 7},
-        )
-
-    monkeypatch.setattr(cli_agent.CliAgentBrain, "_execute_native_turn", run)
-    brain = cli_agent.CliAgentBrain(
-        "judge", "chat_decision", logging.getLogger(), cli_agent="selected"
-    )
-    for _ in range(2):
-        await brain.run(
-            "evaluate",
-            cwd=tmp_path,
-            input_only=True,
-            session_state={
-                "agent_execution_context": {
-                    "resume_policy": "auto",
-                    "work_identity": "existing-chat",
-                }
-            },
-        )
-    assert turns[0].conversation_key != turns[1].conversation_key
-    assert brain.execution.model == "effective-model" and brain.execution.usage == {
-        "input_tokens": 7
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
-async def test_input_only_closes_its_adapter_without_evicting_work(
-    tmp_path, monkeypatch, outcome
-):
-    import asyncio
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-    from guildbotics.intelligences.agent_runtime import factory, registry
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentTerminalResult,
-        ConversationKey,
-    )
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
-
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
-        "judge",
-        {"default": cli_agent.ExecutableInfo(adapter="codex")},
-    )
-    terminal = AgentTerminalResult(
-        output="done", events=(), provider_session_id="fresh-session", model="model"
-    )
-    failure = (
-        RuntimeError("provider failed")
-        if outcome == "failure"
-        else asyncio.CancelledError()
-        if outcome == "cancelled"
-        else None
-    )
-    adapter = SimpleNamespace(
-        applied_settings=lambda _: {},
-        run_turn=AsyncMock(return_value=terminal, side_effect=failure),
-        close=AsyncMock(),
-    )
-    monkeypatch.setattr(factory, "create_native_adapter", lambda _: adapter)
-
-    def forbidden(*args):
-        pytest.fail("A judgment must not evict or reuse the member's work adapter")
-
-    monkeypatch.setattr(registry, "get_native_adapter", forbidden)
-    brain = cli_agent.CliAgentBrain("judge", "chat_decision", _test_logger())
-    key = ConversationKey("judge", "codex", "manual", "judgment")
-    context = cli_agent.AgentExecutionContext(
-        person_id="judge",
-        run_id="judgment",
-        cwd=tmp_path,
-        workspace_root=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=key,
-        contract=AccessContract(input_only=True),
-    )
-    invocation = brain._execute_native_turn(
-        input="evaluate",
-        configured={},
-        context=context,
-        adapter_name="codex",
-        run_id="judgment",
-    )
-    if failure is None:
-        result = await invocation
-        assert result.stdout == "done"
-    else:
-        with pytest.raises(type(failure)):
-            await invocation
-    adapter.close.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 async def test_a_turn_records_what_its_environment_confines_it_to(
     tmp_path, monkeypatch
 ):
@@ -1238,7 +1107,7 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     goes along with it."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
-    from guildbotics.intelligences.agent_runtime import factory
+    from guildbotics.intelligences.agent_runtime import registry
     from guildbotics.intelligences.agent_runtime.models import (
         AgentRuntimeError,
         AgentRuntimeErrorCategory,
@@ -1269,7 +1138,11 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     adapter = SimpleNamespace(
         applied_settings=lambda _: {}, run_turn=run_turn, close=AsyncMock()
     )
-    monkeypatch.setattr(factory, "create_native_adapter", lambda _: adapter)
+
+    async def native_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(registry, "get_native_adapter", native_adapter)
     brain = cli_agent.CliAgentBrain("judge", "chat_decision", _test_logger())
     context = cli_agent.AgentExecutionContext(
         person_id="judge",
@@ -1278,7 +1151,7 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
-        contract=AccessContract(input_only=True),
+        contract=AccessContract(),
     )
 
     turn = brain._execute_native_turn(

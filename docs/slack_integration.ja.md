@@ -127,7 +127,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 **設定 → LLM・AI CLIツール → 詳細設定 → チャット判断エンジン**で選び、セクション上部の保存ボタンで確定します。
 
-- **LLM／AI CLI**: 既存のスロットへ割り当てます。モデル・パラメーター・認証はそのスロットの設定を使います。AI CLI は端末での環境準備とログインも必要です。
+- **LLM**: 既存のスロットへ割り当てます。モデル・パラメーター・認証はそのスロットの設定を使います。
 - **Jev**: `jev-latest` を使います。選択時に表示される API キー欄へ入力し、設定と一緒に保存します。登録済みのキーは伏せ字で表示され、変更しなければ維持されます。キーは SecretStore の `TYPESAFE_API_KEY` に保存されます。
 
 割り当ては `intelligences/brain_mapping.yml` の `chat_decision` に保存され、メンバー設定で上書きしない限りチーム全体に適用されます。既存 Workspace の設定には自動追加されません。未設定の場合は対象チャットをすべて対応エージェントへ委ねます。Jev はチャット判断専用で、本文生成には割り当てられません。
@@ -136,9 +136,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 同じ判定で会話に必要な effort も求め、ワークフローが会話処理側の設定で適用します。作業要否が不明・判定失敗の場合は既存設定を維持し、一律に `high` へ変更しません。判断エンジン自身のモデル・推論量とは別です。適用規則は[ワークフローの既定動作](custom_command_guide.ja.md#96-ワークフローの既定動作)を参照してください。
 
-Jev の yes/no 判定は肯定の確率が 0.4 以下なら否定、0.6 以上なら肯定、その間は不明として扱います。必要な対応の誤省略を避けるための暫定値で、正答率の保証ではありません。リアクションは最上位候補を採用します。LLM／AI CLI が返す true・false・unknown には Jev の確率閾値を適用しません。
-
-AI CLI による判断には会話入力だけを渡し、作業ファイルや過去の CLI セッションは渡しません。判断用の環境は終了時に破棄し、CLI の認証更新だけを保存します。
+Jev の yes/no 判定は肯定の確率が 0.4 以下なら否定、0.6 以上なら肯定、その間は不明として扱います。必要な対応の誤省略を避けるための暫定値で、正答率の保証ではありません。リアクションは最上位候補を採用します。LLM が返す true・false・unknown には Jev の確率閾値を適用しません。
 
 判断のエンジン・モデル・経路・理由は診断画面で確認できます。入力・生回答などの詳細は、秘密値を伏せて Workspace の端末ローカルな `.guildbotics/local/run/required-io/` に保存され、Workspace Sync では共有しません。記録に失敗した場合もエージェントへ委ねます。
 
@@ -203,7 +201,7 @@ task_schedules:
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものが対象になります
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
-- `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断と返信生成は AI CLI ツール経由でこのプロフィールを参照します
+- `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は AI CLI ツール経由で参照します
 
 Bot Token と App-Level Token は `person.yml` には保存されません。OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
 

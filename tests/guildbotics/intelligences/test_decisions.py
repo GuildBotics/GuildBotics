@@ -586,8 +586,7 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
     assert len(calls) == 1
     request, kwargs = calls[0]
     assert request["state"] == state and set(request["questions"]) == set(QUESTIONS)
-    assert kwargs["input_only"] is True
-    assert not {"effort", "model", "session_state"} & kwargs.keys()
+    assert set(kwargs) == {"cwd"}
     assert result.model == "resolved-model" and result.usage == {"input_tokens": 12}
     assert result.retries is None
 
@@ -645,8 +644,11 @@ async def test_resolved_configuration_is_durable_before_failed_call(
         model = "test-cli"
 
     observed = []
+    calls = 0
 
     async def fail(*args, **kwargs):
+        nonlocal calls
+        calls += 1
         records = [
             json.loads(p.read_text())["payload"]
             for p in tmp_path.rglob("*.json")
@@ -667,13 +669,22 @@ async def test_resolved_configuration_is_durable_before_failed_call(
     )
     path = next(tmp_path.rglob(f"{record_id}.json"))
     payload = json.loads(path.read_text())["payload"]
-    assert len(observed) == 1
-    assert observed[0]["configuration"] == brain.configuration
-    assert observed[0]["instructions"] == engines.INSTRUCTIONS
+    records = [
+        json.loads(p.read_text())["payload"]
+        for p in tmp_path.rglob("*.json")
+        if "required-io" in p.parts
+    ]
+    resolved = next(p for p in records if p.get("phase") == "resolved")
+    assert calls == (0 if engine == "cli" else 1)
+    assert len(observed) == calls
+    assert resolved["configuration"] == brain.configuration
+    assert resolved["instructions"] == engines.INSTRUCTIONS
     assert "private-inline-key" not in path.read_text()
     assert selection.route == "agent"
     result = payload["result"]
-    assert result["error"] == "evaluation_failed"
+    assert result["error"] == (
+        "invalid_response" if engine == "cli" else "evaluation_failed"
+    )
     assert result["model"] == model
     assert result["configuration"]["provider"]
     if engine != "jev":

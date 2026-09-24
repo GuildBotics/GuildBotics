@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from guildbotics.editions import get_edition
+from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.decisions.models import (
     DecisionConfig,
     Evaluation,
@@ -59,6 +60,8 @@ async def evaluate(
             except Exception:
                 result.error = "recording_failed"
                 return result
+        if isinstance(brain, CliAgentBrain):
+            raise ValueError("AI CLI is not supported for chat_decision")
         request = {
             "state": state,
             "questions": {
@@ -69,7 +72,6 @@ async def evaluate(
             raw = await brain.run(
                 json.dumps(request, ensure_ascii=False, sort_keys=True),
                 cwd=config_dir.parent.parent,
-                input_only=True,
             )
         if isinstance(raw, str):
             raw = json.loads(raw)

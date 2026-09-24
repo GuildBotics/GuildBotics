@@ -132,10 +132,6 @@ class AgentExecutionContext:
     contract: AccessContract = field(default_factory=AccessContract)
     login: TurnLogin = field(default_factory=TurnLogin)
 
-    @property
-    def input_only(self) -> bool:
-        return self.contract.input_only
-
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:
             raise ValueError("Execution and conversation person_id must match.")
@@ -143,8 +139,6 @@ class AgentExecutionContext:
             raise ValueError("run_id must not be empty.")
         if unknown := self.inspects - set(get_args(InspectionScope)):
             raise ValueError(f"Unknown inspection scopes: {sorted(unknown)}.")
-        if self.inspects and self.input_only:
-            raise ValueError("An input-only turn inspects nothing.")
 
 
 def settings_fingerprint(applied: Mapping[str, Any]) -> str:
