@@ -89,7 +89,7 @@ class GrokAcpAdapter(AcpAdapterBase):
         return _launch_argv(self._executable, self.applied_settings(context))
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
-        return {"sandbox": _SANDBOX_PROFILE, "read_only": context.read_only}
+        return {"sandbox": _SANDBOX_PROFILE}
 
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
         # Grok Build names the model the process is fixed to in its

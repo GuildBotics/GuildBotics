@@ -80,6 +80,8 @@ from guildbotics.utils.i18n_tool import t
 #: This device's per-provider stores, and the cache turns keep between them.
 STATE_ROOT = ("agent_environment",)
 CACHE_DIR = "cache"
+#: Under a provider's directory: the store its read-only turns keep.
+READ_ONLY_STORE = "read-only"
 #: Longest line the login command may print.
 _LOGIN_LINE_LIMIT = 1 << 16
 #: Where a brokered tool's login is sealed, beside its store.
@@ -190,17 +192,31 @@ def _failure_path(tool: CliAgentInfo) -> Path:
     return get_machine_state_path(*STATE_ROOT, tool.name, "authentication-failed")
 
 
+def read_only_state_dir(tool: CliAgentInfo) -> Path:
+    """The store read-only turns of the provider keep apart from every other."""
+    return get_machine_state_path(
+        *STATE_ROOT, tool.name, READ_ONLY_STORE, tool.provision.state_root
+    )
+
+
 def bind_state(
-    tool: CliAgentInfo, home: Path | None = None
+    tool: CliAgentInfo, home: Path | None = None, *, read_only: bool = False
 ) -> tuple[EnvironmentMount, ...]:
     """What a turn of ``tool`` binds of this device's store.
 
     A persisted directory is created in the store, so a first turn can fill
     it, and bound at its place under the state root. A persisted file is
     bound only once it exists.
+
+    A read-only turn is bound a store of its own and no cache: its sessions,
+    its provider's settings, and what it fetched would otherwise be read,
+    resumed, or run by the next turn that may change things. The account
+    files it needs are copied in afresh from the provider's store, so what
+    one read-only turn changes in them no turn reads.
     """
     provision = tool.provision
-    store = provider_state_dir(tool)
+    shared = provider_state_dir(tool)
+    store = read_only_state_dir(tool) if read_only else shared
     root = f"{guest_home(home)}/{provision.state_root}"
     mounts = []
     for entry in provision.persisted:
@@ -209,12 +225,20 @@ def bind_state(
             continue
         if entry.endswith("/"):
             host.mkdir(parents=True, exist_ok=True, mode=0o700)
+        elif read_only:
+            account = _inside(shared, entry)
+            if account is None or not account.is_file():
+                host.unlink(missing_ok=True)
+                continue
+            host.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            atomic_write_bytes(host, account.read_bytes())
         elif not host.is_file():
             continue
         mounts.append(EnvironmentMount(f"{root}/{entry.rstrip('/')}", host, False))
-    cache = cache_dir()
-    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
-    mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))
+    if not read_only:
+        cache = cache_dir()
+        cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))
     return tuple(mounts)
 
 

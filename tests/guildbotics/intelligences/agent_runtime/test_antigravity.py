@@ -419,24 +419,6 @@ def test_usage_clamps_and_ignores_unusable_values() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_only_turn_records_that_it_is_not_enforced(
-    monkeypatch, tmp_path
-) -> None:
-    calls: list[tuple[Any, ...]] = []
-    _install(monkeypatch, _StreamProcess(_fixture_lines()), calls=calls)
-    adapter = AntigravityStreamJsonAdapter()
-    events: list[AgentEvent] = []
-
-    await _run(adapter, _context(tmp_path, read_only=True), events)
-
-    policy = next(event for event in events if event.name == "policy")
-    assert policy.approval == "always-proceed"
-    assert policy.details == {"read_only": True, "read_only_enforced": False}
-    # `agy` offers no provider-side read-only mode, so the argv is unchanged.
-    assert "--dangerously-skip-permissions" in calls[-1]
-
-
-@pytest.mark.asyncio
 async def test_quota_result_is_rate_limited_with_a_retry_hint(
     monkeypatch, tmp_path
 ) -> None:

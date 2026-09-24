@@ -37,8 +37,10 @@ _LOGIN_METHOD = "copilot-login"
 _AUTH_TIMEOUT = 20.0
 #: Session configuration options this adapter sets. `model` and
 #: `reasoning_effort` are the effort mapping's keys; `allow_all` is the approval
-#: policy, which GuildBotics owns rather than exposing as a member setting.
+#: policy, which GuildBotics owns rather than exposing as a member setting. It
+#: is always `on`: what a turn may change is its environment's to decide.
 _ALLOW_ALL_OPTION = "allow_all"
+_ALLOW_ALL = "on"
 _SETTING_KEYS = frozenset({"model", "reasoning_effort"})
 #: Copilot spells its weekly quota exhaustion this way; the rest of the shared
 #: identifiers are matched by the base adapter.
@@ -79,10 +81,9 @@ class CopilotAcpAdapter(AcpAdapterBase):
             # web and mobile: it carries workspace contents and takes its
             # instructions from GuildBotics alone.
             "--no-remote-export",
-            # Read-only turns decline every unexpected permission request, but
-            # the broker itself enforces the member command's read/write class.
-            # Allowing this one MCP tool keeps read-only member inspections
-            # usable without widening any other Copilot capability.
+            # Only for a session that does not confirm `allow_all`, where
+            # every request is declined: the member tool stays usable, since
+            # the broker itself enforces each member command's read/write class.
             "--allow-tool",
             f"{self._member_broker.name}(guildbotics_member)",
             # Copilot confines file access to the working directory by default.
@@ -91,11 +92,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
         )
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
-        return {
-            "allowed_paths": "workspace",
-            "allow_all": _allow_all(context),
-            "read_only": context.read_only,
-        }
+        return {"allowed_paths": "workspace", "allow_all": _ALLOW_ALL}
 
     async def _authenticate(self, result: dict[str, Any]) -> None:
         methods = [
@@ -144,7 +141,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
         desired = {
             key: str(value) for key, value in self.applied_settings(context).items()
         }
-        desired[_ALLOW_ALL_OPTION] = _allow_all(context)
+        desired[_ALLOW_ALL_OPTION] = _ALLOW_ALL
         current = _config_values(result)
         for option_id, value in desired.items():
             if current.get(option_id) == value:
@@ -171,20 +168,6 @@ class CopilotAcpAdapter(AcpAdapterBase):
             for option_id, value in desired.items()
             if current.get(option_id) != value
         )
-        if _ALLOW_ALL_OPTION in rejected and context.read_only:
-            # Every other setting only degrades the turn, but this one is what
-            # holds a read-only turn back. A session that kept `on` from an
-            # earlier turn would act without asking, so an unconfirmed `off` is
-            # a refusal to run rather than a warning.
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                "Copilot did not confirm the read-only approval policy.",
-                details={
-                    "requested": desired[_ALLOW_ALL_OPTION],
-                    "effective": current.get(_ALLOW_ALL_OPTION, ""),
-                },
-                rotate_session=True,
-            )
         if rejected:
             _LOGGER.warning(
                 "Copilot did not apply the requested session settings: %s",
@@ -207,17 +190,6 @@ class CopilotAcpAdapter(AcpAdapterBase):
                 },
             )
         ]
-
-
-def _allow_all(context: AgentExecutionContext) -> str:
-    """Whether Copilot may run tools without asking, for this turn.
-
-    A read-only turn only inspects recorded, untrusted state, so Copilot has to
-    ask before every write, shell command and URL fetch -- and the base adapter
-    declines every one of them. Reads inside the allowed paths never ask, so the
-    turn can still do its job.
-    """
-    return "off" if context.read_only else "on"
 
 
 def _config_values(result: Any) -> dict[str, str]:

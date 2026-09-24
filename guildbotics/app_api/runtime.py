@@ -524,8 +524,9 @@ class AppRuntime:
             message: Latest user instruction, used to resolve the context language.
             person: Requested member identifier, or ``None`` for the team default.
             failure_code: App API error code used when the assistant fails.
-            read_only: Whether the turn is enforced read-only by the agent
-                adapter. Only such a turn skips the member's execution lease, so
+            read_only: Whether the turn's environment holds it read-only,
+                whatever provider runs it. Only such a turn skips the member's
+                execution lease, so
                 it stays usable while that member runs scheduled work. A turn
                 that can write keeps the lease it has always held.
 

@@ -41,19 +41,6 @@ _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",",
 # sandbox (the check its container images satisfy the same way). The turn is
 # root inside the microVM, and the microVM is that sandbox.
 _ENVIRONMENT = {"IS_SANDBOX": "1"}
-# A read-only turn runs under the ordinary permission mode, where anything not
-# allowed below is denied outright in non-interactive mode. The allowlist is the
-# enforcement; the prompt is only a description of it.
-_READ_ONLY_PERMISSION_MODE = "default"
-_READ_ONLY_ALLOWED_TOOLS = ("Read", "Glob", "Grep")
-_READ_ONLY_DISALLOWED_TOOLS = (
-    "Write",
-    "Edit",
-    "NotebookEdit",
-    "WebFetch",
-    "WebSearch",
-    "Task",
-)
 #: The effort-mapping keys Claude Code can act on: the model it runs and the
 #: effort level it runs at.
 _EFFORT_SETTING_KEYS = frozenset({"model", "effort"})
@@ -121,9 +108,6 @@ class ClaudeStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        permission_mode = (
-            _READ_ONLY_PERMISSION_MODE if context.read_only else _PERMISSION_MODE
-        )
         args = [
             self._executable,
             "-p",
@@ -137,18 +121,11 @@ class ClaudeStreamJsonAdapter:
             "--settings",
             _SESSION_SETTINGS,
             "--permission-mode",
-            permission_mode,
+            _PERMISSION_MODE,
             "--mcp-config",
             _claude_mcp_config(self._member_broker),
             "--strict-mcp-config",
         ]
-        if context.read_only:
-            allowed_tools = (
-                *_READ_ONLY_ALLOWED_TOOLS,
-                f"mcp__{self._member_broker.endpoint.name}__guildbotics_member",
-            )
-            args.extend(("--allowed-tools", *allowed_tools))
-            args.extend(("--disallowed-tools", *_READ_ONLY_DISALLOWED_TOOLS))
         _warn_unusable_effort_settings(context)
         args.extend(_effort_arguments(context))
         if conversation.provider_session_id:
@@ -192,8 +169,8 @@ class ClaudeStreamJsonAdapter:
         policy_event = AgentEvent(
             AgentEventKind.APPROVAL,
             "policy",
-            approval=permission_mode,
-            details={"bash_sandbox": False, "read_only": context.read_only},
+            approval=_PERMISSION_MODE,
+            details={"bash_sandbox": False},
         )
         events.append(policy_event)
         emitted = emit(policy_event)

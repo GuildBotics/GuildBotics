@@ -945,10 +945,11 @@ a monorepo on purpose.
   payload in, one typed model out, keyed by a stable `work_identity` so the provider
   resumes its own session), and `AppRuntime._assistant_turn` resolves the acting member,
   tracks the turn as cancellable manual work and correlates it under a fresh trace.
-  A turn that is declared read-only is confined by the provider, not by its prompt: the
-  Claude adapter drops `bypassPermissions` for an explicit tool allowlist, the Codex
-  adapter forces a `read-only` sandbox with no network, and `cli_agent` takes no member
-  execution lease. Only such a turn is tracked non-exclusively, so it stays usable while
+  A turn that is declared read-only is confined by its isolated environment, not by its
+  prompt or its provider: `cli_agent` puts `read_only` into the turn's access contract, the
+  environment spec mounts every host directory read-only with an empty working directory
+  and lets the network reach only the provider's API and the member broker, and
+  `cli_agent` takes no member execution lease. Only such a turn is tracked non-exclusively, so it stays usable while
   that member runs scheduled work — which is exactly when its logs are worth asking
   about. Command authoring is also read-only: it can inspect the effective shared
   command sources and return structured proposals, but only the separate explicit

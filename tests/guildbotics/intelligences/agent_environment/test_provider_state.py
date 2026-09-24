@@ -20,6 +20,7 @@ from guildbotics.intelligences.agent_environment.provider_state import (
     login,
     login_spec,
     provider_state_dir,
+    read_only_state_dir,
 )
 from guildbotics.intelligences.agent_environment.spec import (
     EnvironmentMount,
@@ -70,6 +71,37 @@ def test_a_turn_binds_only_the_persisted_entries(machine: Path, tmp_path: Path) 
         EnvironmentMount(f"{root}/projects", store / "projects", False),
         EnvironmentMount(f"{guest_path(home)}/.cache", cache_dir(), False),
     )
+
+
+def test_a_read_only_turn_writes_nothing_another_turn_reads(
+    machine: Path, tmp_path: Path
+) -> None:
+    """Its sessions are its own, it has no cache, and the account file it is
+    given is a fresh copy, so what it changed there is gone by the next turn
+    -- and one the provider's store no longer has is not left behind."""
+    home = tmp_path / "home"
+    root = f"{guest_path(home)}/.claude"
+    shared = provider_state_dir(CLAUDE)
+    own = read_only_state_dir(CLAUDE)
+    shared.mkdir(parents=True)
+    (shared / ".claude.json").write_text('{"account": 1}')
+
+    assert bind_state(CLAUDE, home, read_only=True) == (
+        EnvironmentMount(f"{root}/.claude.json", own / ".claude.json", False),
+        EnvironmentMount(f"{root}/projects", own / "projects", False),
+    )
+    assert own != shared and not own.is_relative_to(shared)
+
+    (own / ".claude.json").write_text('{"account": "changed by the turn"}')
+    bind_state(CLAUDE, home, read_only=True)
+    assert (own / ".claude.json").read_text() == '{"account": 1}'
+    assert (shared / ".claude.json").read_text() == '{"account": 1}'
+
+    (shared / ".claude.json").unlink()
+    assert bind_state(CLAUDE, home, read_only=True) == (
+        EnvironmentMount(f"{root}/projects", own / "projects", False),
+    )
+    assert not (own / ".claude.json").exists()
 
 
 def test_a_login_left_in_the_store_is_neither_counted_nor_bound(

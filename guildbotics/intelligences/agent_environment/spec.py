@@ -9,8 +9,11 @@ Filesystem: every granted directory -- the working directory, the documents,
 the device-local paths -- is mounted at the same path it has on the host, and
 the guest's home directory is the host's home path, so a path means the same
 thing on both sides: what the user typed, what the Desktop shows, and what the
-provider's session state records all agree. The working directory is always
-read-write; a grant is read-only when it says so. Nothing else of the host is
+provider's session state records all agree. The working directory is
+read-write; a grant is read-only when it says so. A read-only contract makes
+every grant read-only and the working directory an empty read-only mount, so
+what the turn may not change holds whatever provider runs it; only what
+GuildBotics binds itself (``mounts``) keeps its own access. Nothing else of the host is
 mounted except what GuildBotics binds itself (``mounts``), so credentials, the
 workspace configuration, and other members' clones are unreachable rather than
 forbidden -- unless a caller lets its turn inspect the workspace's own state. A deny inside an opened tree is
@@ -21,7 +24,8 @@ agent's tools live inside the environment.
 Network: the microVM's gateway enforces the one rule the contract states.
 Unrestricted opens all egress; otherwise egress is closed except DNS, the
 domains the contract allows, the provider's own API domains, and the host
-ports GuildBotics itself needs.
+ports GuildBotics itself needs. A read-only turn is allowed no domains of its
+own, whatever the workspace declares.
 """
 
 from __future__ import annotations
@@ -129,15 +133,15 @@ def build_environment_spec(
         cwd=guest_path(cwd),
         home=guest_home(home),
         mounts=(
-            *(
-                (EnvironmentMount(guest_path(cwd), None, True),)
-                if contract.input_only
-                else _mounts(contract.access, cwd)
+            *_mounts(
+                ResolvedAccess() if contract.input_only else contract.access,
+                cwd,
+                read_only=contract.read_only,
             ),
             *mounts,
         ),
         network=_network(
-            NetworkPolicy() if contract.input_only else contract.network,
+            contract.reached_network,
             tuple(host_ports),
             tuple(provider_domains),
             nameservers,
@@ -175,10 +179,18 @@ def guest_path(path: PurePath) -> str:
     return "/".join(("", drive[0].lower(), *path.parts[1:]))
 
 
-def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[EnvironmentMount, ...]:
-    """The host-backed mounts, outermost first, then the denies they cover."""
+def _mounts(
+    access: ResolvedAccess, cwd: Path, *, read_only: bool
+) -> tuple[EnvironmentMount, ...]:
+    """The host-backed mounts, outermost first, then the denies they cover.
+
+    A read-only turn has nothing of its own to read, so its working directory
+    is an empty read-only mount rather than the host directory.
+    """
     opened: dict[str, EnvironmentMount] = {
-        guest_path(cwd): EnvironmentMount(guest_path(cwd), cwd, readonly=False)
+        guest_path(cwd): EnvironmentMount(
+            guest_path(cwd), None if read_only else cwd, readonly=read_only
+        )
     }
     for grant in (*access.documents, *access.paths):
         denied = any(grant.path.is_relative_to(d.path) for d in access.denied)
@@ -186,7 +198,9 @@ def _mounts(access: ResolvedAccess, cwd: Path) -> tuple[EnvironmentMount, ...]:
             opened.setdefault(
                 guest_path(grant.path),
                 EnvironmentMount(
-                    guest_path(grant.path), grant.path, grant.access == "read"
+                    guest_path(grant.path),
+                    grant.path,
+                    readonly=read_only or grant.access == "read",
                 ),
             )
     covers = {

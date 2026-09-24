@@ -1,10 +1,13 @@
 """The access contract: what one AI CLI turn may reach.
 
 Every turn an AI CLI tool runs for GuildBotics is confined the same way,
-whatever the turn is for: the agent may read and write its working directory
+whatever provider runs it: the agent may read and write its working directory
 and the directories the user granted under their home, and it reaches the
 network only as the workspace's environment declaration allows, whether
-through a command it runs or the provider's built-in web tools. The agent's tools are
+through a command it runs or the provider's built-in web tools (those it
+runs on its own servers excepted: they never pass the environment). A read-only
+turn reads the same grants but writes nowhere and reaches no network beyond
+its provider and GuildBotics itself. The agent's tools are
 the environment's own, so nothing of this device's PATH is part of it. The
 contract is what GuildBotics asks for, as data; the isolated agent
 environment (:mod:`.spec`, :mod:`.runtime`) is what enforces it.
@@ -65,7 +68,9 @@ class NetworkPolicy(BaseModel):
     """The environment declaration's ``network`` block: what a turn may reach.
 
     One rule covers the provider's own web tools and every command it runs,
-    because the environment that enforces it cannot tell the two apart. ``mode``
+    because the environment that enforces it cannot tell the two apart. A web
+    tool the provider runs on its own servers never passes through the
+    environment, so no rule here reaches it. ``mode``
     is a plain string, never a YAML boolean: ``off`` / ``on`` read as booleans
     under YAML 1.1, which is why the closed value is spelled ``deny``.
     ``allow_local_network`` opens the host and its private networks as well.
@@ -452,14 +457,31 @@ class AccessContract:
     """What GuildBotics asks a provider to enforce for one turn.
 
     The working directory is not part of the contract because it is the
-    turn's own ``cwd``: always readable and writable, whatever else is granted.
+    turn's own ``cwd``: readable and writable unless the turn is read-only.
     """
 
     network: NetworkPolicy = field(default_factory=NetworkPolicy)
     access: ResolvedAccess = field(default_factory=ResolvedAccess)
 
-    #: Only supplied input is visible; no workspace or previous provider sessions.
+    #: The turn may change nothing: it still sees the grants, but read-only,
+    #: its working directory is empty, and ``network`` does not apply.
+    read_only: bool = False
+    #: Only supplied input is visible; no workspace or previous provider
+    #: sessions. Such a turn is read-only as well.
     input_only: bool = False
+
+    def __post_init__(self) -> None:
+        if self.input_only:
+            object.__setattr__(self, "read_only", True)
+
+    @property
+    def reached_network(self) -> NetworkPolicy:
+        """What the turn reaches beyond its provider and GuildBotics itself.
+
+        A turn that may change nothing reaches nothing more: a request to
+        another host is a write somewhere the environment cannot undo.
+        """
+        return NetworkPolicy() if self.read_only else self.network
 
     def requested_policy(
         self, cwd: Path, *, home: Path | None = None, workspace_root: Path | None = None
@@ -470,6 +492,7 @@ class AccessContract:
             return redact_path(path, home, workspace_root)
 
         return {
+            "read_only": self.read_only,
             "input_only": self.input_only,
             "filesystem": {
                 "working_directory": mask(cwd),
@@ -486,7 +509,7 @@ class AccessContract:
                     for d in self.access.denied
                 ],
             },
-            "network": self.network.model_dump(mode="json"),
+            "network": self.reached_network.model_dump(mode="json"),
         }
 
 

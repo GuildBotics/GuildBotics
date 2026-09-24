@@ -90,7 +90,8 @@ imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッシ
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください。開発中（`tauri dev`）は、起動に使ったターミナルや Visual Studio Code が対象です。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と Desktop に同じ拒否理由を表示します。
 
 - **作業ディレクトリ**: ターンの`cwd`（チケット作業ならメンバーのclone、内部処理なら
-  `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします。
+  `<workspace>/.guildbotics/local/work/...`）は、hostと同じパスに読み書きでbindします
+  （読み取り専用ターンでは、代わりに空の読み取り専用mountを置きます）。
   ワークスペースの`.guildbotics/config`や`state`は含みません
 - **調べるための読み取り専用mount**: 呼び出し側が許可したturn（`AgentExecutionContext.inspects`）
   にだけ、ワークスペース自身の状態の一部をhostと同じパスに読み取り専用でbindします。`diagnostics`は
@@ -178,6 +179,20 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
     allow_local_network: false
   ```
 
+- **読み取り専用ターン**: 何も変更してはいけないターン（Desktopのトラブルシューティングと
+  コマンド作成アシスタント）は、契約（`AccessContract.read_only`）でそれを表し、どのプロバイダが
+  動かしても隔離環境が同じ形で閉じ込めます。hostからbindするディレクトリはすべて読み取り専用
+  （受け渡しフォルダと`read_write`のgrantを含む）で、作業ディレクトリは空の読み取り専用mountです。
+  ワークスペースの`network:`は適用せず、届くのはプロバイダのAPIドメインとmember brokerだけです。
+  会話を再開できるよう、セッションは読み取り専用ターン専用のstore
+  （`agent_environment/<provider>/read-only/`）からbindし、プロバイダの共有storeと全ターン共有の
+  cacheはbindしません。読み取り専用ターンがそこに残したものを、次の書き込み可能なターンが再開・
+  実行してしまうからです。プロバイダが必要とするアカウント情報のファイルは毎ターンコピーし直します。
+  プロバイダが自身のサーバーで実行するweb機能（ホスト型のweb検索など）は隔離環境を通らないため、
+  どのターンでも止められません。契約（`read_only`を含む）は、すべてのターンの`started`イベントに`requested_policy`
+  として記録されます。このターンはperson leaseを持たないため、書き込み系のmemberコマンドも
+  member brokerがすべて拒否します。
+
 これらはDesktopの **エージェント実行環境** から編集できます。「ワークスペース共通の
 ディレクトリ」カードがdocumentsを、「この端末のディレクトリ」カードがここで足した追加パスと
 禁止を持ち、どちらも入力または選択したパスを保存前に判定します（存在有無、認証情報を含む
@@ -189,25 +204,22 @@ microVMの中にあるものはすべて許可済みなので、内側のsandbox
 プロバイダ自身の認証情報を隠すことと、プロバイダ設定の変更をターンをまたいで残さないことです。
 Codexは環境のmountをそのまま写したpermission profileで動きます: guest全体を読め、環境がbindした
 各ディレクトリはmountされたとおりに書き込み可または読み取り専用（`read_write`のgrantはCodexの
-コマンドからも読み書きできる）、作業ディレクトリ（`.git`を含む）と一時ディレクトリは書き込み可、
+コマンドからも読み書きできる）、書き込み可の作業ディレクトリ（`.git`を含む）と一時ディレクトリは書き込み可、
 ネットワークは有効、`~/.codex`だけを隠します。profileで`/`を書き込み可能にすると、Codex 0.153では
 `/dev/null`へ書けなくなるため、`/`は指定しません。Codexは常に
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
 `bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
 rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
-`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`（読み取り専用ターンでは
-`off`にして全要求を拒否）、Antigravityは`--dangerously-skip-permissions`で起動し、設定から
-フラグは注入されません。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
+`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`、Antigravityは
+`--dangerously-skip-permissions`で起動し、設定からフラグは注入されません。読み取り専用ターンも
+同じ形で起動します。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
 provisionするたびに実機で確認し、Codexは同梱のbubblewrapで動くことを確認済みです（imageに
 bubblewrapを入れると同梱のものより優先され、Codexのhelperを起動できないため、imageには入れません）。
 
 ターンをまたいで残るのはプロバイダのセッションと、認証情報を含まないアカウント情報だけで、この端末の
 store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
 ログインはturnに置きません（後述の「VMの外で管理するログイン」）。
-プロバイダの設定やskillはsnapshot側のもので、ターンごとに元へ戻ります。読み取り専用ターンは
-member brokerが強制します（person leaseを持たず、書き込み系のmemberコマンドをすべて拒否
-します）。そのターンでプロバイダが自身のファイル操作ツールで何をしたかは承認イベントに
-記録されますが、境界ではありません。
+プロバイダの設定やskillはsnapshot側のもので、ターンごとに元へ戻ります。
 
 有効になったpolicyと承認の判断は、プロバイダ非依存の診断イベントとして記録します。型の誤り、
 廃止したキー、未知の値は検証で失敗し、有効な境界が黙って変わることはありません。

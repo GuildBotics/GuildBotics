@@ -170,12 +170,7 @@ class CodexAppServerAdapter:
             AgentEventKind.APPROVAL,
             "policy",
             approval=_APPROVAL_POLICY,
-            details={
-                "requested_policy": context.contract.requested_policy(
-                    context.cwd, workspace_root=context.workspace_data_root
-                ),
-                "adapter_settings": _sandbox_overrides(environment.spec),
-            },
+            details={"adapter_settings": _sandbox_overrides(environment.spec)},
         )
         emitted = emit(policy_event)
         if asyncio.iscoroutine(emitted):
@@ -670,10 +665,12 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     allowed, so the profile mirrors it rather than narrowing it: the whole
     guest is readable, and every directory the environment bound is
     writable or read-only exactly as it was mounted -- what the user
-    granted read/write is read/write for Codex's commands too. The working
-    directory (its ``.git`` included, since the agent stages its own
-    changes) and the temporary directories are writable as Codex spells
-    them, and the network is on; which hosts is the environment's
+    granted read/write is read/write for Codex's commands too. A writable
+    working directory is Codex's workspace root, its ``.git`` included since
+    the agent stages its own changes; a read-only one is not named one,
+    because Codex makes directories inside every workspace root and cannot
+    start a session on one it may not write. The temporary directories are
+    writable as Codex spells them, and the network is on; which hosts is the environment's
     gateway's to decide. Naming ``/`` writable instead would lose
     ``/dev/null`` (measured on 0.153.4), and Codex's ``workspace-write``
     default would close the network and ask for approvals, which no
@@ -702,7 +699,11 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
         f"{profile}.filesystem": {
             "/": "read",
             **mounts,
-            ":workspace_roots": {".": "write", ".git": "write"},
+            **(
+                {":workspace_roots": {".": "write", ".git": "write"}}
+                if mounts.get(spec.cwd) == "write"
+                else {}
+            ),
             ":tmpdir": "write",
             ":slash_tmp": "write",
             state: "deny",

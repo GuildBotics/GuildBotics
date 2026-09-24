@@ -16,6 +16,7 @@ from acp_fake_peer import (
 )
 
 from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
@@ -487,53 +488,28 @@ async def test_the_terminal_result_carries_the_confirmed_session_settings(
 
 
 @pytest.mark.asyncio
-async def test_a_read_only_turn_makes_copilot_ask_before_acting(
+async def test_a_read_only_turn_runs_copilot_as_any_other_turn(
     monkeypatch, tmp_path
 ) -> None:
+    """What a read-only turn may change is its environment's to hold."""
     peer = _Peer()
     install(monkeypatch, peer)
 
-    _result, events = await _run(CopilotAcpAdapter(), tmp_path, read_only=True)
+    _result, events = await _run(
+        CopilotAcpAdapter(), tmp_path, contract=AccessContract(read_only=True)
+    )
 
-    assert peer.current["allow_all"] == "off"
+    assert peer.current["allow_all"] == "on"
     policy = _named(events, AgentEventKind.APPROVAL, "policy")
     assert policy.approval == "never"
-    assert policy.details == {
-        "allowed_paths": "workspace",
-        "allow_all": "off",
-        "read_only": True,
-    }
+    assert policy.details == {"allowed_paths": "workspace", "allow_all": "on"}
 
 
 @pytest.mark.asyncio
-async def test_a_read_only_turn_stops_when_its_approval_policy_is_not_confirmed(
+async def test_a_turn_survives_an_approval_policy_it_could_not_set(
     monkeypatch, tmp_path
 ) -> None:
-    """An unconfirmed `allow_all: off` is a refusal to run, not a warning.
-
-    Copilot acknowledges an option id it does not know without applying it, so a
-    session left on `on` by an earlier turn would act without ever asking.
-    """
-    peer = _Peer(
-        known_options={"model", "reasoning_effort"},
-        current_config={"allow_all": "on"},
-    )
-    install(monkeypatch, peer)
-
-    with pytest.raises(AgentRuntimeError) as error:
-        await _run(CopilotAcpAdapter(), tmp_path, read_only=True)
-
-    assert error.value.category is AgentRuntimeErrorCategory.PROTOCOL
-    assert error.value.rotate_session is True
-    assert error.value.details == {"requested": "off", "effective": "on"}
-    assert "session/prompt" not in peer.methods()
-
-
-@pytest.mark.asyncio
-async def test_a_normal_turn_survives_an_approval_policy_it_could_not_set(
-    monkeypatch, tmp_path
-) -> None:
-    """The other direction only costs confirmations, which are declined anyway."""
+    """It only costs confirmations, which are declined anyway."""
     peer = _Peer(known_options={"model", "reasoning_effort"})
     install(monkeypatch, peer)
 
@@ -809,7 +785,7 @@ async def test_a_permission_request_is_declined_with_the_agents_own_option_id(
     )
     install(monkeypatch, peer)
 
-    _result, events = await _run(CopilotAcpAdapter(), tmp_path, read_only=True)
+    _result, events = await _run(CopilotAcpAdapter(), tmp_path)
 
     answer = next(
         message

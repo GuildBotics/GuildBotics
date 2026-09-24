@@ -244,7 +244,7 @@ class AntigravityStreamJsonAdapter:
             if asyncio.iscoroutine(emitted):
                 await emitted
 
-        for event in _start_events(context, settings, rejected):
+        for event in _start_events(settings, rejected):
             await _publish(event)
         try:
             async with asyncio.timeout(self._timeout + _TIMEOUT_GRACE_SECONDS):
@@ -506,26 +506,12 @@ def _requested_settings(context: AgentExecutionContext) -> dict[str, Any]:
 
 
 def _start_events(
-    context: AgentExecutionContext,
     settings: dict[str, Any],
     rejected: dict[str, str],
 ) -> list[AgentEvent]:
     """The policy and settings this turn runs under, recorded before it starts."""
     return [
-        AgentEvent(
-            AgentEventKind.APPROVAL,
-            "policy",
-            approval="always-proceed",
-            details={
-                "read_only": context.read_only,
-                # `agy` offers no provider-side way to hold a turn to reads:
-                # `--mode plan` still writes under `--dangerously-skip-permissions`,
-                # `--sandbox` only confines terminal commands (its own file tools
-                # escape the workspace), and dropping the permission skip makes
-                # headless mode auto-deny every command and return nothing.
-                "read_only_enforced": False,
-            },
-        ),
+        AgentEvent(AgentEventKind.APPROVAL, "policy", approval="always-proceed"),
         AgentEvent(
             AgentEventKind.PROCESS,
             "settings",
