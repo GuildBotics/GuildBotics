@@ -700,6 +700,9 @@ async def test_codex_terminal_error_notification_uses_structured_category(
         )
     )
     while not adapter._active_turn_id:
+        # A turn that ends before starting would leave this loop spinning;
+        # reading its result raises why it ended instead.
+        assert not task.done(), task.result()
         await asyncio.sleep(0)
     process._feed(
         {

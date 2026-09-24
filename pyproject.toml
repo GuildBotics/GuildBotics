@@ -73,7 +73,10 @@ dev = [
   "types-PyYAML>=6.0",
 ]
 test = [
-  "pytest>=8.2",
+  # 9.1.0 and 9.1.1 drop a directory's conftest fixtures for files collected
+  # after it is revisited on the command line (pytest-dev/pytest#14964). Drop
+  # the exclusions once they are no longer the newest releases.
+  "pytest>=8.2,!=9.1.0,!=9.1.1",
   "pytest-asyncio>=0.23",
   "pytest-cov>=5.0",
   "pytest-xdist>=3.6",
