@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
+import tzlocal
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
@@ -18,10 +20,12 @@ from guildbotics.intelligences.agent_environment.contract import (
     SharedGrants,
     resolve_access,
 )
+from guildbotics.intelligences.agent_environment import spec as spec_module
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
     EnvironmentMount,
     guest_path,
+    host_environment,
 )
 from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec as _build_environment_spec,
@@ -53,7 +57,7 @@ def _contract(
 
 
 def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
-    tmp_path: Path,
+    tmp_path: Path, host_time_zone: str
 ) -> None:
     cwd = tmp_path / "repo"
     cwd.mkdir()
@@ -63,7 +67,7 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
     assert spec.cwd == guest_path(cwd)
     assert spec.home == guest_path(tmp_path.resolve())
     assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
-    assert spec.env == {}
+    assert spec.env == {"TZ": host_time_zone}
 
 
 def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
@@ -354,10 +358,11 @@ def test_a_read_only_contract_reaches_only_the_provider_and_the_host_ports(
     assert not spec.network.local_network
 
 
-def test_the_environment_is_exactly_what_the_caller_states(
-    tmp_path: Path, monkeypatch
+def test_the_environment_is_what_the_caller_states_and_the_host_facts(
+    tmp_path: Path, monkeypatch, host_time_zone: str
 ) -> None:
-    """The boundary is another machine: the host environment is not inherited."""
+    """The boundary is another machine: the host environment is not inherited,
+    only what the guest is told of the host."""
     monkeypatch.setenv("OPENAI_API_KEY", "not-for-the-guest")
 
     spec = build_environment_spec(
@@ -367,7 +372,71 @@ def test_the_environment_is_exactly_what_the_caller_states(
         home=tmp_path,
     )
 
-    assert spec.env == {"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+    assert spec.env == {"TZ": host_time_zone, "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+
+
+# --- host facts -----------------------------------------------------------------
+
+
+def test_the_host_time_zone_is_read_afresh_for_every_environment(
+    monkeypatch,
+) -> None:
+    """The Desktop outlives a change of zone: a later environment is told the
+    zone the host has then."""
+    zones = iter(["Asia/Tokyo", "America/Los_Angeles"])
+    monkeypatch.setattr(spec_module, "reload_localzone", lambda: None)
+    monkeypatch.setattr(spec_module, "get_localzone_name", lambda: next(zones))
+
+    assert host_environment() == {"TZ": "Asia/Tokyo"}
+    assert host_environment() == {"TZ": "America/Los_Angeles"}
+
+
+@pytest.mark.parametrize(
+    "zone", [None, "Not/A_Zone"], ids=["no name configured", "unknown name"]
+)
+def test_a_zone_without_an_iana_name_leaves_the_guest_on_utc(
+    monkeypatch, zone: str | None
+) -> None:
+    monkeypatch.setattr(spec_module, "get_localzone_name", lambda: zone)
+
+    assert host_environment() == {}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ZoneInfoNotFoundError("Nowhere Standard Time"), OSError("no registry")],
+    ids=["windows name without a mapping", "unreadable configuration"],
+)
+def test_a_zone_the_host_cannot_name_leaves_the_guest_on_utc(
+    monkeypatch, error: Exception
+) -> None:
+    def fail() -> None:
+        raise error
+
+    monkeypatch.setattr(spec_module, "reload_localzone", fail)
+
+    assert host_environment() == {}
+
+
+# The zone set here is not the one the test process started in.
+@pytest.mark.filterwarnings("ignore:Timezone offset does not match system offset")
+def test_the_host_time_zone_is_found_through_tzlocal(monkeypatch) -> None:
+    """Without the suite's fixed zone, the name comes from the host's own
+    configuration; ``TZ`` is the one every platform reads first."""
+    monkeypatch.setattr(spec_module, "reload_localzone", tzlocal.reload_localzone)
+    monkeypatch.setattr(spec_module, "get_localzone_name", tzlocal.get_localzone_name)
+    monkeypatch.setenv("TZ", "America/New_York")
+
+    assert host_environment() == {"TZ": "America/New_York"}
+
+
+def test_windows_zone_names_map_to_iana_names() -> None:
+    """Windows names its zones its own way; the guest is told the IANA name
+    tzlocal maps the registry's name to."""
+    from tzlocal.windows_tz import win_tz
+
+    assert win_tz["Tokyo Standard Time"] == "Asia/Tokyo"
+    assert win_tz["Pacific Standard Time"] == "America/Los_Angeles"
 
 
 def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
