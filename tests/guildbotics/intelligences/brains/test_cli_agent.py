@@ -507,7 +507,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
 
     assert not result.error_category
     assert result.stdout == "answer"
-    assert captured["context"].read_only is True
+    assert captured["context"].contract.read_only is True
     assert captured["context"].inspects == frozenset({"diagnostics"})
     assert captured["context"].lease_id == ""
     assert captured["context"].cwd == isolated_cwd
@@ -1069,7 +1069,7 @@ async def test_input_only_uses_slot_settings_without_lease_or_resume(
     async def run(self, *, context, configured, **kwargs):
         turns.append(context)
         assert configured == {}
-        assert context.input_only and context.read_only and not context.lease_id
+        assert context.input_only and not context.lease_id
         assert context.resume_policy is ResumePolicy.FRESH
         assert context.model == "configured-model"
         return cli_agent.CliAgentExecutionResult(
@@ -1169,6 +1169,60 @@ async def test_input_only_closes_its_adapter_without_evicting_work(
         with pytest.raises(type(failure)):
             await invocation
     adapter.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_records_what_its_environment_confines_it_to(
+    tmp_path, monkeypatch
+):
+    """Whatever provider runs it, the turn's start names its contract, so a
+    read-only turn is recorded as one without asking the adapter."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from guildbotics.intelligences.agent_runtime import diagnostics, registry
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentTerminalResult,
+        ConversationKey,
+    )
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    adapter = SimpleNamespace(
+        applied_settings=lambda _: {},
+        run_turn=AsyncMock(
+            return_value=AgentTerminalResult(
+                output="answer", events=(), provider_session_id="s"
+            )
+        ),
+    )
+
+    async def native_adapter(*_args):
+        return adapter
+
+    monkeypatch.setattr(registry, "get_native_adapter", native_adapter)
+    recorded = []
+    monkeypatch.setattr(
+        diagnostics, "record_agent_event", lambda event, *_: recorded.append(event)
+    )
+    brain = cli_agent.CliAgentBrain("aiko", "troubleshoot", _test_logger())
+    context = cli_agent.AgentExecutionContext(
+        person_id="aiko",
+        run_id="turn",
+        cwd=tmp_path,
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "grok", "troubleshooting", "c1"),
+        contract=AccessContract(read_only=True),
+    )
+
+    await brain._execute_native_turn(
+        input="why?", configured={}, context=context, adapter_name="grok", run_id="t"
+    )
+
+    started = next(event for event in recorded if event.name == "started")
+    policy = started.details["requested_policy"]
+    assert policy["read_only"] is True
+    assert policy["filesystem"]["working_directory"] == "<workspace>"
 
 
 @pytest.mark.asyncio

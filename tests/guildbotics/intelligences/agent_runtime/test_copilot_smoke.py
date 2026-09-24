@@ -15,6 +15,12 @@ import shutil
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    ResolvedAccess,
+    ResolvedGrant,
+)
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -157,25 +163,33 @@ async def test_real_copilot_prompt_then_exact_reload(tmp_path) -> None:
 
 
 async def test_real_copilot_read_only_turn_cannot_write(tmp_path) -> None:
-    """A read-only turn must be refused at the provider, not by the prompt."""
+    """A read-only turn is held by its environment, not by the prompt: Copilot
+    runs as on any turn, and a `read_write` grant is read-only all the same."""
+    granted = tmp_path / "granted"
+    granted.mkdir()
     adapter = CopilotAcpAdapter()
-    context = dataclasses.replace(_context(tmp_path), read_only=True)
+    context = dataclasses.replace(
+        _context(tmp_path),
+        contract=AccessContract(
+            access=ResolvedAccess(
+                documents=(ResolvedGrant(granted, "read_write", "granted"),)
+            ),
+            read_only=True,
+        ),
+    )
     conversation = ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
 
     try:
         result = await adapter.run_turn(
-            "Create a file named smoke.txt containing the word HELLO in the "
-            "current directory, then reply with exactly DONE.",
+            f"Create a file named {guest_path(granted)}/smoke.txt containing the "
+            "word HELLO, then reply with exactly DONE or FAILED.",
             context,
             conversation,
             events.append,
         )
         _report("read-only turn", events)
-        assert _settings(events)["allow_all"] == "off"
-        declined = [event for event in events if event.name == "decision"]
-        print("declined tool calls:", [event.details for event in declined])
-        assert declined, "a write must have been asked for and refused"
-        assert not (tmp_path / "smoke.txt").exists(), result.output
+        assert _settings(events)["allow_all"] == "on"
+        assert not (granted / "smoke.txt").exists(), result.output
     finally:
         await adapter.close()

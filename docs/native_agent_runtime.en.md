@@ -118,7 +118,8 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 - **Working directory**: the turn's `cwd` (the member's clone for ticket work,
   `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
-  read/write at the same path it has on the host. The workspace's
+  read/write at the same path it has on the host (a read-only turn gets an
+  empty read-only mount there instead). The workspace's
   `.guildbotics/config` and `state` are not part of it.
 - **Inspected workspace state**: only for a turn whose caller lets it
   inspect (`AgentExecutionContext.inspects`), parts of the workspace's own state
@@ -220,6 +221,25 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
     allow_local_network: false
   ```
 
+- **Read-only turns**: a turn that may change nothing (the Desktop's
+  troubleshooting and command-authoring assistants) says so in its contract
+  (`AccessContract.read_only`), and the environment confines it the same way
+  whatever provider runs it. Every directory bound from the host is
+  read-only, the exchange directory and `read_write` grants included, and the
+  working directory is an empty read-only mount. The workspace's `network:`
+  does not apply: only the provider's API domains and the member broker are
+  reachable. Its sessions are bound from a store of its own
+  (`agent_environment/<provider>/read-only/`), so the conversation resumes,
+  and neither the provider's shared store nor the cache turns share is bound:
+  what a read-only turn left there would be resumed or run by the next turn
+  that may write. The account files a provider needs are copied in afresh
+  every turn. A web tool the provider runs on its own servers (such as a
+  hosted web search) never passes through the environment, so it is not
+  stopped on any turn. The contract, `read_only`
+  included, is recorded on every turn's `started` event (`requested_policy`).
+  Such a turn holds no person lease, so the member broker also refuses every
+  write-capable member command.
+
 All of this is edited in Desktop under **Agent execution environment**.
 The "Directories shared by the workspace" card holds the documents; the
 "Directories on this device" card holds the paths and denies added here; both
@@ -236,7 +256,7 @@ credentials from the agent's commands and keeping provider settings from
 changing between turns. Codex runs under a permission profile that mirrors
 the environment's mounts -- the whole guest readable, every directory the
 environment bound writable or read-only exactly as it was mounted (so a
-read/write grant is read/write for Codex's commands too), the working
+read/write grant is read/write for Codex's commands too), a writable working
 directory (its `.git` included) and the temporary directories writable, the
 network on -- and hides `~/.codex`; the profile never names `/` as writable,
 because Codex 0.153 then loses `/dev/null`.
@@ -247,9 +267,9 @@ turn is root inside the microVM and Claude Code otherwise refuses that mode as
 root). Grok Build launches with
 `--sandbox off` and `--always-approve` (its Linux profiles need Landlock, which the
 environment's kernel lacks, and Grok refuses to start with a profile it cannot enforce), GitHub Copilot with
-`--no-remote-export` and `allow_all: on` (`off` on a read-only turn, where every
-request is declined), Antigravity with `--dangerously-skip-permissions`; none of
-them takes a flag from configuration. Which providers' inner sandboxes run on
+`--no-remote-export` and `allow_all: on`, Antigravity with
+`--dangerously-skip-permissions`; none of them takes a flag from configuration,
+and a read-only turn launches them the same way. Which providers' inner sandboxes run on
 the microVM's kernel is confirmed per provider as each is provisioned; Codex
 is, through the bubblewrap it bundles (a bubblewrap installed in the image is
 preferred to it and cannot exec Codex's helper, so the image ships none).
@@ -258,10 +278,7 @@ Only the provider's sessions and its account files that hold no credential
 survive a turn, bound from this device's store
 (`~/.guildbotics/data/agent_environment/<provider>/`) and shared by every
 member. The login is never in a turn (see "Logins kept outside the microVM"). The provider's settings and skills are the snapshot's and return to it
-every turn. Read-only turns are enforced by the member broker, which holds no
-person lease for them and refuses every write-capable member command; what a
-provider does with its own file tools on such a turn is recorded on the
-turn's approval event and is not a boundary.
+every turn.
 
 The effective policy and every approval decision are written as provider-neutral
 diagnostics events. Invalid types, removed keys, and unknown values fail

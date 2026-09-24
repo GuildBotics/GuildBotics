@@ -1198,7 +1198,7 @@ async def test_every_turn_runs_the_workspace_sandbox(monkeypatch, tmp_path) -> N
     peer = _Peer()
     launched = install(monkeypatch, peer)
 
-    await _run(GrokAcpAdapter(), tmp_path, read_only=True)
+    await _run(GrokAcpAdapter(), tmp_path)
 
     # The environment is the boundary; Grok's Landlock profiles cannot run there.
     assert launched[0][0][2:4] == ("--sandbox", "off")

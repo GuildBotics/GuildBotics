@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -206,22 +207,24 @@ def test_agent_runtime_has_one_subprocess_creation_boundary() -> None:
     }
 
 
-@pytest.mark.asyncio
-async def test_input_only_environment_does_not_mount_the_workspace(
-    tmp_path, monkeypatch
-):
-    """A turn that evaluates input sees the input only: no workspace, none of
-    the provider's store, closed egress."""
+def test_no_adapter_decides_what_a_read_only_turn_may_do() -> None:
+    """A read-only turn is held by its environment, the same for every
+    provider; an adapter that narrowed it for its own provider would make the
+    guarantee differ between providers again."""
+    runtime_dir = Path(environment.__file__).parent
+    deciding = [
+        path.name
+        for path in runtime_dir.glob("*.py")
+        if path.name != "environment.py"
+        and re.search(r"\.read_only\b", path.read_text(encoding="utf-8"))
+    ]
+
+    assert deciding == []
+
+
+async def _claude_turn_spec(tmp_path, monkeypatch, context):
+    """The spec a Claude Code turn run in ``context`` boots with."""
     from guildbotics.intelligences.agent_environment import provider_state
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
-    from guildbotics.intelligences.agent_environment.spec import (
-        EnvironmentMount,
-        guest_path,
-    )
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentExecutionContext,
-        ConversationKey,
-    )
 
     tool = environment.cli_agent_info("claude")
     where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
@@ -241,6 +244,29 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         return Booted(spec, before_stop)
 
     monkeypatch.setattr(environment, "_start", start)
+    booted = await environment.start_turn_environment(
+        context, "claude", host_ports=(1234,), env={}
+    )
+    await booted.before_stop(booted)
+    return booted.spec
+
+
+@pytest.mark.asyncio
+async def test_input_only_environment_does_not_mount_the_workspace(
+    tmp_path, monkeypatch
+):
+    """A turn that evaluates input sees the input only: no workspace, none of
+    the provider's store, closed egress."""
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
     context = AgentExecutionContext(
         person_id="aiko",
         run_id="judge",
@@ -250,17 +276,57 @@ async def test_input_only_environment_does_not_mount_the_workspace(
         conversation_key=ConversationKey("aiko", "claude", "manual", "judge"),
         contract=AccessContract(input_only=True),
     )
-    booted = await environment.start_turn_environment(
-        context, "claude", host_ports=(1234,), env={}
+
+    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+
+    assert spec.mounts == (EnvironmentMount(guest_path(context.cwd), None, True),)
+    assert not spec.network.unrestricted and not spec.network.local_network
+    assert spec.network.domains == ()
+    assert spec.network.host_ports[0] == 1234
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
+    tmp_path, monkeypatch
+):
+    """Only the read-only turns' own sessions stay writable: nothing of the
+    store or cache other turns share is bound, so nothing a read-only turn
+    wrote is resumed or run by a later one."""
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.agent_environment.contract import (
+        AccessContract,
+        NetworkPolicy,
     )
-    try:
-        spec = booted.spec
-        assert spec.mounts == (EnvironmentMount(guest_path(context.cwd), None, True),)
-        assert not spec.network.unrestricted and not spec.network.local_network
-        assert spec.network.domains == ()
-        assert spec.network.host_ports[0] == 1234
-    finally:
-        await booted.before_stop(booted)
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
+    monkeypatch.setattr(
+        provider_state,
+        "get_machine_state_path",
+        lambda *parts: tmp_path.joinpath("machine", *parts),
+    )
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="investigate",
+        cwd=tmp_path / "work",
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
+        contract=AccessContract(
+            network=NetworkPolicy(mode="unrestricted"), read_only=True
+        ),
+    )
+
+    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+
+    writable = {mount.host for mount in spec.mounts if not mount.readonly}
+    assert writable == {
+        provider_state.read_only_state_dir(environment.cli_agent_info("claude"))
+        / "projects"
+    }
+    assert not spec.network.unrestricted
 
 
 @pytest.mark.asyncio
@@ -273,7 +339,6 @@ async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
     """The recorded runs and the configuration are mounted read-only only for
     a turn whose caller lets it inspect them, and the leases beside the runs
     stay covered: a delegation is a grant, not a record."""
-    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
         guest_path,
@@ -284,24 +349,6 @@ async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
     )
     from guildbotics.utils.fileio import get_template_path
 
-    tool = environment.cli_agent_info("claude")
-    where = environment.LoginEnvironment(tmp_path / "snapshot", 1024, 1, ("1.1.1.1",))
-    monkeypatch.setattr(environment, "_ready", lambda _: (tool, where))
-    sealed = {tool.provision.auth: json.dumps(_LOGINS["claude"]).encode()}
-    monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
-
-    class Booted:
-        def __init__(self, spec, before_stop):
-            self.spec = spec
-            self.before_stop = before_stop
-
-        async def write_file(self, path, data):
-            pass
-
-    async def start(spec, at, *, before_stop):
-        return Booted(spec, before_stop)
-
-    monkeypatch.setattr(environment, "_start", start)
     state = tmp_path / ".guildbotics"
     run = state / "local" / "run"
     # No lease taken yet: the cover must still be there for one taken later.
@@ -314,35 +361,26 @@ async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
-        read_only=True,
         inspects=inspects,
     )
-    booted = await environment.start_turn_environment(
-        context, "claude", host_ports=(1234,), env={}
-    )
-    try:
-        mounts = set(booted.spec.mounts)
-        expected = {
-            EnvironmentMount(guest_path(run), run, True),
-            EnvironmentMount(guest_path(run / "person-leases"), None, True),
-            EnvironmentMount(guest_path(state / "config"), state / "config", True),
-            EnvironmentMount(
-                guest_path(get_template_path()), get_template_path(), True
-            ),
-        }
-        if inspects:
-            assert expected <= mounts
-            # The cover is applied over the run directory, so it comes after it.
-            order = list(booted.spec.mounts)
-            assert order.index(
-                EnvironmentMount(guest_path(run), run, True)
-            ) < order.index(
-                EnvironmentMount(guest_path(run / "person-leases"), None, True)
-            )
-        else:
-            assert not expected & mounts
-    finally:
-        await booted.before_stop(booted)
+    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+
+    mounts = set(spec.mounts)
+    expected = {
+        EnvironmentMount(guest_path(run), run, True),
+        EnvironmentMount(guest_path(run / "person-leases"), None, True),
+        EnvironmentMount(guest_path(state / "config"), state / "config", True),
+        EnvironmentMount(guest_path(get_template_path()), get_template_path(), True),
+    }
+    if inspects:
+        assert expected <= mounts
+        # The cover is applied over the run directory, so it comes after it.
+        order = list(spec.mounts)
+        assert order.index(EnvironmentMount(guest_path(run), run, True)) < order.index(
+            EnvironmentMount(guest_path(run / "person-leases"), None, True)
+        )
+    else:
+        assert not expected & mounts
 
 
 def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):

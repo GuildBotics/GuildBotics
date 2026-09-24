@@ -16,6 +16,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from guildbotics.capabilities.task_runs import TASK_RUN_ENV
+from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
@@ -48,7 +49,7 @@ def _context(tmp_path: Path, *, read_only: bool = False) -> AgentExecutionContex
         conversation_key=ConversationKey("aiko", "grok", "ticket", "issue-1"),
         lease_id="lease-1" if not read_only else "",
         delegation_id="delegation-1" if not read_only else "",
-        read_only=read_only,
+        contract=AccessContract(read_only=read_only),
     )
 
 

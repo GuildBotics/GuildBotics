@@ -827,6 +827,7 @@ class CliAgentBrain(Brain):
                         access=resolve_access(
                             load_shared_grants(), load_local_grants()
                         ),
+                        read_only=read_only,
                     )
                 )
             except (AccessContractError, ToolchainError, PermissionError) as exc:
@@ -872,7 +873,6 @@ class CliAgentBrain(Brain):
                 attempt=_attempt(configured),
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
-                read_only=read_only,
                 inspects=frozenset(configured.get("inspects") or ()),
                 contract=contract,
             )
@@ -969,7 +969,14 @@ class CliAgentBrain(Brain):
                     AgentEventKind.TURN,
                     "started",
                     provider_session_id=conversation.provider_session_id,
-                    details={"work_kind": context.conversation_key.work_kind},
+                    details={
+                        "work_kind": context.conversation_key.work_kind,
+                        # What the environment confines the turn to, whatever
+                        # provider runs it.
+                        "requested_policy": context.contract.requested_policy(
+                            context.cwd, workspace_root=context.workspace_data_root
+                        ),
+                    },
                 )
             )
             try:

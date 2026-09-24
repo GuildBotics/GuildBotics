@@ -87,9 +87,9 @@ def open_assistant_session[TResult: BaseModel](
         result_type: Structured response type the agent must return.
         workspace_data_root: Selected GuildBotics workspace root.
         cwd_name: Directory under ``.guildbotics/local/work`` the agent runs in.
-        read_only: Whether the agent may only inspect recorded state. Adapters
-            enforce this at the provider level, and such a turn takes no member
-            execution lease.
+        read_only: Whether the agent may change nothing. Its environment
+            enforces this whatever provider runs it, and such a turn takes no
+            member execution lease.
         inspects: The workspace's own state the agent may read, mounted
             read-only into its environment.
 

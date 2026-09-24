@@ -121,17 +121,14 @@ class AgentExecutionContext:
     #: spawns records into it, so what the agent read or changed shows up on
     #: the execution that asked for it.
     trace_id: str = ""
-    # A read-only turn only inspects recorded state, so it holds no execution
-    # lease and may run while the member is busy. It is not a weaker
-    # confinement: every turn reads untrusted material, and every turn runs
-    # under the same ``contract``.
-    read_only: bool = False
     #: The workspace's own state the caller lets the turn inspect, mounted
     #: read-only beside the contract's grants. What a turn needs to read is
-    #: its work's business and independent of ``read_only``, which is about
-    #: what it may change.
+    #: its work's business and independent of whether its contract lets it
+    #: change anything.
     inspects: frozenset[InspectionScope] = frozenset()
-    #: What the turn may reach beyond ``cwd``.
+    #: What the turn may reach beyond ``cwd``. A read-only contract is what
+    #: lets a turn hold no execution lease and run while the member is busy:
+    #: the environment, not the provider, keeps it from changing anything.
     contract: AccessContract = field(default_factory=AccessContract)
     login: TurnLogin = field(default_factory=TurnLogin)
 

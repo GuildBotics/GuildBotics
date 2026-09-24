@@ -15,6 +15,13 @@ import shutil
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    NetworkPolicy,
+    ResolvedAccess,
+    ResolvedGrant,
+)
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.antigravity import (
     AntigravityStreamJsonAdapter,
 )
@@ -150,35 +157,46 @@ async def test_real_antigravity_reaches_the_working_directory(tmp_path) -> None:
         await adapter.close()
 
 
-async def test_real_antigravity_read_only_turn_is_recorded_as_unenforced(
+async def test_real_antigravity_read_only_turn_cannot_write_or_reach_out(
     tmp_path,
 ) -> None:
-    """`agy` has no provider-side read-only mode; the gap must stay visible.
+    """`agy` has no read-only mode of its own; its environment holds the turn.
 
-    ``--mode plan`` still writes under ``--dangerously-skip-permissions``,
-    ``--sandbox`` only confines terminal commands (its own file tools reach
-    outside the workspace), and dropping the permission skip makes headless mode
-    auto-deny every command and return an empty response. Until ``agy`` grows a
-    real one, this pins the honest record rather than a false guarantee.
+    ``--mode plan`` still writes under ``--dangerously-skip-permissions`` and
+    ``--sandbox`` only confines terminal commands, so what keeps a read-only
+    turn from a ``read_write`` grant and from a domain the workspace allows is
+    the environment's read-only mounts and closed egress.
     """
+    granted = tmp_path / "granted"
+    granted.mkdir()
     adapter = AntigravityStreamJsonAdapter()
-    context = dataclasses.replace(_context(tmp_path), read_only=True)
+    context = dataclasses.replace(
+        _context(tmp_path),
+        contract=AccessContract(
+            network=NetworkPolicy(mode="allowlist", allowed_domains=["example.com"]),
+            access=ResolvedAccess(
+                documents=(ResolvedGrant(granted, "read_write", "granted"),)
+            ),
+            read_only=True,
+        ),
+    )
     conversation = ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
 
     try:
         result = await adapter.run_turn(
-            "Reply with the single word READONLY and nothing else.",
+            "Run these two shell commands and do not work around a failure: "
+            f"`touch {guest_path(granted)}/smoke.txt` and "
+            "`curl -sS -o /dev/null -w '%{http_code}' https://example.com`. "
+            "Reply with exactly two lines: `WRITE=<ok or failed>` and "
+            "`HTTP=<the status code curl printed, or failed>`.",
             context,
             conversation,
             events.append,
         )
         _report("read-only turn", events)
-        assert _named(events, "policy") == {
-            "read_only": True,
-            "read_only_enforced": False,
-        }
-        assert result.output.strip() == "READONLY", result.output
+        assert not (granted / "smoke.txt").exists(), result.output
+        assert "HTTP=200" not in result.output, result.output
     finally:
         await adapter.close()
 

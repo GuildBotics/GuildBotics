@@ -425,6 +425,24 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
         ],
     }
     assert policy["network"] == _CLOSED
+    assert policy["read_only"] is False
+
+
+def test_the_requested_policy_records_what_a_read_only_turn_reaches(
+    tmp_path: Path,
+) -> None:
+    """The declared network is recorded as the turn reaches it: not at all."""
+    allowlist = NetworkPolicy(mode="allowlist", allowed_domains=["github.com"])
+
+    policy = AccessContract(network=allowlist, read_only=True).requested_policy(
+        tmp_path, home=tmp_path
+    )
+
+    assert policy["read_only"] is True
+    assert policy["network"] == _CLOSED
+    assert AccessContract(network=allowlist).requested_policy(tmp_path, home=tmp_path)[
+        "network"
+    ] == allowlist.model_dump(mode="json")
 
 
 def test_grant_spelling_is_how_the_grant_file_names_a_path() -> None:

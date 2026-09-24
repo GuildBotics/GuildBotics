@@ -1194,3 +1194,24 @@ def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() 
         ":slash_tmp": "write",
         "/home/u/.codex": "deny",
     }
+
+
+def test_a_read_only_working_directory_is_not_a_workspace_root() -> None:
+    """Codex makes directories inside every workspace root and cannot start a
+    session on one mounted read-only (measured on 0.153.4: bwrap cannot
+    mkdir `.codex`), so the profile mirrors that mount as read, and no more."""
+    spec = AgentEnvironmentSpec(
+        cwd="/work/assist",
+        home="/home/u",
+        mounts=(EnvironmentMount("/work/assist", None, readonly=True),),
+        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        env={},
+    )
+
+    assert _sandbox_overrides(spec)["permissions.guildbotics.filesystem"] == {
+        "/": "read",
+        "/work/assist": "read",
+        ":tmpdir": "write",
+        ":slash_tmp": "write",
+        "/home/u/.codex": "deny",
+    }
