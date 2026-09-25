@@ -32,7 +32,7 @@ def test_windows_default_basetemp_is_short_and_removed(
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     config = _config()
 
-    root_conftest.pytest_configure(config)
+    root_conftest._configure_windows_basetemp(config)
     basetemp = Path(config.option.basetemp)
     try:
         assert basetemp.parent == tmp_path / "tmp"
@@ -77,7 +77,7 @@ def test_explicit_basetemp_is_preserved(
     basetemp.mkdir()
     config = _config(str(basetemp), worker=worker)
 
-    root_conftest.pytest_configure(config)
+    root_conftest._configure_windows_basetemp(config)
     root_conftest.pytest_unconfigure(config)
 
     assert config.option.basetemp == str(basetemp)
@@ -92,7 +92,7 @@ def test_worker_does_not_create_a_second_basetemp(
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     config = _config(worker=True)
 
-    root_conftest.pytest_configure(config)
+    root_conftest._configure_windows_basetemp(config)
     root_conftest.pytest_unconfigure(config)
 
     assert config.option.basetemp is None

@@ -49,9 +49,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_configure(config: pytest.Config) -> None:
-    global _PHASE_DURATION_OUTPUT
+def _configure_windows_basetemp(config: pytest.Config) -> None:
     if hasattr(config, "workerinput"):
         return
     if sys.platform == "win32" and config.option.basetemp is None:
@@ -61,6 +59,14 @@ def pytest_configure(config: pytest.Config) -> None:
         basetemp = Path(tempfile.mkdtemp(prefix="gb-", dir=root))
         config.option.basetemp = str(basetemp)
         config.stash[_WINDOWS_BASETEMP] = basetemp
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config: pytest.Config) -> None:
+    global _PHASE_DURATION_OUTPUT
+    if hasattr(config, "workerinput"):
+        return
+    _configure_windows_basetemp(config)
     value = config.getoption("phase_durations_json")
     _PHASE_DURATION_OUTPUT = Path(value) if value else None
     _PHASE_DURATIONS.clear()
