@@ -911,8 +911,8 @@ a monorepo on purpose.
   copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
   afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on
   Windows). While a process still runs from an older build the switch waits for the next
-  launch, and an old build is removed only after the switch and once nothing runs from
-  it: the CLI holds a shared lock on its executable (the PyInstaller runtime hook
+  launch, and an old build is removed only on a launch after the switch, once nothing
+  runs from it (a program just started through `bin` may not hold its lock yet): the CLI holds a shared lock on its executable (the PyInstaller runtime hook
   `desktop/sidecar/hold_program_lock.py`), and on Windows a running executable cannot be
   opened for writing. A one-file build unpacks everything on every start, which cost
   seconds per CLI call. The

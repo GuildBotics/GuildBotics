@@ -344,8 +344,8 @@ fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
 /// Each build is its own directory, `root/programs/<build id>`, which appears
 /// complete (it is copied under another name first) and is never modified, and
 /// `bin` is a link to one of them. `bin` moves only once the new link exists,
-/// and an old build is removed only after that, so there is always a working
-/// CLI: an interrupted step is simply run again on the next launch.
+/// and the build it pointed at is removed on a later launch, so there is always
+/// a working CLI: an interrupted step is simply run again on the next launch.
 ///
 /// A build still in use is never taken away. While a program runs from an old
 /// build, `bin` keeps pointing at it until a later launch, since on Windows a
@@ -363,35 +363,31 @@ fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
         copy_dir(source, &staging)?;
         fs::rename(&staging, &current)?;
     }
-    let mut unused = Vec::new();
-    let mut in_use = false;
+    let mut older = Vec::new();
     for entry in fs::read_dir(&programs)? {
         let program = entry?.path();
-        if program == current {
-            continue;
-        }
-        if is_running(&program) {
-            in_use = true;
-        } else {
-            unused.push(program);
+        if program != current {
+            older.push(program);
         }
     }
     let bin = root.join("bin");
-    if fs::read_link(&bin)
-        .ok()
-        .as_deref()
-        .and_then(Path::file_name)
-        != current.file_name()
-    {
-        if in_use {
+    let linked = fs::read_link(&bin).ok();
+    let linked = linked.as_deref().and_then(Path::file_name);
+    if linked != current.file_name() {
+        if older.iter().any(|program| is_running(program)) {
             eprintln!("GuildBotics CLI update deferred: a program runs from an older build");
             return Ok(());
         }
         point_link(&bin, &current)?;
     }
-    for program in unused {
-        // Retried on the next launch if something still holds a file.
-        let _ = fs::remove_dir_all(program);
+    for program in older {
+        // What `bin` pointed at until now may have just been started through
+        // it and not yet hold its lock; it goes on a later launch, which no
+        // new program reaches it by.
+        if program.file_name() != linked && !is_running(&program) {
+            // Retried on the next launch if something still holds a file.
+            let _ = fs::remove_dir_all(program);
+        }
     }
     Ok(())
 }
@@ -1060,7 +1056,8 @@ mod tests {
     }
 
     #[test]
-    fn install_programs_points_bin_at_each_new_build_and_drops_the_old_one() -> io::Result<()> {
+    fn install_programs_points_bin_at_each_new_build_and_drops_the_old_one_later() -> io::Result<()>
+    {
         let temp_dir = TestDir::new()?;
         let source = temp_dir.path().join("resources");
         let root = temp_dir.path().join("home");
@@ -1082,7 +1079,14 @@ mod tests {
         install_programs(&source, &root)?;
         assert_eq!(fs::read_to_string(&data)?, "untouched");
 
+        // What `bin` pointed at may just have been started through it, and
+        // stays until a later launch.
         write_build(&source, "build-2")?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-2".into(), vec!["build-1".into(), "build-2".into()])
+        );
         install_programs(&source, &root)?;
         assert_eq!(
             installed(&root)?,
@@ -1130,7 +1134,7 @@ mod tests {
         install_programs(&source, &root)?;
         assert_eq!(
             installed(&root)?,
-            ("build-2".into(), vec!["build-2".into()])
+            ("build-2".into(), vec!["build-1".into(), "build-2".into()])
         );
         Ok(())
     }
@@ -1235,6 +1239,7 @@ mod tests {
             write_build(&source, "build-2")?;
             arrange(&root)?;
 
+            install_programs(&source, &root)?;
             install_programs(&source, &root)?;
 
             assert_eq!(
