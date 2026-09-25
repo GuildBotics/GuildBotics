@@ -3,6 +3,7 @@ refreshed and asked about only where it is held in memory."""
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import datetime as dt
@@ -762,7 +763,8 @@ def _codex_tokens(data: bytes) -> dict[str, Any]:
 def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
     machine: Path,
 ) -> None:
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
+    sealed = _codex_login()
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
     lent = LentLogin(CODEX, WHERE)
 
     ((name, data),) = lent.stand_in_files().items()
@@ -796,7 +798,7 @@ def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
             "chatgpt_account_id": "account-459",
         },
     }
-    real = _codex_tokens(_codex_login())
+    real = _codex_tokens(sealed)
     for secret_value in (
         real["access_token"],
         real["id_token"],
@@ -816,7 +818,8 @@ async def test_a_login_read_from_its_jwts_expires_when_its_access_token_does(
 ) -> None:
     """The refresh is handed the access token claiming an expiry that has
     passed -- everything else of the token and the login as it was."""
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login(expires_in=60)})
+    sealed = _codex_login(expires_in=60)
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
     given: list[dict[str, Any]] = []
 
     def act(files: dict[str, bytes], root: str) -> None:
@@ -826,7 +829,7 @@ async def test_a_login_read_from_its_jwts_expires_when_its_access_token_does(
 
     _Environment.act = staticmethod(act)
     lent = LentLogin(CODEX, WHERE)
-    stale = _codex_tokens(_codex_login(expires_in=60))
+    stale = _codex_tokens(sealed)
 
     token = await lent.access_token(None)
 
@@ -1066,8 +1069,9 @@ def test_what_comes_from_where_a_login_is_held_is_told_with_it_masked(
 
 def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
     """A tool may print a token's claims without the rest of it."""
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
-    token = _codex_tokens(_codex_login())["access_token"]
+    sealed = _codex_login()
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
+    token = _codex_tokens(sealed)["access_token"]
     _header, claims, _signature = token.split(".")
 
     assert claims not in provider_state.masked(CODEX, f"claims: {claims}")
@@ -1076,3 +1080,207 @@ def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
 def test_what_cannot_be_masked_is_not_told(machine: Path) -> None:
     """Without the login to mask it by, nothing of what was said is kept."""
     assert "REAL-459" not in provider_state.masked(CLAUDE, "failed: REAL-459")
+
+
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _reads_the_clock(function: ast.AST) -> bool:
+    """True when the function itself calls ``time.time``.
+
+    That call is what makes two builds of the same helper differ across a
+    second. Nested functions count, so a builder that hides the call still
+    joins the population.
+    """
+    return any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "time"
+        and node.attr == "time"
+        for node in ast.walk(function)
+    )
+
+
+def _clock_reading_helpers(tree: ast.AST) -> frozenset[str]:
+    """Module-level helpers whose bytes depend on ``time.time``.
+
+    The population is the clock read, not a provider name. ``_github_login``
+    stays out because it does not read the clock. Test functions stay out
+    because a ``time.time`` in an assertion is not a login being built.
+    """
+    return frozenset(
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and not node.name.startswith("test_")
+        and _reads_the_clock(node)
+    )
+
+
+def _is_login_call(node: ast.AST, helpers: frozenset[str]) -> bool:
+    return isinstance(node, ast.Call) and _call_name(node.func) in helpers
+
+
+def _local_nodes(function: ast.AST):
+    """Nodes of one function, excluding anything nested in another function."""
+    pending = list(getattr(function, "body", []))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _login_in(expression: ast.AST, helpers: frozenset[str]) -> ast.Call | None:
+    calls = [node for node in ast.walk(expression) if _is_login_call(node, helpers)]
+    if len(calls) == 1:
+        return calls[0]
+    return None
+
+
+def _bind_login_names(
+    target: ast.expr,
+    value: ast.expr,
+    bound: dict[str, ast.Call],
+    helpers: frozenset[str],
+) -> None:
+    """Bind names to the one login call that initializes them.
+
+    A bare name uses the whole value. A tuple pairs each element with the
+    value in the same position, so ``sealed, other = helper(), helper()``
+    keeps both calls. Leaving the names unbound drops the function out of
+    the population (the guard passes without looking).
+    """
+    if isinstance(target, ast.Name):
+        call = _login_in(value, helpers)
+        if call is not None:
+            bound[target.id] = call
+        return
+    if not isinstance(target, ast.Tuple | ast.List):
+        return
+    if not isinstance(value, ast.Tuple | ast.List):
+        return
+    if len(target.elts) != len(value.elts):
+        return
+    if any(isinstance(elt, ast.Starred) for elt in (*target.elts, *value.elts)):
+        return
+    for elt, piece in zip(target.elts, value.elts, strict=True):
+        _bind_login_names(elt, piece, bound, helpers)
+
+
+def _login_bound_here(
+    function: ast.AST, helpers: frozenset[str]
+) -> dict[str, ast.Call]:
+    """Names assigned in this function from an expression with one login call.
+
+    The walk is ``_local_nodes``, the same one that finds ``_seal_login`` and
+    comparisons. Stopping at the function's top-level statements left a name
+    assigned inside ``if`` / ``for`` / ``with`` unresolved, and the function
+    then dropped out of the population.
+    """
+    bound: dict[str, ast.Call] = {}
+    assignments = [
+        node
+        for node in _local_nodes(function)
+        if isinstance(node, ast.Assign | ast.AnnAssign)
+    ]
+    for statement in sorted(
+        assignments, key=lambda node: (node.lineno, node.col_offset)
+    ):
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                _bind_login_names(target, statement.value, bound, helpers)
+        elif statement.value is not None:
+            _bind_login_names(statement.target, statement.value, bound, helpers)
+    return bound
+
+
+def _login_call(
+    node: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> ast.Call | None:
+    if _is_login_call(node, helpers):
+        return node
+    if isinstance(node, ast.Name):
+        return bound.get(node.id)
+    return None
+
+
+def _calls_under(
+    expression: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
+    return {
+        id(call)
+        for node in ast.walk(expression)
+        if (call := _login_call(node, bound, helpers)) is not None
+    }
+
+
+def _sealed_logins(
+    function: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
+    sealed: set[int] = set()
+    for node in _local_nodes(function):
+        if isinstance(node, ast.Call) and _call_name(node.func) == "_seal_login":
+            sealed.update(_calls_under(node, bound, helpers))
+    return sealed
+
+
+def _expected_logins(
+    function: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
+    """Logins a test treats as the value it sealed: token reads and compares.
+
+    ``_codex_tokens`` is named because the compared value is a piece of the
+    JWT, so the login call is not itself in the comparison. Other providers
+    compare a name bound to the call, which the comparison walk already sees.
+    """
+    expected: set[int] = set()
+    for node in _local_nodes(function):
+        if isinstance(node, ast.Call) and _call_name(node.func) == "_codex_tokens":
+            for arg in node.args:
+                expected.update(_calls_under(arg, bound, helpers))
+        elif isinstance(node, ast.Compare):
+            expected.update(_calls_under(node.left, bound, helpers))
+            for comparator in node.comparators:
+                expected.update(_calls_under(comparator, bound, helpers))
+    return expected
+
+
+def _logins_compared_apart_from_the_one_sealed() -> list[str]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    helpers = _clock_reading_helpers(tree)
+    apart: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        bound = _login_bound_here(node, helpers)
+        sealed = _sealed_logins(node, bound, helpers)
+        if not sealed:
+            continue
+        stray = _expected_logins(node, bound, helpers) - sealed
+        if stray:
+            apart.append(f"{node.name}:{node.lineno}")
+    return sorted(apart)
+
+
+def test_a_login_is_compared_with_the_one_that_was_sealed() -> None:
+    """A helper that reads ``time.time`` can fall on either side of a second.
+
+    The bytes that are sealed and the bytes a test treats as what was sealed
+    have to be the same call. A second call used as the expected value is the
+    flake, and the same shape on the ``not in`` side is the check that passes
+    without looking at the login that was sealed. Which helpers those are is
+    derived from the clock read. An empty derivation would pass every test
+    without looking, so it fails here.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    helpers = _clock_reading_helpers(tree)
+    assert helpers, "clock-reading helpers were not derived; the guard would pass open"
+    apart = _logins_compared_apart_from_the_one_sealed()
+    assert not apart, apart
