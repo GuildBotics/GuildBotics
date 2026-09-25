@@ -18,6 +18,9 @@ from guildbotics.utils.workspace_state import (
 )
 
 FormatChoice = click.Choice(["json", "markdown"])
+#: Every GuildBotics command group's context settings: the member group can be
+#: run on its own, without the root CLI it would otherwise inherit them from.
+CLI_CONTEXT_SETTINGS = {"show_default": True}
 
 
 class SharedWriteBusyGroup(click.Group):

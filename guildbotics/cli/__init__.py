@@ -13,7 +13,7 @@ from pathlib import Path
 
 import click
 
-from guildbotics.cli._options import SharedWriteBusyGroup
+from guildbotics.cli._options import CLI_CONTEXT_SETTINGS, SharedWriteBusyGroup
 from guildbotics.cli.desktop_commands import run_on_desktop
 from guildbotics.cli.diagnostics import diagnostics
 from guildbotics.cli.environment import environment
@@ -117,7 +117,7 @@ def _configure_windows_standard_streams() -> None:
             reconfigure(encoding="utf-8")
 
 
-@click.group(cls=SharedWriteBusyGroup, context_settings={"show_default": True})
+@click.group(cls=SharedWriteBusyGroup, context_settings=CLI_CONTEXT_SETTINGS)
 @click.version_option(
     version=_resolve_version(),
     prog_name="guildbotics",

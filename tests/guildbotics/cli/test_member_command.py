@@ -1186,14 +1186,13 @@ def test_content_file_must_exist(tmp_path):
     def command():
         pass
 
-    missing = tmp_path / "missing.txt"
-    result = CliRunner().invoke(command, ["--content-file", str(missing)])
+    result = CliRunner().invoke(
+        command,
+        ["--content-file", str(tmp_path / "missing.txt")],
+    )
 
     assert result.exit_code != 0
-    prefix = member_module.t(
-        "cli.member.content.file_read_failed", path=missing, error=""
-    )
-    assert prefix in result.output
+    assert "does not exist" in result.output
 
 
 def test_content_file_must_be_utf8(tmp_path):

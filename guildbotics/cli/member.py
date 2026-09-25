@@ -53,6 +53,7 @@ from guildbotics.capabilities.task_runs import (
     current_task_run_id,
 )
 from guildbotics.cli._options import (
+    CLI_CONTEXT_SETTINGS,
     SharedWriteBusyGroup,
     apply_workspace_option,
     format_option,
@@ -164,8 +165,7 @@ def _content_option(
 
         with_file = click.option(
             "--content-file",
-            type=click.Path(path_type=Path),
-            callback=_host_path,
+            type=_HostPath(exists=True, dir_okay=False, readable=True),
             help=t("cli.member.content.file_help"),
         )(wrapped)
         return click.option(
@@ -207,11 +207,16 @@ def _call(ctx: click.Context | None = None) -> MemberCall:
     return found or MemberCall()
 
 
-def _host_path(
-    ctx: click.Context, _param: click.Parameter, value: Path | None
-) -> Path | None:
-    """Read a relative path option from the command's working directory."""
-    return None if value is None else _call(ctx).cwd / value
+class _HostPath(click.Path):
+    """A path read from the command's working directory, then checked as usual."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(path_type=Path, **kwargs)
+
+    def convert(
+        self, value: Any, param: click.Parameter | None, ctx: click.Context | None
+    ) -> Any:
+        return super().convert(_call(ctx).cwd / value, param, ctx)
 
 
 def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -240,7 +245,7 @@ class _MemberGroup(SharedWriteBusyGroup):
         return _help_to_call(super().get_help_option(ctx))
 
 
-@click.group(cls=_MemberGroup)
+@click.group(cls=_MemberGroup, context_settings=CLI_CONTEXT_SETTINGS)
 @click.pass_context
 @workspace_option
 def member(ctx: click.Context, workspace_dir: Path | None) -> None:
@@ -1392,8 +1397,7 @@ async def _git_prepare(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
-    callback=_host_path,
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1447,8 +1451,7 @@ async def _git_commit(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
-    callback=_host_path,
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_workspace_mode_option
@@ -1493,8 +1496,7 @@ async def _git_push(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
-    callback=_host_path,
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -2060,9 +2062,8 @@ def artifact() -> None:
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
     "--dest",
-    type=click.Path(path_type=Path),
+    type=_HostPath(file_okay=False),
     default=Path("."),
-    callback=_host_path,
     help=(
         "Directory to extract into. Defaults to the current directory. Remove "
         "downloaded files after inspection when this is inside a repository."

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +39,67 @@ def test_help_of_a_command_goes_to_the_command(capsys) -> None:
     assert stdout.startswith("Usage: guildbotics member git commit [OPTIONS]")
     assert stderr == ""
     assert capsys.readouterr() == ("", "")
+
+
+def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
+    """The member group runs without the root CLI whose settings it would
+    otherwise inherit, such as showing each option's default."""
+    from click.testing import CliRunner
+
+    from guildbotics.cli import main
+
+    monkeypatch.setattr(main, "callback", None)
+    arguments = ["github", "pr", "checks", "--help"]
+    through_cli = CliRunner().invoke(
+        main, ["member", *arguments], prog_name="guildbotics"
+    )
+
+    exit_code, stdout, _stderr = _run(arguments)
+
+    assert exit_code == 0
+    assert "[default: markdown]" in stdout
+    # CliRunner forces its own width, so the text wraps differently; compare
+    # what the settings decide instead.
+    defaults = re.compile(r"\[default: [^\]]+\]")
+    assert defaults.findall(stdout) == defaults.findall(through_cli.output)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--dest", "a-file"], "is a file"),
+        (["--dest", "missing-dir"], None),
+    ],
+)
+def test_path_checks_read_from_the_commands_directory(
+    monkeypatch, tmp_path, arguments, message
+) -> None:
+    """Path options keep their checks, made against the command's directory
+    rather than the process's."""
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    seen: list[Path] = []
+
+    async def github(person, operation):
+        return operation(
+            SimpleNamespace(
+                artifact_download=lambda _u, _n, d: seen.append(d) or {"dest": str(d)}
+            )
+        )
+
+    monkeypatch.setattr(member_module, "_github", github)
+    command = ["github", "run", "artifact", "download", "--person", "aiko"]
+    command += ["--url", "https://example.test/pr/1", "--name", "logs", *arguments]
+
+    exit_code, _stdout, stderr = _run(
+        command, MemberInvocation(task_run_id="run-1"), cwd=tmp_path
+    )
+
+    if message:
+        assert exit_code == 2
+        assert message in stderr
+        assert seen == []
+    else:
+        assert (exit_code, seen) == (0, [tmp_path / "missing-dir"])
 
 
 def test_a_usage_error_is_reported_the_way_the_cli_reports_it(capsys) -> None:
