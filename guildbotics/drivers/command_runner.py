@@ -100,12 +100,15 @@ class CommandRunner:
         ):
             from guildbotics.drivers.agent_turn import run_agent_turn
 
-            async def _invoke_turn(turn_context: dict[str, Any]) -> Any:
+            async def _invoke_turn(
+                turn_context: dict[str, Any], parameters: dict[str, str]
+            ) -> Any:
                 return await self._invoke_once(
                     name,
                     args,
                     {
                         **kwargs,
+                        **parameters,
                         "agent_execution_context": turn_context,
                     },
                     cwd,

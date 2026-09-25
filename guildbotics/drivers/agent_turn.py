@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,7 @@ class AgentTurnResult:
 
 async def run_agent_turn(
     *,
-    invoke: Callable[[dict[str, Any]], Awaitable[Any]],
+    invoke: Callable[[dict[str, Any], dict[str, str]], Awaitable[Any]],
     execution_context: Mapping[str, Any],
 ) -> AgentTurnResult:
     """Drive one logical workflow turn until it records completion.
@@ -40,6 +41,13 @@ async def run_agent_turn(
     than accepting a workflow-owned callback. This keeps both ticket and chat
     turns on the same boundary while letting each workflow choose its attempt
     budget through ``max_completion_attempts``.
+
+    ``invoke`` receives the attempt's execution context and the prompt
+    parameters the host derives from the run record for that attempt: a chat
+    turn gets ``previous_attempt_evidence``, the actions its run has already
+    taken, re-read before every attempt so a session that had to be recreated
+    does not repeat them. These parameters replace any the workflow passed
+    under the same name.
 
     Raises:
         CompletionRetryExhausted: When the attempt budget is exhausted. The
@@ -82,7 +90,7 @@ async def run_agent_turn(
             "continuation_input": _continuation_input(context),
         }
         try:
-            response = await invoke(turn_context)
+            response = await invoke(turn_context, _turn_parameters(store, context))
         except Exception as exc:
             _raise_rate_limit(exc)
             if retry_invoke_exceptions:
@@ -112,6 +120,21 @@ async def run_agent_turn(
         )
 
     raise CompletionRetryExhausted(attempts, last_error)
+
+
+def _turn_parameters(store: RunStore, context: Mapping[str, Any]) -> dict[str, str]:
+    if context.get("work_kind") != "chat":
+        return {}
+    evidence = [
+        item
+        for item in store.evidence(str(context["run_id"]))
+        if item["evidence_type"] != "chat_batch"
+    ]
+    return {
+        "previous_attempt_evidence": json.dumps(
+            evidence, ensure_ascii=False, sort_keys=True
+        )
+    }
 
 
 def _continuation_input(context: Mapping[str, Any]) -> str:
