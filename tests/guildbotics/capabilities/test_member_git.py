@@ -719,11 +719,14 @@ async def test_chat_run_cannot_push_unchecked_work(
         ChatUpdatesRequired,
         check_chat_updates,
     )
-    from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+    from guildbotics.capabilities.task_runs import RunStore
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+    from guildbotics.runtime.member_invocation import (
+        MemberInvocation,
+        member_invocation_scope,
+    )
 
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "dummy-token")
-    monkeypatch.setenv(RUN_ENV, "chat-run")
     RunStore().append_evidence(
         "chat-run",
         "chat_batch",
@@ -743,11 +746,12 @@ async def test_chat_run_cannot_push_unchecked_work(
     (repo_path / "README.md").write_text("changed\n", encoding="utf-8")
     repo.git.add(A=True)
     commit_sha = repo.index.commit("local commit").hexsha
-    with pytest.raises(ChatUpdatesRequired):
+    with member_invocation_scope(MemberInvocation(run_id="chat-run")):
+        with pytest.raises(ChatUpdatesRequired):
+            await service.push(repo_path)
+        with git.Repo(tmp_path / "remote.git") as remote:
+            assert remote.commit("main").hexsha != commit_sha
+        check_chat_updates("aiko", "chat-run")
         await service.push(repo_path)
-    with git.Repo(tmp_path / "remote.git") as remote:
-        assert remote.commit("main").hexsha != commit_sha
-    check_chat_updates("aiko", "chat-run")
-    await service.push(repo_path)
     with git.Repo(tmp_path / "remote.git") as remote:
         assert remote.commit("main").hexsha == commit_sha

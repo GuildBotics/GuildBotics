@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager, suppress
@@ -44,8 +43,6 @@ from guildbotics.capabilities.member_reference import (
     command_summary,
 )
 from guildbotics.capabilities.task_runs import (
-    RUN_ENV,
-    TASK_RUN_ENV,
     RunStore,
     TaskRunError,
     TaskRunStore,
@@ -61,7 +58,7 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
-from guildbotics.observability import TRACE_ID_ENV, join_trace, trace_scope
+from guildbotics.observability import join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
@@ -71,6 +68,12 @@ from guildbotics.observability.interactive_sessions import (
     interactive_thread_key,
 )
 from guildbotics.runtime.member_context import resolve_member_context
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    active_member_invocation,
+    current_member_invocation,
+    member_invocation_scope,
+)
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
     PreparedOneShotSync,
@@ -185,6 +188,8 @@ _human_approved_option = click.option(
 @workspace_option
 def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
+    if active_member_invocation() is None:
+        ctx.with_resource(member_invocation_scope(MemberInvocation.from_environment()))
     applied_workspace = apply_workspace_option(workspace_dir)
     workspace = (
         applied_workspace.workspace
@@ -2391,14 +2396,13 @@ def _member_execution_guard(command: str, session: InteractiveTraceSession | Non
         yield
         return
     from guildbotics.runtime.person_lease import (
-        LEASE_PERSON_ENV,
         PersonExecutionLease,
         PersonLeaseUnavailableError,
         validate_delegation,
     )
 
     if _running_under_workflow():
-        delegated_person = os.getenv(LEASE_PERSON_ENV, "")
+        delegated_person = current_member_invocation().lease_person_id
         person_id = delegated_person if delegated_person == person else ""
         if not person_id:
             _context, member_person = _resolve(person)
@@ -2504,7 +2508,7 @@ def _run_in_owner_trace(coro, command: str) -> Any:
     The broker hands the trace over in the environment; without it (a plain
     workflow-less invocation) the command records on its own.
     """
-    trace_id = os.getenv(TRACE_ID_ENV, "")
+    trace_id = current_member_invocation().trace_id
     if not trace_id:
         return asyncio.run(coro)
     person = _current_person()
@@ -2533,7 +2537,8 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
 
 
 def _running_under_workflow() -> bool:
-    return bool(os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV))
+    invocation = current_member_invocation()
+    return bool(invocation.task_run_id or invocation.run_id)
 
 
 def _current_person() -> str:

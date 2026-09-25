@@ -15,7 +15,6 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from guildbotics.capabilities.task_runs import TASK_RUN_ENV
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
@@ -30,11 +29,12 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     ConversationKey,
 )
-from guildbotics.runtime.person_lease import (
+from guildbotics.runtime.member_invocation import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
+    TASK_RUN_ENV,
 )
 from guildbotics.utils.loopback_server import LoopbackServer
 
@@ -521,7 +521,7 @@ def test_member_environment_preserves_unrelated_host_values(
 async def test_execute_hands_the_turns_trace_to_the_member_cli(
     monkeypatch, tmp_path
 ) -> None:
-    from guildbotics.observability import TRACE_ID_ENV
+    from guildbotics.runtime.member_invocation import TRACE_ID_ENV
 
     launched: list[dict[str, Any]] = []
 

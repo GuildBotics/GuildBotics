@@ -33,7 +33,7 @@ from guildbotics.intelligences.agent_runtime.environment import (
     terminate_process_tree,
 )
 from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
-from guildbotics.runtime.person_lease import (
+from guildbotics.runtime.member_invocation import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
     LEASE_PERSON_ENV,

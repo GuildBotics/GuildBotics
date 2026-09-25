@@ -105,11 +105,13 @@ def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
 
 
 def _set_workflow_delegation(monkeypatch, person_id="aiko", run_id="run-1"):
-    from guildbotics.runtime.person_lease import (
+    from guildbotics.runtime.member_invocation import (
         DELEGATION_ID_ENV,
         LEASE_ID_ENV,
         LEASE_PERSON_ENV,
         LEASE_RUN_ENV,
+    )
+    from guildbotics.runtime.person_lease import (
         PersonExecutionLease,
     )
 
@@ -3685,12 +3687,13 @@ def test_member_cli_help_stays_in_sync_with_capability_catalog():
 
 
 def test_chat_updates_reads_queue_without_constructing_chat_service(monkeypatch):
-    from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+    from guildbotics.capabilities.task_runs import RunStore
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
     from guildbotics.integrations.chat_service import ChatEvent
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,
     )
+    from guildbotics.runtime.member_invocation import RUN_ENV
 
     monkeypatch.setenv(RUN_ENV, "run-1")
     lease = _set_workflow_delegation(monkeypatch)
@@ -3835,7 +3838,7 @@ def test_member_github_commands_declare_their_work_target(
 def test_workflow_member_command_records_into_the_turns_trace(monkeypatch):
     # The broker hands the workflow's trace over; the command's records then
     # belong to that execution instead of to a trace of their own.
-    from guildbotics.observability import TRACE_ID_ENV
+    from guildbotics.runtime.member_invocation import TRACE_ID_ENV
 
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")

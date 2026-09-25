@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import IO, Any
 from uuid import uuid4
 
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.advisory_lock import lock_file_nonblocking as _lock_nonblocking
 from guildbotics.utils.advisory_lock import open_lock_file as _open_lock_file
 from guildbotics.utils.advisory_lock import read_lock_data as _read_lock_data
@@ -22,11 +23,6 @@ from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import pid_exists
 from guildbotics.utils.safe_path import safe_path_component
-
-LEASE_ID_ENV = "GUILDBOTICS_EXECUTION_LEASE_ID"
-DELEGATION_ID_ENV = "GUILDBOTICS_EXECUTION_DELEGATION_ID"
-LEASE_PERSON_ENV = "GUILDBOTICS_EXECUTION_PERSON_ID"
-LEASE_RUN_ENV = "GUILDBOTICS_EXECUTION_RUN_ID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,12 +193,11 @@ def validate_delegation(
     person_id: str,
     *,
     workspace_root: Path | None = None,
-    environ: dict[str, str] | None = None,
 ) -> PersonLeaseMetadata | None:
-    env = environ or os.environ
-    lease_id = env.get(LEASE_ID_ENV, "")
-    delegation_id = env.get(DELEGATION_ID_ENV, "")
-    run_id = env.get(LEASE_RUN_ENV, "")
+    invocation = current_member_invocation()
+    lease_id = invocation.lease_id
+    delegation_id = invocation.delegation_id
+    run_id = invocation.lease_run_id
     if not lease_id or not delegation_id or not run_id:
         return None
     path = lease_directory(workspace_root) / f"{safe_path_component(person_id)}.lock"
