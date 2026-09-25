@@ -12,15 +12,16 @@ from logging import getLogger
 from typing import Any
 
 from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironment,
     AgentEnvironmentError,
     EnvironmentProcess,
 )
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
+from guildbotics.intelligences.agent_runtime.environment import (
+    TurnEnvironment,
+    start_turn_environment,
+)
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
     MemberCapabilityBroker,
-    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -79,8 +80,7 @@ class ClaudeStreamJsonAdapter:
         self._executable = executable
         self._timeout = timeout
         self._process: EnvironmentProcess | None = None
-        self._environment: AgentEnvironment | None = None
-        self._member_broker = MemberCapabilityBroker()
+        self._environment: TurnEnvironment | None = None
 
     async def run_turn(
         self,
@@ -90,16 +90,10 @@ class ClaudeStreamJsonAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         try:
-            await self._member_broker.activate(context)
-        except MemberCapabilityBrokerError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Could not start the trusted member capability broker.",
-            ) from exc
-        try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
-            await self._member_broker.deactivate(context)
+            # Nothing of the turn keeps running in the environment it shares.
+            await self.close()
 
     async def _run_active_turn(
         self,
@@ -108,6 +102,10 @@ class ClaudeStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
+        self._environment = await start_turn_environment(
+            context, "claude", env=_ENVIRONMENT
+        )
+        broker = self._environment.broker
         args = [
             self._executable,
             "-p",
@@ -123,19 +121,13 @@ class ClaudeStreamJsonAdapter:
             "--permission-mode",
             _PERMISSION_MODE,
             "--mcp-config",
-            _claude_mcp_config(self._member_broker),
+            _claude_mcp_config(broker),
             "--strict-mcp-config",
         ]
         _warn_unusable_effort_settings(context)
         args.extend(_effort_arguments(context))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
-        self._environment = await start_turn_environment(
-            context,
-            "claude",
-            host_ports=(self._member_broker.endpoint.port,),
-            env={**_ENVIRONMENT, **self._member_broker.provider_environment()},
-        )
         try:
             self._process = await self._environment.run(*args, limit=STREAM_READ_LIMIT)
         except AgentEnvironmentError as exc:
@@ -158,9 +150,7 @@ class ClaudeStreamJsonAdapter:
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": self._member_broker.prompt(prompt)}
-                ],
+                "content": [{"type": "text", "text": broker.prompt(prompt)}],
             },
         }
         process.stdin.write(
@@ -329,16 +319,16 @@ class ClaudeStreamJsonAdapter:
         )
 
     async def interrupt(self) -> None:
-        await self._member_broker.deactivate()
+        if self._environment is not None:
+            await self._environment.broker.deactivate()
         if self._process is not None and self._process.returncode is None:
             await self._process.kill()
 
     async def close(self) -> None:
         try:
             await self.interrupt()
-            await self._close_environment()
         finally:
-            await self._member_broker.close()
+            await self._close_environment()
 
     async def _close_environment(self) -> None:
         environment, self._environment = self._environment, None

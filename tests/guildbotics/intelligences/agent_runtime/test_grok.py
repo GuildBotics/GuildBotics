@@ -951,27 +951,6 @@ async def test_missing_http_mcp_capability_is_unsupported(
 
 
 @pytest.mark.asyncio
-async def test_member_broker_start_failure_is_a_process_error(
-    monkeypatch, tmp_path
-) -> None:
-    async def fail_to_start(_broker: MemberCapabilityBroker) -> None:
-        raise OSError("bind failed")
-
-    monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
-    peer = _Peer()
-    install(monkeypatch, peer)
-    adapter = GrokAcpAdapter()
-
-    try:
-        with pytest.raises(AgentRuntimeError) as excinfo:
-            await _run(adapter, tmp_path)
-    finally:
-        await adapter.close()
-
-    assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-
-
-@pytest.mark.asyncio
 async def test_the_lent_login_is_selected_from_the_advertised_methods(
     monkeypatch, tmp_path
 ) -> None:

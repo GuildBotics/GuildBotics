@@ -16,12 +16,12 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironment,
-    AgentEnvironmentError,
-)
+from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
+from guildbotics.intelligences.agent_runtime.environment import (
+    TurnEnvironment,
+    start_turn_environment,
+)
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
@@ -30,7 +30,6 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
-    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -146,7 +145,7 @@ class AcpAdapterBase:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_agent_request,
         )
-        self._environment: AgentEnvironment | None = None
+        self._environment: TurnEnvironment | None = None
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""
         #: The running process's full `initialize` response. Some providers
@@ -167,7 +166,12 @@ class AcpAdapterBase:
         #: Providers may end a rate-limited turn with a bare protocol error, so
         #: the notice is what classifies that terminal failure.
         self._turn_rate_limit: dict[str, Any] = {}
-        self._member_broker = MemberCapabilityBroker()
+
+    @property
+    def _member_broker(self) -> MemberCapabilityBroker:
+        """The member broker, bound to the running turn."""
+        assert self._environment is not None
+        return self._environment.broker
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The settings this adapter can really impose, normalized.
@@ -190,24 +194,16 @@ class AcpAdapterBase:
         emit: EventSink,
     ) -> AgentTerminalResult:
         try:
-            try:
-                await self._member_broker.activate(context)
-            except MemberCapabilityBrokerError as exc:
-                raise AgentRuntimeError(
-                    AgentRuntimeErrorCategory.PROCESS,
-                    "Could not start the trusted member capability broker.",
-                ) from exc
             await self._ensure_started(context, emit)
             try:
                 await self._prepare_turn(context)
                 return await self._run_active_turn(prompt, context, conversation, emit)
             finally:
                 await self._finish_turn(context)
-                # The environment is the turn's: nothing of it outlives the
-                # turn, and the next one boots its own.
-                await self._close_provider()
         finally:
-            await self._member_broker.deactivate(context)
+            # The provider process is the turn's: the next turn starts its
+            # own and reloads the session.
+            await self._close_provider()
 
     async def _run_active_turn(
         self,
@@ -320,7 +316,8 @@ class AcpAdapterBase:
         )
 
     async def interrupt(self) -> None:
-        await self._member_broker.deactivate()
+        if self._environment is not None:
+            await self._environment.broker.deactivate()
         if self._active_session_id:
             with suppress(asyncio.CancelledError, Exception):
                 await self._transport.notify(
@@ -331,13 +328,10 @@ class AcpAdapterBase:
             await process.kill()
 
     async def close(self) -> None:
-        try:
-            await self._close_provider()
-        finally:
-            await self._member_broker.close()
+        await self._close_provider()
 
     async def _close_provider(self) -> None:
-        """Stop the ACP provider and its environment, preserving the broker."""
+        """Stop the ACP provider and end its turn in the environment."""
         process = self._transport.process
         if process is not None and process.returncode is None:
             with suppress(BrokenPipeError, ConnectionError, OSError):
@@ -354,17 +348,13 @@ class AcpAdapterBase:
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
-        argv = self._launch_argv(context)
         if self._transport.process is not None:
             await self._close_provider()
-        self._environment = await start_turn_environment(
-            context,
-            self.tool_name,
-            host_ports=(self._member_broker.endpoint.port,),
-            env={},
-        )
+        self._environment = await start_turn_environment(context, self.tool_name)
         try:
-            process = await self._environment.run(*argv, limit=STREAM_READ_LIMIT)
+            process = await self._environment.run(
+                *self._launch_argv(context), limit=STREAM_READ_LIMIT
+            )
         except AgentEnvironmentError as exc:
             await self._close_provider()
             raise AgentRuntimeError(
