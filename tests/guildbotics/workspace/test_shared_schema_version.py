@@ -31,7 +31,6 @@ from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
-    ScheduledPostState,
     ThreadConversationState,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -96,9 +95,6 @@ def _write_one_of_every_shared_record(workspace: Path) -> None:
         "C1",
         "1.0",
         ThreadConversationState(channel_id="C1", thread_ts="1.0"),
-    )
-    store.save_scheduled_post_state(
-        "slack", "p1", "daily", ScheduledPostState(last_run_slot="s")
     )
     store.upsert_pending_event(
         "slack",

@@ -9,7 +9,6 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     PendingEventRecordError,
-    ScheduledPostState,
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
@@ -163,22 +162,6 @@ def test_state_is_isolated_per_person_and_channel(tmp_path):
     assert store.is_processed_event("slack", "alice", "C1", "e2") is False
     assert store.is_processed_event("slack", "bob", "C1", "e2") is True
     assert store.is_processed_event("slack", "alice", "C2", "e3") is True
-
-
-def test_scheduled_post_state_roundtrip_and_default(tmp_path):
-    store = FileConversationStateStore(base_dir=tmp_path)
-
-    default_state = store.load_scheduled_post_state("slack", "alice", "morning-topic")
-    assert default_state.last_run_slot is None
-
-    store.save_scheduled_post_state(
-        "slack",
-        "alice",
-        "morning-topic",
-        ScheduledPostState(last_run_slot="2026-02-23T09:00"),
-    )
-    loaded = store.load_scheduled_post_state("slack", "alice", "morning-topic")
-    assert loaded.last_run_slot == "2026-02-23T09:00"
 
 
 def test_thread_messages_roundtrip_replace_and_trim(tmp_path):
