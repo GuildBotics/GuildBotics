@@ -2343,3 +2343,42 @@ async def test_only_a_writing_command_takes_the_manual_command_slot(
             assert caught.value.code == "command_already_running"
     finally:
         runtime._release_command("manual-command")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["preparing", "running"])
+async def test_a_read_only_run_keeps_its_workspace_from_switching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    """Taking no slot is not taking no workspace: the run is resolved and runs
+    in the workspace it was accepted for."""
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(config_dir / "commands/look.md", "---\nbrain: none\nread_only: true\n---\n")
+    runtime = AppRuntime(EventBus())
+    other = tmp_path / "other"
+    other.mkdir()
+    refused: list[str] = []
+
+    def try_to_switch() -> None:
+        with pytest.raises(AppApiError) as caught:
+            runtime.set_workspace(other)
+        refused.append(caught.value.code)
+
+    def resolve_context(message: str = "") -> object:
+        if phase == "preparing":
+            try_to_switch()
+        return _make_context([_make_person()])
+
+    async def ran(*_: Any, **__: Any) -> CommandOutcome:
+        if phase == "running":
+            try_to_switch()
+        return CommandOutcome(result="looked", text_output="looked")
+
+    monkeypatch.setattr(runtime, "_get_context", resolve_context)
+    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", ran)
+
+    await runtime.run_command(CommandRunRequest(command="look"))
+
+    assert refused == ["workspace_switch_blocked_by_active_work"]
+    # Released with the run.
+    assert runtime._accepted_command_ids == set()

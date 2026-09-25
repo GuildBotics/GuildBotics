@@ -301,6 +301,9 @@ class AppRuntime:
         self._activity_sync_lock = threading.Lock()
         self._activity_sync_attempts: dict[tuple[str, str], float] = {}
         self._running_command_id: str | None = None
+        #: Every accepted manual run, read-only ones included: the workspace
+        #: does not switch under any of them.
+        self._accepted_command_ids: set[str] = set()
         self.on_workspace_changed: Callable[[Path], None] | None = None
         self._execution_status = ExecutionStatusPublisher()
         self._execution = TaskRunCoordinator(self._execution_status)
@@ -378,7 +381,7 @@ class AppRuntime:
 
     def set_workspace(self, workspace_dir: Path) -> ConfigStatus:
         with self._lock:
-            if self._running_command_id is not None:
+            if self._accepted_command_ids:
                 raise _workspace_switch_blocked_error(self.get_scheduler_status())
             return self._set_workspace(workspace_dir)
 
@@ -884,39 +887,40 @@ class AppRuntime:
             AppApiError: If the member cannot be resolved, the runtime rejects
                 the work, or the command fails.
         """
-        # The workspace is accepted before anything is resolved in it, and a
-        # command that takes the slot is reserved for that same workspace: only
-        # the resolved command says whether it takes the slot at all.
-        workspace = self._reserve_command(None, expected_workspace)
-        context = self._get_context()
-        # Resolve the member up front: the guard must check the file that this
-        # very member runs, and an omitted person would otherwise resolve twice
-        # (placeholder context for the guard, team default for the run).
-        acting = self._resolve_execution_person(context, person, execution.label)
-        if guard is not None:
-            guard(context.clone_for(acting))
-        path = resolve_command_path(
-            execution.command,
-            context.team.project.get_language_code(),
-            acting.person_id,
-        )
-        try:
-            access = command_access(path) if path is not None else CommandAccess()
-        except CommandError:
-            # What cannot be resolved declares nothing; the run reports why.
-            access = CommandAccess()
-        context.pipe = message(access)
         trace_id = new_id()
-        if not access.read_only:
-            self._reserve_command(trace_id, workspace)
-        loop = asyncio.get_running_loop()
-        task = asyncio.current_task()
-
-        def _cancel() -> None:
-            if task is not None:
-                loop.call_soon_threadsafe(task.cancel)
-
+        # The run is accepted for the workspace before anything is resolved in
+        # it, and the workspace cannot switch until the run is released. Only
+        # the resolved command says whether it also takes the one slot.
+        self._reserve_command(trace_id, expected_workspace, exclusive=False)
         try:
+            context = self._get_context()
+            # Resolve the member up front: the guard must check the file that
+            # this very member runs, and an omitted person would otherwise
+            # resolve twice (placeholder context for the guard, team default
+            # for the run).
+            acting = self._resolve_execution_person(context, person, execution.label)
+            if guard is not None:
+                guard(context.clone_for(acting))
+            path = resolve_command_path(
+                execution.command,
+                context.team.project.get_language_code(),
+                acting.person_id,
+            )
+            try:
+                access = command_access(path) if path is not None else CommandAccess()
+            except CommandError:
+                # What cannot be resolved declares nothing; the run reports why.
+                access = CommandAccess()
+            context.pipe = message(access)
+            if not access.read_only:
+                self._reserve_command(trace_id)
+            loop = asyncio.get_running_loop()
+            task = asyncio.current_task()
+
+            def _cancel() -> None:
+                if task is not None:
+                    loop.call_soon_threadsafe(task.cancel)
+
             with (
                 self._execution.track_work(
                     source="manual",
@@ -1840,47 +1844,52 @@ class AppRuntime:
         self._loaded_dotenv_keys = loaded_keys
 
     def _reserve_command(
-        self, trace_id: str | None, expected_workspace: Path | None = None
-    ) -> Path | None:
-        """Accept a command for the selected workspace and reserve its slot.
+        self,
+        trace_id: str,
+        expected_workspace: Path | None = None,
+        *,
+        exclusive: bool = True,
+    ) -> None:
+        """Accept a command run for the selected workspace.
+
+        The workspace cannot switch until the run is released. An exclusive
+        run also takes the one manual-command slot; a read-only one does not,
+        since its turns can change nothing.
 
         Args:
-            trace_id: The run taking the one manual-command slot, or ``None``
-                to only accept the workspace.
+            trace_id: The run being accepted.
             expected_workspace: The workspace the command was asked for.
-
-        Returns:
-            The selected workspace the command was accepted for.
+            exclusive: Whether the run takes the manual-command slot.
 
         Raises:
             AppApiError: If the workspace is switching or is not the expected
-                one, or another command holds the slot.
+                one, or another run holds the slot.
         """
         # Workspace switching may wait for I/O while holding this lock. A
         # command arrives on the event loop, so reject it instead of blocking.
         if not self._lock.acquire(blocking=False):
             raise AppApiError("command_workspace_changing", status_code=409)
         try:
-            workspace = self.get_config_status().workspace
             if (
                 expected_workspace is not None
-                and workspace != expected_workspace.resolve()
+                and self.get_config_status().workspace != expected_workspace.resolve()
             ):
                 raise AppApiError("command_workspace_changed", status_code=409)
-            if trace_id is not None:
-                if self._running_command_id is not None:
+            if exclusive:
+                if self._running_command_id not in (None, trace_id):
                     raise AppApiError(
                         "command_already_running",
                         status_code=409,
                         context={"trace_id": self._running_command_id},
                     )
                 self._running_command_id = trace_id
-            return workspace
+            self._accepted_command_ids.add(trace_id)
         finally:
             self._lock.release()
 
     def _release_command(self, trace_id: str) -> None:
         with self._lock:
+            self._accepted_command_ids.discard(trace_id)
             if self._running_command_id == trace_id:
                 self._running_command_id = None
 
