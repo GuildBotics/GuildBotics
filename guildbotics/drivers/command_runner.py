@@ -94,6 +94,36 @@ class CommandRunner:
 
     async def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
         cwd = kwargs.pop("cwd", None)
+        execution_context = kwargs.get("agent_execution_context")
+        if isinstance(execution_context, dict) and execution_context.get(
+            "max_completion_attempts"
+        ):
+            from guildbotics.drivers.agent_turn import run_agent_turn
+
+            async def _invoke_turn(turn_context: dict[str, Any]) -> Any:
+                return await self._invoke_once(
+                    name,
+                    args,
+                    {
+                        **kwargs,
+                        "agent_execution_context": turn_context,
+                    },
+                    cwd,
+                )
+
+            return await run_agent_turn(
+                invoke=_invoke_turn,
+                execution_context=execution_context,
+            )
+        return await self._invoke_once(name, args, kwargs, cwd)
+
+    async def _invoke_once(
+        self,
+        name: str,
+        args: Sequence[Any],
+        kwargs: dict[str, Any],
+        cwd: Path | None,
+    ) -> Any:
         spec = self._spec_factory.build_from_entry(
             self._current_spec(),
             {
