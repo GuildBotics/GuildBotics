@@ -400,35 +400,26 @@ uv run --no-sync python -m pytest tests/ -n auto --durations=30
 
 Windows の全テストは `git-contracts` と `remainder` の 2 shard に分かれている。
 最初の collection で全 node ID がちょうど 1 つの shard に入ることを検証し、その後の
-2 コマンドを両方実行して全件を走らせる。Git repository を作るテストの一時 path が
-`MAX_PATH` を超えないよう、各 shard には短いテスト専用の base directory を指定する。
-pytest は `--basetemp` を実行開始時に空にするだけで終了時には消さないので、
-`%USERPROFILE%\tmp` の下に実行ごとに別名のディレクトリを作り、成否に関わらず最後に削除する
-（固定 path にすると、残骸が残り、並行実行とも衝突する）。`$env:TEMP`
-（`%USERPROFILE%\AppData\Local\Temp`）の下では長すぎて、Hub のテストが `Filename too long` で
-落ちる。pytest が `--basetemp` を実 path へ解決するため、8.3 短縮名や `subst` でも短くならない。
+2 コマンドを両方実行して全件を走らせる。Windows では `tests/conftest.py` が
+`--basetemp` 未指定時に `%USERPROFILE%\tmp` の下へ実行ごとの短い一時 directory を作り、
+終了時に削除する。関連範囲だけの pytest 実行にも同じ設定が適用される。
 PowerShell は既定ではネイティブコマンドの非ゼロ終了を terminating error にしないので、
 `uv` ごとに `$LASTEXITCODE` を検査して `throw` する（検査を省くと、collection や
 git-contracts が失敗しても remainder まで進み、最後のコマンドが成功すると手順全体が
 成功したように見える）:
 
 ```powershell
-$run = New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE "tmp\gb-$([guid]::NewGuid().ToString('N').Substring(0, 8))")
-try {
-  uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
-  if ($LASTEXITCODE -ne 0) { throw "shard verification failed ($LASTEXITCODE)" }
-  uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts --basetemp="$run/git"
-  if ($LASTEXITCODE -ne 0) { throw "git-contracts shard failed ($LASTEXITCODE)" }
-  uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder --basetemp="$run/rest"
-  if ($LASTEXITCODE -ne 0) { throw "remainder shard failed ($LASTEXITCODE)" }
-} finally {
-  Remove-Item -Recurse -Force $run
-}
+uv run --no-sync python -m pytest tests/ --collect-only -qq --verify-windows-shards
+if ($LASTEXITCODE -ne 0) { throw "shard verification failed ($LASTEXITCODE)" }
+uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=git-contracts
+if ($LASTEXITCODE -ne 0) { throw "git-contracts shard failed ($LASTEXITCODE)" }
+uv run --no-sync python -m pytest tests/ -n 8 --durations=30 --windows-shard=remainder
+if ($LASTEXITCODE -ne 0) { throw "remainder shard failed ($LASTEXITCODE)" }
 ```
 
 `$PSNativeCommandUseErrorActionPreference` は PowerShell 7.3 以降にしか無く、
-Windows PowerShell 5.1 では黙って無視されるので使わない。失敗したテストが `--basetemp`
-配下に残したファイルを見たいときは、`finally` の `Remove-Item` を一時的に外して再実行する。
+Windows PowerShell 5.1 では黙って無視されるので使わない。失敗したテストの一時ファイルを
+調べたいときは `--basetemp` を明示して再実行する（明示した directory は自動削除しない）。
 
 CI が付ける `--junitxml` / `--phase-durations-json` は artifact として shard の所要時間を
 残すためのもので、手元では `--durations=30` の出力で足りる。

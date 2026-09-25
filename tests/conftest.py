@@ -2,7 +2,9 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -25,6 +27,7 @@ from tests.windows_shards import (
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
+_WINDOWS_BASETEMP = pytest.StashKey[Path]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -45,13 +48,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _PHASE_DURATION_OUTPUT
     if hasattr(config, "workerinput"):
         return
+    if sys.platform == "win32" and config.option.basetemp is None:
+        root = Path.home() / "tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        basetemp = Path(tempfile.mkdtemp(prefix="gb-", dir=root))
+        config.option.basetemp = str(basetemp)
+        config.stash[_WINDOWS_BASETEMP] = basetemp
     value = config.getoption("phase_durations_json")
     _PHASE_DURATION_OUTPUT = Path(value) if value else None
     _PHASE_DURATIONS.clear()
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    basetemp = config.stash.get(_WINDOWS_BASETEMP, None)
+    if basetemp is not None:
+        shutil.rmtree(basetemp)
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
