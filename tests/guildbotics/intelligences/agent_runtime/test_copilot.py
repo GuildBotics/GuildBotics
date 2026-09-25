@@ -15,7 +15,14 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.runtime.member_invocation import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+    RUN_ENV,
+    TASK_RUN_ENV,
+)
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
@@ -29,12 +36,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
-)
-from guildbotics.runtime.person_lease import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"

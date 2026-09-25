@@ -1,16 +1,16 @@
 """Queue-only chat refresh and the pre-publication check for chat runs."""
 
-import os
 from dataclasses import asdict
 from decimal import Decimal
 from typing import Any
 
 from guildbotics.capabilities.chat_batch import chat_batch_event_ids
-from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus, ReceiveState
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import is_suppressed_chat_event
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.i18n_tool import t
 
 
@@ -63,7 +63,7 @@ def _receive_delay_reason(state: ReceiveState) -> str:
 
 def check_chat_updates(person_id: str, run_id: str) -> dict[str, Any]:
     """Deliver new input without acknowledging or removing pending events."""
-    active_run = os.getenv(RUN_ENV)
+    active_run = current_member_invocation().run_id
     if active_run and active_run != run_id:
         raise ChatUpdatesRequired(t("cli.member.chat_updates.invalid_run"))
     source, evidence = _source(person_id, run_id)
@@ -94,7 +94,7 @@ def check_chat_updates(person_id: str, run_id: str) -> dict[str, Any]:
 
 def ensure_chat_current(person_id: str, run_id: str | None = None) -> None:
     """Guard the source chat even when publishing to another destination."""
-    run_id = run_id or os.getenv(RUN_ENV)
+    run_id = run_id or current_member_invocation().run_id
     if not run_id:
         return
     source, evidence = _source(person_id, run_id)

@@ -23,7 +23,6 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialGateway,
     CredentialUnavailableError,
@@ -66,7 +65,12 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
     terminate_process_job,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
-from guildbotics.observability import TRACE_ID_ENV
+from guildbotics.runtime.member_invocation import (
+    CHAT_PARTICIPANT_LABELS_ENV,
+    RUN_ENV,
+    TASK_RUN_ENV,
+    TRACE_ID_ENV,
+)
 from guildbotics.runtime.person_lease import lease_directory
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
@@ -77,7 +81,6 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.processes import terminate_posix_process_group
 
-CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 _WINDOWS = os.name == "nt"
 
 #: What every provider process starts with, beside the tool's own state

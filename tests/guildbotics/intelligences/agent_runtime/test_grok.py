@@ -15,7 +15,14 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.runtime.member_invocation import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+    RUN_ENV,
+    TASK_RUN_ENV,
+)
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
@@ -36,12 +43,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
     settings_fingerprint,
-)
-from guildbotics.runtime.person_lease import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
 )
 
 #: Run identity and delegation grant the parent process holds while a workflow

@@ -10,9 +10,12 @@ from guildbotics.capabilities.member_memory import (
     MemberMemoryService,
 )
 from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
 from guildbotics.observability import trace_scope
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    member_invocation_scope,
+)
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     dump_yaml,
@@ -31,8 +34,6 @@ def person() -> Person:
 @pytest.fixture(autouse=True)
 def data_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.delenv(RUN_ENV, raising=False)
-    monkeypatch.delenv(TASK_RUN_ENV, raising=False)
     return tmp_path / ".guildbotics" / "state"
 
 
@@ -279,18 +280,17 @@ def test_update_touch_archive_and_promote_manage_recency(person: Person) -> None
     assert [item["doc_id"] for item in service.load_digest(limit=2)] == [second_id]
 
 
-def test_memory_mutations_write_audit_events(
-    monkeypatch: pytest.MonkeyPatch, person: Person, data_root: Path
-) -> None:
-    monkeypatch.setenv(RUN_ENV, "run-1")
-    monkeypatch.setenv(TASK_RUN_ENV, "task-1")
+def test_memory_mutations_write_audit_events(person: Person, data_root: Path) -> None:
     service = MemberMemoryService(person)
 
-    with trace_scope(
-        "manual",
-        trace_id="trace-1",
-        person_id="aiko",
-        command="workflows/demo",
+    with (
+        member_invocation_scope(MemberInvocation(run_id="run-1", task_run_id="task-1")),
+        trace_scope(
+            "manual",
+            trace_id="trace-1",
+            person_id="aiko",
+            command="workflows/demo",
+        ),
     ):
         recorded = service.record(
             scope="personal",
@@ -629,14 +629,14 @@ def test_policy_memory_requires_approval_and_controls_context(
     )
     assert service.load_policy_params().digest_n == EXPECTED_DIGEST_N + 1
 
-    monkeypatch.setenv(RUN_ENV, "run-1")
-    with pytest.raises(MemberMemoryError, match="autonomous"):
-        service.update(
-            doc_id=policy["doc_id"],
-            scope="team",
-            body="New policy",
-            policy_approved=True,
-        )
+    with member_invocation_scope(MemberInvocation(run_id="run-1")):
+        with pytest.raises(MemberMemoryError, match="autonomous"):
+            service.update(
+                doc_id=policy["doc_id"],
+                scope="team",
+                body="New policy",
+                policy_approved=True,
+            )
 
 
 @pytest.mark.parametrize(

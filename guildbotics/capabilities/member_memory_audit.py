@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.observability import correlation_fields
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.diagnostics_records import notify_diagnostics_record
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -52,8 +51,9 @@ def append_memory_event(
 ) -> None:
     correlation = correlation_fields()
     attributes = _dict(correlation.get("attributes"))
-    run_id = os.getenv(RUN_ENV, "")
-    task_run_id = os.getenv(TASK_RUN_ENV, "")
+    invocation = current_member_invocation()
+    run_id = invocation.run_id
+    task_run_id = invocation.task_run_id
     attributes.update(
         {
             "memory.action": action,

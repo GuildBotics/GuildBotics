@@ -10,6 +10,10 @@ from guildbotics.integrations.chat_service import (
     ChatIdentity,
     ChatPostResult,
 )
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    member_invocation_scope,
+)
 
 
 class FakeChatService:
@@ -141,15 +145,16 @@ async def test_post_resolves_channel_name_and_returns_evidence_payload():
 
 
 @pytest.mark.asyncio
-async def test_post_renders_participant_labels_from_workflow_env(monkeypatch):
-    monkeypatch.setenv(
-        member_chat.CHAT_PARTICIPANT_LABELS_ENV,
-        '{"UBOB":"bob","UAIKO":"aiko"}',
-    )
+async def test_post_renders_participant_labels_from_workflow_context():
     fake = FakeChatService()
     service = _service(fake)
 
-    result = await service.post(channel_id="C1", channel_name=None, body="@bob please")
+    with member_invocation_scope(
+        MemberInvocation(participant_labels='{"UBOB":"bob","UAIKO":"aiko"}')
+    ):
+        result = await service.post(
+            channel_id="C1", channel_name=None, body="@bob please"
+        )
 
     assert fake.posts == [("C1", "<@UBOB> please", None)]
     assert result["text"] == "<@UBOB> please"
@@ -204,14 +209,17 @@ async def test_reply_posts_to_thread():
 
 
 @pytest.mark.asyncio
-async def test_reply_renders_participant_labels_from_workflow_env(monkeypatch):
-    monkeypatch.setenv(member_chat.CHAT_PARTICIPANT_LABELS_ENV, '{"UBOB":"bob"}')
+async def test_reply_renders_participant_labels_from_workflow_context():
     fake = FakeChatService()
     service = _service(fake)
 
-    result = await service.reply(
-        channel_id="C1", channel_name=None, thread_ts="100.1", body="@bob thoughts?"
-    )
+    with member_invocation_scope(MemberInvocation(participant_labels='{"UBOB":"bob"}')):
+        result = await service.reply(
+            channel_id="C1",
+            channel_name=None,
+            thread_ts="100.1",
+            body="@bob thoughts?",
+        )
 
     assert fake.posts == [("C1", "<@UBOB> thoughts?", "100.1")]
     assert result["text"] == "<@UBOB> thoughts?"

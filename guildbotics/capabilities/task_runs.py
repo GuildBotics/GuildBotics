@@ -8,7 +8,6 @@ an event log.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +21,7 @@ from guildbotics.entities.task_run import (
     TaskRunResult,
 )
 from guildbotics.observability import current_trace
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.shared_redaction import redact_for_sharing
 from guildbotics.utils.shared_write_lock import shared_write_lock
@@ -32,9 +32,6 @@ from guildbotics.utils.workspace_sync_port import (
     update_shared_json_with_change,
 )
 from guildbotics.workspace.identity import ensure_device_identity
-
-RUN_ENV = "GUILDBOTICS_RUN_ID"
-TASK_RUN_ENV = "GUILDBOTICS_TASK_RUN_ID"
 
 
 def chat_event_work_identity(
@@ -644,11 +641,13 @@ class RunStore:
 
 
 def current_task_run_id(explicit: str | None = None) -> str | None:
-    return explicit or os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV) or None
+    invocation = current_member_invocation()
+    return explicit or invocation.task_run_id or invocation.run_id or None
 
 
 def current_run_id(explicit: str | None = None) -> str | None:
-    return explicit or os.getenv(RUN_ENV) or os.getenv(TASK_RUN_ENV) or None
+    invocation = current_member_invocation()
+    return explicit or invocation.run_id or invocation.task_run_id or None
 
 
 def _new_record(

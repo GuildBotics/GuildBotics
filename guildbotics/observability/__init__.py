@@ -26,9 +26,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
-#: How a process hands the trace it runs inside to a member CLI it spawns.
-TRACE_ID_ENV = "GUILDBOTICS_TRACE_ID"
-
 _current_trace: ContextVar[TraceContext | None] = ContextVar(
     "guildbotics_trace", default=None
 )
@@ -173,7 +170,6 @@ def correlation_fields() -> dict[str, Any]:
 
 
 __all__ = [
-    "TRACE_ID_ENV",
     "SpanContext",
     "TraceContext",
     "correlation_fields",

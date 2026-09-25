@@ -15,8 +15,8 @@ from typing import Any, Literal
 import yaml  # type: ignore
 
 from guildbotics.capabilities.member_memory_audit import append_memory_event
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.team import Person
+from guildbotics.runtime.member_invocation import current_member_invocation
 from guildbotics.utils.fileio import (
     dump_yaml,
     get_workspace_state_path,
@@ -873,7 +873,8 @@ def _positive_int(value: Any, default: int) -> int:
 
 
 def _is_autonomous_run() -> bool:
-    return bool(os.getenv(TASK_RUN_ENV) or os.getenv(RUN_ENV))
+    invocation = current_member_invocation()
+    return bool(invocation.task_run_id or invocation.run_id)
 
 
 def _redact_secrets(text: str) -> str:

@@ -7,7 +7,14 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.runtime.member_invocation import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+    RUN_ENV,
+    TASK_RUN_ENV,
+)
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import antigravity as antigravity_module
 from guildbotics.intelligences.agent_runtime.antigravity import (
@@ -29,12 +36,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
 )
 from guildbotics.intelligences.brains.cli_agent import normalize_cli_agent_retry_after
-from guildbotics.runtime.person_lease import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-)
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 FIXTURE = (
