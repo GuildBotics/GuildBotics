@@ -86,9 +86,13 @@ workflow (orchestration)
         -> guildbotics member ... CLI (external side-effect boundary)
 ```
 
-- **Workflow** (`guildbotics/templates/commands/workflows/*`): selects the work item,
-  builds the prompt payload, launches the CLI agent with the member workspace as cwd,
-  and afterwards verifies run completion. It never produces work products
+- **Workflow** (`guildbotics/templates/commands/workflows/*`): builds the prompt
+  payload for the selected work item and asks for one CLI agent turn with the member
+  workspace as cwd. The host that runs the turn (`drivers/agent_turn.py`, reached
+  through `CommandRunner` when the execution context names `max_completion_attempts`)
+  reads the run record, retries the turn with a continuation prompt until the member
+  records its completion, and returns that completion and its evidence; workflows
+  never read or write the run record themselves. It never produces work products
   (code changes, PRs, replies, review comments) itself, but it does perform a narrow
   set of orchestration/status writes of its own through its integration clients:
   moving the Project lane, posting rate-limit / failure status comments on the ticket,
@@ -232,8 +236,8 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
-  handled by shared capability logic (`capabilities/workflow_rate_limits.py`,
-  `capabilities/completion_retry.py`), surfaced as a `workflow.rate_limited`
+  handled by shared logic (`capabilities/workflow_rate_limits.py`,
+  `drivers/agent_turn.py`), surfaced as a `workflow.rate_limited`
   diagnostics event, and never amplified by in-process retries. Ticket selection and
   the chat pending queue defer re-entry until the provider's exact reset timestamp
   when one is available.
