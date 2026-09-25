@@ -3,12 +3,15 @@ import json
 import logging
 import os
 import sys
+import tempfile
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
@@ -25,6 +28,7 @@ from tests.windows_shards import (
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
+_WINDOWS_BASETEMP = pytest.StashKey[Path]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -45,13 +49,41 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def _configure_windows_basetemp(config: pytest.Config) -> None:
+    if hasattr(config, "workerinput"):
+        return
+    if sys.platform == "win32" and config.option.basetemp is None:
+        # %TEMP% is too long for Git-backed tests; pytest resolves basetemp to its real path.
+        root = Path.home() / "tmp"
+        root.mkdir(parents=True, exist_ok=True)
+        basetemp = Path(tempfile.mkdtemp(prefix="gb-", dir=root))
+        config.option.basetemp = str(basetemp)
+        config.stash[_WINDOWS_BASETEMP] = basetemp
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _PHASE_DURATION_OUTPUT
     if hasattr(config, "workerinput"):
         return
+    _configure_windows_basetemp(config)
     value = config.getoption("phase_durations_json")
     _PHASE_DURATION_OUTPUT = Path(value) if value else None
     _PHASE_DURATIONS.clear()
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    basetemp = config.stash.get(_WINDOWS_BASETEMP, None)
+    if basetemp is not None:
+        try:
+            rm_rf(basetemp)
+        except OSError as exc:
+            warnings.warn(
+                pytest.PytestWarning(
+                    f"Could not remove automatic Windows basetemp {basetemp}: {exc}"
+                ),
+                stacklevel=2,
+            )
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
