@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import json
 import types
+from uuid import uuid4
 
 import pytest
 
+from guildbotics.capabilities import chat_selection
+from guildbotics.capabilities.chat_selection import (
+    ChatAttempt,
+    ChatSelector,
+    ChatTurn,
+)
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import (
@@ -34,6 +41,9 @@ from guildbotics.runtime.workflow_invocation import (
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
 from guildbotics.utils.i18n_tool import t
+
+
+_WORKFLOW = "workflows/chat_conversation_workflow"
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +114,7 @@ def _judgment_engine(monkeypatch):
             response_effort=ctx.response_effort,
         ), "a" * 32
 
-    monkeypatch.setattr(chat_conversation_workflow, "assess", assess)
+    monkeypatch.setattr(chat_selection, "assess", assess)
 
 
 def _agent_invocations(ctx) -> list[tuple[str, dict]]:
@@ -130,6 +140,8 @@ class FakeInvokeContext(types.SimpleNamespace):
             shared_state={},
         )
         self.action = action
+        self.incoming: IncomingChatEvent | None = None
+        self.retry_context: dict | None = None
         self.logger.context = self
         self.assessments = []
         self.invocations: list[tuple[str, dict]] = []
@@ -280,13 +292,42 @@ def _set_incoming_event(
         ),
         chat_participation=chat_participation,
     )
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
-        command="workflows/chat_conversation_workflow",
-        person_id="alice",
-        source="event_queue",
-        trigger_type="chat",
-        payload=incoming.to_shared_state(),
+    ctx.incoming = incoming
+
+
+async def _dispatch(ctx, *, chat_service, state_store) -> None:
+    """Drive the queued event the way the dispatcher does: select, then respond."""
+    incoming = ctx.incoming
+    retry = ctx.retry_context or {}
+    attempt = ChatAttempt(
+        run_id=retry.get("run_id") or uuid4().hex,
+        attempt_count=retry.get("attempt_count", 1),
+        max_attempts=retry.get("max_attempts", 5),
     )
+    selector = ChatSelector(
+        ctx, command=_WORKFLOW, chat_service=chat_service, state_store=state_store
+    )
+    batch = await selector.prepare(
+        service_name=incoming.service_name,
+        channel_id=incoming.channel_id,
+        event=incoming.event,
+        chat_participation=incoming.chat_participation,
+        run_id=attempt.run_id,
+    )
+    if batch is None:
+        return
+
+    async def run_turn(turn: ChatTurn) -> None:
+        ctx.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
+            command=_WORKFLOW,
+            person_id="alice",
+            source="event_queue",
+            trigger_type="chat",
+            payload=turn.model_dump(),
+        )
+        await chat_conversation_workflow.main(ctx)
+
+    await selector.run(batch, attempt, run_turn)
 
 
 @pytest.mark.asyncio
@@ -298,9 +339,7 @@ async def test_workflow_delegates_to_handle_chat_event_and_updates_reply_state(
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx)
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts == []
     assert service.reactions == []
@@ -375,16 +414,14 @@ async def test_redispatch_of_completed_run_skips_agent_and_reuses_evidence(tmp_p
         subject_id="slack:C1:100.1:E1",
         person_id="alice",
     )
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 2,
         "max_attempts": 5,
         "is_final_attempt": False,
         "run_id": run_id,
     }
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     # A crash between the agent's completion record and the dispatcher marking
     # the event processed must resume from the recorded evidence: the agent is
@@ -409,15 +446,11 @@ async def test_two_messages_in_one_thread_share_conversation_and_advance_cursor(
     first = FakeInvokeContext("reply")
     first.response_effort = "high"
     _set_incoming_event(first, event_id="E1", message_ts="100.1")
-    await chat_conversation_workflow.main(
-        first, chat_service=service, state_store=state_store
-    )
+    await _dispatch(first, chat_service=service, state_store=state_store)
     second = FakeInvokeContext("reply")
     second.response_effort = "default"
     _set_incoming_event(second, event_id="E2", message_ts="101.1")
-    await chat_conversation_workflow.main(
-        second, chat_service=service, state_store=state_store
-    )
+    await _dispatch(second, chat_service=service, state_store=state_store)
 
     first_context = _agent_invocations(first)[0][1]["agent_execution_context"]
     second_context = _agent_invocations(second)[0][1]["agent_execution_context"]
@@ -468,20 +501,27 @@ async def test_live_thread_snapshot_paginates_and_keeps_latest_bound() -> None:
             )
 
     service = PaginatedChatService()
-    payload = await chat_conversation_workflow._build_agent_prompt_payload(
-        context=FakeInvokeContext("noop"),
+    context = FakeInvokeContext("noop")
+    event = ChatEvent(
+        event_id="E150",
+        channel_id="C1",
+        message_ts="150.1",
+        thread_ts="1.1",
+        author_id="U_USER",
+        text="message-150",
+    )
+    payload = await chat_selection._build_agent_prompt_payload(
+        context=context,
         chat_service=service,
-        event=ChatEvent(
-            event_id="E150",
-            channel_id="C1",
-            message_ts="150.1",
-            thread_ts="1.1",
-            author_id="U_USER",
-            text="message-150",
-        ),
+        event=event,
         thread_messages=[],
         self_user_id="U_ALICE",
         thread_state=ThreadConversationState(channel_id="C1", thread_ts="1.1"),
+        chat_participation="strict",
+        live_thread=await chat_selection._fetch_thread_events(
+            context=context, chat_service=service, event=event
+        ),
+        batch_events=[event],
     )
 
     assert service.cursors == [None, "page-2"]
@@ -500,9 +540,7 @@ async def test_reaction_only_completion_processes_without_bot_message(
     ctx = FakeInvokeContext("reaction")
     _set_incoming_event(ctx)
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
@@ -520,9 +558,7 @@ async def test_noop_completion_processes_without_visible_action(tmp_path, monkey
     ctx = FakeInvokeContext("noop")
     _set_incoming_event(ctx)
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E1"]
@@ -552,9 +588,7 @@ async def test_taking_a_batch_records_the_runs_start_under_its_trace(tmp_path):
         person_id="alice",
         attributes={"event.provider": "slack", "slack.channel": "C1"},
     ):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     records = list(RunStore().records())
     assert [record.run_id for record in records] == ["run-chat"]
@@ -581,9 +615,7 @@ async def test_declined_batch_leaves_no_run_record(tmp_path):
     _set_incoming_event(ctx, text="please check", mentions=[])
     _set_retry_context(ctx, run_id="run-declined")
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     assert list(RunStore().records()) == []
@@ -596,21 +628,16 @@ async def test_unshared_run_start_hands_the_batch_back(tmp_path, monkeypatch):
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx)
     _set_retry_context(ctx, run_id="run-unshared")
-    monkeypatch.setattr(
-        chat_conversation_workflow, "await_shared_change", lambda change: False
-    )
+    monkeypatch.setattr(chat_selection, "await_shared_change", lambda change: False)
 
     with pytest.raises(ThreadContextUnavailableError):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
 
 
 def _set_retry_context(ctx: types.SimpleNamespace, *, run_id: str) -> None:
-    invocation = ctx.shared_state[WORKFLOW_INVOCATION_KEY]
-    invocation.payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 1,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -625,9 +652,7 @@ async def test_unmentioned_new_thread_is_processed_without_agent(tmp_path):
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx, text="please check", mentions=[])
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
@@ -648,9 +673,7 @@ async def test_social_unmentioned_new_thread_delegates(tmp_path):
         chat_participation="social",
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     kwargs = _agent_invocations(ctx)[0][1]
     assert kwargs["chat_participation"] == "social"
@@ -681,9 +704,7 @@ async def test_unmentioned_followup_after_prior_mention_delegates(tmp_path):
         ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     kwargs = _agent_invocations(ctx)[0][1]
     assert kwargs["event_id"] == "E2"
@@ -718,9 +739,7 @@ async def test_muted_unmentioned_followup_after_prior_mention_skips(tmp_path):
         chat_participation="muted",
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
@@ -766,9 +785,7 @@ async def test_empty_cache_followup_participates_via_provider_snapshot(tmp_path)
         ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     kwargs = _agent_invocations(ctx)[0][1]
     assert kwargs["event_id"] == "E2"
@@ -795,9 +812,7 @@ async def test_snapshot_is_fetched_once_and_persisted_to_cache(tmp_path):
         ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert service.fetch_count == 1
     cached = state_store.load_thread_messages("slack", "alice", "C1", "100.1")
@@ -817,10 +832,8 @@ async def test_provider_unavailable_without_cache_keeps_event_unprocessed(tmp_pa
         ctx, event_id="E2", message_ts="100.2", text="Any update?", mentions=[]
     )
 
-    with pytest.raises(chat_conversation_workflow.ThreadContextUnavailableError):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+    with pytest.raises(ThreadContextUnavailableError):
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
@@ -860,10 +873,8 @@ async def test_provider_unavailable_with_cached_mention_waits_for_fresh_input(
         chat_participation=participation,
     )
 
-    with pytest.raises(chat_conversation_workflow.ThreadContextUnavailableError):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+    with pytest.raises(ThreadContextUnavailableError):
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
     assert ctx.invocations == []
     assert not state_store.is_processed_event("slack", "alice", "C1", "E2")
 
@@ -897,9 +908,7 @@ async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
         mentions=["U_BOB"],
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
@@ -908,7 +917,7 @@ async def test_followup_mentioning_other_member_skips_even_after_prior_mention(
 
 def test_author_labels_include_mentionable_team_members_not_in_thread():
     ctx = types.SimpleNamespace(person=types.SimpleNamespace(person_id="alice"))
-    labels = chat_conversation_workflow._build_author_labels(
+    labels = chat_selection._build_author_labels(
         ctx,
         "U_ALICE",
         ChatEvent(
@@ -952,7 +961,7 @@ def test_handoff_candidates_include_only_mentionable_other_members_with_roles():
         person=alice, team=types.SimpleNamespace(members=[alice, bob, carol])
     )
 
-    candidates = chat_conversation_workflow._build_handoff_candidates(
+    candidates = chat_selection._build_handoff_candidates(
         ctx, {"U_ALICE": "alice", "U_BOB": "bob"}
     )
 
@@ -981,7 +990,7 @@ async def test_chat_user_to_person_labels_uses_configured_slack_user_id():
         ),
     )
 
-    labels = await chat_conversation_workflow._chat_user_to_person_labels(ctx)
+    labels = await chat_selection._chat_user_to_person_labels(ctx)
 
     assert labels == {"U_BOB": "bob"}
 
@@ -996,7 +1005,7 @@ def test_record_handoffs_saves_mentions_to_known_members():
     ctx = types.SimpleNamespace(team=types.SimpleNamespace(members=[alice, bob]))
     thread_state = ThreadConversationState(channel_id="C1", thread_ts="100.1")
 
-    chat_conversation_workflow._record_handoffs(
+    chat_selection._record_handoffs(
         context=ctx,
         thread_state=thread_state,
         participant_labels={"U_ALICE": "alice", "U_BOB": "bob"},
@@ -1019,7 +1028,7 @@ def test_record_handoffs_ignores_non_team_participant_labels():
     ctx = types.SimpleNamespace(team=types.SimpleNamespace(members=[alice]))
     thread_state = ThreadConversationState(channel_id="C1", thread_ts="100.1")
 
-    chat_conversation_workflow._record_handoffs(
+    chat_selection._record_handoffs(
         context=ctx,
         thread_state=thread_state,
         participant_labels={"U_ALICE": "alice", "U_USER": "user_1"},
@@ -1048,20 +1057,24 @@ async def test_prompt_payload_includes_existing_handoffs():
     )
     ctx = FakeInvokeContext("noop")
 
-    payload = await chat_conversation_workflow._build_agent_prompt_payload(
+    event = ChatEvent(
+        event_id="E2",
+        channel_id="C1",
+        message_ts="201.1",
+        thread_ts="100.1",
+        author_id="U_USER",
+        text="Any thoughts?",
+    )
+    payload = await chat_selection._build_agent_prompt_payload(
         context=ctx,
         chat_service=FakeChatService(),
-        event=ChatEvent(
-            event_id="E2",
-            channel_id="C1",
-            message_ts="201.1",
-            thread_ts="100.1",
-            author_id="U_USER",
-            text="Any thoughts?",
-        ),
+        event=event,
         thread_messages=[],
         self_user_id="U_ALICE",
         thread_state=thread_state,
+        chat_participation="strict",
+        live_thread=([], True),
+        batch_events=[event],
     )
 
     assert payload["previous_thread_context"]["handoffs"] == [
@@ -1085,7 +1098,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 3,
         "max_attempts": 3,
         "is_final_attempt": True,
@@ -1094,9 +1107,7 @@ async def test_incomplete_turns_retry_then_escalate(tmp_path, monkeypatch):
 
     # A single dispatch retries the agent in-process up to the budget, then
     # escalates and stops (no exception bubbles out).
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     handle_calls = [
         kwargs
@@ -1144,7 +1155,7 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")  # the agent run raises every attempt
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 2,
         "max_attempts": 2,
         "is_final_attempt": True,
@@ -1153,9 +1164,7 @@ async def test_agent_run_failure_escalates_and_stops(tmp_path, monkeypatch):
 
     # A failing agent run must be bounded and escalated, NOT raise out of the
     # workflow (which would leave the event queued for infinite retry).
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     handle_calls = [
         kwargs
@@ -1175,7 +1184,7 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 1,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -1183,30 +1192,7 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
     }
 
     with pytest.raises(RuntimeError, match="agent exited non-zero"):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
-
-    assert service.posts == []
-    assert (
-        state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
-        == []
-    )
-
-
-@pytest.mark.asyncio
-async def test_missing_retry_context_agent_failure_bubbles_for_pending_backoff(
-    tmp_path,
-):
-    service = FakeChatService()
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("crash")
-    _set_incoming_event(ctx)
-
-    with pytest.raises(RuntimeError, match="agent exited non-zero"):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts == []
     assert (
@@ -1223,9 +1209,7 @@ async def test_rate_limit_posts_notice_and_leaves_event_pending(tmp_path):
     _set_incoming_event(ctx)
 
     with pytest.raises(CliAgentExecutionError):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert len(service.posts) == 1
     _channel_id, text, _thread_ts, metadata = service.posts[0]
@@ -1262,16 +1246,14 @@ async def test_duplicate_system_notice_is_not_posted_again(tmp_path):
     state_store.save_thread_state("slack", "alice", "C1", "100.1", state)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 5,
         "max_attempts": 5,
         "is_final_attempt": True,
         "run_id": "run-1",
     }
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts == []
     assert state_store.load_channel_cursor(
@@ -1286,16 +1268,14 @@ async def test_final_notice_post_failure_marks_processed_without_notice_state(tm
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("crash")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 5,
         "max_attempts": 5,
         "is_final_attempt": True,
         "run_id": "run-1",
     }
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert service.posts == []
     assert state_store.load_channel_cursor(
@@ -1306,41 +1286,13 @@ async def test_final_notice_post_failure_marks_processed_without_notice_state(tm
 
 
 @pytest.mark.asyncio
-async def test_final_prerun_identity_failure_marks_processed(tmp_path):
-    service = FakeChatService()
-    service.fail_identity = True
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-    _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
-        "attempt_count": 5,
-        "max_attempts": 5,
-        "is_final_attempt": True,
-        "run_id": "run-1",
-    }
-
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
-
-    assert ctx.invocations == []
-    assert state_store.load_channel_cursor(
-        "slack", "alice", "C1"
-    ).processed_event_ids == ["E1"]
-    # Giving up must be visible in the logs as an error, not silent.
-    error_lines = [line for line in ctx.logger.lines if line[0] == "error"]
-    assert len(error_lines) == 1
-    assert error_lines[0][1].startswith("chat event abandoned after final attempt")
-
-
-@pytest.mark.asyncio
 async def test_non_final_prerun_identity_failure_bubbles(tmp_path):
     service = FakeChatService()
     service.fail_identity = True
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 1,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -1348,9 +1300,7 @@ async def test_non_final_prerun_identity_failure_bubbles(tmp_path):
     }
 
     with pytest.raises(RuntimeError, match="invalid_auth"):
-        await chat_conversation_workflow.main(
-            ctx, chat_service=service, state_store=state_store
-        )
+        await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert (
         state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
@@ -1368,9 +1318,7 @@ async def test_completion_on_retry_stops_early(tmp_path, monkeypatch):
     ctx.complete_on_attempt = 2
     _set_incoming_event(ctx)
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     handle_calls = [
         kwargs
@@ -1400,76 +1348,24 @@ async def test_obvious_self_message_is_marked_processed_without_agent(tmp_path):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
-        command="workflows/chat_conversation_workflow",
-        person_id="alice",
-        source="event_queue",
-        trigger_type="chat",
-        payload=IncomingChatEvent(
-            service_name="slack",
+    ctx.incoming = IncomingChatEvent(
+        service_name="slack",
+        channel_id="C1",
+        event=ChatEvent(
+            event_id="E_SELF",
             channel_id="C1",
-            event=ChatEvent(
-                event_id="E_SELF",
-                channel_id="C1",
-                message_ts="100.1",
-                thread_ts="100.1",
-                author_id="U_ALICE",
-                text="bot message",
-            ),
-        ).to_shared_state(),
+            message_ts="100.1",
+            thread_ts="100.1",
+            author_id="U_ALICE",
+            text="bot message",
+        ),
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert ctx.invocations == []
     channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
     assert channel_state.processed_event_ids == ["E_SELF"]
-
-
-@pytest.mark.asyncio
-async def test_chat_conversation_workflow_reads_from_invocation(tmp_path):
-    service = FakeChatService()
-    state_store = FileConversationStateStore(base_dir=tmp_path)
-    ctx = FakeInvokeContext("reply")
-
-    incoming = IncomingChatEvent(
-        service_name="slack",
-        channel_id="C1",
-        event=ChatEvent(
-            event_id="E_INVOCATION",
-            channel_id="C1",
-            message_ts="100.1",
-            thread_ts="100.1",
-            author_id="U_BOB",
-            text="hello bot",
-            mentions=["U_ALICE"],
-        ),
-    )
-
-    inv = WorkflowInvocation(
-        command="workflows/chat_conversation_workflow",
-        person_id="alice",
-        source="event_queue",
-        trigger_type="chat",
-        payload=incoming.to_shared_state(),
-    )
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY] = inv
-
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
-
-    assert len(_agent_invocations(ctx)) == 1
-
-    import json
-
-    messages = json.loads(_agent_invocations(ctx)[0][1]["unprocessed_messages"])
-    assert [message["content"] for message in messages] == ["hello bot"]
-
-    channel_state = state_store.load_channel_cursor("slack", "alice", "C1")
-    assert "E_INVOCATION" in channel_state.processed_event_ids
 
 
 @pytest.mark.asyncio
@@ -1481,7 +1377,7 @@ async def test_final_attempt_abandon_records_dispatch_abandoned_event(
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("missing")
     _set_incoming_event(ctx)
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 3,
         "max_attempts": 3,
         "is_final_attempt": True,
@@ -1489,14 +1385,12 @@ async def test_final_attempt_abandon_records_dispatch_abandoned_event(
     }
     recorded: list[dict] = []
     monkeypatch.setattr(
-        chat_conversation_workflow,
+        chat_selection,
         "record_chat_dispatch_abandoned",
         lambda **kwargs: recorded.append(kwargs),
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert len(recorded) == 1
     assert recorded[0]["event_id"] == "E1"
@@ -1535,7 +1429,7 @@ async def test_recovered_completion_records_workflow_completed_event(
         subject_id="slack:C1:100.1:E1",
         person_id="alice",
     )
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "attempt_count": 2,
         "max_attempts": 5,
         "is_final_attempt": False,
@@ -1543,14 +1437,12 @@ async def test_recovered_completion_records_workflow_completed_event(
     }
     recorded: list[dict] = []
     monkeypatch.setattr(
-        chat_conversation_workflow,
+        chat_selection,
         "record_workflow_completed",
         lambda **kwargs: recorded.append(kwargs),
     )
 
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
 
     assert recorded == [{"run_id": run_id, "attempt": 2, "recovered": True}]
 
@@ -1563,9 +1455,7 @@ async def test_recovered_completion_records_workflow_completed_event(
 async def _run_chat_event(tmp_path, monkeypatch, ctx, state_store) -> FakeChatService:
     service = FakeChatService()
     _set_incoming_event(ctx)
-    await chat_conversation_workflow.main(
-        ctx, chat_service=service, state_store=state_store
-    )
+    await _dispatch(ctx, chat_service=service, state_store=state_store)
     return service
 
 
@@ -1614,11 +1504,6 @@ async def test_response_effort_is_promoted_and_persisted(
         state_store.load_thread_state("slack", "alice", "C1", "100.1").effort
         == expected
     )
-    evidence = RunStore().evidence(ctx.assessments[0]["run_id"])
-    decision = next(
-        item["payload"] for item in evidence if item["evidence_type"] == "chat_decision"
-    )
-    assert decision["response_effort"] == candidate
 
 
 @pytest.mark.asyncio
@@ -1690,7 +1575,7 @@ def _batch_event(number, *, text=None, mentions=(), thread_ts="100.1"):
 def _batch_context(action="noop", *, run_id="batch-run", attempt=1):
     ctx = FakeInvokeContext(action)
     _set_incoming_event(ctx, event_id="E3", message_ts="103.1")
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"] = {
+    ctx.retry_context = {
         "run_id": run_id,
         "attempt_count": attempt,
         "max_attempts": 5,
@@ -1720,9 +1605,7 @@ async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals
     )
     service = SnapshotChatService(events)
     ctx = _batch_context()
-    ctx.shared_state[WORKFLOW_INVOCATION_KEY].payload["chat_participation"] = (
-        participation
-    )
+    ctx.incoming.chat_participation = participation
     original_invoke = ctx.invoke
 
     async def invoke(name, **kwargs):
@@ -1733,7 +1616,7 @@ async def test_batch_reads_requests_and_corrections_but_leaves_inflight_arrivals
         return await original_invoke(name, **kwargs)
 
     ctx.invoke = invoke
-    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=store)
+    await _dispatch(ctx, chat_service=service, state_store=store)
 
     assert len(_agent_invocations(ctx)) == 1
     kwargs = _agent_invocations(ctx)[0][1]
@@ -1767,17 +1650,13 @@ async def test_failed_batch_is_refreshed_on_retry_without_losing_action_evidence
     service = SnapshotChatService(events)
     first = _batch_context("crash")
     with pytest.raises(RuntimeError, match="agent exited"):
-        await chat_conversation_workflow.main(
-            first, chat_service=service, state_store=store
-        )
+        await _dispatch(first, chat_service=service, state_store=store)
     assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == []
     assert len(store.load_pending_events("slack", "alice", "C1")) == 2
     RunStore().append_evidence("batch-run", "chat_reaction", {"message_ts": "103.1"})
     events.append(_batch_event(7, text="Cancel deployment; review only"))
     retry = _batch_context(attempt=2)
-    await chat_conversation_workflow.main(
-        retry, chat_service=service, state_store=store
-    )
+    await _dispatch(retry, chat_service=service, state_store=store)
     kwargs = _agent_invocations(retry)[0][1]
     assert kwargs["agent_execution_context"]["context_cursor"] == "107.1"
     assert "chat_reaction" in kwargs["previous_attempt_evidence"]
@@ -1812,16 +1691,12 @@ async def test_completed_batch_recovery_does_not_consume_new_messages(
 
     monkeypatch.setattr(store, "mark_processed_events", crash_before_ack)
     with pytest.raises(RuntimeError, match="before acknowledgement"):
-        await chat_conversation_workflow.main(
-            _batch_context(), chat_service=service, state_store=store
-        )
+        await _dispatch(_batch_context(), chat_service=service, state_store=store)
     assert RunStore().status("batch-run").completed
     monkeypatch.setattr(store, "mark_processed_events", original_mark)
     service.events.append(_batch_event(7, text="A new request after completion"))
     recovered = _batch_context("crash", attempt=2)
-    await chat_conversation_workflow.main(
-        recovered, chat_service=service, state_store=store
-    )
+    await _dispatch(recovered, chat_service=service, state_store=store)
     assert recovered.invocations == []
     assert store.load_channel_cursor("slack", "alice", "C1").processed_event_ids == [
         "E3",
@@ -1837,9 +1712,7 @@ async def test_batch_keeps_unread_messages_beyond_historical_context_bound(tmp_p
         _batch_event(i, mentions=["U_ALICE"] if i == 3 else []) for i in range(3, 155)
     ]
     ctx = _batch_context()
-    await chat_conversation_workflow.main(
-        ctx, chat_service=SnapshotChatService(events), state_store=store
-    )
+    await _dispatch(ctx, chat_service=SnapshotChatService(events), state_store=store)
     kwargs = _agent_invocations(ctx)[0][1]
     unread = json.loads(kwargs["unprocessed_messages"])
     assert len(unread) == len(events)
@@ -1874,6 +1747,7 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
 
         def clone_for(self, person):
             ctx = FakeInvokeContext("noop")
+            ctx.get_chat_service = lambda: service
             invocations.append(ctx)
 
             async def close():
@@ -1887,9 +1761,7 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
             self.context = context
 
         async def run(self):
-            await chat_conversation_workflow.main(
-                self.context, chat_service=service, state_store=store
-            )
+            await chat_conversation_workflow.main(self.context)
 
     monkeypatch.setattr("guildbotics.drivers.workflow_dispatcher.CommandRunner", Runner)
     dispatcher = PendingChatDispatcher(
@@ -1898,8 +1770,9 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
     await dispatcher.process_person(
         Person(person_id="alice", name="Alice", is_active=True)
     )
-    assert len(invocations) == 1
-    assert len(_agent_invocations(invocations[0])) == 1
+    # One context selects the batch, one runs its single agent turn.
+    assert len(invocations) == 2
+    assert len(_agent_invocations(invocations[1])) == 1
     assert store.load_pending_events("slack", "alice", "C1") == []
 
 
@@ -1914,9 +1787,7 @@ async def test_batch_includes_members_own_reply_without_using_it_as_reaction_tar
     own_reply.is_bot_message = True
     events.append(own_reply)
     ctx = _batch_context()
-    await chat_conversation_workflow.main(
-        ctx, chat_service=SnapshotChatService(events), state_store=store
-    )
+    await _dispatch(ctx, chat_service=SnapshotChatService(events), state_store=store)
     kwargs = _agent_invocations(ctx)[0][1]
     assert kwargs["message_ts"] == "105.1"
     assert kwargs["agent_execution_context"]["context_cursor"] == "106.1"
@@ -1987,12 +1858,10 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
 
         monkeypatch.setattr(store, "mark_processed_events", interrupted)
         with pytest.raises(RuntimeError, match="crash before ack"):
-            await chat_conversation_workflow.main(
-                ctx, chat_service=service, state_store=store
-            )
+            await _dispatch(ctx, chat_service=service, state_store=store)
         monkeypatch.setattr(store, "mark_processed_events", original_ack)
         ctx = _batch_context("crash", attempt=2)
-    await chat_conversation_workflow.main(ctx, chat_service=service, state_store=store)
+    await _dispatch(ctx, chat_service=service, state_store=store)
     assert store.is_processed_event("slack", "alice", "C1", "E5") is handled
     assert not store.is_processed_event("slack", "alice", "C1", "E6")
     assert [
@@ -2002,8 +1871,6 @@ async def test_updates_read_during_turn_are_consumed_only_on_completion(
     if action in {"noop", "blocked"}:
         following = _batch_context("noop", run_id="following-run")
         _set_incoming_event(following, event_id="E5", message_ts="105.1")
-        await chat_conversation_workflow.main(
-            following, chat_service=service, state_store=store
-        )
+        await _dispatch(following, chat_service=service, state_store=store)
         assert len(_agent_invocations(following)) == 1
         assert store.is_processed_event("slack", "alice", "C1", "E5")

@@ -220,5 +220,6 @@ guildbotics member chat reaction add --person alice --service slack --channel-id
 
 - チャットイベントの受信はイベントリスナーランナーが担当し、処理は各メンバーのメンバーワーカー内のイベントキューソースが直列に実行します。どちらもサービスの起動（GUI の **サービス実行 → 実行**、または `guildbotics start`）で起動します
 - **イベント起動** を含めずに起動した場合（CLI では `guildbotics start --only scheduler`）、チャットイベントは受信されません。逆に **巡回実行コマンド** と **定期実行コマンド** を外した場合（CLI では `--only events`）でも、メンバーワーカーはキュー済みチャットイベントを処理します
+- キュー済みのイベントは、ワークフローを起動する前にメンバーワーカーが選別します。編集・削除、メンバー自身の発言、参加条件で対象外になる発言は既読にするだけで、診断に実行を残しません。残りのイベントをチャット判断エンジンで判定し、リアクションだけ・行動なしで完了できる場合はその場で完了します。チャットワークフロー（`workflows/chat_conversation_workflow`）を起動するのは対応エージェントが必要なイベントだけです。そのため、Workspace に同名のファイルを置いて差し替えられるのは対応の turn だけで、選別と判定は差し替えられません
 - AI CLI ツールによるチャット処理では、`functions/handle_chat_event` がメンバーごとの作業ディレクトリを `cwd` にして実行されます。既定では `<workspace>/.guildbotics/local/clones/<person_id>/` です。この配下にある複製済みリポジトリを参照できます
 - 返信・リアクション・no-op・完了の証跡は `guildbotics member chat reply|post|reaction add|noop|complete` 経由で記録されます。ワークフローはこの実行証跡を検証し、ツールの自然言語の標準出力だけでは Slack に投稿した証拠として扱いません

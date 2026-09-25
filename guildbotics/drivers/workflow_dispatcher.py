@@ -23,24 +23,10 @@ class WorkflowDispatcher:
         """Run the workflow corresponding to the invocation for the given person.
 
         The caller owns the trace: it opened the scope and records the boundary
-        events that say the execution started and ended. This dispatcher only
-        adds the invocation's attributes to it.
+        events that say the execution started and ended, with the attributes
+        that name its subject. This dispatcher only adds the service run id.
         """
-        attributes = {"service_run_id": self._service_run_id}
-        if invocation.trigger_type == "chat":
-            payload = invocation.payload
-            event_dict = payload.get("event") or {}
-            attributes.update(
-                {
-                    "event.provider": payload.get("service_name", ""),
-                    "slack.channel": payload.get("channel_id", ""),
-                    "slack.thread_ts": event_dict.get("thread_ts", ""),
-                    "slack.ts": event_dict.get("message_ts", ""),
-                    "event_id": event_dict.get("event_id", ""),
-                }
-            )
-
-        set_attributes(**attributes)
+        set_attributes(service_run_id=self._service_run_id)
         context = self._context.clone_for(person)
         context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
 

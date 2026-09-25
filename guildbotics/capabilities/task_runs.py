@@ -39,7 +39,7 @@ def chat_event_work_identity(
 ) -> dict[str, str]:
     """The stable input identity one chat event has as a run.
 
-    The dispatcher claims it before running the workflow and the workflow
+    The dispatcher claims it before judging the event and chat selection
     records it when it takes the batch, so both name the same run.
     """
     return {
