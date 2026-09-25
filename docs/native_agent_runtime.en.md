@@ -384,7 +384,8 @@ and `-p no:xdist`). Nothing is sent off the device.
   not logged). httpcore's DEBUG trace records an answer's headers as they came, so
   running with the root logger at DEBUG can leave the real value in a log. HTTP/1.1 and
   streaming (SSE) are carried; HTTP/2 is declined through ALPN and a WebSocket is never
-  upgraded to (its handshake is taken as a plain HTTP request). The routes not forwarded are logged as `METHOD /path` only, the same route once per turn. A catalog route
+  upgraded to (its handshake is taken as a plain HTTP request). The routes not
+  forwarded are logged as `METHOD /path` only, the same route once per turn. A catalog route
   matches its path exactly; one that ends in `/*` (for a tool that puts a repository or
   the like in the path) forwards the paths under it made of plain names only (never one
   with a segment that is empty or begins with `.`, a percent-encoding, or a character outside
