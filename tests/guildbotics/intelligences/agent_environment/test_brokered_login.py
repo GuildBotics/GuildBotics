@@ -3,6 +3,7 @@ refreshed and asked about only where it is held in memory."""
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import datetime as dt
@@ -762,7 +763,8 @@ def _codex_tokens(data: bytes) -> dict[str, Any]:
 def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
     machine: Path,
 ) -> None:
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
+    sealed = _codex_login()
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
     lent = LentLogin(CODEX, WHERE)
 
     ((name, data),) = lent.stand_in_files().items()
@@ -796,7 +798,7 @@ def test_a_login_read_from_its_jwts_is_lent_one_that_claims_the_account_only(
             "chatgpt_account_id": "account-459",
         },
     }
-    real = _codex_tokens(_codex_login())
+    real = _codex_tokens(sealed)
     for secret_value in (
         real["access_token"],
         real["id_token"],
@@ -816,7 +818,8 @@ async def test_a_login_read_from_its_jwts_expires_when_its_access_token_does(
 ) -> None:
     """The refresh is handed the access token claiming an expiry that has
     passed -- everything else of the token and the login as it was."""
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login(expires_in=60)})
+    sealed = _codex_login(expires_in=60)
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
     given: list[dict[str, Any]] = []
 
     def act(files: dict[str, bytes], root: str) -> None:
@@ -826,7 +829,7 @@ async def test_a_login_read_from_its_jwts_expires_when_its_access_token_does(
 
     _Environment.act = staticmethod(act)
     lent = LentLogin(CODEX, WHERE)
-    stale = _codex_tokens(_codex_login(expires_in=60))
+    stale = _codex_tokens(sealed)
 
     token = await lent.access_token(None)
 
@@ -1066,8 +1069,9 @@ def test_what_comes_from_where_a_login_is_held_is_told_with_it_masked(
 
 def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
     """A tool may print a token's claims without the rest of it."""
-    provider_state._seal_login(CODEX, {CODEX_AUTH: _codex_login()})
-    token = _codex_tokens(_codex_login())["access_token"]
+    sealed = _codex_login()
+    provider_state._seal_login(CODEX, {CODEX_AUTH: sealed})
+    token = _codex_tokens(sealed)["access_token"]
     _header, claims, _signature = token.split(".")
 
     assert claims not in provider_state.masked(CODEX, f"claims: {claims}")
@@ -1076,3 +1080,118 @@ def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
 def test_what_cannot_be_masked_is_not_told(machine: Path) -> None:
     """Without the login to mask it by, nothing of what was said is kept."""
     assert "REAL-459" not in provider_state.masked(CLAUDE, "failed: REAL-459")
+
+
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_codex_login_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and _call_name(node.func) == "_codex_login"
+
+
+def _local_nodes(function: ast.AST):
+    """Nodes of one function, excluding anything nested in another function."""
+    pending = list(getattr(function, "body", []))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _codex_login_in(expression: ast.AST) -> ast.Call | None:
+    calls = [node for node in ast.walk(expression) if _is_codex_login_call(node)]
+    if len(calls) == 1:
+        return calls[0]
+    return None
+
+
+def _codex_login_bound_here(function: ast.AST) -> dict[str, ast.Call]:
+    """Names assigned in this function from an expression with one login call."""
+    bound: dict[str, ast.Call] = {}
+    for statement in getattr(function, "body", []):
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target = statement.targets[0]
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            target = statement.target
+            value = statement.value
+        if isinstance(target, ast.Name) and value is not None:
+            call = _codex_login_in(value)
+            if call is not None:
+                bound[target.id] = call
+    return bound
+
+
+def _login_call(node: ast.AST, bound: dict[str, ast.Call]) -> ast.Call | None:
+    if _is_codex_login_call(node):
+        return node
+    if isinstance(node, ast.Name):
+        return bound.get(node.id)
+    return None
+
+
+def _calls_under(expression: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
+    return {
+        id(call)
+        for node in ast.walk(expression)
+        if (call := _login_call(node, bound)) is not None
+    }
+
+
+def _sealed_codex_logins(function: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
+    sealed: set[int] = set()
+    for node in _local_nodes(function):
+        if isinstance(node, ast.Call) and _call_name(node.func) == "_seal_login":
+            sealed.update(_calls_under(node, bound))
+    return sealed
+
+
+def _expected_codex_logins(function: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
+    """Logins a test treats as the value it sealed: token reads and compares."""
+    expected: set[int] = set()
+    for node in _local_nodes(function):
+        if isinstance(node, ast.Call) and _call_name(node.func) == "_codex_tokens":
+            for arg in node.args:
+                expected.update(_calls_under(arg, bound))
+        elif isinstance(node, ast.Compare):
+            expected.update(_calls_under(node.left, bound))
+            for comparator in node.comparators:
+                expected.update(_calls_under(comparator, bound))
+    return expected
+
+
+def _codex_logins_compared_apart_from_the_one_sealed() -> list[str]:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    apart: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        bound = _codex_login_bound_here(node)
+        sealed = _sealed_codex_logins(node, bound)
+        if not sealed:
+            continue
+        stray = _expected_codex_logins(node, bound) - sealed
+        if stray:
+            apart.append(f"{node.name}:{node.lineno}")
+    return sorted(apart)
+
+
+def test_a_codex_login_is_compared_with_the_one_that_was_sealed() -> None:
+    """Two calls of `_codex_login` can fall on either side of a second.
+
+    The bytes that are sealed and the bytes a test treats as what was sealed
+    have to be the same call. A second call used as the expected value is the
+    flake, and the same shape on the `not in` side is the check that passes
+    without looking at the login that was sealed.
+    """
+    apart = _codex_logins_compared_apart_from_the_one_sealed()
+    assert not apart, apart
