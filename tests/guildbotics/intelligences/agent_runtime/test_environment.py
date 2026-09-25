@@ -1138,3 +1138,56 @@ async def test_a_contract_change_refuses_a_turn_only_if_the_microvm_would_show_i
                 )
 
     assert len(_Booted.booted) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_boot_that_fails_leaves_no_gateway_running(tmp_path, monkeypatch):
+    """The command may try another turn after a failed boot: that turn boots
+    afresh, and no listener of the failed boot is left that no one can stop."""
+    from guildbotics.intelligences.agent_environment.auth_gateway import (
+        CredentialGateway,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentRuntimeError,
+        AgentRuntimeErrorCategory,
+    )
+
+    _device(monkeypatch, tmp_path, "claude", "codex")
+    started: list[CredentialGateway] = []
+
+    class Recorded(CredentialGateway):
+        async def start(self) -> None:
+            await super().start()
+            started.append(self)
+
+    monkeypatch.setattr(environment, "CredentialGateway", Recorded)
+    booting = environment._start
+    failures = [
+        AgentRuntimeError(
+            AgentRuntimeErrorCategory.PROCESS, "the microVM did not start"
+        )
+    ]
+
+    async def start(spec, at, *, before_stop):
+        if failures:
+            raise failures.pop()
+        return await booting(spec, at, before_stop=before_stop)
+
+    monkeypatch.setattr(environment, "_start", start)
+    tools = frozenset({"claude", "codex"})
+
+    async with environment.command_environment():
+        with pytest.raises(AgentRuntimeError):
+            await environment.start_turn_environment(
+                _turn(tmp_path, tools=tools), "claude"
+            )
+        failed = list(started)
+        assert len(failed) == 2
+        assert all(gateway._server is None for gateway in failed)
+        turn = await environment.start_turn_environment(
+            _turn(tmp_path, tools=tools), "claude"
+        )
+        await turn.close()
+        assert len(started) == 4
+
+    assert all(gateway._server is None for gateway in started)

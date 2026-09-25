@@ -33,6 +33,7 @@ import secrets
 import ssl
 import tempfile
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from logging import getLogger
 from pathlib import Path
@@ -113,8 +114,23 @@ class CredentialUnavailableError(RuntimeError):
     """The login cannot give a token; the message says what to do."""
 
 
+@dataclass(frozen=True, slots=True)
+class _Lent:
+    """What one turn is lent: the stand-in it presents, as the header it
+    comes in, and where the token sent for it comes from."""
+
+    authorization: str
+    tokens: TokenSource
+
+
 class CredentialGateway:
-    """A command's gateway to one tool's API, lent to one turn at a time."""
+    """A command's gateway to one tool's API, lent to one turn at a time.
+
+    A request is served for the turn it was accepted for only while that turn
+    still holds the gateway: one its turn ended while it waited -- for the
+    rest of its body, for a token -- goes no further, and an answer still
+    streaming stops, so nothing of a turn crosses into the next.
+    """
 
     def __init__(
         self,
@@ -123,8 +139,7 @@ class CredentialGateway:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._broker = broker
-        self._tokens: TokenSource | None = None
-        self._authorization = ""
+        self._lent: _Lent | None = None
         self._tls: ssl.SSLContext | None = None
         #: The CA the lent turn trusts the gateway's TLS by.
         self.ca_pem = b""
@@ -173,14 +188,12 @@ class CredentialGateway:
             self.ca_pem = _issue(
                 self._tls, (GUEST_HOST_ALIAS, *self._broker.relayed_hosts)
             )
-        self._tokens = tokens
-        self._authorization = f"Bearer {stand_in}"
+        self._lent = _Lent(f"Bearer {stand_in}", tokens)
         self._refused_routes = set()
 
     def revoke(self) -> None:
-        """Refuse the lent turn's stand-in from now on."""
-        self._authorization = ""
-        self._tokens = None
+        """Refuse the lent turn's stand-in, and stop what it asked for."""
+        self._lent = None
 
     async def close(self) -> None:
         """Refuse every stand-in from now on and stop the gateway; idempotent."""
@@ -207,13 +220,9 @@ class CredentialGateway:
             for name, value in scope["headers"]
         ]
         presented = next((v for k, v in headers if k == "authorization"), "")
-        tokens = self._tokens
-        if (
-            tokens is None
-            or not self._authorization
-            or not secrets.compare_digest(
-                presented.encode(), self._authorization.encode()
-            )
+        lent = self._lent
+        if lent is None or not secrets.compare_digest(
+            presented.encode(), lent.authorization.encode()
         ):
             await _refuse(send, 401, "authentication_error", "Unknown credentials.")
             return
@@ -234,11 +243,11 @@ class CredentialGateway:
         if body is None:
             await _refuse(send, 413, "request_too_large", "Request is too large.")
             return
-        await self._forward(tokens, scope, origin, headers, body, send)
+        await self._forward(lent, scope, origin, headers, body, send)
 
     async def _forward(
         self,
-        tokens: TokenSource,
+        lent: _Lent,
         scope: dict[str, Any],
         origin: str,
         headers: list[tuple[str, str]],
@@ -252,7 +261,13 @@ class CredentialGateway:
         refused: str | None = None
         try:
             while True:
-                token = await tokens(refused)
+                token = await lent.tokens(refused)
+                if self._lent is not lent:
+                    # Its turn ended while it waited for its body or a token.
+                    await _refuse(
+                        send, 401, "authentication_error", "Unknown credentials."
+                    )
+                    return
                 request = self._client.build_request(
                     scope["method"],
                     url,
@@ -309,6 +324,9 @@ class CredentialGateway:
             )
             held = b""
             async for chunk in response.aiter_raw():
+                if self._lent is not lent:
+                    held = b""  # What its turn is no longer lent ends here.
+                    break
                 data = (held + chunk).replace(secret, mask)
                 # What may be the start of the token is held for the next chunk.
                 cut = len(data) - _partial(data, secret)

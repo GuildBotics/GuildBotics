@@ -380,6 +380,99 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
     assert upstream.requests == [] and tokens.asked == [] and sent == []
 
 
+async def _serve(gateway: CredentialGateway, receive: Any) -> list[dict[str, Any]]:
+    """What the gateway answers one request of the lent turn's."""
+    sent: list[dict[str, Any]] = []
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await gateway(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages",
+            "query_string": b"",
+            "headers": [(b"authorization", f"Bearer {STAND_IN}".encode())],
+        },
+        receive,
+        send,
+    )
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("waiting_for", ["its body", "a token"])
+async def test_a_request_whose_turn_ends_while_it_waits_goes_no_further(
+    waiting_for: str,
+) -> None:
+    """The gateway outlives its turns: a request accepted for one turn is not
+    sent on once the turn has ended, whatever it was still waiting for."""
+    upstream = _Upstream()
+    gateway: CredentialGateway | None = None
+
+    class Ending(_Tokens):
+        async def __call__(self, refused: str | None) -> str:
+            if waiting_for == "a token":
+                assert gateway is not None
+                gateway.revoke()
+            return await super().__call__(refused)
+
+    gateway = await _started(
+        BROKER, Ending(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    messages = [
+        {"type": "http.request", "body": b'{"part', "more_body": True},
+        {"type": "http.request", "body": b'ial": 1}'},
+    ]
+
+    async def receive() -> dict[str, Any]:
+        if waiting_for == "its body" and len(messages) == 1:
+            gateway.revoke()
+        return messages.pop(0)
+
+    try:
+        sent = await _serve(gateway, receive)
+    finally:
+        await gateway.close()
+
+    assert upstream.requests == []
+    assert sent[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_an_answer_stops_when_its_turn_ends() -> None:
+    """What the upstream still streams for an ended turn is not handed on."""
+    gateway: CredentialGateway | None = None
+
+    class Streaming(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"FIRST-CHUNK"
+            assert gateway is not None
+            gateway.revoke()
+            yield b"AFTER-THE-TURN"
+
+    def upstream(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=Streaming())
+
+    gateway = await _started(
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"{}"}
+
+    try:
+        sent = await _serve(gateway, receive)
+    finally:
+        await gateway.close()
+
+    body = b"".join(message.get("body", b"") for message in sent[1:])
+    assert sent[0]["status"] == 200
+    assert body == b"FIRST-CHUNK"
+    assert sent[-1].get("more_body") is not True
+
+
 @pytest.mark.asyncio
 async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> None:
     grok = cli_agent_info("grok").provision.credential_broker

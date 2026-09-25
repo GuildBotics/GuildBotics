@@ -348,7 +348,25 @@ class _SharedEnvironment:
         with, whatever of them the first turn runs: one member's slots can
         name different tools, and which one a later turn uses is decided
         while the command runs. A tool not logged in here is booted able to
-        run all the same, and refused only when a turn of it comes."""
+        run all the same, and refused only when a turn of it comes.
+
+        A boot that fails leaves nothing running: the gateways it started are
+        stopped, so the command's next turn boots afresh instead of starting
+        a second listener beside one no one can stop."""
+        try:
+            return await self._boot_able_to_run(context, tool, where)
+        except BaseException:
+            gateways, self._gateways = self._gateways, {}
+            for gateway in gateways.values():
+                await gateway.close()
+            raise
+
+    async def _boot_able_to_run(
+        self,
+        context: AgentExecutionContext,
+        tool: CliAgentInfo,
+        where: LoginEnvironment,
+    ) -> AgentEnvironment:
         tools = [
             tool,
             *(
