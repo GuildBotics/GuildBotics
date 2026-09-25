@@ -1129,20 +1129,27 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
-def _reads_the_clock(function: ast.AST) -> bool:
-    """True when the function itself calls ``time.time``.
+def _is_clock_read(node: ast.AST) -> bool:
+    """True for the attribute ``time.time`` itself.
 
-    That call is what makes two builds of the same helper differ across a
-    second. Nested functions count, so a builder that hides the call still
-    joins the population.
+    That call is what makes two builds differ across a second. The attribute
+    is the whole definition; a callee in another module is not one of these.
     """
-    return any(
+    return (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "time"
         and node.attr == "time"
-        for node in ast.walk(function)
     )
+
+
+def _reads_the_clock(function: ast.AST) -> bool:
+    """True when the function itself calls ``time.time``.
+
+    Nested functions count, so a builder that hides the call still joins the
+    population.
+    """
+    return any(_is_clock_read(node) for node in ast.walk(function))
 
 
 def _clock_reading_helpers(tree: ast.AST) -> frozenset[str]:
@@ -1404,11 +1411,18 @@ def _byte_origin(
     ``plain`` is the only answer that leaves a call out of the population,
     and only when this walk has seen that the bytes are not a clock read: a
     literal, a module import or function used as a value, or a call of a
-    module function that does not read the clock. A module assignment is
-    followed the same way as one in the function. A parameter, a free name,
-    a name this walk cannot follow, or a call through anything other than
-    such a function is ``unknown`` and is reported. Following one more shape
-    (a decorator, a fixture, a tuple unpack) is the path this refuses to grow.
+    module function that does not read the clock. A direct ``time.time()``
+    is that clock read, in the expression or through a simple assignment.
+    A module assignment is followed the same way as one in the function. A
+    parameter, a free name, a name this walk cannot follow, or a call through
+    anything other than such a function is ``unknown`` and is reported.
+    Following one more shape (a decorator, a fixture, a tuple unpack) is the
+    path this refuses to grow.
+
+    An attribute callee's body is not in this file, so it is not followed.
+    The call stays ``plain`` when it is not ``time.time()`` and its arguments
+    and receiver are. That is the boundary, not a claim that the callee
+    ignores the clock.
     """
 
     def origin(
@@ -1458,7 +1472,7 @@ def _byte_origin(
     ):
         return "unknown"
     if isinstance(node, ast.Call):
-        if _is_login_call(node, helpers):
+        if _is_login_call(node, helpers) or _is_clock_read(node.func):
             return "clock"
         # A Name callee counts only when it is a module function this walk
         # already classified. A parameter, a local, or a free name is not.
@@ -1551,10 +1565,12 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
     """The population is not grown by reading decorators, fixtures, or unpacks.
 
     A parameter (what ``parametrize`` and a fixture pass in), a call through
-    a parameter or a free name, a tuple unpack of a clock read, and a module
-    assignment of a clock read are reported by name. A helper that does not
-    read the clock, and bytes that are not a login, are not, including when
-    that helper or those bytes are named at module level.
+    a parameter or a free name, a tuple unpack of a clock read, a module
+    assignment of a clock read, and bytes written out with ``time.time`` are
+    reported by name. A helper that does not read the clock, and bytes that
+    are not a login, are not, including when that helper or those bytes are
+    named at module level. An attribute call whose arguments do not read the
+    clock is one of those: its body is not in this file.
     """
     sample = "\n".join(
         (
@@ -1617,6 +1633,15 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
             "    two = json.dumps({'a': {}, 'b': {}}).encode()",
             "    provider_state._seal_login(GROK, {AUTH: two})",
             "",
+            "def test_written_clock():",
+            "    blob = json.dumps({'expires_at': time.time() + 3600}).encode()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: blob})",
+            "",
+            "def test_named_clock():",
+            "    now = time.time()",
+            "    blob = json.dumps({'expires_at': now + 3600}).encode()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: blob})",
+            "",
         )
     )
     reported = {
@@ -1629,4 +1654,6 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
         "test_free_name",
         "test_tuple_unpack",
         "test_module_name",
+        "test_written_clock",
+        "test_named_clock",
     }
