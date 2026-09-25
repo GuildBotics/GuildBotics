@@ -8,6 +8,8 @@ into the reference). These tests assert the source definitions directly.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Iterator
 
 import click
@@ -42,6 +44,32 @@ def test_every_visible_command_and_option_has_help() -> None:
             if isinstance(param, click.Option) and not param.hidden and not param.help
         )
     assert missing == []
+
+
+def test_each_lazy_subcommand_is_the_command_of_that_name() -> None:
+    ctx = click.Context(main, info_name="guildbotics")
+
+    for name in main.lazy_commands:
+        command = main.get_command(ctx, name)
+        assert isinstance(command, click.Command)
+        assert command.name == name
+
+
+def test_importing_the_cli_leaves_every_subcommand_module_unloaded() -> None:
+    """A process runs one subcommand, so it must not import the others."""
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, guildbotics.cli\n"
+            "print(sorted(m for m in sys.modules if m.startswith('guildbotics.cli.')))",
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+
+    assert loaded.strip() == "['guildbotics.cli._options']"
 
 
 def test_help_shows_defaults_required_and_repeatable(monkeypatch, tmp_path) -> None:

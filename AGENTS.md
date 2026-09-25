@@ -61,7 +61,7 @@
 - `guildbotics/workspace/*` は `utils` と `entities` 以外に依存しない storage 層であり、capability / driver / app_api の都合を知らない
 - `guildbotics/hub/*` は `utils` 以外に依存しない。Hub は repository の入れ物と OpenSSH 経路だけを知り、共有 record の意味を知らない
 - `guildbotics/secrets/*` は `utils` と `hub` にだけ依存する。逆に `hub` から `secrets` を import しない（Hub は値を持つだけで、どれを動かすかは上の層が決める）
-- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py`、`cli/__init__.py`、`cli/member.py`、`cli/secrets.py`）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やす場合は、同期 repositoryへ触れる必要性と `sync.lock` の境界を同時に設計する。activation の防御は process 内の queue 重複を止め、`sync.lock` は process をまたぐ cycle・one-shot・workspace pause を直列化する（`service.lock` は background service の二重起動用で、member CLIの書き込みは守らない）。
+- `guildbotics/sync/*` は `utils` / `entities` / `workspace` / `observability` にだけ依存する。逆に import してよいのは **composition root だけ**で、その一覧は `tests/guildbotics/test_layer_boundaries.py` の `SYNC_COMPOSITION_ROOTS` が正本（現在は `app_api/workspace_sync.py`、`cli/service.py`、`cli/member.py`、`cli/secrets.py`）。capability / driver / integration / それ以外の app_api module は Workspace Sync Port 越しにだけ同期へ届く。composition root を増やす場合は、同期 repositoryへ触れる必要性と `sync.lock` の境界を同時に設計する。activation の防御は process 内の queue 重複を止め、`sync.lock` は process をまたぐ cycle・one-shot・workspace pause を直列化する（`service.lock` は background service の二重起動用で、member CLIの書き込みは守らない）。
 
 リポジトリ直下では `desktop/`（Tauri + React frontend）と `skills/guildbotics/SKILL.md`（エージェント向け作業スキル）も対象。
 
@@ -236,7 +236,9 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 
 ### 2. CLI コマンド
 
-`guildbotics/cli/__init__.py` に主要コマンドがあります。コマンド・オプションの完全な一覧は
+`guildbotics/cli/__init__.py` がルート group で、サブコマンドは名前 → モジュールの表（`_options.LazyGroup`）から
+実行するときにだけ import する（CLI は呼び出しごとに新しいプロセスなので、1 つの `member` 操作に service や hub の
+import を払わせない）。`start` / `stop` / `kill` は `cli/service.py`、`run` は `cli/run.py`。コマンド・オプションの完全な一覧は
 Click 定義から生成される `docs/cli_reference.md` を参照する（`scripts/generate-cli-reference.py`
 で再生成。drift は CI の `generate-cli-reference.py --check` ステップと
 `tests/guildbotics/cli/test_cli_reference.py` が検出する）。CLI の説明文は Click 定義の
@@ -458,6 +460,7 @@ Markdown の内部リンク・見出しアンカー検査（リポジトリル�
 ```bash
 lychee --no-progress --scheme file --include-fragments \
   --exclude-path 'desktop[\\/]node_modules' \
+  --exclude-path 'desktop[\\/]src-tauri[\\/]binaries' \
   './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
 ```
 
@@ -505,9 +508,9 @@ npm run e2e           # desktop/e2e/*.spec.ts を headless chromium で実行
 
 desktop packaging / Tauri 変更時の確認:
 
-- `scripts/desktop-build-backend.sh` は PyInstaller で `guildbotics-app-api` と `guildbotics-cli` の 2 本を build し、`desktop/src-tauri/binaries/*-<target>` に配置する
+- `scripts/desktop-build-backend.sh` は PyInstaller（`desktop/sidecar/guildbotics.spec`）で `guildbotics-app-api` と `guildbotics` の 2 本を `_internal/` を共有する 1 つの onedir として build し、`desktop/src-tauri/binaries/guildbotics/` に `build-id` と一緒に配置する。Tauri はこの directory を `bundle.resources` として同梱し、Desktop は Local API をそこから起動する。CLI は build ごとに `~/.guildbotics/programs/<build-id>/` へ一度だけ複製し（以後書き換えない）、`~/.guildbotics/bin` をそこを指すリンク（Windows はジャンクション）にする。`bin` は新しいリンクを作ってから差し替え、古い build は、切り替えの後の起動で、どのプロセスも使っていないものだけ消す（切り替えた起動では、直前まで `bin` が指していた build は残す。判定の直後に `bin` 経由で起動したプロセスがまだロックを持っていないことがあるため）。古い build から動いているプロセスがあれば切り替えも次回の起動へ延期する（Windows ではジャンクション経由で起動したプロセスが `bin` を通してファイルを読むため）。使用中の判定は、CLI が PyInstaller の runtime hook `hold_program_lock.py` で自分の実行ファイルに持つ共有ロック、Windows では実行中の exe を書き込みで開けないこと。onefile は起動のたびに全体を一時 directory へ展開するため使わない
 - `scripts/desktop-dev-tauri.sh` は `scripts/desktop-write-dev-binaries.sh` で Local API / CLI の開発用 wrapper を生成する
-- Rust/Tauri 側を変更したら `cargo fmt --check`、`cargo check`、必要に応じて `scripts/desktop-test-rust.sh` を実行する。test wrapper は Tauri の `externalBin` をテスト時だけ無効化するため、sidecar の事前 build は不要
+- Rust/Tauri 側を変更したら `cargo fmt --check`、`cargo check`、必要に応じて `scripts/desktop-test-rust.sh` を実行する。test wrapper は Tauri の `bundle.resources` をテスト時だけ空にするため、sidecar の事前 build は不要
 - sidecar / packaging script を変更したら `bash -n scripts/desktop-build-backend.sh scripts/desktop-build-frontend.sh scripts/desktop-dev-tauri.sh scripts/desktop-write-dev-binaries.sh scripts/desktop-target.sh scripts/desktop-smoke-sidecars.sh scripts/desktop-test-rust.sh` と、可能なら `scripts/desktop-build-backend.sh` による smoke を行う
 
 エージェント作業時の品質確認:

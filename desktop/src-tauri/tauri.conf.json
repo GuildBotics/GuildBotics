@@ -50,7 +50,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/guildbotics-app-api", "binaries/guildbotics-cli"]
+    "resources": { "binaries/guildbotics/": "guildbotics/" }
   },
   "plugins": {
     "shell": {

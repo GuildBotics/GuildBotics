@@ -1,0 +1,384 @@
+"""The ``start`` / ``stop`` / ``kill`` commands of the CLI-managed background service."""
+
+from __future__ import annotations
+
+import signal
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+import click
+
+from guildbotics.cli._options import selected_workspace
+from guildbotics.drivers import EventListenerRunner, TaskScheduler
+from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
+from guildbotics.editions import get_edition
+from guildbotics.observability import new_id
+from guildbotics.observability.diagnostics_events import (
+    finish_system_session,
+    start_system_session,
+)
+from guildbotics.runtime.live_state import LiveStatePort
+from guildbotics.runtime.relay_runtime import RelayRuntime
+from guildbotics.runtime.service_control import (
+    ServiceControlWatcher,
+    StopStage,
+    clear_stop_request,
+    write_stop_request,
+)
+from guildbotics.runtime.service_lock import (
+    ServiceLock,
+    ServiceLockMetadata,
+    ServiceLockUnavailableError,
+    inspect_service_lock,
+)
+from guildbotics.runtime.service_owner import (
+    ServiceOwnerError,
+    create_relay_runtime,
+)
+from guildbotics.runtime.service_owner import (
+    prepare_service_owner as prepare_relay_service_owner,
+)
+from guildbotics.sync.activation import (
+    activate_workspace_sync,
+    deactivate_workspace_sync,
+)
+from guildbotics.sync.local_repository import LocalSyncRepository
+from guildbotics.sync.manager import GitSyncManager
+from guildbotics.utils.fileio import get_machine_state_path
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.log_utils import get_logger
+from guildbotics.utils.processes import force_terminate_pid, pid_exists
+from guildbotics.workspace.identity import ensure_device_identity
+
+
+def _service_lock_path() -> Path:
+    return get_machine_state_path("run", "service.lock")
+
+
+def _stop_request_path() -> Path:
+    return get_machine_state_path("run", "stop-request.json")
+
+
+@click.command()
+@click.option(
+    "--only",
+    "only_target",
+    type=click.Choice(["scheduler", "events"], case_sensitive=False),
+    default=None,
+    help="Start only one runtime instead of both scheduler and event listener runner.",
+)
+@click.option(
+    "--max-consecutive-errors",
+    type=int,
+    default=3,
+    help="Stop a worker after this many consecutive workflow errors.",
+)
+def start(
+    only_target: str | None,
+    max_consecutive_errors: int,
+) -> None:
+    """Start GuildBotics runtimes (scheduler and event listener runner)."""
+    workspace = selected_workspace()
+    request_path = _stop_request_path()
+    service_lock = ServiceLock(_service_lock_path())
+    try:
+        metadata = service_lock.acquire(
+            owner="cli",
+            workspace=workspace,
+            before_publish=lambda: clear_stop_request(request_path),
+        )
+    except ServiceLockUnavailableError as exc:
+        raise click.ClickException(
+            _service_lock_conflict_message(exc.metadata)
+        ) from exc
+
+    relay_runtime: RelayRuntime | None = None
+    try:
+        sync_manager = activate_workspace_sync(workspace)
+        relay_runtime = (
+            _prepare_service_owner(workspace, sync_manager)
+            if sync_manager is not None
+            else None
+        )
+        _run_cli_background_service(
+            only_target=only_target,
+            max_consecutive_errors=max_consecutive_errors,
+            service_instance_id=metadata.service_instance_id,
+            request_path=request_path,
+            live_state=relay_runtime.publisher if relay_runtime is not None else None,
+            owner_check=relay_runtime.check_owner
+            if relay_runtime is not None
+            else None,
+        )
+    finally:
+        if relay_runtime is not None:
+            relay_runtime.stop()
+        if not deactivate_workspace_sync():
+            get_logger().warning("The synchronization queue did not stop cleanly.")
+        clear_stop_request(request_path)
+        service_lock.release()
+
+
+def _run_cli_background_service(
+    *,
+    only_target: str | None,
+    max_consecutive_errors: int,
+    service_instance_id: str,
+    request_path: Path,
+    live_state: LiveStatePort | None = None,
+    owner_check: Callable[[], bool | None] | None = None,
+) -> None:
+    start_system_session(new_id())
+    try:
+        _run_cli_background_service_session(
+            only_target=only_target,
+            max_consecutive_errors=max_consecutive_errors,
+            service_instance_id=service_instance_id,
+            request_path=request_path,
+            live_state=live_state,
+            owner_check=owner_check,
+        )
+    finally:
+        finish_system_session()
+
+
+def _prepare_service_owner(
+    workspace: Path, sync_manager: GitSyncManager
+) -> RelayRuntime | None:
+    """Settle synchronization, then require this device to own the service."""
+    status = sync_manager.synchronize()
+    if status.failure is not None:
+        raise click.ClickException(
+            "The service cannot start because workspace synchronization failed: "
+            f"{status.failure}"
+        )
+    repository = LocalSyncRepository(workspace)
+    remote_url = repository.remote_url()
+    if not remote_url:
+        return None
+    device_id = ensure_device_identity().device_id
+    runtime: RelayRuntime | None = None
+    try:
+        runtime = create_relay_runtime(
+            remote_url,
+            status.workspace_id,
+            device_id,
+            on_head_updated=sync_manager.wake,
+        )
+        return prepare_relay_service_owner(runtime, device_id)
+    except ServiceOwnerError as exc:
+        if runtime is not None:
+            runtime.stop()
+        if exc.code == "service_owner_conflict":
+            current = exc.owner_device_id or "unknown"
+            message = (
+                "This device is not the service owner "
+                f"(current owner: {current}). Transfer ownership explicitly first."
+            )
+        else:
+            message = str(exc)
+        raise click.ClickException(f"The service cannot start: {message}") from exc
+
+
+def _run_cli_background_service_session(
+    *,
+    only_target: str | None,
+    max_consecutive_errors: int,
+    service_instance_id: str,
+    request_path: Path,
+    live_state: LiveStatePort | None = None,
+    owner_check: Callable[[], bool | None] | None = None,
+) -> None:
+    edition = get_edition()
+
+    scheduler_sources_enabled = only_target in (None, "scheduler")
+    start_events = only_target in (None, "events")
+    start_member_worker = scheduler_sources_enabled or start_events
+
+    execution = TaskRunCoordinator(
+        ExecutionStatusPublisher(live_state),
+        owner_check=owner_check,
+    )
+
+    scheduler = (
+        TaskScheduler(
+            edition.get_context(),
+            consecutive_error_limit=max_consecutive_errors,
+            scheduled_source_enabled=scheduler_sources_enabled,
+            routine_source_enabled=scheduler_sources_enabled,
+            event_queue_source_enabled=start_events,
+            execution_coordinator=execution,
+        )
+        if start_member_worker
+        else None
+    )
+    event_runner = EventListenerRunner(edition.get_context()) if start_events else None
+
+    graceful_stop_started = threading.Event()
+
+    def _request_shutdown(*, cancel: bool) -> None:
+        # Signal-handler safe: only sets flags / schedules non-blocking stops
+        # and never joins, so the handler returns immediately and a second
+        # signal can still be delivered to escalate the stop.
+        if event_runner is not None:
+            event_runner.stop()
+        if scheduler is not None:
+            scheduler.request_shutdown(graceful=not cancel)
+
+    def _handle_signal(signum, frame):  # type: ignore[no-untyped-def]
+        if graceful_stop_started.is_set():
+            # Second signal: escalate like the GUI force stop and cancel the
+            # in-flight work the graceful stop is still waiting on. The main
+            # thread does the joining, so this handler must not block.
+            click.echo("Cancelling in-flight work...")
+            _request_shutdown(cancel=True)
+            return
+        graceful_stop_started.set()
+        click.echo(
+            f"Received signal {signum}. Waiting for in-flight work to finish "
+            "(send the signal again to cancel it)..."
+        )
+        _request_shutdown(cancel=False)
+
+    watcher = ServiceControlWatcher(
+        service_instance_id,
+        _request_shutdown,
+        path=request_path,
+    )
+
+    # Signals support foreground interrupts and external process supervisors.
+    # GuildBotics stop requests use the cross-platform control file above.
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        watcher.start()
+        if event_runner is not None:
+            event_runner.start()
+        if scheduler is not None:
+            # Blocks until workers exit; the signal handler above only requests
+            # the stop, so the join that waits it out happens here in the main
+            # thread and remains interruptible by a second (escalating) signal.
+            scheduler.start()
+        if event_runner is not None:
+            _wait_for_event_runner(event_runner)
+    except KeyboardInterrupt:
+        _request_shutdown(cancel=False)
+    finally:
+        watcher.close()
+        if scheduler is not None:
+            scheduler.shutdown(graceful=True)
+        if event_runner is not None:
+            event_runner.stop()
+            event_runner.join(timeout=5.0)
+
+
+def _wait_for_event_runner(event_runner: EventListenerRunner) -> None:
+    while event_runner.is_alive():
+        time.sleep(1.0)
+
+
+@click.command()
+@click.option(
+    "--timeout",
+    default=30,
+    help="Seconds to wait at each stop stage",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Cancel in-flight work after timeout, then force terminate as a last resort",
+)
+def stop(timeout: int, force: bool) -> None:
+    """Gracefully stop a CLI-managed background service."""
+    selected_workspace()
+    status = inspect_service_lock(_service_lock_path())
+    if not status.locked:
+        click.echo(t("runtime.service_lock.not_running"))
+        return
+    metadata = status.metadata
+    if metadata is None:
+        raise click.ClickException(t("runtime.service_lock.invalid_metadata"))
+    if metadata.owner == "desktop":
+        raise click.ClickException(t("runtime.service_lock.desktop_managed"))
+
+    pid = metadata.pid
+    if not pid_exists(pid):
+        raise click.ClickException(t("runtime.service_lock.missing_process", pid=pid))
+
+    _write_service_stop_request(metadata, "graceful")
+
+    # Wait for graceful shutdown (the scheduler finishes in-flight work first).
+    if _wait_for_process_exit(pid, timeout):
+        click.echo(t("runtime.service_lock.stopped"))
+        return
+
+    if not force:
+        click.echo(t("runtime.service_lock.stop_timeout"))
+        return
+
+    # Escalate monotonically from graceful to cancellation, then force stop.
+    _write_service_stop_request(metadata, "cancel")
+    if _wait_for_process_exit(pid, timeout):
+        click.echo(t("runtime.service_lock.stopped_after_cancel"))
+        return
+
+    try:
+        force_terminate_pid(pid)
+    except Exception as e:
+        click.echo(t("runtime.service_lock.force_kill_failed", pid=pid, error=e))
+    else:
+        click.echo(t("runtime.service_lock.force_killed"))
+
+
+def _write_service_stop_request(
+    metadata: ServiceLockMetadata,
+    stage: StopStage,
+) -> None:
+    try:
+        write_stop_request(
+            metadata.service_instance_id,
+            stage,
+            _stop_request_path(),
+        )
+    except PermissionError as exc:
+        raise click.ClickException(
+            t("runtime.service_lock.permission_denied", pid=metadata.pid)
+        ) from exc
+    except TimeoutError as exc:
+        raise click.ClickException(
+            t("runtime.service_lock.control_timeout", pid=metadata.pid)
+        ) from exc
+
+
+def _wait_for_process_exit(pid: int, timeout: float) -> bool:
+    deadline = time.time() + max(0, timeout)
+    while True:
+        if not pid_exists(pid):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+@click.command()
+@click.pass_context
+def kill(ctx: click.Context) -> None:
+    """Immediately force kill a CLI-managed background service.
+
+    Equivalent to: `guildbotics stop --force --timeout 0`.
+    """
+    ctx.invoke(stop, timeout=0, force=True)
+
+
+def _service_lock_conflict_message(metadata: ServiceLockMetadata | None) -> str:
+    if metadata is None:
+        return t("runtime.service_lock.already_running")
+    return t(
+        "runtime.service_lock.already_running_with_owner",
+        owner=metadata.owner,
+        pid=metadata.pid,
+        workspace=metadata.workspace,
+    )

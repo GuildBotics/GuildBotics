@@ -31,12 +31,9 @@ def _parent_is_alive(parent_pid: int) -> bool:
 def _watch_parent(parent_pid: int, on_exit: Callable[[], None]) -> None:
     """Exit the sidecar once the parent (desktop app) process is gone.
 
-    The packaged sidecar is a PyInstaller one-file binary, so the desktop host
-    actually spawns a bootloader process that re-executes the real worker as a
-    child. Killing the bootloader does not reliably terminate that worker, which
-    would otherwise survive as an orphan holding the API port. Watching the
-    desktop app PID directly covers both a clean quit and a force-kill of the
-    app.
+    A force-killed desktop app cannot stop its sidecar, which would otherwise
+    survive as an orphan holding the API port. Watching the desktop app PID
+    covers that as well as a clean quit.
     """
     while True:
         if not _parent_is_alive(parent_pid):

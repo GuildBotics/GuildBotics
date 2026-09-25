@@ -86,9 +86,10 @@ def test_windows_scripts_use_exe_sidecars_and_real_dev_binaries() -> None:
     dev = (ROOT / "scripts/desktop-write-dev-binaries.sh").read_text(encoding="utf-8")
     frontend = (ROOT / "scripts/desktop-build-frontend.sh").read_text(encoding="utf-8")
 
-    for script in (build_backend, smoke, dev, frontend):
+    for script in (smoke, dev, frontend):
         assert "*-pc-windows-msvc" in script
-    assert 'SOURCE_SUFFIX=".exe"' in build_backend
+    assert "cp -R dist/guildbotics" in build_backend
+    assert 'SIDECAR_PATH="${SIDECAR_PATH}.exe"' in smoke
     assert '"$SCRIPT_DIR/desktop-build-backend.sh"' in dev
     assert 'BUILD_ARGS=(--target "$DESKTOP_TARGET")' in frontend
     assert "BUILD_ARGS+=(--bundles nsis)" in frontend
@@ -102,5 +103,5 @@ def test_rust_tests_disable_packaged_sidecars_only_for_cargo_test() -> None:
     script = (ROOT / "scripts/desktop-test-rust.sh").read_text(encoding="utf-8")
 
     assert "TAURI_CONFIG=" in script
-    assert '"externalBin":[]' in script
+    assert '"resources":[]' in script
     assert 'cargo test "$@"' in script

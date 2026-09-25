@@ -170,7 +170,7 @@ def test_sync_depends_only_on_storage_and_recording() -> None:
 SYNC_COMPOSITION_ROOTS = frozenset(
     {
         Path("app_api/workspace_sync.py"),
-        Path("cli/__init__.py"),
+        Path("cli/service.py"),
         Path("cli/member.py"),
         Path("cli/secrets.py"),
     }

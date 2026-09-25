@@ -35,7 +35,7 @@ struct Sidecar {
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// What the process still needs after its teardown has finished: the server
-/// closing down and, in a packaged build, the bootloader cleaning up after it.
+/// closing down.
 /// How long the teardown itself may take is the backend's to say.
 const BACKEND_EXIT_MARGIN: Duration = Duration::from_secs(5);
 
@@ -300,57 +300,12 @@ fn resolve_home_dir(discovered: Option<PathBuf>) -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))
 }
 
-fn desktop_target_triple_for(os: &str, architecture: &str) -> Option<&'static str> {
-    Some(match (os, architecture) {
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
-        _ => return None,
-    })
-}
-
-fn desktop_target_triple() -> Option<&'static str> {
-    desktop_target_triple_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
-fn bundled_cli_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    let target_triple = desktop_target_triple();
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join(platform_executable_name("guildbotics-cli")));
-            if let Some(target_triple) = target_triple {
-                candidates.push(dir.join(platform_executable_name(&format!(
-                    "guildbotics-cli-{target_triple}"
-                ))));
-            }
-        }
-    }
-    if let Some(target_triple) = target_triple {
-        candidates.push(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join(platform_executable_name(&format!(
-                    "guildbotics-cli-{target_triple}"
-                ))),
-        );
-    }
-    candidates
-}
-
-fn find_bundled_cli() -> io::Result<PathBuf> {
-    bundled_cli_candidates()
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "bundled guildbotics-cli binary was not found",
-            )
-        })
-}
+/// The resource directory holding the bundled Python programs: the member CLI
+/// `guildbotics`, the Local API `guildbotics-app-api`, and the `_internal/`
+/// directory they share.
+const PROGRAMS_DIR: &str = "guildbotics";
+/// Names the build a programs directory came from.
+const BUILD_ID_FILE: &str = "build-id";
 
 #[cfg(unix)]
 fn make_executable(path: &Path) -> io::Result<()> {
@@ -366,13 +321,8 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn install_member_cli(home: &Path) -> io::Result<()> {
-    let source = find_bundled_cli()?;
-    let managed_dir = home.join(".guildbotics").join("bin");
-    let managed_cli = managed_dir.join(platform_executable_name("guildbotics"));
-    fs::create_dir_all(&managed_dir)?;
-    fs::copy(source, &managed_cli)?;
-    make_executable(&managed_cli)?;
+fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
+    install_programs(programs, &home.join(".guildbotics"))?;
 
     if should_install_shell_shim(std::env::consts::OS) {
         let local_bin = home.join(".local").join("bin");
@@ -387,6 +337,157 @@ fn install_member_cli(home: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Install the bundled build under `root` and point `root/bin` at it.
+///
+/// Each build is its own directory, `root/programs/<build id>`, which appears
+/// complete (it is copied under another name first) and is never modified, and
+/// `bin` is a link to one of them. `bin` moves only once the new link exists,
+/// and the build it pointed at is removed on a later launch, so there is always
+/// a working CLI: an interrupted step is simply run again on the next launch.
+///
+/// A build still in use is never taken away. While a program runs from an old
+/// build, `bin` keeps pointing at it until a later launch, since on Windows a
+/// program started through the junction reads its files through `bin`.
+fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
+    let build_id = fs::read_to_string(source.join(BUILD_ID_FILE))?;
+    let build_id = build_id.trim();
+    let programs = root.join("programs");
+    let current = programs.join(build_id);
+    if !current.exists() {
+        let staging = programs.join(format!("{build_id}.staging"));
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        copy_dir(source, &staging)?;
+        fs::rename(&staging, &current)?;
+    }
+    let mut older = Vec::new();
+    for entry in fs::read_dir(&programs)? {
+        let program = entry?.path();
+        if program != current {
+            older.push(program);
+        }
+    }
+    let bin = root.join("bin");
+    let linked = fs::read_link(&bin).ok();
+    let linked = linked.as_deref().and_then(Path::file_name);
+    if linked != current.file_name() {
+        if older.iter().any(|program| is_running(program)) {
+            eprintln!("GuildBotics CLI update deferred: a program runs from an older build");
+            return Ok(());
+        }
+        point_link(&bin, &current)?;
+    }
+    for program in older {
+        // What `bin` pointed at until now may have just been started through
+        // it and not yet hold its lock; it goes on a later launch, which no
+        // new program reaches it by.
+        if program.file_name() != linked && !is_running(&program) {
+            // Retried on the next launch if something still holds a file.
+            let _ = fs::remove_dir_all(program);
+        }
+    }
+    Ok(())
+}
+
+/// Whether a program runs from `build`, answering yes when that cannot be
+/// ruled out. A running CLI holds a shared lock on its executable for its
+/// whole life (`desktop/sidecar/hold_program_lock.py`).
+#[cfg(unix)]
+fn is_running(build: &Path) -> bool {
+    match fs::File::open(build.join("guildbotics")) {
+        Ok(executable) => executable.try_lock().is_err(),
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    }
+}
+
+/// Whether a program runs from `build`, answering yes when that cannot be
+/// ruled out. Windows refuses to open a running executable for writing.
+#[cfg(windows)]
+fn is_running(build: &Path) -> bool {
+    match fs::OpenOptions::new()
+        .write(true)
+        .open(build.join("guildbotics.exe"))
+    {
+        Ok(_) => false,
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    }
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Replace whatever `link` is with a link to `target`, in one rename.
+#[cfg(unix)]
+fn point_link(link: &Path, target: &Path) -> io::Result<()> {
+    let pending = sibling(link, ".pending");
+    let _ = fs::remove_file(&pending);
+    std::os::unix::fs::symlink(target, &pending)?;
+    if fs::symlink_metadata(link).is_ok_and(|metadata| metadata.is_dir()) {
+        // A directory is not renamed over; only an earlier layout left one.
+        fs::remove_dir_all(link)?;
+    }
+    fs::rename(&pending, link)
+}
+
+/// Replace whatever `link` is with a junction to `target` (a symbolic link
+/// needs a privilege on Windows). A directory cannot be renamed over, so the
+/// old one steps aside first and comes back if the new one cannot take its
+/// place.
+#[cfg(windows)]
+fn point_link(link: &Path, target: &Path) -> io::Result<()> {
+    let pending = sibling(link, ".pending");
+    let previous = sibling(link, ".previous");
+    for leftover in [&pending, &previous] {
+        if fs::symlink_metadata(leftover).is_ok() {
+            // Removes a junction itself, not what it points at.
+            fs::remove_dir_all(leftover)?;
+        }
+    }
+    junction::create(target, &pending)?;
+    if fs::symlink_metadata(link).is_ok() {
+        fs::rename(link, &previous)?;
+    }
+    if let Err(error) = fs::rename(&pending, link) {
+        let _ = fs::rename(&previous, link);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(&previous);
+    Ok(())
+}
+
+/// Copy a directory tree, keeping symbolic links as links rather than following
+/// them, since a PyInstaller build on a POSIX system may lay libraries out so.
+fn copy_dir(source: &Path, target: &Path) -> io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let destination = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            copy_symlink(&entry.path(), &destination)?;
+        } else if file_type.is_dir() {
+            copy_dir(&entry.path(), &destination)?;
+        } else {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(source)?, target)
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    fs::copy(source, target).map(drop)
 }
 
 fn executable_name_for(base: &str, os: &str) -> String {
@@ -588,9 +689,9 @@ fn cli_agent_skill_status(home: &Path, agent: &CliAgent) -> serde_json::Value {
     }
 }
 
-fn install_cli_agent_assets() -> io::Result<()> {
+fn install_cli_agent_assets(programs: &Path) -> io::Result<()> {
     let home = home_dir()?;
-    install_member_cli(&home)?;
+    install_member_cli(&home, programs)?;
 
     for agent in &CLI_AGENTS {
         let Some(agent_home) = configured_agent_home(&home, agent.home_env, agent.home_dir) else {
@@ -931,36 +1032,246 @@ mod tests {
         Ok(())
     }
 
+    fn write_build(dir: &Path, build_id: &str) -> io::Result<()> {
+        if dir.exists() {
+            fs::remove_dir_all(dir)?;
+        }
+        fs::create_dir_all(dir.join("_internal"))?;
+        fs::write(dir.join(BUILD_ID_FILE), build_id)?;
+        fs::write(dir.join(platform_executable_name("guildbotics")), build_id)?;
+        fs::write(dir.join("_internal").join("data"), build_id)
+    }
+
+    /// What `bin` runs, and every entry left under `programs`.
+    fn installed(root: &Path) -> io::Result<(String, Vec<String>)> {
+        let running = fs::read_to_string(
+            root.join("bin")
+                .join(platform_executable_name("guildbotics")),
+        )?;
+        let mut programs = fs::read_dir(root.join("programs"))?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<io::Result<Vec<_>>>()?;
+        programs.sort();
+        Ok((running, programs))
+    }
+
     #[test]
-    fn desktop_target_triple_for_maps_supported_platforms() {
+    fn install_programs_points_bin_at_each_new_build_and_drops_the_old_one_later() -> io::Result<()>
+    {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
         assert_eq!(
-            desktop_target_triple_for("macos", "aarch64"),
-            Some("aarch64-apple-darwin")
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into()])
         );
+
+        // The same build is left alone.
+        let data = root
+            .join("programs")
+            .join("build-1")
+            .join("_internal")
+            .join("data");
+        fs::write(&data, "untouched")?;
+        install_programs(&source, &root)?;
+        assert_eq!(fs::read_to_string(&data)?, "untouched");
+
+        // What `bin` pointed at may just have been started through it, and
+        // stays until a later launch.
+        write_build(&source, "build-2")?;
+        install_programs(&source, &root)?;
         assert_eq!(
-            desktop_target_triple_for("macos", "x86_64"),
-            Some("x86_64-apple-darwin")
+            installed(&root)?,
+            ("build-2".into(), vec!["build-1".into(), "build-2".into()])
         );
+        install_programs(&source, &root)?;
         assert_eq!(
-            desktop_target_triple_for("linux", "aarch64"),
-            Some("aarch64-unknown-linux-gnu")
+            installed(&root)?,
+            ("build-2".into(), vec!["build-2".into()])
         );
+        Ok(())
+    }
+
+    /// Hold the build's executable the way a program running from it does.
+    #[cfg(unix)]
+    fn run_from(build: &Path) -> io::Result<fs::File> {
+        let executable = fs::File::open(build.join("guildbotics"))?;
+        executable.lock_shared()?;
+        Ok(executable)
+    }
+
+    #[cfg(windows)]
+    fn run_from(build: &Path) -> io::Result<fs::File> {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 1;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(build.join("guildbotics.exe"))
+    }
+
+    #[test]
+    fn install_programs_waits_while_a_program_runs_from_the_old_build() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+
+        let running = run_from(&root.join("programs").join("build-1"))?;
+        write_build(&source, "build-2")?;
+        install_programs(&source, &root)?;
         assert_eq!(
-            desktop_target_triple_for("linux", "x86_64"),
-            Some("x86_64-unknown-linux-gnu")
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into(), "build-2".into()])
         );
+
+        drop(running);
+        install_programs(&source, &root)?;
         assert_eq!(
-            desktop_target_triple_for("windows", "x86_64"),
-            Some("x86_64-pc-windows-msvc")
+            installed(&root)?,
+            ("build-2".into(), vec!["build-1".into(), "build-2".into()])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn install_programs_removes_an_old_build_only_once_nothing_runs_from_it() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+        let old = root.join("programs").join("build-0");
+        write_build(&old, "build-0")?;
+
+        let running = run_from(&old)?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-0".into(), "build-1".into()])
+        );
+
+        drop(running);
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into()])
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_programs_keeps_the_old_link_when_the_new_one_cannot_be_made() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+        write_build(&source, "build-2")?;
+        copy_dir(&source, &root.join("programs").join("build-2"))?;
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555))?;
+        let result = install_programs(&source, &root);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
+
+        assert!(result.is_err());
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into(), "build-2".into()])
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn link_to(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn link_to(target: &Path, link: &Path) -> io::Result<()> {
+        junction::create(target, link)
+    }
+
+    #[test]
+    fn install_programs_recovers_from_any_interrupted_or_earlier_state() -> io::Result<()> {
+        type Arrange = fn(&Path) -> io::Result<()>;
+        let states: [(&str, Arrange); 6] = [
+            ("staging left over", |root| {
+                let staging = root.join("programs").join("build-2.staging");
+                fs::create_dir_all(&staging)?;
+                fs::write(staging.join("partial"), "")
+            }),
+            ("new link left pending", |root| {
+                link_to(
+                    &root.join("programs").join("build-1"),
+                    &root.join("bin.pending"),
+                )
+            }),
+            ("old link stepped aside", |root| {
+                fs::rename(root.join("bin"), root.join("bin.previous"))
+            }),
+            ("bin left dangling", |root| {
+                fs::remove_dir_all(root.join("programs").join("build-1"))
+            }),
+            ("stale entry left over", |root| {
+                fs::create_dir_all(root.join("programs").join("build-0.gc"))
+            }),
+            ("bin is a directory of an earlier layout", |root| {
+                fs::remove_dir_all(root.join("bin"))?;
+                fs::create_dir_all(root.join("bin"))?;
+                fs::write(root.join("bin").join("guildbotics"), "one-file")
+            }),
+        ];
+        for (state, arrange) in states {
+            let temp_dir = TestDir::new()?;
+            let source = temp_dir.path().join("resources");
+            let root = temp_dir.path().join("home");
+            write_build(&source, "build-1")?;
+            install_programs(&source, &root)?;
+            write_build(&source, "build-2")?;
+            arrange(&root)?;
+
+            install_programs(&source, &root)?;
+            install_programs(&source, &root)?;
+
+            assert_eq!(
+                installed(&root)?,
+                ("build-2".into(), vec!["build-2".into()]),
+                "{state}"
+            );
+            assert!(!root.join("bin").join("partial").exists(), "{state}");
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_programs_keeps_symbolic_links() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        std::os::unix::fs::symlink("_internal/data", source.join("link"))?;
+
+        install_programs(&source, &root)?;
+
+        assert_eq!(
+            fs::read_link(root.join("bin").join("link"))?,
+            PathBuf::from("_internal/data")
+        );
+        Ok(())
     }
 
     #[test]
     fn windows_cli_names_include_executable_suffix_and_skip_shell_shim() {
-        assert_eq!(
-            executable_name_for("guildbotics-cli-x86_64-pc-windows-msvc", "windows"),
-            "guildbotics-cli-x86_64-pc-windows-msvc.exe"
-        );
         assert_eq!(
             executable_name_for("guildbotics", "windows"),
             "guildbotics.exe"
@@ -1072,7 +1383,8 @@ pub fn run() {
             app.manage(tray::TrayState::default());
             tray::build(app.handle())?;
 
-            if let Err(error) = install_cli_agent_assets() {
+            let programs = app.path().resource_dir()?.join(PROGRAMS_DIR);
+            if let Err(error) = install_cli_agent_assets(&programs) {
                 eprintln!("failed to install GuildBotics AI CLI tool assets: {error}");
             }
 
@@ -1083,33 +1395,29 @@ pub fn run() {
             let port_arg = port.to_string();
             let boot_log_path = app.path().app_log_dir()?.join("bootstrap.log");
             let _ = append_boot_log(&boot_log_path, b"--- GuildBotics backend start ---");
-            let spawn_result = app
+            let command = app
                 .shell()
-                .sidecar("guildbotics-app-api")
-                .and_then(|command| {
-                    let command = command
-                        // The sidecar is a PyInstaller one-file binary whose worker can
-                        // outlive a killed bootloader. Hand it our PID so it can exit on
-                        // its own if this app ever dies without a clean teardown.
-                        .env(
-                            "GUILDBOTICS_APP_API_PARENT_PID",
-                            std::process::id().to_string(),
-                        )
-                        // Handed over through the environment, never argv: on a
-                        // shared host `ps` exposes another user's command line.
-                        .env("GUILDBOTICS_APP_API_TOKEN", &token);
-                    // In `tauri dev` the webview is served from the Vite dev server
-                    // (`build.devUrl` in tauri.conf.json), so API requests carry that
-                    // origin instead of tauri://localhost.
-                    #[cfg(debug_assertions)]
-                    let command = command.env(
-                        "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
-                        "http://127.0.0.1:1420",
-                    );
-                    command
-                        .args(["--host", "127.0.0.1", "--port", &port_arg])
-                        .spawn()
-                });
+                .command(programs.join(platform_executable_name("guildbotics-app-api")))
+                // Hand the sidecar our PID so it can exit on its own if this app
+                // ever dies without a clean teardown.
+                .env(
+                    "GUILDBOTICS_APP_API_PARENT_PID",
+                    std::process::id().to_string(),
+                )
+                // Handed over through the environment, never argv: on a
+                // shared host `ps` exposes another user's command line.
+                .env("GUILDBOTICS_APP_API_TOKEN", &token);
+            // In `tauri dev` the webview is served from the Vite dev server
+            // (`build.devUrl` in tauri.conf.json), so API requests carry that
+            // origin instead of tauri://localhost.
+            #[cfg(debug_assertions)]
+            let command = command.env(
+                "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
+                "http://127.0.0.1:1420",
+            );
+            let spawn_result = command
+                .args(["--host", "127.0.0.1", "--port", &port_arg])
+                .spawn();
             let sidecar = match spawn_result {
                 Ok((mut rx, child)) => {
                     // Keep the child's stdout/stderr pipe drained so it never blocks.

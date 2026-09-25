@@ -24,6 +24,7 @@ jobs:
             --scheme file
             --include-fragments
             --exclude-path 'desktop[\\/]node_modules'
+            --exclude-path 'desktop[\\/]src-tauri[\\/]binaries'
             './*.md'
             './docs/**/*.md'
             './desktop/**/*.md'

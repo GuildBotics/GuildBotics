@@ -103,10 +103,9 @@ function isTauriRuntime() {
 }
 
 async function waitForHealth(token: string) {
-  // The packaged sidecar is a PyInstaller one-file binary that unpacks itself
-  // into a temp dir on first launch, which can take ~10s on a fresh Mac before
-  // uvicorn answers. Keep a generous deadline so the cold start is not flagged
-  // as a backend failure.
+  // On the first launch after an install or update, the OS checks every bundled
+  // library the sidecar loads before uvicorn answers. Keep a generous deadline
+  // so that cold start is not flagged as a backend failure.
   const deadline = Date.now() + 45_000;
   const base = getApiBase();
   let lastError: unknown = null;

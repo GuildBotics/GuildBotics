@@ -45,7 +45,7 @@ scripts/desktop-test-rust.sh
 ```
 
 These tests must run natively on Windows. In particular, confirm that the GuildBotics process can create a nested Job Object, assign a suspended AI CLI process to it, and resume the process.
-The Rust test wrapper clears Tauri's `externalBin` only for tests, so it works before the PyInstaller sidecars are built. Package builds still use the normal Tauri configuration and continue to require both sidecars.
+The Rust test wrapper clears Tauri's `bundle.resources` only for tests, so it works before the PyInstaller programs are built. Package builds still use the normal Tauri configuration and continue to require them.
 
 ## Build
 
@@ -58,10 +58,7 @@ cd desktop
 npm run tauri build -- --bundles nsis
 ```
 
-The PyInstaller executables are written as:
-
-- `desktop/src-tauri/binaries/guildbotics-app-api-x86_64-pc-windows-msvc.exe`
-- `desktop/src-tauri/binaries/guildbotics-cli-x86_64-pc-windows-msvc.exe`
+The PyInstaller programs are written as one directory, `desktop/src-tauri/binaries/guildbotics/`, holding `guildbotics-app-api.exe`, `guildbotics.exe`, the `_internal\` directory they share, and a `build-id`.
 
 The NSIS installer is produced under `desktop/src-tauri/target/release/bundle/nsis/`. The Windows Tauri overlay fixes the bundle target to NSIS so a normal Windows build does not attempt an MSI build.
 
@@ -69,7 +66,7 @@ For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds real PyInstaller `.
 
 ## Installation and PATH behavior
 
-On first launch, Desktop copies the managed member CLI to `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`. The NSIS install hook adds `%USERPROFILE%\.guildbotics\bin` to the current user's PATH only when an equivalent entry is absent. It records ownership only when it adds the entry, and uninstall removes only that owned entry.
+On launch, Desktop copies the bundled programs once per build into `%USERPROFILE%\.guildbotics\programs\<build-id>\` and makes `%USERPROFILE%\.guildbotics\bin` a junction to it, so the managed member CLI is `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`. The new junction is made first and then renamed into place; if that fails, the previous junction is put back. While a `guildbotics.exe` from an older build is running (Windows refuses to open it for writing), the switch waits for the next launch, and an old build is removed on a later launch, once nothing runs from it. The NSIS install hook adds `%USERPROFILE%\.guildbotics\bin` to the current user's PATH only when an equivalent entry is absent. It records ownership only when it adds the entry, and uninstall removes only that owned entry.
 
 Open a new cmd, PowerShell, or Git Bash session before testing bare `guildbotics`. Windows resolves the system PATH before the user PATH; a different system-wide `guildbotics` installation can therefore take precedence. Spawned AI CLI processes are unaffected because GuildBotics prepends its managed bin directory to their PATH.
 

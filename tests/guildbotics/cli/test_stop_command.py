@@ -16,12 +16,15 @@ def _setup_stop(monkeypatch, tmp_path: Path, *, dies_after_stage: str | None):
     monkeypatch.setattr("guildbotics.runtime.service_lock.os.getpid", lambda: 4242)
     service_lock = ServiceLock(lock_path)
     service_lock.acquire(owner="cli", workspace=tmp_path)
-    monkeypatch.setattr("guildbotics.cli._service_lock_path", lambda: lock_path)
+    monkeypatch.setattr("guildbotics.cli.service._service_lock_path", lambda: lock_path)
     monkeypatch.setattr(
-        "guildbotics.cli._stop_request_path", lambda: tmp_path / "stop-request.json"
+        "guildbotics.cli.service._stop_request_path",
+        lambda: tmp_path / "stop-request.json",
     )
-    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
-    monkeypatch.setattr("guildbotics.cli.time.sleep", lambda _s: None)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.selected_workspace", lambda: Path.cwd()
+    )
+    monkeypatch.setattr("guildbotics.cli.service.time.sleep", lambda _s: None)
 
     state = {"running": True}
     requests: list[str] = []
@@ -38,9 +41,13 @@ def _setup_stop(monkeypatch, tmp_path: Path, *, dies_after_stage: str | None):
         requests.append("force")
         state["running"] = False
 
-    monkeypatch.setattr("guildbotics.cli.write_stop_request", _write_stop_request)
-    monkeypatch.setattr("guildbotics.cli.force_terminate_pid", _force_terminate)
-    monkeypatch.setattr("guildbotics.cli.pid_exists", lambda _pid: state["running"])
+    monkeypatch.setattr(
+        "guildbotics.cli.service.write_stop_request", _write_stop_request
+    )
+    monkeypatch.setattr("guildbotics.cli.service.force_terminate_pid", _force_terminate)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.pid_exists", lambda _pid: state["running"]
+    )
     return service_lock, lock_path, requests
 
 
@@ -127,7 +134,9 @@ def test_stop_reports_control_lock_timeout_without_traceback(
         if stage == failed_stage:
             raise TimeoutError("lock timeout")
 
-    monkeypatch.setattr("guildbotics.cli.write_stop_request", _write_stop_request)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.write_stop_request", _write_stop_request
+    )
     arguments = ["stop", "--timeout", "0"]
     if force:
         arguments.append("--force")
@@ -146,8 +155,10 @@ def test_stop_rejects_desktop_managed_service(monkeypatch, tmp_path):
     lock_path = tmp_path / "service.lock"
     service_lock = ServiceLock(lock_path)
     service_lock.acquire(owner="desktop", workspace=tmp_path)
-    monkeypatch.setattr("guildbotics.cli._service_lock_path", lambda: lock_path)
-    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
+    monkeypatch.setattr("guildbotics.cli.service._service_lock_path", lambda: lock_path)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.selected_workspace", lambda: Path.cwd()
+    )
     try:
         result = CliRunner().invoke(cli_main, ["stop"])
     finally:
