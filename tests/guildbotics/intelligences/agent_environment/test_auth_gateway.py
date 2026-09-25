@@ -59,19 +59,32 @@ class _Upstream:
         return self.responses.pop(0) if self.responses else _answer(200)
 
 
+async def _started(
+    broker: CredentialBroker,
+    tokens: Any,
+    stand_in: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> CredentialGateway:
+    """A gateway started and lent to one turn holding ``stand_in``."""
+    gateway = CredentialGateway(broker, transport=transport)
+    await gateway.start()
+    gateway.lend(tokens, stand_in)
+    return gateway
+
+
 @pytest_asyncio.fixture
 async def running() -> AsyncIterator[
     tuple[CredentialGateway, _Upstream, _Tokens, httpx.AsyncClient]
 ]:
     upstream = _Upstream()
     tokens = _Tokens(REAL, "REFRESHED-SYNTHETIC-459")
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, tokens, STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     async with httpx.AsyncClient(
         base_url=f"http://127.0.0.1:{gateway.port}",
-        headers={"authorization": f"Bearer {gateway.stand_in}"},
+        headers={"authorization": f"Bearer {STAND_IN}"},
     ) as guest:
         yield gateway, upstream, tokens, guest
     await gateway.close()
@@ -102,7 +115,7 @@ async def test_a_route_with_the_stand_in_reaches_the_upstream_with_the_real_toke
     assert sent.headers["host"] == "api.anthropic.com"
     assert "x-api-key" not in sent.headers and "cookie" not in sent.headers
     assert sent.content == b'{"model": "m"}'
-    assert gateway.stand_in not in str(sent.headers)
+    assert STAND_IN not in str(sent.headers)
 
 
 @pytest.mark.asyncio
@@ -215,15 +228,14 @@ async def test_an_unreachable_upstream_is_a_bad_gateway() -> None:
     def unreachable(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=request)
 
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(unreachable)
     )
-    await gateway.start()
     try:
         async with httpx.AsyncClient() as guest:
             response = await guest.post(
                 f"http://127.0.0.1:{gateway.port}/v1/messages",
-                headers={"authorization": f"Bearer {gateway.stand_in}"},
+                headers={"authorization": f"Bearer {STAND_IN}"},
             )
         assert response.status_code == 502
         assert REAL not in response.text
@@ -234,11 +246,10 @@ async def test_an_unreachable_upstream_is_a_bad_gateway() -> None:
 @pytest.mark.asyncio
 async def test_after_the_turn_the_stand_in_opens_nothing() -> None:
     upstream = _Upstream()
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
-    port, stand_in = gateway.port, gateway.stand_in
+    port = gateway.port
 
     await gateway.close()
     await gateway.close()
@@ -247,22 +258,81 @@ async def test_after_the_turn_the_stand_in_opens_nothing() -> None:
         with pytest.raises(httpx.ConnectError):
             await guest.post(
                 f"http://127.0.0.1:{port}/v1/messages",
-                headers={"authorization": f"Bearer {stand_in}"},
+                headers={"authorization": f"Bearer {STAND_IN}"},
             )
     assert upstream.requests == []
 
 
 @pytest.mark.asyncio
+async def test_between_turns_the_gateway_forwards_nothing() -> None:
+    """It lives as long as the command's microVM, but a stand-in opens it only
+    while its turn holds it; the next turn is lent a stand-in of its own."""
+    upstream = _Upstream()
+    gateway = await _started(
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}"
+        ) as guest:
+            gateway.revoke()
+            revoked = await guest.post(
+                "/v1/messages", headers={"authorization": f"Bearer {STAND_IN}"}
+            )
+            gateway.lend(_Tokens(REAL), "NEXT-TURN-STAND-IN")
+            previous = await guest.post(
+                "/v1/messages", headers={"authorization": f"Bearer {STAND_IN}"}
+            )
+            current = await guest.post(
+                "/v1/messages",
+                headers={"authorization": "Bearer NEXT-TURN-STAND-IN"},
+            )
+    finally:
+        await gateway.close()
+
+    assert revoked.status_code == 401
+    assert previous.status_code == 401
+    assert current.status_code == 200
+    assert len(upstream.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_each_turn_trusts_a_ca_of_its_own() -> None:
+    """No CA has to outlive a turn, however long the command runs: the one a
+    turn was lent is no longer what the gateway answers with afterwards."""
+    upstream = _Upstream()
+    gateway = await _started(
+        _ELSEWHERE, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    try:
+        first = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        gateway.lend(_Tokens(REAL), STAND_IN)
+        second = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        url = f"https://127.0.0.1:{gateway.port}/me"
+        sni = {"sni_hostname": GUEST_HOST_ALIAS}
+        async with httpx.AsyncClient(verify=first) as stale:
+            with pytest.raises(httpx.ConnectError):
+                await stale.get(url, extensions=sni)
+        async with httpx.AsyncClient(verify=second) as current:
+            response = await current.get(
+                url, extensions=sni, headers={"authorization": f"Bearer {STAND_IN}"}
+            )
+    finally:
+        await gateway.close()
+
+    assert response.status_code == 200
+    assert len(upstream.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_gateway_takes_its_own_turns_stand_in_only() -> None:
-    first = CredentialGateway(BROKER, _Tokens(REAL), STAND_IN)
-    second = CredentialGateway(BROKER, _Tokens(REAL), STAND_IN + "-other")
-    await first.start()
-    await second.start()
+    first = await _started(BROKER, _Tokens(REAL), STAND_IN)
+    second = await _started(BROKER, _Tokens(REAL), STAND_IN + "-other")
     try:
         async with httpx.AsyncClient() as guest:
             response = await guest.post(
                 f"http://127.0.0.1:{second.port}/v1/messages",
-                headers={"authorization": f"Bearer {first.stand_in}"},
+                headers={"authorization": f"Bearer {STAND_IN}"},
             )
         assert response.status_code == 401
     finally:
@@ -275,10 +345,9 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
     """A partial body is not sent on with the real token."""
     upstream = _Upstream()
     tokens = _Tokens(REAL)
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, tokens, STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     messages = iter(
         [
             {"type": "http.request", "body": b'{"partial', "more_body": True},
@@ -300,7 +369,7 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
                 "method": "POST",
                 "path": "/v1/messages",
                 "query_string": b"",
-                "headers": [(b"authorization", f"Bearer {gateway.stand_in}".encode())],
+                "headers": [(b"authorization", f"Bearer {STAND_IN}".encode())],
             },
             receive,
             send,
@@ -311,12 +380,104 @@ async def test_a_request_the_guest_abandons_is_never_forwarded() -> None:
     assert upstream.requests == [] and tokens.asked == [] and sent == []
 
 
+async def _serve(gateway: CredentialGateway, receive: Any) -> list[dict[str, Any]]:
+    """What the gateway answers one request of the lent turn's."""
+    sent: list[dict[str, Any]] = []
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await gateway(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages",
+            "query_string": b"",
+            "headers": [(b"authorization", f"Bearer {STAND_IN}".encode())],
+        },
+        receive,
+        send,
+    )
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("waiting_for", ["its body", "a token"])
+async def test_a_request_whose_turn_ends_while_it_waits_goes_no_further(
+    waiting_for: str,
+) -> None:
+    """The gateway outlives its turns: a request accepted for one turn is not
+    sent on once the turn has ended, whatever it was still waiting for."""
+    upstream = _Upstream()
+    gateway: CredentialGateway | None = None
+
+    class Ending(_Tokens):
+        async def __call__(self, refused: str | None) -> str:
+            if waiting_for == "a token":
+                assert gateway is not None
+                gateway.revoke()
+            return await super().__call__(refused)
+
+    gateway = await _started(
+        BROKER, Ending(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    messages = [
+        {"type": "http.request", "body": b'{"part', "more_body": True},
+        {"type": "http.request", "body": b'ial": 1}'},
+    ]
+
+    async def receive() -> dict[str, Any]:
+        if waiting_for == "its body" and len(messages) == 1:
+            gateway.revoke()
+        return messages.pop(0)
+
+    try:
+        sent = await _serve(gateway, receive)
+    finally:
+        await gateway.close()
+
+    assert upstream.requests == []
+    assert sent[0]["status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_an_answer_stops_when_its_turn_ends() -> None:
+    """What the upstream still streams for an ended turn is not handed on."""
+    gateway: CredentialGateway | None = None
+
+    class Streaming(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"FIRST-CHUNK"
+            assert gateway is not None
+            gateway.revoke()
+            yield b"AFTER-THE-TURN"
+
+    def upstream(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=Streaming())
+
+    gateway = await _started(
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"{}"}
+
+    try:
+        sent = await _serve(gateway, receive)
+    finally:
+        await gateway.close()
+
+    body = b"".join(message.get("body", b"") for message in sent[1:])
+    assert sent[0]["status"] == 200
+    assert body == b"FIRST-CHUNK"
+    assert sent[-1].get("more_body") is not True
+
+
 @pytest.mark.asyncio
 async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> None:
     grok = cli_agent_info("grok").provision.credential_broker
     assert grok is not None
-    gateway = CredentialGateway(grok, _Tokens(REAL), STAND_IN)
-    await gateway.start()
+    gateway = await _started(grok, _Tokens(REAL), STAND_IN)
     try:
         assert gateway.turn_environment() == {
             "GROK_CLI_CHAT_PROXY_BASE_URL": (
@@ -339,7 +500,7 @@ async def test_a_refused_route_is_logged_without_what_it_carried(
     await guest.post("/v1/oauth/token?secret=QUERY-459", content=b"BODY-459")
 
     assert "POST /v1/oauth/token" in caplog.text
-    for carried in (gateway.stand_in, "QUERY-459", "BODY-459"):
+    for carried in (STAND_IN, "QUERY-459", "BODY-459"):
         assert carried not in caplog.text
 
 
@@ -374,14 +535,13 @@ async def test_the_same_refused_route_is_logged_once_in_a_turn(
         assert carried not in caplog.text
 
     later = _Upstream()
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(later)
     )
-    await gateway.start()
     try:
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}",
-            headers={"authorization": f"Bearer {gateway.stand_in}"},
+            headers={"authorization": f"Bearer {STAND_IN}"},
         ) as again:
             response = await again.post("/v1/oauth/token")
     finally:
@@ -397,10 +557,9 @@ async def test_a_route_ending_in_a_star_forwards_what_is_under_it_only() -> None
     client resolves them first -- is refused before it leaves the device."""
     upstream = _Upstream()
     broker = BROKER.model_copy(update={"routes": ("GET /agents/*",)})
-    gateway = CredentialGateway(
+    gateway = await _started(
         broker, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     try:
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}",
@@ -435,10 +594,9 @@ _ELSEWHERE = CredentialBroker(
 @pytest.mark.asyncio
 async def test_a_route_that_names_its_origin_is_forwarded_there() -> None:
     upstream = _Upstream()
-    gateway = CredentialGateway(
+    gateway = await _started(
         _ELSEWHERE, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     try:
         trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
         async with httpx.AsyncClient(
@@ -469,8 +627,7 @@ async def test_a_route_that_names_its_origin_is_forwarded_there() -> None:
 async def test_a_tool_that_takes_https_only_trusts_the_turns_ca_for_its_names_only() -> (
     None
 ):
-    gateway = CredentialGateway(_ELSEWHERE, _Tokens(REAL), STAND_IN)
-    await gateway.start()
+    gateway = await _started(_ELSEWHERE, _Tokens(REAL), STAND_IN)
     try:
         assert gateway.turn_environment() == {
             "API_URL": f"https://{GUEST_HOST_ALIAS}:{gateway.port}"
@@ -505,10 +662,9 @@ async def test_a_login_refused_that_cannot_be_refreshed_is_answered_once() -> No
                 raise CredentialUnavailableError("log in again")
             return REAL
 
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, Revoked(), STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -607,10 +763,9 @@ async def test_nothing_the_upstream_says_is_logged_as_it_said_it(
             for _ in range(2)
         )
     )
-    gateway = CredentialGateway(
+    gateway = await _started(
         BROKER, _Tokens(REAL, REAL), STAND_IN, transport=httpx.MockTransport(upstream)
     )
-    await gateway.start()
     try:
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}",
@@ -653,8 +808,7 @@ class _Chunks(httpx.AsyncByteStream):
 @pytest.mark.asyncio
 async def test_neither_http2_nor_a_websocket_is_taken() -> None:
     """What the gateway does not carry is refused, not half-carried."""
-    gateway = CredentialGateway(_ELSEWHERE, _Tokens(REAL), STAND_IN)
-    await gateway.start()
+    gateway = await _started(_ELSEWHERE, _Tokens(REAL), STAND_IN)
     try:
         trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
         trust.set_alpn_protocols(["h2", "http/1.1"])

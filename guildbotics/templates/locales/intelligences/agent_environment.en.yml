@@ -17,6 +17,8 @@ en:
     file_failed: "Could not reach '%{path}' in the environment: %{error}"
     relay_failed: "The relay inside the environment to the credential gateway did not start."
     no_system_cas: "The environment's image has no system CA certificates at %{path}, which the credential gateway's CA is added to."
+    outside_mounts: "The turn's working directory %{path} is outside what this command's environment mounted when it started."
+    not_started_for: "This command's environment was not started for this turn of %{tool}: the access contract or the member's AI CLI tools changed after it started."
     build_start_failed: "Could not start the build environment (declared resources: %{memory_mib} MiB, %{cpus} vCPU). If this device cannot allocate them, review the shared declaration under Settings > Agent execution environment: %{error}"
     build_step_failed: "Build step '%{step}' failed with exit code %{code}."
     build_failed: "Could not build the snapshot: %{error}"

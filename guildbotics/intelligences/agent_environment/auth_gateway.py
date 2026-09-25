@@ -2,9 +2,12 @@
 
 A turn of a tool whose login is brokered holds a stand-in token and nothing
 else of the login. The tool is pointed at this gateway, which runs in the
-GuildBotics process on a loopback port only this turn's microVM is let
-through to, for as long as the turn runs. A request is forwarded only when
-it carries this turn's stand-in and is one of the routes the tool's catalog
+GuildBotics process on a loopback port only its microVM is let through to.
+The port is opened when the microVM boots and cannot be opened later, so the
+gateway lives as long as the microVM -- the turns of a whole command -- and
+is lent to one turn at a time (:meth:`CredentialGateway.lend`); between
+turns it takes no stand-in at all. A request is forwarded only when it
+carries the lent turn's stand-in and is one of the routes the tool's catalog
 entry names; it then goes to the tool's one upstream origin, with the
 stand-in replaced by the real access token in the ``Authorization`` header
 and nowhere else. Redirects are handed back, never followed, so the token is
@@ -18,7 +21,8 @@ it comes from, and how it is refreshed, is the login's business
 
 A tool that takes its API over HTTPS only is answered over TLS, as the guest
 alias and as each host the turn relays here, with a certificate from a CA
-made for the turn (:attr:`CredentialGateway.ca_pem`). Its key never leaves
+made for the turn it is lent to (:attr:`CredentialGateway.ca_pem`), so no CA
+has to outlive a turn however long the command runs. Its key never leaves
 this process's memory but for the moment it takes to load it.
 """
 
@@ -29,6 +33,7 @@ import secrets
 import ssl
 import tempfile
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from logging import getLogger
 from pathlib import Path
@@ -49,7 +54,8 @@ from guildbotics.utils.loopback_server import LoopbackServer
 TokenSource = Callable[[str | None], Awaitable[str]]
 
 _MAX_REQUEST_BYTES = 64 * 1024 * 1024
-#: A turn's CA outlives any turn; it is trusted by that turn's microVM alone.
+#: A turn's CA outlives any turn (each is made its own); it is trusted by that
+#: turn's microVM alone.
 _TLS_LIFETIME = timedelta(days=2)
 _LOGGER = getLogger(__name__)
 _TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
@@ -108,28 +114,39 @@ class CredentialUnavailableError(RuntimeError):
     """The login cannot give a token; the message says what to do."""
 
 
+@dataclass(frozen=True, slots=True)
+class _Lent:
+    """What one turn is lent: the stand-in it presents, as the header it
+    comes in, and where the token sent for it comes from."""
+
+    authorization: str
+    tokens: TokenSource
+
+
 class CredentialGateway:
-    """One turn's gateway to its tool's API."""
+    """A command's gateway to one tool's API, lent to one turn at a time.
+
+    A request is served for the turn it was accepted for only while that turn
+    still holds the gateway: one its turn ended while it waited -- for the
+    rest of its body, for a token -- goes no further, and an answer still
+    streaming stops, so nothing of a turn crosses into the next.
+    """
 
     def __init__(
         self,
         broker: CredentialBroker,
-        tokens: TokenSource,
-        stand_in: str,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._broker = broker
-        self._tokens = tokens
-        self._authorization = ""
-        #: The turn's secret: the one credential the gateway takes.
-        self.stand_in = stand_in
-        #: The CA a turn trusts the gateway's TLS by, once it is started.
+        self._lent: _Lent | None = None
+        self._tls: ssl.SSLContext | None = None
+        #: The CA the lent turn trusts the gateway's TLS by.
         self.ca_pem = b""
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._server: LoopbackServer | None = None
-        #: Routes this turn already refused, so each is logged once.
+        #: Routes the lent turn already refused, so each is logged once.
         self._refused_routes: set[tuple[str, str]] = set()
 
     @property
@@ -148,25 +165,39 @@ class CredentialGateway:
         }
 
     async def start(self) -> None:
-        """Start accepting the turn's stand-in."""
-        tls = None
+        """Start listening; nothing is forwarded until a turn is lent it."""
         if self._broker.tls:
-            tls, self.ca_pem = _turn_tls(
-                (GUEST_HOST_ALIAS, *self._broker.relayed_hosts)
-            )
-        self._authorization = f"Bearer {self.stand_in}"
+            self._tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self._tls.set_alpn_protocols(["http/1.1"])  # HTTP/2 is refused.
         self._client = _Client(
             transport=self._transport, follow_redirects=False, timeout=_TIMEOUT
         )
         try:
-            self._server = await LoopbackServer.start(lambda _port: self, tls=tls)
+            self._server = await LoopbackServer.start(lambda _port: self, tls=self._tls)
         except BaseException:
             await self._client.aclose()
             raise
 
+    def lend(self, tokens: TokenSource, stand_in: str) -> None:
+        """Take ``stand_in`` for one turn and send what ``tokens`` hands out.
+
+        A gateway that speaks TLS answers from now on with a certificate from
+        a CA made for this turn (:attr:`ca_pem`), which the turn is to trust.
+        """
+        if self._tls is not None:
+            self.ca_pem = _issue(
+                self._tls, (GUEST_HOST_ALIAS, *self._broker.relayed_hosts)
+            )
+        self._lent = _Lent(f"Bearer {stand_in}", tokens)
+        self._refused_routes = set()
+
+    def revoke(self) -> None:
+        """Refuse the lent turn's stand-in, and stop what it asked for."""
+        self._lent = None
+
     async def close(self) -> None:
-        """Refuse the stand-in from now on and stop the gateway; idempotent."""
-        self._authorization = ""
+        """Refuse every stand-in from now on and stop the gateway; idempotent."""
+        self.revoke()
         server, self._server = self._server, None
         if server is None:
             return
@@ -189,15 +220,16 @@ class CredentialGateway:
             for name, value in scope["headers"]
         ]
         presented = next((v for k, v in headers if k == "authorization"), "")
-        if not self._authorization or not secrets.compare_digest(
-            presented.encode(), self._authorization.encode()
+        lent = self._lent
+        if lent is None or not secrets.compare_digest(
+            presented.encode(), lent.authorization.encode()
         ):
             await _refuse(send, 401, "authentication_error", "Unknown credentials.")
             return
         origin = self._broker.origin(scope["method"], scope["path"])
         if origin is None:
             # What a tool asks for that its catalog does not name, and no
-            # more: the same route once in this turn, which is this gateway.
+            # more: the same route once in the lent turn.
             route = (scope["method"], scope["path"])
             if route not in self._refused_routes:
                 self._refused_routes.add(route)
@@ -211,10 +243,11 @@ class CredentialGateway:
         if body is None:
             await _refuse(send, 413, "request_too_large", "Request is too large.")
             return
-        await self._forward(scope, origin, headers, body, send)
+        await self._forward(lent, scope, origin, headers, body, send)
 
     async def _forward(
         self,
+        lent: _Lent,
         scope: dict[str, Any],
         origin: str,
         headers: list[tuple[str, str]],
@@ -228,7 +261,13 @@ class CredentialGateway:
         refused: str | None = None
         try:
             while True:
-                token = await self._tokens(refused)
+                token = await lent.tokens(refused)
+                if self._lent is not lent:
+                    # Its turn ended while it waited for its body or a token.
+                    await _refuse(
+                        send, 401, "authentication_error", "Unknown credentials."
+                    )
+                    return
                 request = self._client.build_request(
                     scope["method"],
                     url,
@@ -285,6 +324,9 @@ class CredentialGateway:
             )
             held = b""
             async for chunk in response.aiter_raw():
+                if self._lent is not lent:
+                    held = b""  # What its turn is no longer lent ends here.
+                    break
                 data = (held + chunk).replace(secret, mask)
                 # What may be the start of the token is held for the next chunk.
                 cut = len(data) - _partial(data, secret)
@@ -305,8 +347,10 @@ def _partial(data: bytes, secret: bytes) -> int:
     return 0
 
 
-def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
-    """A server context for ``names``, from a CA of its own, and that CA."""
+def _issue(context: ssl.SSLContext, names: tuple[str, ...]) -> bytes:
+    """Load ``context`` with a certificate for ``names`` from a new CA of its
+    own, and return that CA: connections accepted from now on are answered
+    with it."""
     now = datetime.now(UTC)
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_name = x509.Name(
@@ -344,8 +388,6 @@ def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
         )
         .sign(ca_key, hashes.SHA256())
     )
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.set_alpn_protocols(["http/1.1"])  # HTTP/2 is refused, not guessed.
     with tempfile.TemporaryDirectory() as held:  # The context loads files only.
         chain, private = Path(held, "chain.pem"), Path(held, "key.pem")
         chain.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
@@ -357,7 +399,7 @@ def _turn_tls(names: tuple[str, ...]) -> tuple[ssl.SSLContext, bytes]:
             )
         )
         context.load_cert_chain(chain, private)
-    return context, ca.public_bytes(serialization.Encoding.PEM)
+    return ca.public_bytes(serialization.Encoding.PEM)
 
 
 def _certificate(

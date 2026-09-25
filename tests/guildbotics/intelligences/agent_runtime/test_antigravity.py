@@ -14,7 +14,7 @@ from guildbotics.intelligences.agent_runtime.antigravity import (
     _MAX_PROMPT_BYTES,
     AntigravityStreamJsonAdapter,
     _decode_events,
-    _read_log_tail,
+    _log_tail,
     _result_error,
     _usage,
 )
@@ -192,13 +192,17 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     env = kwargs_log[-1]["env"]
     assert "GUILDBOTICS_WORKSPACE_ROOT" not in env
     assert kwargs_log[-1]["cwd"] == str(tmp_path)
-    # The adapter's own workspace is bound into the environment, so the host
-    # directory is the mount's, and the argument is how the guest names it.
-    mcp_workspace = fake_environment.started[-1].kwargs["mounts"][0].host
-    assert run_args[workspace_indexes[1] + 1] == guest_path(mcp_workspace)
-    assert mcp_workspace != tmp_path
-    mcp_path = mcp_workspace / ".agents" / "mcp_config.json"
-    mcp_config = json.loads(mcp_path.read_text())
+    # The turn's own workspace is written into the environment it runs in:
+    # nothing of the host is bound for it, so a microVM started before it
+    # serves it all the same.
+    environment = fake_environment.started[-1]
+    assert "mounts" not in environment.kwargs
+    mcp_workspace = run_args[workspace_indexes[1] + 1]
+    assert mcp_workspace.startswith("/tmp/guildbotics-agy-")
+    assert run_args[run_args.index("--log-file") + 1] == f"{mcp_workspace}/agy.log"
+    mcp_config = json.loads(
+        environment.files[f"{mcp_workspace}/.agents/mcp_config.json"]
+    )
     server_name, server = next(iter(mcp_config["mcpServers"].items()))
     assert server_name.startswith("guildbotics-member-")
     assert server["serverUrl"] == "http://host.microsandbox.internal:43123/mcp"
@@ -234,25 +238,24 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     initialized = next(event for event in events if event.name == "initialized")
     assert initialized.details["permission_mode"] == "always-proceed"
     assert initialized.details["cwd"] == "/workspace"
+    assert environment.closed
     await adapter.close()
-    assert not mcp_workspace.exists()
 
 
 @pytest.mark.asyncio
-async def test_the_mcp_configuration_is_readable_only_by_its_owner(
-    monkeypatch, tmp_path, fake_environment, posix_permissions
+async def test_each_turn_has_a_workspace_of_its_own(
+    monkeypatch, tmp_path, fake_environment
 ) -> None:
-    """It carries the broker's bearer token, so nobody else on the device reads it."""
-    _install(monkeypatch, _StreamProcess(_fixture_lines()))
+    """Turns of one command share the environment, so a turn never reads
+    another's log for its own."""
+    calls: list[tuple[Any, ...]] = []
     adapter = AntigravityStreamJsonAdapter()
+    for _ in range(2):
+        _install(monkeypatch, _StreamProcess(_fixture_lines()), calls=calls)
+        await _run(adapter, _context(tmp_path), [])
 
-    await _run(adapter, _context(tmp_path), [])
-
-    workspace = fake_environment.started[-1].kwargs["mounts"][0].host
-    config = workspace / ".agents" / "mcp_config.json"
-    assert config.stat().st_mode & 0o777 == 0o600
-    assert config.parent.stat().st_mode & 0o777 == 0o700
-    await adapter.close()
+    first, second = (call[call.index("--log-file") + 1] for call in calls[-2:])
+    assert first != second
 
 
 @pytest.mark.asyncio
@@ -568,15 +571,12 @@ async def test_oversized_prompt_is_refused_before_launching(
     assert launched == []
 
 
-def test_log_tail_reads_only_the_end_of_a_large_log(tmp_path: Path) -> None:
-    log = tmp_path / "agy.log"
-    log.write_bytes(b"x" * (_LOG_TAIL_BYTES * 4) + b"the-final-error")
-
-    tail = _read_log_tail(log)
+def test_log_tail_reads_only_the_end_of_a_large_log() -> None:
+    tail = _log_tail(b"x" * (_LOG_TAIL_BYTES * 4) + b"the-final-error")
 
     assert tail.endswith("the-final-error")
     assert len(tail.encode()) <= _LOG_TAIL_BYTES
-    assert _read_log_tail(tmp_path / "missing.log") == ""
+    assert _log_tail(None) == ""
 
 
 def test_decode_events_ignores_steps_with_nothing_to_report() -> None:

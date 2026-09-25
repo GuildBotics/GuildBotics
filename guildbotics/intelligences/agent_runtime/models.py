@@ -133,6 +133,10 @@ class AgentExecutionContext:
     #: the environment, not the provider, keeps it from changing anything.
     contract: AccessContract = field(default_factory=AccessContract)
     login: TurnLogin = field(default_factory=TurnLogin)
+    #: Every AI CLI tool the member is configured with. The environment a
+    #: command's turns share is started able to run each of them, since
+    #: which one a later turn uses is decided while the command runs.
+    tools: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:

@@ -9,31 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
-import shutil
-import tempfile
+import secrets
 from contextlib import suppress
 from logging import getLogger
-from pathlib import Path
 from typing import Any
 
 from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironment,
     AgentEnvironmentError,
     EnvironmentProcess,
 )
-from guildbotics.intelligences.agent_environment.spec import (
-    EnvironmentMount,
-    guest_path,
-)
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.environment import (
+    TurnEnvironment,
     start_probe_environment,
     start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
-    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
@@ -126,11 +119,9 @@ class AntigravityStreamJsonAdapter:
         self._executable = executable
         self._timeout = timeout
         self._process: EnvironmentProcess | None = None
-        self._environment: AgentEnvironment | None = None
+        self._environment: TurnEnvironment | None = None
         self._model_catalog: frozenset[str] = frozenset()
         self._model_catalog_read = False
-        self._member_broker = MemberCapabilityBroker()
-        self._mcp_workspace: Path | None = None
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The effort settings this adapter recognizes.
@@ -148,16 +139,10 @@ class AntigravityStreamJsonAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         try:
-            await self._member_broker.activate(context)
-        except MemberCapabilityBrokerError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Could not start the trusted member capability broker.",
-            ) from exc
-        try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
-            await self._member_broker.deactivate(context)
+            # Nothing of the turn keeps running in the environment it shares.
+            await self.close()
 
     async def _run_active_turn(
         self,
@@ -166,7 +151,10 @@ class AntigravityStreamJsonAdapter:
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        prompt = self._member_broker.prompt(prompt)
+        self._environment = environment = await start_turn_environment(
+            context, "antigravity"
+        )
+        prompt = environment.broker.prompt(prompt)
         prompt_bytes = len(prompt.encode())
         if prompt_bytes > _MAX_PROMPT_BYTES:
             raise AgentRuntimeError(
@@ -176,13 +164,20 @@ class AntigravityStreamJsonAdapter:
                 details={"prompt_bytes": prompt_bytes, "limit": _MAX_PROMPT_BYTES},
             )
         settings, rejected = await self._turn_settings(context)
-        mcp_workspace = self._ensure_mcp_workspace()
-        # The log lands in the auxiliary workspace, the one host directory of
-        # this adapter's own that the environment binds, so it can be read
-        # back here once the turn is over.
-        log_file = mcp_workspace / "agy.log"
-        log_file.unlink(missing_ok=True)
-        guest_workspace = guest_path(mcp_workspace)
+        # A directory of the turn's own in the environment, holding its MCP
+        # configuration and its log, which is read back before the turn ends.
+        mcp_workspace = f"/tmp/guildbotics-agy-{secrets.token_hex(6)}"
+        try:
+            await environment.write_file(
+                f"{mcp_workspace}/.agents/mcp_config.json",
+                _mcp_config(environment.broker),
+            )
+        except AgentEnvironmentError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS,
+                f"Could not start Antigravity: {exc}",
+            ) from exc
+        log_file = f"{mcp_workspace}/agy.log"
         args = [
             self._executable,
             "--print",
@@ -195,7 +190,7 @@ class AntigravityStreamJsonAdapter:
             "--print-timeout",
             f"{int(self._timeout)}s",
             "--log-file",
-            f"{guest_workspace}/agy.log",
+            log_file,
         ]
         if conversation.provider_session_id:
             args.extend(("--conversation", conversation.provider_session_id))
@@ -203,21 +198,14 @@ class AntigravityStreamJsonAdapter:
             args.extend(("--model", model))
         elif effort := str(settings.get("effort", "")):
             args.extend(("--effort", effort))
-        self._environment = await start_turn_environment(
-            context,
-            "antigravity",
-            host_ports=(self._member_broker.endpoint.port,),
-            env={},
-            mounts=(EnvironmentMount(guest_workspace, mcp_workspace, False),),
-        )
         try:
-            self._process = await self._environment.run(
+            self._process = await environment.run(
                 *args,
                 # The repository remains the primary workspace and relative
                 # path base. The private root exists only to contribute this
                 # process's short-lived MCP configuration.
                 _WORKSPACE_FLAG,
-                guest_workspace,
+                mcp_workspace,
                 limit=STREAM_READ_LIMIT,
             )
         except AgentEnvironmentError as exc:
@@ -307,9 +295,11 @@ class AntigravityStreamJsonAdapter:
                 stderr_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await stderr_task
+            try:
+                log_tail = _log_tail(await environment.read_file(log_file))
+            except AgentEnvironmentError:
+                log_tail = ""
             await self._close_environment()
-            log_tail = _read_log_tail(log_file)
-            log_file.unlink(missing_ok=True)
             self._process = None
         if terminal_error is not None:
             terminal_error.details["log_tail"] = log_tail
@@ -371,59 +361,21 @@ class AntigravityStreamJsonAdapter:
         )
 
     async def interrupt(self) -> None:
-        await self._member_broker.deactivate()
+        if self._environment is not None:
+            await self._environment.broker.deactivate()
         if self._process is not None and self._process.returncode is None:
             await self._process.kill()
 
     async def close(self) -> None:
         try:
             await self.interrupt()
-            await self._close_environment()
         finally:
-            await self._member_broker.close()
-            if self._mcp_workspace is not None:
-                shutil.rmtree(self._mcp_workspace, ignore_errors=True)
-                self._mcp_workspace = None
+            await self._close_environment()
 
     async def _close_environment(self) -> None:
         environment, self._environment = self._environment, None
         if environment is not None:
             await environment.close()
-
-    def _ensure_mcp_workspace(self) -> Path:
-        """Create a private Antigravity workspace containing only broker MCP."""
-        if self._mcp_workspace is not None:
-            return self._mcp_workspace
-        root = Path(tempfile.mkdtemp(prefix="guildbotics-agy-mcp-"))
-        try:
-            config_dir = root / ".agents"
-            config_dir.mkdir(mode=0o700)
-            endpoint = self._member_broker.endpoint
-            payload = json.dumps(
-                {
-                    "mcpServers": {
-                        endpoint.name: {
-                            "serverUrl": endpoint.guest_url,
-                            "headers": {"Authorization": endpoint.authorization},
-                        }
-                    }
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            config_path = config_dir / "mcp_config.json"
-            descriptor = os.open(
-                config_path,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(f"{payload}\n")
-        except BaseException:
-            shutil.rmtree(root, ignore_errors=True)
-            raise
-        self._mcp_workspace = root
-        return root
 
     async def _turn_settings(
         self, context: AgentExecutionContext
@@ -724,16 +676,27 @@ def _step_id(step: dict[str, Any]) -> str:
     return f"step-{index}" if index is not None else ""
 
 
-def _read_log_tail(path: Path) -> str:
+def _mcp_config(broker: MemberCapabilityBroker) -> bytes:
+    """The only MCP configuration the turn's workspace contributes: the broker."""
+    endpoint = broker.endpoint
+    payload = json.dumps(
+        {
+            "mcpServers": {
+                endpoint.name: {
+                    "serverUrl": endpoint.guest_url,
+                    "headers": {"Authorization": endpoint.authorization},
+                }
+            }
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"{payload}\n".encode()
+
+
+def _log_tail(log: bytes | None) -> str:
     """The end of ``agy``'s own log, for a failure that has nothing else."""
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
-            data = handle.read(_LOG_TAIL_BYTES)
-    except OSError:
-        return ""
-    return data.decode(errors="replace").strip()
+    return (log or b"")[-_LOG_TAIL_BYTES:].decode(errors="replace").strip()
 
 
 def _dict(value: Any) -> dict[str, Any]:
