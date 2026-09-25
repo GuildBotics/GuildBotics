@@ -344,6 +344,54 @@ async def test_a_refused_route_is_logged_without_what_it_carried(
 
 
 @pytest.mark.asyncio
+async def test_the_same_refused_route_is_logged_once_in_a_turn(
+    running, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A tool repeats a route its catalog does not name. The first refusal
+    is how a missing route is found; the rest of the turn are the same fact,
+    so the log says it once. A different route is said once of its own, a
+    later turn (a new gateway) says it again, and every refusal is still 403
+    that never reaches the upstream."""
+    _gateway, upstream, tokens, guest = running
+    caplog.set_level(logging.INFO, "guildbotics.intelligences.agent_environment")
+
+    repeated = [
+        await guest.post("/v1/oauth/token?secret=QUERY-592", content=b"BODY-592")
+        for _ in range(3)
+    ]
+    other = await guest.get("/api/oauth/usage")
+
+    assert [response.status_code for response in (*repeated, other)] == [
+        403,
+        403,
+        403,
+        403,
+    ]
+    assert upstream.requests == [] and tokens.asked == []
+    assert caplog.messages.count("Gateway refused POST /v1/oauth/token") == 1
+    assert caplog.messages.count("Gateway refused GET /api/oauth/usage") == 1
+    for carried in ("QUERY-592", "BODY-592"):
+        assert carried not in caplog.text
+
+    later = _Upstream()
+    gateway = CredentialGateway(
+        BROKER, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(later)
+    )
+    await gateway.start()
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{gateway.port}",
+            headers={"authorization": f"Bearer {gateway.stand_in}"},
+        ) as again:
+            response = await again.post("/v1/oauth/token")
+    finally:
+        await gateway.close()
+
+    assert response.status_code == 403 and later.requests == []
+    assert caplog.messages.count("Gateway refused POST /v1/oauth/token") == 2
+
+
+@pytest.mark.asyncio
 async def test_a_route_ending_in_a_star_forwards_what_is_under_it_only() -> None:
     """A path the guest spells to climb out -- its dots encoded, so that no
     client resolves them first -- is refused before it leaves the device."""
