@@ -513,7 +513,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     executor = CommandRunner(context, "pipeline", ["ARG"])
     result = (await executor.run()).text_output
 
-    runner = executor._context
+    runner = executor.context
     assert runner.shared_state["pipeline"].startswith("Main start for ARG")
     assert "first_payload" in runner.shared_state
     assert runner.shared_state["python_payload"] == {
@@ -564,7 +564,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     executor = CommandRunner(context, "shell_driver", ["ARG"])
     result = (await executor.run()).text_output
 
-    runner = executor._context
+    runner = executor.context
     shell_output = runner.shared_state["shell_output"]
 
     assert "args:alpha beta" in shell_output
@@ -602,7 +602,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     executor = CommandRunner(context, "driver", [])
     await executor.run()
 
-    shared = executor._context.shared_state
+    shared = executor.context.shared_state
     assert shared["invoked_md"].startswith("Placeholder value")
     assert shared["driver"]["invoked"] == shared["invoked_md"]
     assert shared["driver"]["stdin"] == shared["invoked_md"]

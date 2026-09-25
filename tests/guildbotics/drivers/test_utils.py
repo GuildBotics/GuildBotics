@@ -5,7 +5,6 @@ from typing import List
 import pytest
 
 from guildbotics.drivers.utils import run_command
-from guildbotics.entities import Task
 
 
 class StubLogger:
@@ -28,10 +27,6 @@ class FakeContext:
     def __init__(self, person_id: str = "p1") -> None:
         self.logger = StubLogger()
         self.person = SimpleNamespace(person_id=person_id)
-        self.task: Task | None = None
-
-    def update_task(self, task: Task) -> None:
-        self.task = task
 
 
 @pytest.mark.asyncio
@@ -39,9 +34,9 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     events = []
 
     class FakeCommandRunner:
-        def __init__(self, context, command, args):
+        def __init__(self, context, command, args, cwd=None):
             self.context = context
-            self.command = command
+            self.command_name = command
             self.args = args
 
         async def run(self):
@@ -73,7 +68,7 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_command_exception_logs_and_returns_false(monkeypatch):
+async def test_run_command_exception_logs_and_reraises(monkeypatch):
     events = []
 
     class FakeCommandRunnerError:
@@ -82,9 +77,10 @@ async def test_run_command_exception_logs_and_returns_false(monkeypatch):
             context,
             command,
             args,
+            cwd=None,
         ):
             self.context = context
-            self.command = command
+            self.command_name = command
             self.args = args
 
         async def run(self):
@@ -100,8 +96,8 @@ async def test_run_command_exception_logs_and_returns_false(monkeypatch):
     )
 
     ctx = FakeContext()
-    ok = await run_command(ctx, "Failing", task_type="scheduled")
-    assert ok is False
+    with pytest.raises(RuntimeError, match="boom"):
+        await run_command(ctx, "Failing", task_type="scheduled")
     # Validate error summary and traceback were logged
     error_summary = [
         e for e in ctx.logger.errors if "Error running scheduled command 'Failing'" in e
@@ -143,7 +139,8 @@ async def test_command_failure_preserves_structured_authentication_cause(
         )
         raise CommandError("wrapped") from cause
 
-    assert not await run_with_logging(FakeContext(), "test", "scheduled", fail)
+    with pytest.raises(CommandError):
+        await run_with_logging(FakeContext(), "test", "scheduled", fail)
     assert events[-1]["payload"]["code"] == (
         "cli_agent_authentication" if category == "authentication" else ""
     )

@@ -19,6 +19,9 @@ WorkflowTriggerType = Literal[
 
 WORKFLOW_INVOCATION_KEY = "workflow_invocation"
 
+#: The workflow every route runs through the host's ticket selector.
+TICKET_WORKFLOW_COMMAND = "workflows/ticket_driven_workflow"
+
 
 @dataclass(frozen=True, slots=True)
 class WorkflowInvocation:

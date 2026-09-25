@@ -8,9 +8,10 @@ from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
 from guildbotics.capabilities.completion_retry import command_failure_payload
-from guildbotics.drivers.command_runner import CommandRunner
+from guildbotics.drivers.command_runner import CommandRunner, run_main_command
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
+from guildbotics.runtime.workflow_invocation import WorkflowSource
 
 
 @contextlib.contextmanager
@@ -72,7 +73,11 @@ async def run_with_logging(
     task_type: str,
     action: Callable[[], Awaitable[Any]],
 ) -> bool:
-    """Run an async action with timing logging and standardized error logging."""
+    """Run an async action with timing logging and standardized error logging.
+
+    A failure is logged and re-raised, so the task-run boundary around the
+    run closes it as failed rather than succeeded.
+    """
     person = context.person
     start_time = datetime.datetime.now()
     context.logger.info(
@@ -91,7 +96,7 @@ async def run_with_logging(
             f"'{person.person_id}': {e}"
         )
         context.logger.error(traceback.format_exc())
-        return False
+        raise
     duration = (datetime.datetime.now() - start_time).total_seconds()
     context.logger.info(
         f"Finished running {task_type} command '{command_name}' for person "
@@ -100,13 +105,17 @@ async def run_with_logging(
     return True
 
 
-async def run_command(context: Context, command: str, task_type: str) -> bool:
+async def run_command(
+    context: Context, command: str, task_type: WorkflowSource
+) -> bool:
     """Run a command within the given context and log its execution."""
 
     async def _action() -> None:
         words = shlex.split(command)
         if not words:
             raise ValueError(f"Empty or whitespace command string: {command!r}")
-        await CommandRunner(context, words[0], words[1:]).run()
+        await run_main_command(
+            CommandRunner(context, words[0], words[1:]), source=task_type
+        )
 
     return await run_with_logging(context, command, task_type, _action)

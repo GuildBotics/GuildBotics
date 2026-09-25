@@ -40,7 +40,7 @@
 
 - `guildbotics/cli/*` … Click コマンド。`member.py` に member capability の入口
 - `guildbotics/app_api/*` … Desktop 向け Local API（FastAPI + EventBus + normalizer）
-- `guildbotics/drivers/*` … スケジューラ、command runner、workflow dispatcher
+- `guildbotics/drivers/*` … スケジューラ、command runner、workflow dispatcher、ticket selector（`ticket_selector.py`。ticket workflow を動かすすべての経路が候補選びと turn の前後の処理をここで行う）
 - `guildbotics/capabilities/*` … member の git / github / chat / memory 操作と domain event 記録
 - `guildbotics/commands/*` … コマンド種別（md/py/sh/yml + inline）の実行基盤
 - `guildbotics/editions/*` … Edition 抽象と Simple edition（setup_service は GUI からも再利用）
@@ -109,7 +109,7 @@ GuildBotics では、実装場所を「その処理を知ってよい層」で�
 - diagnostics record の統一スキーマでの記録・永続化（`diagnostics_store.py`、`run/diagnostics.jsonl`）
 - trace / span の相関（`correlation_fields`）と correlated event の記録（`diagnostics_events.py`）
 - 1 つの実行（trace）の状態判定（`trace_status.py`）。アクティビティ画面と診断画面は同じ record に同じ問いを立てるので、判定は 1 つだけ置く。trace が成功になるのは **trace を開いた層が記録した完了イベント**（`event_types.py` の `TRACE_COMPLETED_EVENT_TYPES`）によるときだけで、`span.finished` は provider の 1 回の呼び出しが返ったことしか言わない（chat workflow は agent turn の前に LLM 判定を 1 回行うため、これを成功と読むと実行中が「成功」になる）。したがって `trace_scope` を開く経路はすべて自分の完了イベントを記録する。母集団は `tests/guildbotics/test_trace_boundaries.py` が列挙し、新しい trace root はどのイベントで終わるかを宣言しないと落ちる。境界は run の終わり方を問わず終端する（cancellation も含む）。`asyncio.CancelledError` と `KeyboardInterrupt` は `Exception` ではないので、`except Exception` だけの境界は service stop / Ctrl-C のあとに `command.started` だけを残し、実行が永久に「進行中」になる。同じテストが境界の母集団も列挙して `BaseException` の捕捉を課す。失敗の分類は `capabilities/completion_retry.command_failure_payload()` の 1 か所（`code` が Desktop の alert 規則と対になっている）
-- 1 つの実行（trace）のタイトル解決（`trace_title.py`）。状態と同じ理由で 1 つだけ置き、実行一覧（`TraceSummary.title`）と Activity 画面が同じ関数を呼ぶ。規則は「trace は、その中で最初に記録された PR / Issue（`github.title`）を作業対象として名乗る」で、workflow 名では分岐しない。ticket workflow は開始時の `set_attributes` で、chat workflow は member CLI が `github.work_target` を記録した時点で対象が決まる。読み取り（`inspect`）は `github.action: inspected` 付きで対象を宣言し、診断には出るが Activity のリンクにはならない（memory の read-only と同じ扱い。`is_read_only_record`）。run の完了サマリは trace に無い記録なので、呼び出し側が `CompletionSummary` callback で渡す（`app_api/runtime.py` の `_completion_summary_lookup`）
+- 1 つの実行（trace）のタイトル解決（`trace_title.py`）。状態と同じ理由で 1 つだけ置き、実行一覧（`TraceSummary.title`）と Activity 画面が同じ関数を呼ぶ。規則は「trace は、その中で最初に記録された PR / Issue（`github.title`）を作業対象として名乗る」で、workflow 名では分岐しない。ticket workflow は host の ticket selector が turn の前に行う `set_attributes` で、chat workflow は member CLI が `github.work_target` を記録した時点で対象が決まる。読み取り（`inspect`）は `github.action: inspected` 付きで対象を宣言し、診断には出るが Activity のリンクにはならない（memory の read-only と同じ扱い。`is_read_only_record`）。run の完了サマリは trace に無い記録なので、呼び出し側が `CompletionSummary` callback で渡す（`app_api/runtime.py` の `_completion_summary_lookup`）
 - 開いている trace への参加（`join_trace`）。member broker が実行する member CLI は呼び出し情報（`runtime/member_invocation.py`）で親 trace を受け取り、その中に記録する。`trace_scope` と違って境界イベントを記録しない（`member.command.finished` は `TRACE_COMPLETED_EVENT_TYPES` なので、記録すると実行中の workflow が「成功」に見える）
 - interactive session の管理（`interactive_sessions.py`）
 
@@ -361,6 +361,8 @@ help / docstring が正であり、member コマンドの一行説明は
 - 各スレッド内で asyncio イベントループを使用
 - 定期コマンドと routine コマンドを実行
 - 連続エラー数でワーカーループ停止（`consecutive_error_limit`）
+- 実行記録の境界（`track_work`）は実行する coroutine の内側に置き、失敗も強制停止も境界まで届けて `failed` / `cancelled` で閉じる（外側に置くと、例外を受け止めた後の正常終了として `succeeded` で閉じる）。失敗を連続エラー数に数えるのは境界の外
+- ticket workflow は、patrol・scheduled・手動実行（`guildbotics run` / Desktop）のどの経路でも `drivers/ticket_selector.py` の `TicketSelector` で候補を選び、`TicketSelector.run` の中で動かす。レーンの移動（`READY` → `IN_PROGRESS`）、run_id と完了の試行回数（`GUILDBOTICS_TICKET_MAX_ATTEMPTS`）、trace の属性、失敗とレート制限のステータスコメント、`workflow.rate_limited` の記録はここが持ち、ワークフローは turn を 1 回頼むだけ。レート制限は chat と違って再送出せず、ステータスコメントがリセットまで候補から外すので、連続エラー数に数えない
 - この device の隔離環境が使えない間（runtime 無し / 宣言不正 / snapshot が ready でない。`status.device_status().refusal`）は、ticket patrol と chat dispatch を**見送る**（失敗として数えない）。build 中に worker が止まるのを防ぐためで、理由が変わったときだけ 1 回 warning を出す。scheduled command は対象外（AI CLI を使うかが分からない）
 
 既定 routine コマンド（Simple edition）:

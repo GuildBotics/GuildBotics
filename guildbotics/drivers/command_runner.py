@@ -18,6 +18,12 @@ from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
+from guildbotics.runtime.workflow_invocation import (
+    TICKET_WORKFLOW_COMMAND,
+    WORKFLOW_INVOCATION_KEY,
+    WorkflowInvocation,
+    WorkflowSource,
+)
 
 __all__ = [
     "CommandRunner",
@@ -25,6 +31,7 @@ __all__ = [
     "PersonNotFoundError",
     "PersonSelectionRequiredError",
     "run_command",
+    "run_main_command",
 ]
 
 
@@ -39,8 +46,8 @@ class CommandRunner:
         cwd: Path | None = None,
     ) -> None:
         context.set_invoker(self._invoke)
-        self._context = context
-        self._command_name = command_name
+        self.context = context
+        self.command_name = command_name
         self._command_args = list(command_args)
         self._registry: dict[str, CommandSpec] = {}
         self._call_stack: list[str] = []
@@ -64,13 +71,13 @@ class CommandRunner:
             outcome = await self._run_with_children(self._main_spec)
         return CommandOutcome(
             result=outcome.result if outcome is not None else None,
-            text_output=self._context.pipe,
+            text_output=self.context.pipe,
         )
 
     def _prepare_main_spec(self) -> CommandSpec:
-        path = resolve_named_command(self._context, self._command_name)
+        path = resolve_named_command(self.context, self.command_name)
         spec = self._spec_factory.prepare_main_spec(
-            path, self._command_name, self._command_args, self._cwd
+            path, self.command_name, self._command_args, self._cwd
         )
         return spec
 
@@ -99,10 +106,10 @@ class CommandRunner:
         self._call_stack.append(name)
 
         try:
-            command = spec.command_class(self._context, spec, spec.cwd)
+            command = spec.command_class(self.context, spec, spec.cwd)
             outcome = await command.run()
             if outcome is not None:
-                self._context.update(
+                self.context.update(
                     command.options.output_key, outcome.result, outcome.text_output
                 )
             return outcome
@@ -192,6 +199,8 @@ async def run_command(
     context = base_context.clone_for(person)
     owned_lease = None
     try:
+        # The declaration is read once: the lease is decided on the very
+        # command that runs.
         runner = CommandRunner(context, command_name, command_args, cwd)
         if inherited_lease is None and not runner.access.read_only:
             lease = PersonExecutionLease(person.person_id)
@@ -202,10 +211,44 @@ async def run_command(
             except PersonLeaseUnavailableError as exc:
                 raise CommandError(str(exc)) from exc
             owned_lease = lease
-        return await runner.run()
+        return await run_main_command(runner, source="manual")
     finally:
         try:
             await context.aclose()
         finally:
             if owned_lease is not None:
                 owned_lease.release()
+
+
+async def run_main_command(
+    runner: CommandRunner, *, source: WorkflowSource
+) -> CommandOutcome:
+    """Run a top-level command from a host entry.
+
+    The ticket workflow runs only for a ticket the host selected, so it goes
+    through the ticket selector, which settles the ticket around the run.
+
+    Args:
+        runner: The command to run, resolved for the member it runs as.
+        source: Route that started the command.
+
+    Returns:
+        The command's outcome; for the ticket workflow, the rate-limit notice
+        posted on the ticket instead, or nothing when there was no ticket.
+    """
+    if runner.command_name != TICKET_WORKFLOW_COMMAND:
+        return await runner.run()
+    from guildbotics.drivers.ticket_selector import TicketSelector
+
+    context = runner.context
+
+    async def _run(invocation: WorkflowInvocation) -> CommandOutcome:
+        context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
+        return await runner.run()
+
+    selector = TicketSelector(context, source=source)
+    outcome = await selector.run_next(context.person, _run)
+    if isinstance(outcome, CommandOutcome):
+        return outcome
+    # No ticket to work on, or the rate-limit notice posted on it instead.
+    return CommandOutcome(result=outcome, text_output=outcome or "")

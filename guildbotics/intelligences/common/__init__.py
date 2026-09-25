@@ -320,7 +320,6 @@ class AgentResponse(BaseModel):
     Attributes:
         status (Literal["done", "asking"]): 'done' if the task is complete, 'asking' if more information is needed from the user.
         message (str): If status is 'done', a summary of the completed task. If 'asking', the question to the user.
-        skip_ticket_comment (bool): Whether to skip posting a ticket comment by the caller.
     """
 
     DONE: ClassVar[Literal["done"]] = "done"
@@ -338,14 +337,6 @@ class AgentResponse(BaseModel):
         description=(
             "If status is 'done', this contains a summary of the completed task. "
             "If status is 'asking', this contains the question for the user."
-        ),
-    )
-    skip_ticket_comment: bool = Field(
-        default=False,
-        description=(
-            "Whether to skip posting an ticket comment by the caller. "
-            "When True, additional comments will not be posted, "
-            "as comments have already been submitted to the code hosting service."
         ),
     )
 

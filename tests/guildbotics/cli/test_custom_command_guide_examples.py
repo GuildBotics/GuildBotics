@@ -211,7 +211,7 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
     ctx = _make_context("")
     ex = CommandRunner(ctx, "summarize", ["file=README.md"], cwd=Path("."))
     await ex.run()
-    result = ex._context.shared_state.get("summarize")
+    result = ex.context.shared_state.get("summarize")
     # DummyBrain returns kwargs; ensure cwd and session_state are provided
     assert isinstance(result, dict)
     assert str(result.get("cwd", "")).endswith("")  # cwd present
@@ -239,7 +239,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
     ctx = _make_context("")
     ex = CommandRunner(ctx, "get-time-of-day", [])
     await ex.run()
-    shared = ex._context.shared_state
+    shared = ex.context.shared_state
     assert "current_time" in shared
     assert "time_of_day" in shared
     # DummyBrain echoes session_state; confirm parameters flowed through
@@ -662,7 +662,7 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
     # Verify template expanded schema-defined variables into the final output.
     assert "- [ ] Implement coverage-driven tests (priority: 1)" in out
     assert "- [ ] Refactor flaky tests (priority: 2)" in out
-    shared = ex._context.shared_state
+    shared = ex.context.shared_state
     # Auto-generated name for the second command (the first inline prompt)
     assert any(key.startswith("coverage__") for key in shared)
     # Named result from the third command should exist

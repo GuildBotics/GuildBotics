@@ -1,17 +1,26 @@
-import os
+"""The ticket workflow runs one AI CLI turn with the input the host selected.
+
+Selection, the working-lane move, the run id and completion budget, and the
+status comments of a failed or rate-limited run belong to the host's
+``TicketSelector`` (``tests/guildbotics/drivers/test_ticket_selector.py``).
+"""
+
 from pathlib import Path
 
 import pytest
 
-from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
-from guildbotics.capabilities.task_runs import TaskRunError, TaskRunStore
 from guildbotics.drivers.agent_turn import AgentTurnResult
-from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
-from guildbotics.observability import trace_scope
+from guildbotics.runtime.workflow_invocation import (
+    WORKFLOW_INVOCATION_KEY,
+    WorkflowInvocation,
+)
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-from guildbotics.utils.i18n_tool import get_language, set_language, t
+from guildbotics.utils.i18n_tool import get_language, set_language
+
+ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
+PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"
 
 
 @pytest.fixture(autouse=True)
@@ -23,164 +32,65 @@ def _isolated_workspace_data(monkeypatch, tmp_path):
     set_language(previous_language)
 
 
-class StubTicketManager:
-    def __init__(self, task=None, move_succeeds=True):
-        self.task = task
-        self.moved = []
-        self.commented = []
-        self.move_succeeds = move_succeeds
-
-    async def get_task_candidates(self):
-        return [self.task] if self.task is not None else []
-
-    async def move_ticket(self, task: Task, status: str) -> bool:
-        self.moved.append((task, status))
-        return self.move_succeeds
-
-    async def add_comment_to_ticket(self, task: Task, message: str):
-        self.commented.append((task, message))
-
-    async def get_ticket_url(self, task: Task, markdown: bool = True):
-        issue_id = task.id or "1"
-        url = (
-            task.url or f"https://github.com/GuildBotics/GuildBotics/issues/{issue_id}"
-        )
-        return f"[{task.title}]({url})" if markdown else url
+class _Person:
+    person_id = "aiko"
 
 
-class StubLogger:
-    def __init__(self):
-        self.errors = []
-        self.warnings = []
+class _Context:
+    """Holds the host's invocation; it has no ticket manager to reach for."""
 
-    def error(self, *args):
-        self.errors.append(args)
-
-    def warning(self, *args):
-        self.warnings.append(args)
-
-
-class StubContext:
-    def __init__(self, task: Task, tm: StubTicketManager):
-        self.task = task
-        self._tm = tm
-        self.invocations = []
-        self.invoke_response = AgentResponse(status=AgentResponse.DONE, message="done")
-        self.complete_task_run = True
-        self._invoke_calls = 0
-        self.task_run_status = "done"
-        self.evidence_type = "issue_comment"
-        self.task_run_store_root = None
-
-        class _PersonStub:
-            person_id = "aiko"
-
-        self.person = _PersonStub()
+    def __init__(self, pull_request_url: str = "", trigger_reason: str = "") -> None:
+        self.person = _Person()
         self.language_name = "English"
-        self.logger = StubLogger()
-
-    def get_ticket_manager(self):
-        return self._tm
-
-    def update_task(self, task: Task) -> None:
-        self.task = task
-
-    async def invoke(self, command_name: str, *args, **kwargs):
-        self.invocations.append(
-            (command_name, args, kwargs, kwargs.get("agent_execution_context"))
-        )
-        if isinstance(self.invoke_response, Exception):
-            from guildbotics.capabilities.completion_retry import (
-                find_cli_agent_execution_error,
+        self.invocations: list[tuple[str, dict]] = []
+        self.shared_state = {
+            WORKFLOW_INVOCATION_KEY: WorkflowInvocation(
+                command="workflows/ticket_driven_workflow",
+                person_id="aiko",
+                source="routine",
+                trigger_type="ticket",
+                payload={
+                    "task": {"title": "T", "description": "D"},
+                    "ticket_url": pull_request_url or ISSUE_URL,
+                    "pull_request_url": pull_request_url,
+                    "trigger_reason": trigger_reason,
+                    "run_id": "trace-7",
+                    "max_completion_attempts": 3,
+                },
             )
+        }
+        self.response = AgentResponse(status=AgentResponse.DONE, message="done")
 
-            if find_cli_agent_execution_error(
-                self.invoke_response, category="rate_limited"
-            ):
-                raise self.invoke_response
-            attempts = kwargs["agent_execution_context"]["max_completion_attempts"]
-            raise CompletionRetryExhausted(attempts, self.invoke_response)
-        self._invoke_calls += 1
-        run_id = kwargs["workflow_run_id"]
-        if not self.complete_task_run:
-            attempts = kwargs["agent_execution_context"]["max_completion_attempts"]
-            raise CompletionRetryExhausted(
-                attempts,
-                TaskRunError(f"Task run '{run_id}' was not found."),
-            )
-        store = TaskRunStore(self.task_run_store_root)
-        store.append_evidence(
-            run_id,
-            self.evidence_type,
-            {"url": kwargs["ticket_url"], "person_id": kwargs["person_id"]},
-        )
-        completion = store.complete(
-            run_id,
-            self.task_run_status,
-            "completed through member capability",
-            kwargs["ticket_url"],
-            kwargs["person_id"],
-        )
-        return AgentTurnResult(
-            response=self.invoke_response,
-            completion=completion,
-            evidence=store.evidence(run_id),
-        )
+    async def invoke(self, command_name: str, **kwargs):
+        self.invocations.append((command_name, kwargs))
+        return AgentTurnResult(response=self.response, completion=None, evidence=[])  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
-async def test_run_is_recorded_under_the_trace_that_dispatched_it(tmp_path):
-    """The run is its trace: the boundary that dispatched the ticket recorded
-    the run under the trace id, and the member's completion lands on it."""
-    task = Task(id="1", title="T", description="D", status=Task.READY)
-    ctx = StubContext(task, StubTicketManager(task))
+async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
+    context = _Context()
 
-    with trace_scope("routine", trace_id="trace-7", person_id="aiko"):
-        await ticket_driven_workflow.main(ctx)
+    response = await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
 
-    _command, _args, kwargs, execution_context = ctx.invocations[0]
-    assert kwargs["workflow_run_id"] == "trace-7"
-    assert execution_context["run_id"] == "trace-7"
-    assert TaskRunStore(None).status("trace-7").completed
-
-
-@pytest.mark.asyncio
-async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
-    tmp_path,
-):
-    task = Task(id="1", title="T", description="D", status=Task.READY)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response == AgentResponse(
-        status=AgentResponse.DONE,
-        message="done",
-        skip_ticket_comment=True,
-    )
-    assert tm.moved == [(task, Task.IN_PROGRESS)]
-    assert ctx.task.status == Task.IN_PROGRESS
-    assert tm.commented == []
-    assert len(ctx.invocations) == 1
-    command_name, args, kwargs, execution_context = ctx.invocations[0]
+    assert response is context.response
+    [(command_name, kwargs)] = context.invocations
     assert command_name == "functions/handle_github_ticket"
-    assert args == ()
-    assert execution_context == {
-        "run_id": kwargs["workflow_run_id"],
+    assert kwargs["agent_execution_context"] == {
+        "run_id": "trace-7",
         "workspace_data_root": str(Path(tmp_path)),
         "work_kind": "ticket",
-        "work_identity": "https://github.com/GuildBotics/GuildBotics/issues/1",
+        "work_identity": ISSUE_URL,
         "resume_policy": "fresh",
         "attempt": 1,
-        "max_completion_attempts": 5,
+        "max_completion_attempts": 3,
     }
+    assert kwargs["workflow_run_id"] == "trace-7"
     assert kwargs["person_id"] == "aiko"
-    assert kwargs["ticket_url"] == "https://github.com/GuildBotics/GuildBotics/issues/1"
+    assert kwargs["ticket_url"] == ISSUE_URL
     assert kwargs["pull_request_url"] == ""
     assert kwargs["work_type"] == "issue"
     assert kwargs["trigger_reason"] == ""
-    # The workflow no longer reads/passes issue content; the agent inspects it.
+    # The workflow does not read or pass issue content; the agent inspects it.
     assert "issue_title" not in kwargs
     assert "issue_description" not in kwargs
     assert kwargs["language"] == "English"
@@ -190,11 +100,10 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
     assert kwargs["cwd"] == Path(kwargs["member_workspace"])
     # Issue trigger: prepare command has no --pr-url.
     assert kwargs["prepare_command"] == (
-        "guildbotics member git prepare --person aiko "
-        "--issue-url https://github.com/GuildBotics/GuildBotics/issues/1"
+        f"guildbotics member git prepare --person aiko --issue-url {ISSUE_URL}"
     )
-    # The capability reference is no longer injected per-prompt; the agent reads
-    # it from the mandatory `member context` call (the single source of truth).
+    # The capability reference is not injected per-prompt; the agent reads it
+    # from the mandatory `member context` call (the single source of truth).
     assert "github_capability_help" not in kwargs
     # The shared workflow envelope is injected from the single i18n source.
     assert "guildbotics_execution_mode=workflow" in kwargs["workflow_contract"]
@@ -202,357 +111,25 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
 
 
 @pytest.mark.asyncio
-async def test_move_to_working_keeps_status_when_move_is_noop():
-    task = Task(id="1", title="T", description="D", status=Task.READY)
-    tm = StubTicketManager(task, move_succeeds=False)
-    ctx = StubContext(task, tm)
-
-    await ticket_driven_workflow._move_task_to_working_if_ready(ctx, tm)
-
-    assert tm.moved == [(task, Task.IN_PROGRESS)]
-    assert ctx.task.status == Task.READY
-
-
-@pytest.mark.asyncio
-async def test_run_accepts_task_completion_written_to_workspace_state_store(tmp_path):
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    # The member CLI writes completions to the shared workspace state store;
-    # member-workspace-local task-run fallbacks no longer exist.
-    ctx.task_run_store_root = tmp_path / ".guildbotics" / "state" / "task-runs"
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response == AgentResponse(
-        status=AgentResponse.DONE,
-        message="done",
-        skip_ticket_comment=True,
-    )
-    assert tm.commented == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "trigger_reason", ["pull_request_feedback", "pull_request_review"]
+    ("trigger_reason", "work_type"),
+    [
+        ("pull_request_feedback", "pull_request_feedback"),
+        ("pull_request_review", "pull_request_review"),
+        ("", "pull_request_feedback"),
+    ],
 )
-async def test_run_passes_pull_request_work_type(trigger_reason):
-    task = Task(
-        id="PR2",
-        title="T",
-        description="D",
-        status=Task.IN_PROGRESS,
-        url="https://github.com/GuildBotics/GuildBotics/pull/2",
-        pull_request_url="https://github.com/GuildBotics/GuildBotics/pull/2",
-        trigger_reason=trigger_reason,
-    )
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
+async def test_workflow_passes_pull_request_work_type(trigger_reason, work_type):
+    context = _Context(PR_URL, trigger_reason)
 
-    await ticket_driven_workflow.main(ctx)
+    await ticket_driven_workflow.main(context)  # type: ignore[arg-type]
 
-    kwargs = ctx.invocations[0][2]
-    assert kwargs["pull_request_url"].endswith("/pull/2")
-    assert kwargs["ticket_url"] == task.url
+    kwargs = context.invocations[0][1]
+    assert kwargs["pull_request_url"] == PR_URL
+    assert kwargs["ticket_url"] == PR_URL
     # The patrol names the member's role on the PR; the prompt branches on it.
-    assert kwargs["work_type"] == trigger_reason
+    assert kwargs["work_type"] == work_type
     # Pull request work anchors on --pr-url so the agent checks out the PR head
     # branch instead of a fresh ticket/<n> branch.
-    assert kwargs["prepare_command"].endswith(
-        "--pr-url https://github.com/GuildBotics/GuildBotics/pull/2"
-    )
+    assert kwargs["prepare_command"].endswith(f"--pr-url {PR_URL}")
     assert "--issue-url" not in kwargs["prepare_command"]
-    assert tm.moved == []
-    assert tm.commented == []
-
-
-@pytest.mark.asyncio
-async def test_run_returns_none_when_no_task():
-    tm = StubTicketManager(None)
-    ctx = StubContext(Task(id="0", title="T", description="D"), tm)
-
-    result = await ticket_driven_workflow.main(ctx)
-
-    assert result is None
-    assert ctx.invocations == []
-    assert tm.moved == []
-
-
-@pytest.mark.asyncio
-async def test_asking_response_requires_comment_evidence():
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.invoke_response = AgentResponse(status=AgentResponse.ASKING, message="asked")
-    ctx.task_run_status = "asking"
-    ctx.evidence_type = "pr_reply"
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response == AgentResponse(
-        status=AgentResponse.ASKING,
-        message="asked",
-        skip_ticket_comment=True,
-    )
-    assert tm.commented == []
-
-
-@pytest.mark.asyncio
-async def test_agent_done_without_task_completion_is_not_success(monkeypatch):
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.complete_task_run = False
-
-    async def fake_talk_as(context, text, role, attachments):
-        return text
-
-    monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", fake_talk_as)
-
-    with pytest.raises(Exception, match="Task run"):
-        await ticket_driven_workflow.main(ctx)
-
-    assert len(tm.commented) == 1
-    assert "Task run" not in tm.commented[0][1]
-
-
-@pytest.mark.asyncio
-async def test_run_posts_safe_error_message_without_leaking_details(
-    monkeypatch,
-):
-    from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
-
-    # One attempt so the failing agent run escalates immediately.
-    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "1")
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.invoke_response = RuntimeError("codex failed: secret-token-123")
-
-    async def fake_talk_as(context, text, role, attachments):
-        return text
-
-    monkeypatch.setattr("guildbotics.intelligences.functions.talk_as", fake_talk_as)
-
-    # The failing agent run is bounded and re-raised (so the scheduler counts the
-    # error), while the ticket comment stays a safe, reader-facing message.
-    with pytest.raises(CompletionRetryExhausted):
-        await ticket_driven_workflow.main(ctx)
-
-    assert len(tm.commented) == 1
-    comment = tm.commented[0][1]
-    assert comment.strip()
-    assert "secret-token-123" not in comment
-    assert "RuntimeError" not in comment
-    assert ".log" not in comment
-
-
-def test_ticket_trace_attributes_for_issue_and_pull_request():
-    # The scheduler opens the run's trace with these and the workflow sets
-    # them when it runs without a caller trace; both read the one definition.
-    issue = Task(
-        id="1",
-        title="T",
-        description="D",
-        repository="repo",
-        number=42,
-        url="https://github.com/owner/repo/issues/42",
-    )
-    assert issue.trace_attributes() == {
-        "github.repo": "repo",
-        "github.title": "T",
-        "github.kind": "issue",
-        "github.url": "https://github.com/owner/repo/issues/42",
-        "github.number": "42",
-    }
-
-    pr = Task(
-        id="2",
-        title="T",
-        description="D",
-        repository="repo",
-        pull_request_url="https://github.com/owner/repo/pull/7",
-    )
-    assert pr.trace_attributes() == {
-        "github.repo": "repo",
-        "github.title": "T",
-        "github.kind": "pull_request",
-        "github.url": "https://github.com/owner/repo/pull/7",
-        "github.number": "7",
-    }
-
-
-@pytest.mark.asyncio
-async def test_ticket_delegates_completion_retry_budget_to_the_host(monkeypatch):
-    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "5")
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response.status == AgentResponse.DONE
-    handle_calls = [
-        kwargs
-        for name, _args, kwargs, _env in ctx.invocations
-        if name == "functions/handle_github_ticket"
-    ]
-    assert len(handle_calls) == 1
-    execution_context = handle_calls[0]["agent_execution_context"]
-    assert execution_context["run_id"] == handle_calls[0]["workflow_run_id"]
-    assert execution_context["work_identity"] == (
-        "https://github.com/GuildBotics/GuildBotics/issues/1"
-    )
-    assert execution_context["resume_policy"] == "fresh"
-    assert execution_context["max_completion_attempts"] == 5
-    assert "continuation_input" not in execution_context
-    assert tm.commented == []
-
-
-@pytest.mark.asyncio
-async def test_ticket_exhaustion_posts_error_comment_and_raises(monkeypatch):
-    from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
-
-    monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "2")
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.complete_task_run = False  # the agent never records a completion
-
-    with pytest.raises(CompletionRetryExhausted):
-        await ticket_driven_workflow.main(ctx)
-
-    handle_calls = [
-        name
-        for name, _args, _kwargs, _env in ctx.invocations
-        if name == "functions/handle_github_ticket"
-    ]
-    assert len(handle_calls) == 1
-    assert len(tm.commented) == 1
-
-
-@pytest.mark.asyncio
-async def test_ticket_driven_workflow_reads_from_invocation(monkeypatch):
-    from guildbotics.runtime.workflow_invocation import (
-        WORKFLOW_INVOCATION_KEY,
-        WorkflowInvocation,
-    )
-
-    task = Task(
-        id="999",
-        title="Payload Task",
-        description="Selected via invocation payload",
-        status=Task.READY,
-    )
-    tm = StubTicketManager(None)  # No task on manager
-    ctx = StubContext(None, tm)
-
-    inv = WorkflowInvocation(
-        command="workflows/ticket_driven_workflow",
-        person_id="aiko",
-        source="routine",
-        trigger_type="ticket",
-        payload={"task": task.model_dump()},
-    )
-    ctx.shared_state = {WORKFLOW_INVOCATION_KEY: inv}
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response is not None
-    assert response.status == AgentResponse.DONE
-    assert ctx.task.id == "999"
-    assert ctx.task.title == "Payload Task"
-    assert len(tm.moved) == 1
-    assert tm.moved[0][0].id == "999"
-
-
-def _rate_limit_error():
-    from guildbotics.intelligences.brains.cli_agent import (
-        CliAgentExecutionError,
-        CliAgentExecutionResult,
-    )
-
-    return CliAgentExecutionError(
-        cli_agent="codex",
-        result=CliAgentExecutionResult(
-            stdout="",
-            stderr="rate limit",
-            returncode=75,
-            error_category="rate_limited",
-            error_details={
-                "retry_after_at": "2026-07-04T11:44:00+09:00",
-                "retry_after_text": "11:44 AM",
-            },
-        ),
-    )
-
-
-def _capture_recorded_event(monkeypatch):
-    recorded: dict = {}
-
-    def fake_record(*args, **kwargs):
-        recorded.clear()
-        recorded.update(kwargs)
-
-    monkeypatch.setattr(
-        "guildbotics.capabilities.workflow_rate_limits.record_correlated_event",
-        fake_record,
-    )
-    return recorded
-
-
-@pytest.mark.asyncio
-async def test_ticket_rate_limit_posts_status_comment_and_records_event(monkeypatch):
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-    tm = StubTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.invoke_response = _rate_limit_error()
-    recorded_kwargs = _capture_recorded_event(monkeypatch)
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response is not None
-    assert response.status == AgentResponse.DONE
-    assert response.skip_ticket_comment is True
-    assert "Rate limited. Reset: 11:44 AM" in response.message
-
-    assert len(tm.commented) == 1
-    comment = tm.commented[0][1]
-    assert "<!-- guildbotics-workflow-status-v1" in comment
-    assert "```" not in comment
-    assert "**GuildBotics workflow status**" not in comment
-    assert "workflow_error" in comment
-    assert "rate_limited" in comment
-
-    assert recorded_kwargs
-    assert recorded_kwargs["event_type"] == "workflow.rate_limited"
-    assert recorded_kwargs["default_source"] == "routine"
-    assert (
-        recorded_kwargs["attributes"]["rate_limit.retry_after_at"]
-        == "2026-07-04T11:44:00+09:00"
-    )
-    assert recorded_kwargs["payload"]["retry_after_text"] == "11:44 AM"
-
-
-@pytest.mark.asyncio
-async def test_ticket_rate_limit_records_event_even_if_comment_post_fails(monkeypatch):
-    task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
-
-    class FailingCommentTicketManager(StubTicketManager):
-        async def add_comment_to_ticket(self, task: Task, message: str):
-            raise RuntimeError("GitHub is down")
-
-    tm = FailingCommentTicketManager(task)
-    ctx = StubContext(task, tm)
-    ctx.invoke_response = _rate_limit_error()
-    recorded_kwargs = _capture_recorded_event(monkeypatch)
-
-    response = await ticket_driven_workflow.main(ctx)
-
-    assert response is not None
-    assert response.status == AgentResponse.DONE
-    assert response.skip_ticket_comment is True
-
-    assert recorded_kwargs
-    assert recorded_kwargs["event_type"] == "workflow.rate_limited"
-    assert recorded_kwargs["payload"]["retry_after_text"] == "11:44 AM"
