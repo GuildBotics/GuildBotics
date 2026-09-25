@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
+from guildbotics.capabilities.task_runs import TaskRunError, TaskRunStore
+from guildbotics.drivers.agent_turn import AgentTurnResult
 from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.observability import trace_scope
@@ -65,9 +67,6 @@ class StubContext:
         self.invocations = []
         self.invoke_response = AgentResponse(status=AgentResponse.DONE, message="done")
         self.complete_task_run = True
-        # When set, only the Nth agent turn records a completion so earlier turns
-        # fail the gate and the workflow retries.
-        self.complete_on_attempt = None
         self._invoke_calls = 0
         self.task_run_status = "done"
         self.evidence_type = "issue_comment"
@@ -91,28 +90,42 @@ class StubContext:
             (command_name, args, kwargs, kwargs.get("agent_execution_context"))
         )
         if isinstance(self.invoke_response, Exception):
-            raise self.invoke_response
+            from guildbotics.capabilities.completion_retry import (
+                find_cli_agent_execution_error,
+            )
+
+            if find_cli_agent_execution_error(
+                self.invoke_response, category="rate_limited"
+            ):
+                raise self.invoke_response
+            attempts = kwargs["agent_execution_context"]["max_completion_attempts"]
+            raise CompletionRetryExhausted(attempts, self.invoke_response)
         self._invoke_calls += 1
-        should_complete = self.complete_task_run and (
-            self.complete_on_attempt is None
-            or self._invoke_calls >= self.complete_on_attempt
+        run_id = kwargs["workflow_run_id"]
+        if not self.complete_task_run:
+            attempts = kwargs["agent_execution_context"]["max_completion_attempts"]
+            raise CompletionRetryExhausted(
+                attempts,
+                TaskRunError(f"Task run '{run_id}' was not found."),
+            )
+        store = TaskRunStore(self.task_run_store_root)
+        store.append_evidence(
+            run_id,
+            self.evidence_type,
+            {"url": kwargs["ticket_url"], "person_id": kwargs["person_id"]},
         )
-        if should_complete:
-            run_id = kwargs["workflow_run_id"]
-            store = TaskRunStore(self.task_run_store_root)
-            store.append_evidence(
-                run_id,
-                self.evidence_type,
-                {"url": kwargs["ticket_url"], "person_id": kwargs["person_id"]},
-            )
-            store.complete(
-                run_id,
-                self.task_run_status,
-                "completed through member capability",
-                kwargs["ticket_url"],
-                kwargs["person_id"],
-            )
-        return self.invoke_response
+        completion = store.complete(
+            run_id,
+            self.task_run_status,
+            "completed through member capability",
+            kwargs["ticket_url"],
+            kwargs["person_id"],
+        )
+        return AgentTurnResult(
+            response=self.invoke_response,
+            completion=completion,
+            evidence=store.evidence(run_id),
+        )
 
 
 @pytest.mark.asyncio
@@ -160,10 +173,7 @@ async def test_run_delegates_ready_ticket_to_cli_agent_and_moves_to_working(
         "work_identity": "https://github.com/GuildBotics/GuildBotics/issues/1",
         "resume_policy": "fresh",
         "attempt": 1,
-        "continuation_input": t(
-            "commands.workflows.common.agent_continuation",
-            run_id=kwargs["workflow_run_id"],
-        ),
+        "max_completion_attempts": 5,
     }
     assert kwargs["person_id"] == "aiko"
     assert kwargs["ticket_url"] == "https://github.com/GuildBotics/GuildBotics/issues/1"
@@ -373,13 +383,11 @@ def test_ticket_trace_attributes_for_issue_and_pull_request():
 
 
 @pytest.mark.asyncio
-async def test_ticket_retries_with_continuation_until_completion(monkeypatch):
+async def test_ticket_delegates_completion_retry_budget_to_the_host(monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_TICKET_MAX_ATTEMPTS", "5")
     task = Task(id="1", title="T", description="D", status=Task.IN_PROGRESS)
     tm = StubTicketManager(task)
     ctx = StubContext(task, tm)
-    # Completes only on the second (continuation) turn.
-    ctx.complete_on_attempt = 2
 
     response = await ticket_driven_workflow.main(ctx)
 
@@ -389,17 +397,15 @@ async def test_ticket_retries_with_continuation_until_completion(monkeypatch):
         for name, _args, kwargs, _env in ctx.invocations
         if name == "functions/handle_github_ticket"
     ]
-    assert len(handle_calls) == 2
-    # Both attempts reuse one run id and one stable ticket conversation key.
-    assert len({kwargs["workflow_run_id"] for kwargs in handle_calls}) == 1
-    conversation_keys = {
-        kwargs["agent_execution_context"]["work_identity"] for kwargs in handle_calls
-    }
-    assert conversation_keys == {"https://github.com/GuildBotics/GuildBotics/issues/1"}
-    assert [
-        kwargs["agent_execution_context"]["resume_policy"] for kwargs in handle_calls
-    ] == ["fresh", "auto"]
-    # Completed within budget: no error comment, no give-up.
+    assert len(handle_calls) == 1
+    execution_context = handle_calls[0]["agent_execution_context"]
+    assert execution_context["run_id"] == handle_calls[0]["workflow_run_id"]
+    assert execution_context["work_identity"] == (
+        "https://github.com/GuildBotics/GuildBotics/issues/1"
+    )
+    assert execution_context["resume_policy"] == "fresh"
+    assert execution_context["max_completion_attempts"] == 5
+    assert "continuation_input" not in execution_context
     assert tm.commented == []
 
 
@@ -421,7 +427,7 @@ async def test_ticket_exhaustion_posts_error_comment_and_raises(monkeypatch):
         for name, _args, _kwargs, _env in ctx.invocations
         if name == "functions/handle_github_ticket"
     ]
-    assert len(handle_calls) == 2
+    assert len(handle_calls) == 1
     assert len(tm.commented) == 1
 
 

@@ -1,20 +1,15 @@
 import os
 from contextlib import suppress
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from guildbotics.capabilities.completion_retry import run_with_completion_retry
-from guildbotics.capabilities.task_runs import (
-    TaskRunStatus,
-    TaskRunStore,
-)
 from guildbotics.capabilities.workflow_rate_limits import (
     WorkflowRateLimit,
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
     workflow_rate_limit_notice_text,
 )
+from guildbotics.drivers.agent_turn import AgentTurnResult
 from guildbotics.entities.task import Task
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
@@ -27,7 +22,6 @@ from guildbotics.runtime import Context
 from guildbotics.utils.fileio import (
     get_member_clone_path,
     get_workspace_root,
-    get_workspace_state_path,
 )
 from guildbotics.utils.i18n_tool import t
 
@@ -109,10 +103,6 @@ def _normalize_agent_response(response: Any) -> AgentResponse:
     )
 
 
-def _task_run_status(run_id: str, task_run_root: Path) -> TaskRunStatus:
-    return TaskRunStore(task_run_root).status(run_id)
-
-
 def _rate_limited_summary(retry_after: WorkflowRateLimit) -> str:
     """Build a machine-summary for ``AgentResponse.message``."""
     display = retry_after.retry_after_display
@@ -169,61 +159,42 @@ async def _main(
     member_workspace = get_member_clone_path(context.person.person_id)
     member_workspace.mkdir(parents=True, exist_ok=True)
 
-    last_response: list[Any] = []
-
-    async def _invoke_ticket_turn(run_id: str, attempt: int) -> None:
-        execution_context = {
+    result = await context.invoke(
+        "functions/handle_github_ticket",
+        person_id=context.person.person_id,
+        workflow_contract=t(
+            "commands.workflows.common.workflow_contract",
+            person_id=context.person.person_id,
+        ),
+        ticket_url=ticket_url,
+        pull_request_url=context.task.pull_request_url or "",
+        work_type=_work_type(context.task),
+        trigger_reason=context.task.trigger_reason or "",
+        language=context.language_name,
+        member_workspace=str(member_workspace),
+        workflow_run_id=run_id,
+        prepare_command=_prepare_command(context, ticket_url),
+        agent_execution_context={
             "run_id": run_id,
             "workspace_data_root": str(workspace_root),
             "work_kind": "ticket",
             "work_identity": ticket_url,
-            "resume_policy": "fresh" if attempt == 1 else "auto",
-            "attempt": attempt,
-            "continuation_input": t(
-                "commands.workflows.common.agent_continuation", run_id=run_id
-            ),
-        }
-        response = await context.invoke(
-            "functions/handle_github_ticket",
-            person_id=context.person.person_id,
-            workflow_contract=t(
-                "commands.workflows.common.workflow_contract",
-                person_id=context.person.person_id,
-            ),
-            ticket_url=ticket_url,
-            pull_request_url=context.task.pull_request_url or "",
-            work_type=_work_type(context.task),
-            trigger_reason=context.task.trigger_reason or "",
-            language=context.language_name,
-            member_workspace=str(member_workspace),
-            workflow_run_id=run_id,
-            prepare_command=_prepare_command(context, ticket_url),
-            agent_execution_context=execution_context,
-            cwd=member_workspace,
-        )
-        last_response.append(response)
-
-    # Retry the agent in-process until it records a terminal completion. On
-    # exhaustion this raises CompletionRetryExhausted, which main() turns into a
-    # ticket comment; that comment then stops the ticket from being re-selected.
-    completion, _run_id = await run_with_completion_retry(
-        invoke=_invoke_ticket_turn,
-        check_completion=lambda rid: _task_run_status(
-            rid, get_workspace_state_path("task-runs", workspace_root=workspace_root)
-        ),
-        max_attempts=_max_agent_attempts(),
-        run_id=run_id,
+            "resume_policy": "fresh",
+            "attempt": 1,
+            "max_completion_attempts": _max_agent_attempts(),
+        },
+        cwd=member_workspace,
     )
-    agent_response = _normalize_agent_response(
-        last_response[-1] if last_response else None
-    )
+    if not isinstance(result, AgentTurnResult):
+        raise RuntimeError("Ticket agent turn returned no completion result.")
+    agent_response = _normalize_agent_response(result.response)
     return AgentResponse(
         status=(
             AgentResponse.ASKING
-            if completion.status == AgentResponse.ASKING
+            if result.completion.status == AgentResponse.ASKING
             else AgentResponse.DONE
         ),
-        message=agent_response.message or completion.summary,
+        message=agent_response.message or result.completion.summary,
         skip_ticket_comment=True,
     )
 

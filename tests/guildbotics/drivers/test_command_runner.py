@@ -68,6 +68,46 @@ async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch):
+    from guildbotics.drivers import agent_turn
+
+    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
+    ctx = DummyContext()
+    runner = CommandRunner(ctx, "main", [])
+    captured = {}
+
+    async def fake_run_agent_turn(*, invoke, execution_context):
+        captured["execution_context"] = execution_context
+        return await invoke({**execution_context, "attempt": 2})
+
+    def fake_build(anchor, entry):
+        captured["entry"] = entry
+        return _main_spec()
+
+    async def fake_run_with_children(spec):
+        return CommandOutcome(result="completed", text_output="completed")
+
+    monkeypatch.setattr(agent_turn, "run_agent_turn", fake_run_agent_turn)
+    runner._spec_factory.build_from_entry = fake_build
+    runner._run_with_children = fake_run_with_children
+
+    result = await runner._invoke(
+        "child",
+        cwd=Path("/memory"),
+        agent_execution_context={
+            "run_id": "run-1",
+            "work_kind": "ticket",
+            "max_completion_attempts": 3,
+        },
+    )
+
+    assert result == "completed"
+    assert captured["execution_context"]["run_id"] == "run-1"
+    assert captured["entry"]["params"]["agent_execution_context"]["attempt"] == 2
+    assert captured["entry"]["cwd"] == Path("/memory")
+
+
+@pytest.mark.asyncio
 async def test_run_uses_spec_cwd_not_runner_cwd(monkeypatch):
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
     ctx = DummyContext()
