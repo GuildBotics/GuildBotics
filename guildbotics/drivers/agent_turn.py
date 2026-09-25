@@ -40,6 +40,10 @@ async def run_agent_turn(
     than accepting a workflow-owned callback. This keeps both ticket and chat
     turns on the same boundary while letting each workflow choose its attempt
     budget through ``max_completion_attempts``.
+
+    Raises:
+        CompletionRetryExhausted: When the attempt budget is exhausted. The
+            caller is responsible for reporting the failure to the requester.
     """
     context = dict(execution_context)
     run_id = str(context.get("run_id") or "").strip()
@@ -66,10 +70,12 @@ async def run_agent_turn(
     last_error: Exception = RuntimeError("no attempts were made")
 
     for offset in range(attempts):
-        attempt = first_attempt + offset
+        # Agent attempts are logical; diagnostics count this dispatch's attempts.
+        logical_attempt = first_attempt + offset
+        dispatch_attempt = offset + 1
         turn_context = {
             **context,
-            "attempt": attempt,
+            "attempt": logical_attempt,
             "resume_policy": (
                 context.get("resume_policy", "fresh") if offset == 0 else "auto"
             ),
@@ -91,14 +97,14 @@ async def run_agent_turn(
             _raise_rate_limit(exc)
             record_workflow_completion_missing(
                 run_id=run_id,
-                attempt=offset + 1,
+                attempt=dispatch_attempt,
                 max_attempts=attempts,
                 error=str(exc),
             )
             last_error = exc
             continue
 
-        record_workflow_completed(run_id=run_id, attempt=offset + 1)
+        record_workflow_completed(run_id=run_id, attempt=dispatch_attempt)
         return AgentTurnResult(
             response=response,
             completion=completion,

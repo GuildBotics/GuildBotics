@@ -6,7 +6,13 @@ import pytest
 
 from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.errors import CommandError
+from guildbotics.drivers import agent_turn
 from guildbotics.drivers.agent_turn import run_agent_turn
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 
 
 def _store(tmp_path) -> RunStore:
@@ -113,6 +119,126 @@ async def test_host_exhausts_the_configured_attempt_budget(tmp_path):
 
     assert attempts == [1, 2]
     assert excinfo.value.attempts == 2
+
+
+@pytest.mark.parametrize("failure_stage", ["invoke", "completion"])
+@pytest.mark.asyncio
+async def test_host_reraises_rate_limits_without_retrying(
+    tmp_path, monkeypatch, failure_stage
+):
+    calls = 0
+    rate_limited = CliAgentExecutionError(
+        cli_agent="codex",
+        result=CliAgentExecutionResult(
+            stdout="",
+            stderr="rate limit",
+            returncode=75,
+            error_category="rate_limited",
+            error_details={"retry_after_text": "11:44 AM"},
+        ),
+    )
+
+    def raise_wrapped_rate_limit(*args, **kwargs):
+        raise CommandError("wrapped") from rate_limited
+
+    async def invoke(context: dict[str, Any]) -> str:
+        nonlocal calls
+        calls += 1
+        if failure_stage == "invoke":
+            raise_wrapped_rate_limit()
+        return "response"
+
+    if failure_stage == "completion":
+        monkeypatch.setattr(agent_turn.RunStore, "status", raise_wrapped_rate_limit)
+
+    with pytest.raises(CliAgentExecutionError) as excinfo:
+        await run_agent_turn(
+            invoke=invoke,
+            execution_context={
+                "run_id": "run-1",
+                "workspace_data_root": str(tmp_path),
+                "work_kind": "ticket",
+                "max_completion_attempts": 3,
+            },
+        )
+
+    assert calls == 1
+    assert excinfo.value is rate_limited
+
+
+@pytest.mark.asyncio
+async def test_host_records_completion_missing_then_completed_events(
+    tmp_path, monkeypatch
+):
+    completion_call = 2
+    max_attempts = 3
+    recorded: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        agent_turn,
+        "record_workflow_completed",
+        lambda **kwargs: recorded.append(("completed", kwargs)),
+    )
+    monkeypatch.setattr(
+        agent_turn,
+        "record_workflow_completion_missing",
+        lambda **kwargs: recorded.append(("missing", kwargs)),
+    )
+    store = _store(tmp_path)
+    calls = 0
+
+    async def invoke(context: dict[str, Any]) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == completion_call:
+            _ticket_completion(store, "run-1")
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        execution_context={
+            "run_id": "run-1",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "ticket",
+            "attempt": 4,
+            "max_completion_attempts": max_attempts,
+        },
+    )
+
+    assert [name for name, _ in recorded] == ["missing", "completed"]
+    missing = recorded[0][1]
+    assert missing["run_id"] == "run-1"
+    assert missing["attempt"] == 1
+    assert missing["max_attempts"] == max_attempts
+    assert "not found" in missing["error"].lower()
+    assert recorded[1][1] == {"run_id": "run-1", "attempt": 2}
+
+
+@pytest.mark.asyncio
+async def test_host_does_not_record_completion_missing_for_invoke_failures(
+    tmp_path, monkeypatch
+):
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        agent_turn,
+        "record_workflow_completion_missing",
+        lambda **kwargs: recorded.append("missing"),
+    )
+
+    async def invoke(context: dict[str, Any]) -> str:
+        raise RuntimeError("provider turn failed")
+
+    with pytest.raises(CompletionRetryExhausted):
+        await run_agent_turn(
+            invoke=invoke,
+            execution_context={
+                "run_id": "run-1",
+                "workspace_data_root": str(tmp_path),
+                "work_kind": "ticket",
+                "max_completion_attempts": 2,
+            },
+        )
+
+    assert recorded == []
 
 
 @pytest.mark.asyncio
