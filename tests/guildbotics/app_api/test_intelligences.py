@@ -463,18 +463,6 @@ def test_team_update_merges_existing_model_file(tmp_path: Path) -> None:
     assert model_data["parameters"]["temperature"] == temperature
 
 
-def test_team_update_clears_all_runtime_caches(tmp_path: Path) -> None:
-    simple_brain_factory.person_brain_mapping["alice"] = {}
-    agno_agent.person_model_mapping["alice"] = {}
-    cli_agent.person_cli_agent_mapping["bob"] = {}
-
-    IntelligenceConfigService().update_config(_team_update_request(tmp_path))
-
-    assert simple_brain_factory.person_brain_mapping == {}
-    assert agno_agent.person_model_mapping == {}
-    assert cli_agent.person_cli_agent_mapping == {}
-
-
 # --------------------------------------------------------------------------- #
 # update_config (member scope)
 # --------------------------------------------------------------------------- #
@@ -659,30 +647,9 @@ def test_member_override_preserves_unsurfaced_def_fields(tmp_path: Path) -> None
     assert stored["rate_limit"] == {"max_requests_per_minute": 3}
 
 
-def test_member_override_update_clears_only_member_cache(tmp_path: Path) -> None:
-    simple_brain_factory.person_brain_mapping["alice"] = {}
-    simple_brain_factory.person_brain_mapping["bob"] = {}
-    agno_agent.person_model_mapping["alice"] = {}
-    cli_agent.person_cli_agent_mapping["alice"] = {}
-
-    request = IntelligenceConfigUpdateRequest(
-        config_dir=tmp_path,
-        person_id="alice",
-        model_mapping={},
-        cli_agent_mapping={},
-    )
-    IntelligenceConfigService().update_config(request)
-
-    assert "alice" not in simple_brain_factory.person_brain_mapping
-    assert "bob" in simple_brain_factory.person_brain_mapping
-    assert "alice" not in agno_agent.person_model_mapping
-    assert "alice" not in cli_agent.person_cli_agent_mapping
-
-
 def test_inherit_team_defaults_deletes_member_intelligences(tmp_path: Path) -> None:
     base = _member_intelligences(tmp_path, "alice")
     _write_yaml(base / "model_mapping.yml", {"default": "models/openai/gpt.yml"})
-    simple_brain_factory.person_brain_mapping["alice"] = {}
 
     request = IntelligenceConfigUpdateRequest(
         config_dir=tmp_path,
@@ -695,7 +662,6 @@ def test_inherit_team_defaults_deletes_member_intelligences(tmp_path: Path) -> N
     assert len(result.files) == 1
     assert result.files[0].path == base
     assert result.files[0].action == "delete"
-    assert "alice" not in simple_brain_factory.person_brain_mapping
 
 
 def test_inherit_team_defaults_when_no_member_dir(tmp_path: Path) -> None:

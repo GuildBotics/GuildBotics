@@ -75,6 +75,8 @@ class ModelConfig(BaseModel):
 #: `models/<provider>/<slot>.yml`
 MODEL_PATH_PARTS = 3
 
+#: Overrides keyed by person id. Production code does not write this dict.
+#: See ``simple_brain_factory.person_brain_mapping`` for why.
 person_model_mapping: dict[str, dict[str, ModelConfig]] = {}
 
 
@@ -117,8 +119,21 @@ def _effort_of(path: Path) -> dict:
 
 
 def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
-    if person_id in person_model_mapping:
-        return person_model_mapping[person_id]
+    """Return the person's model slots, read from configuration each call.
+
+    An entry in :data:`person_model_mapping` is an override and wins over the
+    files. Otherwise the mapping is loaded and not stored, so the next brain
+    sees a file that changed after the previous brain was built.
+
+    Args:
+        person_id (str): The person whose ``model_mapping.yml`` to read.
+
+    Returns:
+        dict[str, ModelConfig]: Slot name to the validated model definition.
+    """
+    override = person_model_mapping.get(person_id)
+    if override is not None:
+        return override
 
     mapping = load_person_slot_mapping(person_id, "intelligences/model_mapping.yml")
     model_mapping = {}
@@ -132,7 +147,6 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
             model["effort"] = _inherited_effort(person_id, str(model_file))
         model_mapping[name] = ModelConfig.model_validate(model)
 
-    person_model_mapping[person_id] = model_mapping
     return model_mapping
 
 
