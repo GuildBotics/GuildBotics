@@ -75,9 +75,8 @@ class ModelConfig(BaseModel):
 #: `models/<provider>/<slot>.yml`
 MODEL_PATH_PARTS = 3
 
-#: Caller-installed overrides, keyed by person id. See
-#: ``simple_brain_factory.person_brain_mapping`` for why a loaded mapping is
-#: not remembered on the process.
+#: Overrides keyed by person id. Production code does not write this dict.
+#: See ``simple_brain_factory.person_brain_mapping`` for why.
 person_model_mapping: dict[str, dict[str, ModelConfig]] = {}
 
 

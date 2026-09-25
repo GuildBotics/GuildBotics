@@ -125,9 +125,8 @@ class ExecutableInfo:
     parameters: dict = field(default_factory=dict)
 
 
-#: Caller-installed overrides, keyed by person id. See
-#: ``simple_brain_factory.person_brain_mapping`` for why a loaded mapping is
-#: not remembered on the process.
+#: Overrides keyed by person id. Production code does not write this dict.
+#: See ``simple_brain_factory.person_brain_mapping`` for why.
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
 
 #: The one effort-mapping key the core gives a name of its own, because it feeds

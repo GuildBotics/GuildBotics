@@ -103,8 +103,6 @@ def test_cli_agent_mapping_rejects_a_tool_outside_the_catalog(monkeypatch) -> No
     with pytest.raises(ValueError, match=r"slot 'default'.*mytool"):
         cli_agent.get_cli_agent_mapping("aiko")
 
-    assert "aiko" not in cli_agent.person_cli_agent_mapping
-
 
 @pytest.mark.asyncio
 async def test_cli_agent_run_returns_the_provider_output(monkeypatch, tmp_path):

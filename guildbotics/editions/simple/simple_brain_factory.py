@@ -28,7 +28,8 @@ class BrainConfig(BaseModel):
     )
 
 
-#: Caller-installed overrides, keyed by person id. Loaders do not write this.
+#: Overrides keyed by person id. Production code does not write this dict;
+#: only tests inject entries, and a production write brings #587 back.
 #: Remembering the first load served stale settings after a hand edit, a sync,
 #: a workspace switch, or any write that did not go through the settings
 #: screen. Re-reading the mapping is cheap enough to do on every brain.
