@@ -506,6 +506,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 expires_at=("*", "expires_at"),
                 expires_format="rfc3339",
                 upstream="https://cli-chat-proxy.grok.com",
+                # Telemetry (`POST /v1/traces`) stays closed.
                 routes=(
                     "GET /v1/user",
                     "GET /v1/settings",
