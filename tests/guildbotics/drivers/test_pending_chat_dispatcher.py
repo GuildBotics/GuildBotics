@@ -5,6 +5,7 @@ import types
 
 import pytest
 
+from guildbotics.capabilities.chat_selection import ChatAttempt, ChatTurn
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
@@ -21,7 +22,6 @@ from guildbotics.intelligences.brains.cli_agent import (
 )
 from guildbotics.observability import current_trace
 from guildbotics.observability.trace_status import resolve_trace_status
-from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
 
 
@@ -45,6 +45,48 @@ class _FakeContext:
         return clone
 
 
+@pytest.fixture(autouse=True)
+def attempts(monkeypatch) -> list[ChatAttempt]:
+    """Replace selection with one that sends every queued event to a turn."""
+    seen: list[ChatAttempt] = []
+
+    class _Selector:
+        def __init__(self, context, *, command, state_store):
+            pass
+
+        async def prepare(self, *, service_name, channel_id, event, **_kwargs):
+            return (service_name, channel_id, event)
+
+        async def run(self, batch, attempt, run_turn):
+            service_name, channel_id, event = batch
+            seen.append(attempt)
+            await run_turn(
+                ChatTurn(
+                    run_id=attempt.run_id,
+                    attempt=attempt.attempt_count,
+                    service_name=service_name,
+                    channel_id=channel_id,
+                    thread_ts=event.thread_ts,
+                    event_id=event.event_id,
+                    message_ts=event.message_ts,
+                    work_identity=event.event_id,
+                    context_cursor=event.message_ts,
+                    prompt={},
+                )
+            )
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.ChatSelector", _Selector
+    )
+    return seen
+
+
+def _turn(context) -> ChatTurn:
+    return ChatTurn.model_validate(
+        context.shared_state[WORKFLOW_INVOCATION_KEY].payload
+    )
+
+
 def _event(event_id="E1", ts="100.1", thread_ts="100.1"):
     return ChatEvent(
         event_id=event_id,
@@ -61,11 +103,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
 
     class _Runner:
         def __init__(self, context, command, args):
-            incoming = IncomingChatEvent.from_shared_state(
-                context.shared_state[WORKFLOW_INVOCATION_KEY].payload
-            )
-            assert incoming is not None
-            self.event_id = incoming.event.event_id
+            self.event_id = _turn(context).event_id
 
         async def run(self):
             ran.append(self.event_id)
@@ -79,7 +117,9 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path):
+async def test_dispatcher_runs_workflow_and_clears_pending(
+    monkeypatch, tmp_path, attempts
+):
     store = FileConversationStateStore(base_dir=tmp_path)
     store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
 
@@ -106,22 +146,16 @@ async def test_dispatcher_runs_workflow_and_clears_pending(monkeypatch, tmp_path
     # The event is marked processed and removed from the queue.
     assert store.is_processed_event("slack", "alice", "C1", "E1")
     assert store.load_pending_events("slack", "alice", "C1") == []
-    # The workflow ran with the incoming event + participation in shared_state.
+    # The workflow ran the turn selection built for the event, on this attempt.
     ctx_used, command, _args = ran[0]
     assert command == "workflows/chat_conversation_workflow"
-    incoming = IncomingChatEvent.from_shared_state(
-        ctx_used.shared_state[WORKFLOW_INVOCATION_KEY].payload
-    )
-    assert incoming is not None
-    assert incoming.event.event_id == "E1"
-    assert incoming.chat_participation == "social"
-    retry_context = ctx_used.shared_state[WORKFLOW_INVOCATION_KEY].payload[
-        "retry_context"
+    turn = _turn(ctx_used)
+    assert turn.event_id == "E1"
+    assert turn.attempt == 1
+    assert turn.run_id
+    assert attempts == [
+        ChatAttempt(run_id=turn.run_id, attempt_count=1, max_attempts=5)
     ]
-    assert retry_context["attempt_count"] == 1
-    assert retry_context["max_attempts"] == 5
-    assert retry_context["is_final_attempt"] is False
-    assert retry_context["run_id"]
 
 
 @pytest.mark.asyncio
@@ -194,9 +228,7 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
 
     class _Runner:
         def __init__(self, context, command, args):
-            self.run_id = context.shared_state[WORKFLOW_INVOCATION_KEY].payload[
-                "retry_context"
-            ]["run_id"]
+            self.run_id = _turn(context).run_id
 
         async def run(self):
             RunStore().start_record(
@@ -312,6 +344,158 @@ async def test_dispatch_records_the_trace_boundary_around_the_turn(
     assert resolve_trace_status(recorded) == "success"
 
 
+def _install_selection(monkeypatch, prepare) -> list:
+    """Replace selection with ``prepare``; record the trace each step ran in."""
+    traces: list = []
+
+    class _Selector:
+        def __init__(self, context, *, command, state_store):
+            pass
+
+        async def prepare(self, **kwargs):
+            traces.append(("prepare", current_trace()))
+            return prepare()
+
+        async def run(self, batch, attempt, run_turn):
+            traces.append(("run", current_trace()))
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.ChatSelector", _Selector
+    )
+    return traces
+
+
+@pytest.mark.asyncio
+async def test_event_that_is_not_work_leaves_no_trace(monkeypatch, tmp_path):
+    # An event selection declines before judgment (an edit, the member's own
+    # message, one its participation excludes) used to leave a
+    # ``command.started`` / ``command.finished`` trace with nothing in it,
+    # once per member, that could not even say why nothing happened.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+    traces = _install_selection(monkeypatch, lambda: None)
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert traces == [("prepare", None)]
+    assert recorded == []
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+    assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_selection_failure_is_traced_and_retried(monkeypatch, tmp_path):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+
+    def _fail():
+        raise RuntimeError("invalid_auth")
+
+    traces = _install_selection(monkeypatch, _fail)
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert traces == [("prepare", None)]
+    assert [item["type"] for item in recorded] == ["command.started", "command.failed"]
+    [pending] = store.load_pending_events("slack", "alice", "C1")
+    assert pending.attempt_count == 1
+    assert pending.last_error_category == "failed"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_chat_service_is_traced_and_retried(monkeypatch, tmp_path):
+    # Building selection resolves the member's chat service, which fails when
+    # its token is missing. That failure spends an attempt like any other, so
+    # the event backs off and is eventually abandoned instead of failing on
+    # every poll forever.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    recorded = _capture_boundary_events(monkeypatch)
+
+    class _Selector:
+        def __init__(self, context, *, command, state_store):
+            raise RuntimeError("SLACK_BOT_TOKEN is not set")
+
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.ChatSelector", _Selector
+    )
+
+    dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert [item["type"] for item in recorded] == ["command.started", "command.failed"]
+    [pending] = store.load_pending_events("slack", "alice", "C1")
+    assert pending.attempt_count == 1
+    assert pending.next_attempt_at
+
+
+@pytest.mark.asyncio
+async def test_selection_failure_on_the_final_attempt_abandons_the_event(
+    monkeypatch, tmp_path
+):
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
+    [pending] = store.load_pending_events("slack", "alice", "C1")
+    pending.attempt_count = 4
+    pending.max_attempts = 5
+    store.save_pending_event("slack", "alice", "C1", pending)
+    recorded = _capture_boundary_events(monkeypatch)
+    abandoned: list[dict] = []
+    monkeypatch.setattr(
+        "guildbotics.drivers.pending_chat_dispatcher.record_chat_dispatch_abandoned",
+        lambda **kwargs: abandoned.append(kwargs),
+    )
+
+    def _fail():
+        raise RuntimeError("invalid_auth")
+
+    _install_selection(monkeypatch, _fail)
+    context = _FakeContext()
+    context.logger.error = lambda *a, **k: None
+
+    dispatcher = PendingChatDispatcher(context, state_store=store)  # type: ignore[arg-type]
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    assert [item["type"] for item in recorded] == ["command.started", "command.failed"]
+    assert [item["attempt_count"] for item in abandoned] == [5]
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+    assert store.load_pending_events("slack", "alice", "C1") == []
+
+
+@pytest.mark.asyncio
+async def test_selected_event_runs_under_a_trace_naming_its_thread(
+    monkeypatch, tmp_path
+):
+    # Reaction-only and no-op judgments never reach the workflow, so the
+    # trace itself names the thread the run is about.
+    store = FileConversationStateStore(base_dir=tmp_path)
+    store.upsert_pending_event("slack", "alice", "C1", _event(ts="101.1"), "social")
+    traces = _install_selection(monkeypatch, lambda: object())
+
+    dispatcher = PendingChatDispatcher(
+        _FakeContext(),  # type: ignore[arg-type]
+        state_store=store,
+        service_run_id="service-1",
+    )
+    await dispatcher.process_person(Person(person_id="alice", name="A", is_active=True))
+
+    step, trace = traces[-1]
+    assert step == "run"
+    assert trace.attributes == {
+        "service_run_id": "service-1",
+        "event.provider": "slack",
+        "slack.channel": "C1",
+        "slack.thread_ts": "100.1",
+        "slack.ts": "101.1",
+        "event_id": "E1",
+    }
+    assert store.is_processed_event("slack", "alice", "C1", "E1")
+
+
 @pytest.mark.asyncio
 async def test_dispatch_records_a_failed_boundary_and_still_retries(
     monkeypatch, tmp_path
@@ -396,7 +580,9 @@ async def test_rejected_dispatch_records_no_boundary(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_uses_env_for_initial_retry_budget(monkeypatch, tmp_path):
+async def test_dispatcher_uses_env_for_initial_retry_budget(
+    monkeypatch, tmp_path, attempts
+):
     monkeypatch.setenv("GUILDBOTICS_CHAT_MAX_ATTEMPTS", "10")
     store = FileConversationStateStore(base_dir=tmp_path)
     store.upsert_pending_event("slack", "alice", "C1", _event(), "social")
@@ -419,10 +605,7 @@ async def test_dispatcher_uses_env_for_initial_retry_budget(monkeypatch, tmp_pat
 
     await dispatcher.process_person(person)
 
-    retry_context = (
-        ran[0].shared_state[WORKFLOW_INVOCATION_KEY].payload["retry_context"]
-    )
-    assert retry_context["max_attempts"] == 10
+    assert [attempt.max_attempts for attempt in attempts] == [10]
 
 
 @pytest.mark.asyncio

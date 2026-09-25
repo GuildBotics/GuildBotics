@@ -44,10 +44,11 @@ TRACE_ROOTS: dict[tuple[str, str], str] = {
         "guildbotics/app_api/runtime.py",
         "run_scenario_diagnostics",
     ): "diagnostics.completed",
-    # Slack-triggered chat workflows, through ``command_boundary``.
+    # Selected Slack events, through ``command_boundary``; an event selection
+    # declines before judgment opens no trace at all.
     (
         "guildbotics/drivers/pending_chat_dispatcher.py",
-        "_dispatch",
+        "_select_and_run",
     ): "command.finished",
     # Scheduled and routine commands, through ``run_with_logging``.
     (

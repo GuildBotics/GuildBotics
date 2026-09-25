@@ -6,6 +6,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from guildbotics.capabilities.chat_batch import completed_chat_event_ids
+from guildbotics.capabilities.chat_selection import (
+    ChatAttempt,
+    ChatBatch,
+    ChatSelector,
+    ChatTurn,
+)
 from guildbotics.capabilities.task_runs import RunStore, chat_event_work_identity
 from guildbotics.capabilities.workflow_completion_events import (
     record_chat_dispatch_abandoned,
@@ -31,7 +37,6 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.timestamps import parse_iso_datetime
 
@@ -42,7 +47,11 @@ _DEFAULT_MAX_ATTEMPTS = 5
 
 
 class PendingChatDispatcher:
-    """Runs the chat workflow for queued chat events inside the member worker.
+    """Selects queued chat events inside the member worker and responds to them.
+
+    Selection (``ChatSelector``) decides whether an event is work for the
+    member and settles reaction-only and no-op judgments itself; the chat
+    workflow runs only for the events that need an AI CLI turn.
 
     The event listener only receives, backfills, and queues chat events. Actual
     execution happens here, called from each member's single scheduler worker
@@ -169,21 +178,67 @@ class PendingChatDispatcher:
         channel_id: str,
         pending: PendingChatEvent,
     ) -> int:
-        event_id = pending.event.event_id
         if not pending.run_id:
             pending.run_id = uuid4().hex
+        context = self._context.clone_for(person)
+        try:
+            return await self._select_and_run(
+                person, service, channel_id, pending, context
+            )
+        finally:
+            await context.aclose()
+
+    async def _select_and_run(
+        self,
+        person: Person,
+        service: str,
+        channel_id: str,
+        pending: PendingChatEvent,
+        context: Context,
+    ) -> int:
+        event_id = pending.event.event_id
+        # Selection reads the thread outside any trace: an event that is not
+        # work for the member (an edit, its own message, one its participation
+        # excludes) leaves neither diagnostics nor a run record behind. A
+        # selection that failed is raised inside the trace, which records it as
+        # the failure it is and retries it like any other.
+        selected: ChatBatch | Exception | None
+        try:
+            selector = ChatSelector(
+                context, command=self._workflow_command, state_store=self._state_store
+            )
+            selected = await selector.prepare(
+                service_name=service,
+                channel_id=channel_id,
+                event=pending.event,
+                chat_participation=pending.chat_participation,
+                run_id=pending.run_id,
+            )
+        except Exception as exc:
+            selected = exc
+        if selected is None:
+            self._state_store.mark_processed_event(
+                service, person.person_id, channel_id, event_id
+            )
+            return 1
         with trace_scope(
             "event_listener",
             person_id=person.person_id,
             command=self._workflow_command,
             trace_id=pending.run_id,
+            attributes={
+                "service_run_id": self._service_run_id,
+                "event.provider": service,
+                "slack.channel": channel_id,
+                "slack.thread_ts": pending.event.thread_ts,
+                "slack.ts": pending.event.message_ts,
+                "event_id": event_id,
+            },
         ) as trace:
             try:
-                # The boundary only claims the event here: whether there is
-                # work in it (the member is addressed, the batch is new) is
-                # decided by the workflow after it has read the thread, and a
-                # batch the member does not act on must leave no run record.
-                # The workflow records the start when it takes the batch.
+                # The boundary only claims the event: the batch selected in it
+                # may still be judged to need nothing, and selection records
+                # the run's start once the member takes the batch.
                 with self._execution.track_work(
                     source="event_queue",
                     person_id=person.person_id,
@@ -214,7 +269,19 @@ class PendingChatDispatcher:
                         task_type="event_listener",
                         person_id=person.person_id,
                     ):
-                        await self._run_workflow(person, service, channel_id, pending)
+                        if isinstance(selected, Exception):
+                            raise selected
+                        await selector.run(
+                            selected,
+                            ChatAttempt(
+                                run_id=pending.run_id,
+                                attempt_count=pending.attempt_count,
+                                max_attempts=pending.max_attempts,
+                            ),
+                            run_turn=lambda turn: self._run_workflow(
+                                person, service, channel_id, pending, turn
+                            ),
+                        )
             except WorkRejectedError as exc:
                 # A finished run is reported as a duplicate only when it is
                 # not known to have left its work undone, so the event really
@@ -275,9 +342,11 @@ class PendingChatDispatcher:
                     "rate_limited" if rate_limit is not None else "failed"
                 )
                 if pending.attempt_count >= pending.max_attempts:
-                    # The workflow normally terminalizes its own final attempt;
-                    # reaching here means it could not. Release the thread so
-                    # the abandoned event never blocks its followers.
+                    # Selection terminalizes a failed judgment or turn on its
+                    # final attempt; reaching here means the event failed
+                    # before judgment, or selection could not settle it.
+                    # Release the thread so the abandoned event never blocks
+                    # its followers.
                     record_chat_dispatch_abandoned(
                         event_id=event_id,
                         run_id=pending.run_id,
@@ -338,27 +407,14 @@ class PendingChatDispatcher:
         service: str,
         channel_id: str,
         pending: PendingChatEvent,
+        turn: ChatTurn,
     ) -> None:
-        incoming = IncomingChatEvent(
-            service_name=service,
-            channel_id=channel_id,
-            event=pending.event,
-            chat_participation=pending.chat_participation,
-        )
         invocation = WorkflowInvocation(
             command=self._workflow_command,
             person_id=person.person_id,
             source="event_queue",
             trigger_type="chat",
-            payload={
-                **incoming.to_shared_state(),
-                "retry_context": {
-                    "attempt_count": pending.attempt_count,
-                    "max_attempts": pending.max_attempts,
-                    "is_final_attempt": pending.attempt_count >= pending.max_attempts,
-                    "run_id": pending.run_id,
-                },
-            },
+            payload=turn.model_dump(),
             idempotency_key=f"{service}:message:{channel_id}:{pending.event.event_id}",
         )
         dispatcher = WorkflowDispatcher(

@@ -22,7 +22,7 @@ def command_boundary(
     Only the layer that opened the trace can say the whole execution started
     and ended, so every route that opens one records these. A provider's
     ``span.finished`` reports that a single call returned and never stands in
-    for them; a chat workflow decides with an LLM call before its agent turn
+    for them; chat selection decides with an LLM call before its agent turn
     even starts.
 
     Every way the run can end is recorded, cancellation included: stopping the

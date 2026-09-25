@@ -162,7 +162,13 @@ purpose:
   Ticket selection lives in `drivers/ticket_selector.py`.
 - **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
   and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
-  then drained per member by `drivers/pending_chat_dispatcher.py`.
+  then drained per member by `drivers/pending_chat_dispatcher.py`. Like the ticket
+  patrol, the dispatcher selects before it starts a workflow: selection
+  (`capabilities/chat_selection.py`) reads the thread, drops events that are not work
+  for the member, judges the rest, and settles reaction-only and no-op outcomes itself.
+  The workflow only runs the AI CLI turn for events that need a response; selection
+  owns the conversation ledger around it (read marks, the thread cache, thread state,
+  the run record, handoffs, failure notices).
 
 Invariants:
 
@@ -183,12 +189,12 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   services must be stopped from Desktop rather than by signalling the sidecar PID.
 - A member that finishes work while messages 3 and 5 arrive in one Slack thread
   reads the unread conversation through message 5 in its next run. The oldest
-  queued event starts that run; the workflow combines queued messages with a fresh
+  queued event starts that run; selection combines queued messages with a fresh
   provider snapshot, including intervening conversation and corrections. Historical
   context is bounded to 100 messages; unread input is kept separately so that the
   context bound cannot discard an earlier request. Both fresh and resumed AI CLI
   sessions receive the whole unread batch.
-- Before invoking the agent, the workflow records the batch's event IDs and last
+- Before judging the batch, selection records its event IDs and last
   message timestamp as `chat_batch` evidence on the task run. Completion acknowledges
   and removes those IDs. Additional `chat_updates` input is acknowledged only on
   done/asking after a subsequent chat reply, post, reaction, GitHub write, or Git publication. Blocked runs and updates
@@ -246,7 +252,7 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   the same question about the same records, so they read one implementation. A
   trace becomes success only through an event the layer that opened it records
   (`TRACE_COMPLETED_EVENT_TYPES`). `span.finished` says a single provider call
-  returned, and a chat workflow makes an LLM decision before its agent turn starts,
+  returned, and chat selection makes an LLM decision before its agent turn starts,
   so treating that span as the trace's success showed still-running executions as
   finished. Every route that opens a `trace_scope` therefore records its own
   completion event; `tests/guildbotics/test_trace_boundaries.py` enumerates that
@@ -573,10 +579,12 @@ work may already have taken effect elsewhere; only the user starts it again.
 A run record means work was taken. The ticket patrol selects its ticket outside
 the boundary and claims a slot only for a ticket it dispatches, so an idle patrol
 leaves no record (and no trace). A chat event is different: whether it holds work
-for the member is known only after the thread has been read, so the dispatcher
-only claims the event's identity (`record_start=False`) and the workflow records
-the start itself, under the same barrier, once it takes the batch; a batch the
-member does not act on leaves no record, and the boundary finishes only a run
+for the member is known only after the thread has been read. The dispatcher
+selects it before opening a trace, so an event that is not work for the member
+(an edit, its own message, one its participation excludes) leaves neither a trace
+nor a record. For an event that is, it opens the trace, claims only the event's
+identity (`record_start=False`), and selection records the start itself, under
+the same barrier, before judging the batch; the boundary finishes only a run
 that started. The run is its trace (`run_id == trace_id`, for the ticket workflow
 too), and the boundary mirrors the trace's source and attributes into the record
 at start and at finish, so the record names the run's PR / issue or chat thread

@@ -371,7 +371,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
         outside that local lock; a failed barrier never starts the caller's
         workflow.
 
-        With ``record_start`` false the identity is only claimed: the workflow
+        With ``record_start`` false the identity is only claimed: the caller
         records the run's start itself, with the same barrier, once it has
         decided to act on the input, so an input it declines leaves no record.
         The scan still rejects an identity another run holds.
@@ -444,7 +444,7 @@ class TaskRunCoordinator(ExecutionCoordinator):
 
         Returns:
             The finished record, or None when the run never recorded a start
-            (the workflow declined the input, so there is nothing to finish).
+            (the caller declined the input, so there is nothing to finish).
         """
         store = RunStore()
         _source, attributes = trace_stamp(run_id)
