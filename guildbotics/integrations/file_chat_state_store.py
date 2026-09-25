@@ -14,7 +14,6 @@ from guildbotics.integrations.chat_state_store import (
     ChannelCursorState,
     ConversationStateStore,
     PendingChatEvent,
-    ScheduledPostState,
     ThreadConversationState,
     ThreadHandoffState,
     ThreadMessageState,
@@ -246,30 +245,6 @@ class FileConversationStateStore(ConversationStateStore):
         self._update_json(
             self._thread_file(service, person_id, channel_id, thread_ts),
             lambda data: data or {"channel_id": channel_id, "thread_ts": thread_ts},
-        )
-
-    def load_scheduled_post_state(
-        self, service: str, person_id: str, schedule_name: str
-    ) -> ScheduledPostState:
-        with self._lock:
-            path = self._scheduled_post_file(service, person_id, schedule_name)
-            data = self._read_json(path)
-            if not data:
-                return ScheduledPostState()
-            return ScheduledPostState(
-                last_run_slot=_to_str_or_none(data.get("last_run_slot"))
-            )
-
-    def save_scheduled_post_state(
-        self,
-        service: str,
-        person_id: str,
-        schedule_name: str,
-        state: ScheduledPostState,
-    ) -> None:
-        self._write_json(
-            self._scheduled_post_file(service, person_id, schedule_name),
-            {"last_run_slot": state.last_run_slot},
         )
 
     def load_pending_events(
@@ -517,15 +492,6 @@ class FileConversationStateStore(ConversationStateStore):
             / "threads"
             / _safe_segment(channel_id)
             / f"{_safe_segment(thread_ts)}.json"
-        )
-
-    def _scheduled_post_file(
-        self, service: str, person_id: str, schedule_name: str
-    ) -> Path:
-        return (
-            self._root(service, person_id)
-            / "scheduled_posts"
-            / f"{_safe_segment(schedule_name)}.json"
         )
 
     def _pending_events_file(

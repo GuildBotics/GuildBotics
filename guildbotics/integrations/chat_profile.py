@@ -16,14 +16,6 @@ def get_chat_subscriptions(person: Any) -> list[dict[str, Any]]:
     return _subscriptions_from_message_channels(person)
 
 
-def get_chat_scheduled_posts(person: Any) -> list[dict[str, Any]]:
-    chat = get_chat_profile(person)
-    posts = chat.get("scheduled_posts", [])
-    if not isinstance(posts, list):
-        return []
-    return [item for item in posts if isinstance(item, dict)]
-
-
 def get_chat_slack_base_url(person: Any) -> str | None:
     chat = get_chat_profile(person)
     raw = chat.get("slack_base_url", "")
