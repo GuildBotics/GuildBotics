@@ -108,6 +108,58 @@ async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_the_command_is_the_span_its_turns_share_an_environment_in(
+    monkeypatch, fails
+):
+    """Every AI CLI turn of the run, its subcommands' included, shares one
+    environment, and it is discarded when the run ends, however it ends."""
+    from guildbotics.intelligences.agent_runtime import environment
+
+    closed: list[object] = []
+    seen: list[object] = []
+
+    class Shared:
+        async def close(self) -> None:
+            closed.append(self)
+
+    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
+
+    class Turning(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            seen.append(environment._COMMAND.get())
+            if fails:
+                raise RuntimeError("the command failed")
+            return await super().run()
+
+    spec = _main_spec()
+    spec.command_class = Turning
+    spec.children = [
+        CommandSpec(
+            name="child", base_dir=Path("."), command_class=Turning, cwd=Path("/")
+        )
+    ]
+    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
+    runner = CommandRunner(DummyContext(), "main", [])
+    runner._spec_factory.build_from_entry = lambda anchor, entry: entry
+
+    if fails:
+        with pytest.raises(RuntimeError):
+            await runner.run()
+    else:
+        await runner.run()
+
+    assert seen and all(isinstance(shared, Shared) for shared in seen)
+    assert len(set(map(id, seen))) == 1
+    assert closed == seen[:1]
+    assert environment._COMMAND.get() is None
+
+
+@pytest.mark.asyncio
 async def test_run_uses_spec_cwd_not_runner_cwd(monkeypatch):
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
     ctx = DummyContext()

@@ -880,6 +880,10 @@ class CliAgentBrain(Brain):
                 participant_labels=str(configured.get("participant_labels") or ""),
                 inspects=frozenset(configured.get("inspects") or ()),
                 contract=contract,
+                tools=frozenset(
+                    info.adapter
+                    for info in get_cli_agent_mapping(self.person_id).values()
+                ),
             )
             return await self._execute_native_turn(
                 input=input,

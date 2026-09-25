@@ -14,6 +14,7 @@ from guildbotics.commands.errors import (
 )
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
+from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 
@@ -47,7 +48,9 @@ class CommandRunner:
         self._main_spec = self._prepare_main_spec()
 
     async def run(self) -> str:
-        await self._run_with_children(self._main_spec)
+        # The command's AI CLI turns share one microVM, discarded with the run.
+        async with command_environment():
+            await self._run_with_children(self._main_spec)
         return self._context.pipe
 
     def _prepare_main_spec(self) -> CommandSpec:

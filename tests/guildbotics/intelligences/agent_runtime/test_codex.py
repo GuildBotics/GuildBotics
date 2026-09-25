@@ -1168,3 +1168,32 @@ def test_a_read_only_working_directory_is_not_a_workspace_root() -> None:
         ":slash_tmp": "write",
         "/home/u/.codex": "deny",
     }
+
+
+@pytest.mark.parametrize(
+    ("cwd", "workspace_root"),
+    [
+        ("/work/repo/package", True),
+        ("/work/repo/private/deeper", False),
+    ],
+)
+def test_a_turn_working_deeper_than_its_mount_is_judged_by_that_mount(
+    cwd: str, workspace_root: bool
+) -> None:
+    """The turns of a command share one environment, each in its own working
+    directory: one under a writable mount is a workspace root, one under a
+    read-only corner of it is not."""
+    spec = AgentEnvironmentSpec(
+        cwd=cwd,
+        home="/home/u",
+        mounts=(
+            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
+            EnvironmentMount("/work/repo/private", None, readonly=True),
+        ),
+        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        env={},
+    )
+
+    filesystem = _sandbox_overrides(spec)["permissions.guildbotics.filesystem"]
+
+    assert (":workspace_roots" in filesystem) is workspace_root

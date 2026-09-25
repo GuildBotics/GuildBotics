@@ -1,14 +1,23 @@
 """Where a provider process runs: inside the isolated agent environment.
 
 Every adapter starts its provider CLI the same way, through
-:func:`start_turn_environment`: a microVM booted from this device's snapshot
-for the one turn, shaped by the turn's access contract, with the provider's
-persisted state bound in, whatever of the workspace's own state the caller lets
-the turn inspect mounted read-only, and the member broker's port opened. The adapter
-runs the CLI inside it and speaks its protocol over the bridged stdio; when
-the turn ends the microVM is discarded. Nothing of the host -- its
-environment variables, its credentials, its PATH -- reaches the provider,
-because the provider does not run on the host.
+:func:`start_turn_environment`, in a microVM booted from this device's
+snapshot. The turns of one command execution (:func:`command_environment`)
+share one. It boots before the first of them and is shaped once for all,
+since a running microVM cannot be reshaped: the turn's access contract, the
+persisted state of every AI CLI tool the member is configured with, whatever
+of the workspace's own state the caller lets the turns inspect mounted
+read-only, and the ports of the member broker and of each tool's credential
+gateway opened. It is discarded when the command ends, however it ends. A
+turn outside a command (the Desktop's assistants) boots one of its own and
+discards it when it ends. What changes from turn to turn is only what can be
+given to a running microVM: the working directory, the environment, and the
+login the turn is lent.
+
+The adapter runs the CLI inside and speaks its protocol over the bridged
+stdio. Nothing of the host -- its environment variables, its credentials,
+its PATH -- reaches the provider, because the provider does not run on the
+host.
 
 What GuildBotics still runs on the host is its own: the member CLI the broker
 spawns for the agent, under the process-tree policy below.
@@ -18,9 +27,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable, Iterable, Mapping
-from contextlib import suppress
-from pathlib import Path
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from guildbotics.intelligences.agent_environment.auth_gateway import (
@@ -48,10 +59,13 @@ from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     EnvironmentMount,
     build_environment_spec,
-    guest_home,
     guest_path,
 )
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberCapabilityBroker,
+    MemberCapabilityBrokerError,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -133,102 +147,349 @@ def inspected_directories(
     }
 
 
+#: The environment the AI CLI turns of the running command share.
+_COMMAND: ContextVar[_SharedEnvironment | None] = ContextVar(
+    "guildbotics_command_environment", default=None
+)
+
+
+@asynccontextmanager
+async def command_environment() -> AsyncIterator[None]:
+    """Run the AI CLI turns of one command execution in one microVM.
+
+    Nothing boots until a turn needs it, and what did is discarded when the
+    command ends, cancellation included. A command run inside another one
+    shares that one's: a command and its subcommands are one isolation.
+    """
+    if _COMMAND.get() is not None:
+        yield
+        return
+    shared = _SharedEnvironment()
+    token = _COMMAND.set(shared)
+    try:
+        yield
+    finally:
+        _COMMAND.reset(token)
+        await shared.close()
+
+
 async def start_turn_environment(
     context: AgentExecutionContext,
     tool_name: str,
     *,
-    host_ports: Iterable[int],
-    env: Mapping[str, str],
-    mounts: Iterable[EnvironmentMount] = (),
-) -> AgentEnvironment:
-    """Boot the environment one turn of ``tool_name`` runs in.
+    env: Mapping[str, str] | None = None,
+) -> TurnEnvironment:
+    """Start one turn of ``tool_name`` in the environment it runs in.
+
+    Inside a command that is the command's microVM, booted by its first
+    turn; outside one, a microVM of the turn's own. The turn holds it until
+    it is closed, and the command's next turn waits until then: the member
+    broker serves one turn at a time.
 
     Args:
         context: The turn: its working directory and access contract.
         tool_name: The catalog name of the AI CLI tool.
-        host_ports: Host ports the turn must reach (the member broker's).
         env: What the provider process starts with beyond the tool's own
-            state variables (the broker's bearer token).
-        mounts: An adapter's own binds beyond the contract and the tool's
-            persisted state.
+            state variables, its gateway, and the member broker's token.
 
     Raises:
         AgentRuntimeError: ``configuration`` when this device cannot run the
-            environment or holds no snapshot for the declaration;
-            ``authentication`` when the tool is not logged in here;
-            ``process`` when the microVM does not start. Nothing is widened:
-            a turn that cannot be confined does not run.
+            environment or holds no snapshot for the declaration, or when the
+            command's microVM was not started for this turn (another
+            contract, a tool it does not hold, a working directory outside
+            what it mounted); ``authentication`` when the tool is not logged
+            in here; ``process`` when the microVM or the broker does not
+            start. Nothing is widened: a turn that cannot be confined does
+            not run.
     """
-    tool, where = _ready(tool_name)
-    home = guest_home()
-    broker = tool.provision.credential_broker
-    assert broker is not None
-    lent = await _lend(tool, where)
-    context.login.refusal = lent.refusal
-    gateway = CredentialGateway(broker, lent.access_token, lent.stand_in)
-    await gateway.start()
-    try:
+    shared = _COMMAND.get()
+    owned = shared is None
+    return await (shared or _SharedEnvironment()).turn(
+        context, tool_name, env or {}, owned=owned
+    )
+
+
+class TurnEnvironment:
+    """One turn's hold on its microVM.
+
+    ``spec`` is the microVM as the turn sees it: its mounts and network, and
+    the turn's own working directory and environment, which every process
+    the turn runs starts with. ``broker`` is the member broker, bound to
+    this turn until it is closed.
+    """
+
+    def __init__(
+        self,
+        environment: AgentEnvironment,
+        spec: AgentEnvironmentSpec,
+        broker: MemberCapabilityBroker,
+        end: Callable[[], Awaitable[None]],
+    ) -> None:
+        self._environment = environment
+        self.spec = spec
+        self.broker = broker
+        self._end: Callable[[], Awaitable[None]] | None = end
+
+    async def run(
+        self, command: str, *args: str, limit: int, tty: bool = False
+    ) -> EnvironmentProcess:
+        """Start ``command`` in the turn's working directory and environment."""
+        return await self._environment.run(
+            command, *args, limit=limit, tty=tty, cwd=self.spec.cwd, env=self.spec.env
+        )
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        await self._environment.write_file(path, data)
+
+    async def read_file(self, path: str) -> bytes | None:
+        return await self._environment.read_file(path)
+
+    async def close(self) -> None:
+        """End the turn; idempotent.
+
+        The login it was lent and its broker grant are revoked, and a microVM
+        of its own is discarded; a command's stays for the command's next
+        turn. Ending the processes the turn started is the adapter's.
+        """
+        end, self._end = self._end, None
+        if end is not None:
+            await end()
+
+
+class _SharedEnvironment:
+    """A microVM, what it was started with, and the turns it runs in turn."""
+
+    def __init__(self) -> None:
+        self._broker = MemberCapabilityBroker()
+        self._turn = asyncio.Lock()
+        self._environment: AgentEnvironment | None = None
+        #: The host directory the microVM was booted working in.
+        self._cwd = Path()
+        #: What shaped the microVM; a turn asking for another shape is refused.
+        self._shape: tuple[object, ...] = ()
+        #: What GuildBotics bound of its own: no turn works in there.
+        self._binds: frozenset[EnvironmentMount] = frozenset()
+        #: The gateway of each tool the microVM was started able to run.
+        self._gateways: dict[str, CredentialGateway] = {}
+        #: The relays running, each started by its tool's first turn.
+        self._relays: dict[str, EnvironmentProcess] = {}
+
+    async def turn(
+        self,
+        context: AgentExecutionContext,
+        tool_name: str,
+        env: Mapping[str, str],
+        *,
+        owned: bool,
+    ) -> TurnEnvironment:
+        """Start a turn, booting the microVM first when none runs yet.
+
+        ``owned`` discards the microVM when the turn ends.
+        """
+        await self._turn.acquire()
+        gateway: CredentialGateway | None = None
+
+        async def end() -> None:
+            if gateway is not None:
+                gateway.revoke()
+            await self._broker.deactivate(context)
+            try:
+                if owned:
+                    await self.close()
+            finally:
+                self._turn.release()
+
+        try:
+            tool, where = _ready(tool_name)
+            # The login is read before anything boots: a tool that is not
+            # logged in here refuses its turn, and only its turn.
+            lent = await _lend(tool, where)
+            try:
+                await self._broker.activate(context)
+            except MemberCapabilityBrokerError as exc:
+                raise AgentRuntimeError(
+                    AgentRuntimeErrorCategory.PROCESS,
+                    "Could not start the trusted member capability broker.",
+                ) from exc
+            environment = self._environment or await self._boot(context, tool, where)
+            self._admit(context, tool)
+            gateway = self._gateways[tool.name]
+            gateway.lend(lent.access_token, lent.stand_in)
+            context.login.refusal = lent.refusal
+            broker = tool.provision.credential_broker
+            assert broker is not None
+            spec = replace(
+                environment.spec,
+                cwd=guest_path(context.cwd),
+                env={
+                    **environment.spec.env,
+                    **_PROVIDER_ENV,
+                    **tool.provision.environment(environment.spec.home),
+                    **gateway.turn_environment(),
+                    **({"SSL_CERT_FILE": _TURN_CAS} if broker.tls else {}),
+                    **lent.stand_in_environment(),
+                    **self._broker.provider_environment(),
+                    **env,
+                },
+            )
+            await self._hand_over(environment, tool, lent, gateway)
+        except BaseException:
+            await end()
+            raise
+        return TurnEnvironment(environment, spec, self._broker, end)
+
+    async def _boot(
+        self,
+        context: AgentExecutionContext,
+        tool: CliAgentInfo,
+        where: LoginEnvironment,
+    ) -> AgentEnvironment:
+        """Boot the microVM able to run every tool the member is configured
+        with, whatever of them the first turn runs: one member's slots can
+        name different tools, and which one a later turn uses is decided
+        while the command runs. A tool not logged in here is booted able to
+        run all the same, and refused only when a turn of it comes."""
+        tools = [
+            tool,
+            *(
+                other
+                for name in sorted(context.tools - {tool.name})
+                if (other := cli_agent_info(name)).provision.provisioned
+            ),
+        ]
+        for each in tools:
+            broker = each.provision.credential_broker
+            assert broker is not None
+            gateway = self._gateways[each.name] = CredentialGateway(broker)
+            await gateway.start()
+        binds = (
+            *(
+                mount
+                for each in tools
+                for mount in bind_state(each, read_only=context.contract.read_only)
+            ),
+            *(
+                EnvironmentMount(guest_path(path), path, readonly=True)
+                for path in inspected_directories(
+                    context.inspects, context.workspace_root
+                ).values()
+            ),
+        )
         spec = build_environment_spec(
             context.contract,
             context.cwd,
-            host_ports=(*host_ports, gateway.port),
-            # The tool reaches its API through the gateway only: what it would
-            # send straight to the provider carries the stand-in.
-            provider_domains=tool.provision.turn_domains,
-            env={
-                **_PROVIDER_ENV,
-                **tool.provision.environment(home),
-                **gateway.turn_environment(),
-                **({"SSL_CERT_FILE": _TURN_CAS} if broker.tls else {}),
-                **lent.stand_in_environment(),
-                **env,
-            },
-            nameservers=where.nameservers,
-            mounts=(
-                *bind_state(tool, read_only=context.contract.read_only),
-                *(
-                    EnvironmentMount(guest_path(path), path, readonly=True)
-                    for path in inspected_directories(
-                        context.inspects, context.workspace_root
-                    ).values()
-                ),
-                *mounts,
+            host_ports=(
+                self._broker.endpoint.port,
+                *(gateway.port for gateway in self._gateways.values()),
             ),
+            # A tool reaches its API through its gateway only: what it would
+            # send straight to the provider carries the stand-in.
+            provider_domains=[
+                domain for each in tools for domain in each.provision.turn_domains
+            ],
+            nameservers=where.nameservers,
+            mounts=binds,
         )
-    except BaseException:
-        await gateway.close()
-        raise
-    relays: list[EnvironmentProcess] = []
+        self._environment = await _start(spec, where, before_stop=self._stop_relays)
+        self._cwd = context.cwd
+        self._shape = self._shape_of(context)
+        self._binds = frozenset(binds)
+        return self._environment
 
-    async def close_gateway(_: AgentEnvironment) -> None:
-        # The stand-in opens nothing from before the microVM is gone; a relay
-        # that does not end goes with the microVM.
-        for relay in relays:
-            with suppress(TimeoutError):
-                await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
-        await gateway.close()
+    def _admit(self, context: AgentExecutionContext, tool: CliAgentInfo) -> None:
+        """Refuse a turn the running microVM was not started for.
 
-    try:
-        environment = await _start(spec, where, before_stop=close_gateway)
-    except BaseException:
-        await gateway.close()
-        raise
-    root = f"{home}/{tool.provision.state_root}"
-    try:
-        for name, data in lent.stand_in_files().items():
-            await environment.write_file(f"{root}/{name}", data)
-        if broker.tls:
-            await _trust(environment, gateway.ca_pem)
-        if broker.relayed_hosts:
-            relays.append(await _relay(environment, broker.relayed_hosts, gateway.port))
-    except BaseException as exc:
-        await environment.close()
-        if isinstance(exc, AgentEnvironmentError):
+        Its working directory must be inside what the microVM mounted of the
+        turn's contract: the deepest mount it is under is one of the
+        contract's, backed by the host or the microVM's own working directory.
+        """
+        assert self._environment is not None
+        if self._shape_of(context) != self._shape or tool.name not in self._gateways:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.CONFIGURATION,
+                t(
+                    "intelligences.agent_environment.runtime.not_started_for",
+                    tool=tool.label,
+                ),
+            )
+        spec = self._environment.spec
+        cwd = guest_path(context.cwd)
+        mount = max(
+            (
+                mount
+                for mount in spec.mounts
+                if PurePosixPath(cwd).is_relative_to(mount.guest)
+            ),
+            key=lambda mount: len(PurePosixPath(mount.guest).parts),
+            default=None,
+        )
+        if (
+            mount is None
+            or mount in self._binds
+            or (mount.host is None and mount.guest != spec.cwd)
+        ):
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.CONFIGURATION,
+                t(
+                    "intelligences.agent_environment.runtime.outside_mounts",
+                    path=context.cwd,
+                ),
+            )
+
+    def _shape_of(self, context: AgentExecutionContext) -> tuple[object, ...]:
+        """What the turn's contract makes of the microVM: its mounts and its
+        network, and what the turn inspects. Compared rather than the contract
+        itself, so a change the microVM does not show -- a closed directory
+        appearing outside everything mounted -- refuses no turn, while one it
+        would show -- the same inside a mount -- does."""
+        spec = build_environment_spec(context.contract, self._cwd, nameservers=())
+        return spec.mounts, spec.network, context.inspects
+
+    async def _hand_over(
+        self,
+        environment: AgentEnvironment,
+        tool: CliAgentInfo,
+        lent: LentLogin,
+        gateway: CredentialGateway,
+    ) -> None:
+        """Give the running microVM what the turn is lent: the stand-in login
+        files, the trust in its gateway's CA, and the relay to its gateway."""
+        broker = tool.provision.credential_broker
+        assert broker is not None
+        root = f"{environment.spec.home}/{tool.provision.state_root}"
+        try:
+            for name, data in lent.stand_in_files().items():
+                await environment.write_file(f"{root}/{name}", data)
+            if broker.tls:
+                await _trust(environment, gateway.ca_pem)
+            if broker.relayed_hosts and tool.name not in self._relays:
+                self._relays[tool.name] = await _relay(
+                    environment, broker.relayed_hosts, gateway.port
+                )
+        except AgentEnvironmentError as exc:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS, str(exc)
             ) from exc
-        raise
-    return environment
+
+    async def _stop_relays(self, _: AgentEnvironment) -> None:
+        # A relay that does not end goes with the microVM.
+        for relay in self._relays.values():
+            with suppress(TimeoutError):
+                await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
+
+    async def close(self) -> None:
+        """Discard the microVM, then stop the gateways and the broker; the
+        stand-ins open nothing once the microVM is gone. Idempotent."""
+        environment, self._environment = self._environment, None
+        try:
+            if environment is not None:
+                await environment.close()
+        finally:
+            try:
+                for gateway in self._gateways.values():
+                    await gateway.close()
+            finally:
+                await self._broker.close()
 
 
 async def _trust(environment: AgentEnvironment, ca_pem: bytes) -> None:

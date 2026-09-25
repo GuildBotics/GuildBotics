@@ -9,15 +9,15 @@ from logging import getLogger
 from pathlib import PurePosixPath
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironment,
-    AgentEnvironmentError,
-)
+from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec,
     guest_path,
 )
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
+from guildbotics.intelligences.agent_runtime.environment import (
+    TurnEnvironment,
+    start_turn_environment,
+)
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
@@ -27,7 +27,6 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
     MemberCapabilityBroker,
-    MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
@@ -129,10 +128,9 @@ class CodexAppServerAdapter:
             request_timeout=min(timeout, 30.0),
             on_reverse_request=self._handle_server_request,
         )
-        self._environment: AgentEnvironment | None = None
+        self._environment: TurnEnvironment | None = None
         self._active_thread_id = ""
         self._active_turn_id = ""
-        self._member_broker = MemberCapabilityBroker()
 
     async def run_turn(
         self,
@@ -142,19 +140,11 @@ class CodexAppServerAdapter:
         emit: EventSink,
     ) -> AgentTerminalResult:
         try:
-            await self._member_broker.activate(context)
-        except MemberCapabilityBrokerError as exc:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Could not start the trusted member capability broker.",
-            ) from exc
-        try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
-            # The environment is the turn's: nothing of it outlives the turn,
-            # and the next one boots its own and resumes the thread by id.
+            # The App Server is the turn's: the next turn starts its own and
+            # resumes the thread by id.
             await self._close_provider()
-            await self._member_broker.deactivate(context)
 
     async def _run_active_turn(
         self,
@@ -189,7 +179,7 @@ class CodexAppServerAdapter:
                     "input": [
                         {
                             "type": "text",
-                            "text": self._member_broker.prompt(prompt),
+                            "text": environment.broker.prompt(prompt),
                         }
                     ],
                     "cwd": guest_path(context.cwd),
@@ -305,7 +295,8 @@ class CodexAppServerAdapter:
         )
 
     async def interrupt(self) -> None:
-        await self._member_broker.deactivate()
+        if self._environment is not None:
+            await self._environment.broker.deactivate()
         if self._active_thread_id and self._active_turn_id:
             # A second cancellation while the interrupt RPC is pending must not
             # skip the process-tree termination below.
@@ -322,13 +313,10 @@ class CodexAppServerAdapter:
             await process.kill()
 
     async def close(self) -> None:
-        try:
-            await self._close_provider()
-        finally:
-            await self._member_broker.close()
+        await self._close_provider()
 
     async def _close_provider(self) -> None:
-        """Stop Codex App Server and its environment, preserving the broker."""
+        """Stop Codex App Server and end its turn in the environment."""
         process = self._transport.process
         if process is not None and process.returncode is None:
             with suppress(BrokenPipeError, ConnectionError, OSError):
@@ -344,21 +332,16 @@ class CodexAppServerAdapter:
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
-    ) -> AgentEnvironment:
+    ) -> TurnEnvironment:
         if self._transport.process is not None:
             await self._close_provider()
-        environment = await start_turn_environment(
-            context,
-            "codex",
-            host_ports=(self._member_broker.endpoint.port,),
-            env=self._member_broker.provider_environment(),
-        )
+        environment = await start_turn_environment(context, "codex")
         self._environment = environment
         try:
             process = await environment.run(
                 self._executable,
                 "app-server",
-                *_codex_mcp_arguments(self._member_broker),
+                *_codex_mcp_arguments(environment.broker),
                 *_config_arguments(
                     {
                         **_gateway_overrides(environment.spec),
@@ -665,8 +648,10 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     allowed, so the profile mirrors it rather than narrowing it: the whole
     guest is readable, and every directory the environment bound is
     writable or read-only exactly as it was mounted -- what the user
-    granted read/write is read/write for Codex's commands too. A writable
-    working directory is Codex's workspace root, its ``.git`` included since
+    granted read/write is read/write for Codex's commands too. A working
+    directory the environment mounted writable -- itself, or a directory it
+    is under, since the turns of a command share one environment, each in
+    its own working directory -- is Codex's workspace root, its ``.git`` included since
     the agent stages its own changes; a read-only one is not named one,
     because Codex makes directories inside every workspace root and cannot
     start a session on one it may not write. The temporary directories are
@@ -693,6 +678,11 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
         for mount in spec.mounts
         if not PurePosixPath(mount.guest).is_relative_to(state)
     }
+    workspace = max(
+        (guest for guest in mounts if PurePosixPath(spec.cwd).is_relative_to(guest)),
+        key=lambda guest: len(PurePosixPath(guest).parts),
+        default=None,
+    )
     profile = f"permissions.{_PERMISSION_PROFILE}"
     return {
         "default_permissions": _PERMISSION_PROFILE,
@@ -701,7 +691,7 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
             **mounts,
             **(
                 {":workspace_roots": {".": "write", ".git": "write"}}
-                if mounts.get(spec.cwd) == "write"
+                if workspace is not None and mounts[workspace] == "write"
                 else {}
             ),
             ":tmpdir": "write",

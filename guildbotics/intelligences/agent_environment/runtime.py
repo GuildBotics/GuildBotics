@@ -1,11 +1,11 @@
-"""One microVM per turn, driven through the microsandbox SDK.
+"""The microVMs AI CLI turns run in, driven through the microsandbox SDK.
 
 This is the only module that talks to the runtime. A :class:`AgentEnvironment` is
-created from a snapshot for one turn -- boot from a snapshot takes a fraction
-of a second -- with the mounts and network policy a :class:`AgentEnvironmentSpec`
-states, runs the provider CLI inside with its stdio bridged to the host, and
-is discarded when the turn ends. Cancelling a turn stops the microVM, so no
-process survives it.
+created from a snapshot -- for the turns of one command, or for one turn that
+runs outside a command -- with the mounts and network policy a
+:class:`AgentEnvironmentSpec` states, runs the provider CLI inside with its
+stdio bridged to the host, and is discarded when what it was booted for ends.
+Stopping it ends every process inside, so no process survives it.
 
 The SDK is imported when an environment is needed rather than when this module
 is: a device without a wheel for its platform must still start GuildBotics
@@ -29,6 +29,7 @@ from collections.abc import (
     Coroutine,
     Iterable,
     Iterator,
+    Mapping,
     Sequence,
 )
 from concurrent.futures import ThreadPoolExecutor
@@ -355,7 +356,7 @@ class EnvironmentProcess:
 
 
 class AgentEnvironment:
-    """One turn's microVM."""
+    """One microVM: a command's turns', or a single turn's."""
 
     def __init__(
         self,
@@ -383,8 +384,8 @@ class AgentEnvironment:
     ) -> AgentEnvironment:
         """Boot a microVM from ``snapshot`` shaped by ``spec``.
 
-        The sandbox is ephemeral: stopping it removes it, so nothing of a
-        turn outlives the turn. ``on_close`` is what the caller has to do
+        The sandbox is ephemeral: stopping it removes it, so nothing of the
+        turns it ran outlives it. ``on_close`` is what the caller has to do
         once the microVM is gone -- take the provider's persisted state out
         of the turn's directory -- and it runs exactly once, whether the boot
         failed, the turn ended, or the turn was cancelled. ``before_stop`` is
@@ -431,7 +432,13 @@ class AgentEnvironment:
         return environment
 
     async def run(
-        self, command: str, *args: str, limit: int, tty: bool = False
+        self,
+        command: str,
+        *args: str,
+        limit: int,
+        tty: bool = False,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> EnvironmentProcess:
         """Start ``command`` inside the environment with its stdio bridged.
 
@@ -442,6 +449,10 @@ class AgentEnvironment:
                 that reads long single lines sets it high enough for them.
             tty: Give the command a terminal, for a dialogue that only asks
                 its questions on one (a login's confirmation prompt).
+            cwd: The guest directory it runs in; the environment's own by
+                default. The turns of one command share the microVM, each in
+                its own working directory.
+            env: What it starts with; the environment's own by default.
         """
         from microsandbox import Stdin
 
@@ -450,8 +461,8 @@ class AgentEnvironment:
                 command,
                 list(args),
                 stdin=Stdin.pipe(),
-                cwd=self.spec.cwd,
-                env={"HOME": self.spec.home, **self.spec.env},
+                cwd=cwd or self.spec.cwd,
+                env={"HOME": self.spec.home, **(self.spec.env if env is None else env)},
                 tty=tty,
             )
         except Exception as exc:

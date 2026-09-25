@@ -34,8 +34,9 @@ def _adapter_member_broker_without_socket(request, monkeypatch) -> None:
 
 
 class FakeEnvironment:
-    """Stands in for the agent environment: what the adapter asked to boot,
-    and the process the test scripted, started through ``asyncio``'s
+    """Stands in for a turn's environment: what the adapter asked to start,
+    the member broker bound to the turn, the files written into it, and the
+    process the test scripted, started through ``asyncio``'s
     ``create_subprocess_exec`` so a test's own fake process is what runs."""
 
     started: list[FakeEnvironment] = []
@@ -44,8 +45,16 @@ class FakeEnvironment:
         self.tool = tool
         self.kwargs = kwargs
         self.commands: list[tuple[str, ...]] = []
+        self.files: dict[str, bytes] = {}
         self.closed = False
+        self.broker = MemberCapabilityBroker()
         FakeEnvironment.started.append(self)
+
+    @classmethod
+    async def start(cls, context: Any, tool: str, **kwargs: Any) -> FakeEnvironment:
+        environment = cls(tool, {"context": context, **kwargs})
+        await environment.broker.activate(context)
+        return environment
 
     @property
     def spec(self) -> Any:
@@ -75,13 +84,23 @@ class FakeEnvironment:
                 stderr=asyncio.subprocess.PIPE,
                 limit=limit,
                 cwd=str(context.cwd) if context is not None else self.spec.home,
-                env=dict(self.kwargs.get("env", {})),
+                env={
+                    **self.broker.provider_environment(),
+                    **(self.kwargs.get("env") or {}),
+                },
             )
         except OSError as exc:
             raise AgentEnvironmentError(str(exc)) from exc
         return _ProcessInEnvironment(process)
 
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+
+    async def read_file(self, path: str) -> bytes | None:
+        return self.files.get(path)
+
     async def close(self) -> None:
+        await self.broker.deactivate()
         self.closed = True
 
 
@@ -147,14 +166,11 @@ def fake_environment(request, monkeypatch) -> type[FakeEnvironment]:
     if request.module.__name__.endswith("test_member_broker"):
         return FakeEnvironment
 
-    async def start_turn(context: Any, tool: str, **kwargs: Any) -> FakeEnvironment:
-        return FakeEnvironment(tool, {"context": context, **kwargs})
-
     async def start_probe(tool: str) -> FakeEnvironment:
         return FakeEnvironment(tool, {})
 
     for module in (codex, acp, claude, antigravity):
-        monkeypatch.setattr(module, "start_turn_environment", start_turn)
+        monkeypatch.setattr(module, "start_turn_environment", FakeEnvironment.start)
     for module in (usage, antigravity):
         monkeypatch.setattr(module, "start_probe_environment", start_probe)
     return FakeEnvironment

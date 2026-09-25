@@ -12,7 +12,7 @@ repository を clone する前に、以下をインストールします。
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) と Python 3.12 以上。
 - Git for Windows。repository の build script は Git Bash から実行します。
 - WebView2 Runtime。通常は Windows 11 に含まれます。未導入の場合、NSIS installer は Tauri の download-bootstrapper 方式で導入します。
-- オプション機能「**Windows ハイパーバイザー プラットフォーム**」。エージェント隔離環境（AI CLI の turn ごとの microVM）に必要です。runtime（microsandbox）は sidecar に同梱され、GuildBotics が初回利用時に `%USERPROFILE%\.guildbotics\data\msb` へ配置します。
+- オプション機能「**Windows ハイパーバイザー プラットフォーム**」。エージェント隔離環境（AI CLI の turn を動かす microVM）に必要です。runtime（microsandbox）は sidecar に同梱され、GuildBotics が初回利用時に `%USERPROFILE%\.guildbotics\data\msb` へ配置します。
 
 NSIS は build 時に Tauri が取得します。Windows の bundle target は NSIS のみに限定しているため WiX は不要です。コード署名は今回の対象外であり、生成される installer は未署名です。
 

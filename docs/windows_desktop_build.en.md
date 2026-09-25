@@ -12,7 +12,7 @@ Install the following before cloning the repository:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.12 or later.
 - Git for Windows. Run the repository build scripts from Git Bash.
 - WebView2 Runtime. Windows 11 normally includes it; the NSIS installer uses Tauri's download-bootstrapper mode when it is absent.
-- The **Windows Hypervisor Platform** optional feature, for the isolated agent environment (a microVM per AI CLI turn). The runtime (microsandbox) ships inside the sidecar; GuildBotics places it under `%USERPROFILE%\.guildbotics\data\msb` on first use.
+- The **Windows Hypervisor Platform** optional feature, for the isolated agent environment (the microVM AI CLI turns run in). The runtime (microsandbox) ships inside the sidecar; GuildBotics places it under `%USERPROFILE%\.guildbotics\data\msb` on first use.
 
 NSIS is downloaded by Tauri during the build. WiX is not needed because the Windows bundle target is NSIS only. Code signing is outside the current scope, so the resulting installer is unsigned.
 

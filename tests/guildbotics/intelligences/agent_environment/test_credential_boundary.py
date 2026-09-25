@@ -284,12 +284,15 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
     tool = _seal(name)
     broker = tool.provision.credential_broker
     assert broker is not None
-    gateways: list[CredentialGateway] = []
+    stand_ins: list[str] = []
 
     class Echoed(CredentialGateway):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, transport=httpx.MockTransport(_echo), **kwargs)
-            gateways.append(self)
+
+        def lend(self, tokens: Any, stand_in: str) -> None:
+            stand_ins.append(stand_in)
+            super().lend(tokens, stand_in)
 
     monkeypatch.setattr(turn, "CredentialGateway", Echoed)
     work = tmp_path / "work"
@@ -304,12 +307,9 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         contract=AccessContract(),
     )
     before = _sandboxes()
-    environment = await turn.start_turn_environment(
-        context, name, host_ports=(), env={}
-    )
+    environment = await turn.start_turn_environment(context, name)
     try:
         (sandbox,) = _sandboxes() - before
-        (gateway,) = gateways
         # What the checks must find: a file, and a process's environment.
         await environment.write_file(_PLANTED, f"{MARK}C".encode())
         await _sh(
@@ -332,7 +332,7 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
                 _THROUGH_GATEWAY,
                 f"{origin}{path}",
                 method,
-                gateway.stand_in,
+                stand_ins[-1],
                 environment=f"NODE_EXTRA_CA_CERTS={turn._TURN_CAS}"
                 if broker.tls
                 else "",
@@ -358,6 +358,98 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
     ]
     logging.getLogger("guildbotics").debug(CANARY)  # What the log check must find.
     assert CANARY in caplog.text and MARK not in caplog.text
+
+
+async def test_the_turns_of_a_command_share_one_microvm(
+    device: LoginEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One microVM for the command: each turn runs in its own working
+    directory with its own environment, is lent a stand-in (and, over TLS, a
+    CA) of its own that the previous turn's no longer opens, and the microVM
+    is gone when the command ends."""
+    for name in ("antigravity", "claude"):
+        _seal(name)
+    broker = next(a for a in CLI_AGENTS if a.name == "antigravity").provision
+    assert broker.credential_broker is not None
+    base_url_env = broker.credential_broker.base_url_env[0]
+    stand_ins: list[str] = []
+
+    class Echoed(CredentialGateway):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, transport=httpx.MockTransport(_echo), **kwargs)
+
+        def lend(self, tokens: Any, stand_in: str) -> None:
+            stand_ins.append(stand_in)
+            super().lend(tokens, stand_in)
+
+    monkeypatch.setattr(turn, "CredentialGateway", Echoed)
+    work = tmp_path / "work"
+    (work / "package").mkdir(parents=True)
+
+    def context(name: str, cwd: Path) -> AgentExecutionContext:
+        return AgentExecutionContext(
+            person_id="probe",
+            run_id="shared",
+            cwd=cwd,
+            workspace_root=tmp_path,
+            workspace_data_root=tmp_path,
+            conversation_key=ConversationKey("probe", name, "manual", "shared"),
+            contract=AccessContract(),
+            tools=frozenset({"antigravity", "claude"}),
+        )
+
+    async def through_gateway(environment: Any, stand_in: str) -> str:
+        return await _sh(
+            environment,
+            _node(
+                _THROUGH_GATEWAY,
+                f"{environment.spec.env[base_url_env]}/v1internal:loadCodeAssist",
+                "POST",
+                stand_in,
+                environment=f"NODE_EXTRA_CA_CERTS={turn._TURN_CAS}",
+            ),
+        )
+
+    before = _sandboxes()
+    answers: list[str] = []
+    async with turn.command_environment():
+        first = await turn.start_turn_environment(
+            context("antigravity", work), "antigravity"
+        )
+        try:
+            (sandbox,) = _sandboxes() - before
+            answers.append(await through_gateway(first, stand_ins[-1]))
+            await _sh(first, "echo left-by-the-first-turn > /var/tmp/trace")
+        finally:
+            await first.close()
+        second = await turn.start_turn_environment(
+            context("claude", work / "package"), "claude"
+        )
+        try:
+            where = (await _sh(second, "pwd; cat /var/tmp/trace")).split()
+            told = await _sh(second, f'printf %s "${base_url_env}"')
+        finally:
+            await second.close()
+        third = await turn.start_turn_environment(
+            context("antigravity", work), "antigravity"
+        )
+        try:
+            answers.append(await through_gateway(third, stand_ins[0]))
+            answers.append(await through_gateway(third, stand_ins[-1]))
+        finally:
+            await third.close()
+        assert _sandboxes() - before == {sandbox}
+
+    assert sandbox not in _sandboxes()
+    assert where[0].endswith("/work/package") and where[1] == "left-by-the-first-turn"
+    # The claude turn is not told where antigravity's gateway is.
+    assert told == ""
+    assert len(set(stand_ins)) == 3
+    assert answers[0].startswith("200 "), answers
+    assert answers[1].startswith("401 "), answers
+    assert answers[2].startswith("200 "), answers
 
 
 def _probing(tool: CliAgentInfo) -> CliAgentInfo:

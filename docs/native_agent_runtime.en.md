@@ -46,8 +46,17 @@ provider-neutral `low` / `high` levels become provider settings. The shipped def
 ## Isolated agent environment: access permissions
 
 Every AI CLI turn runs inside an isolated agent environment: a microVM
-GuildBotics boots for the one turn from a snapshot it built on this device,
-and discards when the turn ends. What the turn may reach is the access
+GuildBotics boots from a snapshot it built on this device. The turns of one
+command execution share one microVM: it boots before the first of them,
+able to run every AI CLI tool the member is configured with, and is
+discarded when the command ends, whether it succeeded, failed, or was
+cancelled. The turns run one at a time and see what an earlier one left in
+it, since a command and its subcommands are one isolation. A turn outside a
+command (the Desktop's assistants) boots a microVM of its own and discards it
+when it ends. A running microVM is never reshaped: a turn whose working
+directory is outside what the microVM mounted when it booted, or that asks
+for another access contract, is refused. A tool that is configured but not
+logged in stops nothing until a turn of it comes. What the turn may reach is the access
 contract below, and the environment is what enforces it -- the same way on
 every OS and for every provider, because the provider CLI runs inside and
 sees nothing else. There is no per-provider translation and no list of what
@@ -277,7 +286,7 @@ Only the provider's sessions and its account files that hold no credential
 survive a turn, bound from this device's store
 (`~/.guildbotics/data/agent_environment/<provider>/`) and shared by every
 member. The login is never in a turn (see "Logins kept outside the microVM"). The provider's settings and skills are the snapshot's and return to it
-every turn.
+whenever a microVM is discarded.
 
 The effective policy and every approval decision are written as provider-neutral
 diagnostics events. Invalid types, removed keys, and unknown values fail
@@ -370,8 +379,11 @@ and `-p no:xdist`). Nothing is sent off the device.
   carrying that turn's stand-in, only to `https://api.anthropic.com`, and replaces only the
   `Authorization` header with the real token. The guest's `Host`, `x-api-key`, and `cookie`
   are not sent. Redirects are handed back, never followed. Every other destination, route,
-  or value is refused before it reaches the upstream. When the turn's microVM stops, the
-  gateway stops, and the stand-in opens nothing. When the upstream answers 401, the login
+  or value is refused before it reaches the upstream. The gateway lives as long as the
+  microVM, since its port is opened when the microVM boots, but it is lent to one turn at a
+  time: once the turn ends its stand-in opens nothing, and the next turn is lent a login and
+  a stand-in of its own (a login one turn could not use is not the next turn's failure).
+  When the microVM stops, the gateway stops. When the upstream answers 401, the login
   is refreshed once and the request sent again. Should the real token appear in an answer's
   headers or body, it is masked to the same length before the answer is passed on, and the
   upstream is asked for an uncompressed answer so that the body can be checked; an answer
@@ -398,7 +410,7 @@ and `-p no:xdist`). Nothing is sent off the device.
   short to be a credential. A refresh gives it the login marked
   as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
   the environment is stopped. A login within five minutes of its expiry is refreshed before
-  the turn's microVM and the tool start: a tool reaches its API as soon as it starts, and
+  the turn (and, for a command's first turn, its microVM) and the tool start: a tool reaches its API as soon as it starts, and
   Antigravity gives up on its sign-in after ten seconds, so the first request never waits
   for a refresh. During a turn, the gateway asks for a refresh five minutes before expiry
   or when the upstream refuses the token, and that request waits for it (every tool that refreshes
