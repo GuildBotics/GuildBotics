@@ -196,7 +196,7 @@ scripts/desktop-build-backend.sh
 # desktop/src-tauri/binaries/guildbotics/{guildbotics-app-api,guildbotics,_internal/,build-id}
 ```
 
-生成される directory は約 240MB です。Desktop はこの directory を同梱し、起動時に同梱物の `build-id` が `~/.guildbotics/bin` のものと違うときだけ、directory ごと `~/.guildbotics/bin` へ入れ替えます（managed CLI は `~/.guildbotics/bin/guildbotics`）。onefile は起動のたびに全体を一時 directory へ展開して CLI 1 回に数秒かかるため使いません。
+生成される directory は約 240MB です。Desktop はこの directory を同梱し、起動時に build ごとの `~/.guildbotics/programs/<build-id>/` へ一度だけ複製して、`~/.guildbotics/bin` をそこを指すリンクにします（managed CLI は `~/.guildbotics/bin/guildbotics`）。古い build の CLI が動いている間は切り替えを次回の起動へ延期するので、実行中のプロセスの参照先が途中で変わることはありません。onefile は起動のたびに全体を一時 directory へ展開して CLI 1 回に数秒かかるため使いません。
 
 > **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
 >
@@ -295,7 +295,7 @@ chmod +x GuildBotics_<version>_amd64.AppImage
 
 ### 起動後
 
-- 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**初回と更新後は、同梱の program を `~/.guildbotics/bin` へ配置し、OS が同梱ライブラリを初めて検査するため、起動完了まで時間がかかることがあります**（2 回目以降は速くなります）。
+- 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**初回と更新後は、同梱の program を `~/.guildbotics/programs` へ配置し、OS が同梱ライブラリを初めて検査するため、起動完了まで時間がかかることがあります**（2 回目以降は速くなります）。
 - backend が立ち上がると、設定状態（config / `.env` / storage path）が画面に表示されます。
 - 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を AI CLIツールから参照できる場所へ配置します。
   - `~/.guildbotics/bin/guildbotics`: managed CLI
@@ -339,5 +339,5 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 | GUI で PDF 変換（`to_pdf`）が使えない                                 | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。                                                                                                                              |
 | 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                                                                                                        |
 | Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                                                                                                            |
-| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/bin` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                                                                                                                                          |
+| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/programs` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                                                                                                                                          |
 | `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                                                                                                             |

@@ -66,7 +66,7 @@ NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成さ�
 
 ## install と PATH
 
-起動時に Desktop は、同梱した program の directory の `build-id` が違う場合だけ `%USERPROFILE%\.guildbotics\bin` をその directory で入れ替えます。managed member CLI は `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` です。managed の `guildbotics.exe` が実行中だと入れ替えは失敗し、次回の起動で再試行します。NSIS install hook は、同等の entry が存在しない場合だけ `%USERPROFILE%\.guildbotics\bin` を現在のユーザー PATH に追加します。実際に追加した場合だけ所有 marker を記録し、uninstall 時はその marker が示す自分の entry だけを削除します。
+起動時に Desktop は、同梱した program を build ごとに `%USERPROFILE%\.guildbotics\programs\<build-id>\` へ一度だけ複製し、`%USERPROFILE%\.guildbotics\bin` をそこを指すジャンクションにします。managed member CLI は `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` です。古い build の `guildbotics.exe` が実行中の間は Windows がその build の移動を拒むため、切り替えは次回の起動へ延期されます。NSIS install hook は、同等の entry が存在しない場合だけ `%USERPROFILE%\.guildbotics\bin` を現在のユーザー PATH に追加します。実際に追加した場合だけ所有 marker を記録し、uninstall 時はその marker が示す自分の entry だけを削除します。
 
 bare `guildbotics` を確認するときは、新しい cmd、PowerShell、Git Bash session を開いてください。Windows では system PATH が user PATH より先に評価されるため、system-wide に別の `guildbotics` がある場合はそちらが優先されます。spawned AI CLI process では GuildBotics が managed bin を PATH の先頭へ置くため、この制約はありません。
 

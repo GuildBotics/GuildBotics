@@ -907,9 +907,14 @@ a monorepo on purpose.
 - **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
   (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
   shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.
-  Tauri bundles it as a resource; the app starts the Local API from it and swaps the
-  whole directory into `~/.guildbotics/bin` when the `build-id` changes (a one-file build
-  unpacks everything on every start, which cost seconds per CLI call). The
+  Tauri bundles it as a resource and the app starts the Local API from it. The CLI is
+  copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
+  afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on
+  Windows). While a process still runs from an older build the switch waits for the next
+  launch: the CLI holds a shared lock on its executable (the PyInstaller runtime hook
+  `desktop/sidecar/hold_program_lock.py`), and on Windows the running image already
+  refuses the move. A one-file build unpacks everything on every start, which cost
+  seconds per CLI call. The
   app also installs a `~/.local/bin/guildbotics` shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.

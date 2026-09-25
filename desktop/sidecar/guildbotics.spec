@@ -84,7 +84,7 @@ def _program(name, entry_point):
         hiddenimports=hiddenimports,
         hookspath=[],
         hooksconfig={},
-        runtime_hooks=[],
+        runtime_hooks=[os.path.join(SPECPATH, "hold_program_lock.py")],
         # weasyprint is loaded lazily by ToPdfCommand; exclude it so the build
         # does not fail on missing GTK/Pango/Cairo native libraries.
         excludes=["weasyprint"],

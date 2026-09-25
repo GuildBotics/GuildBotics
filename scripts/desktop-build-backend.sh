@@ -23,7 +23,7 @@ uv run --with pyinstaller python -m PyInstaller \
 rm -rf "$PROGRAMS_DIR"
 mkdir -p "$(dirname "$PROGRAMS_DIR")"
 cp -R dist/guildbotics "$PROGRAMS_DIR"
-# The desktop app refreshes the installed CLI only when this id changes.
+# The desktop app installs the CLI once per build id.
 uv run --no-sync python -c 'import uuid; print(uuid.uuid4())' >"$PROGRAMS_DIR/build-id"
 
 echo "Built desktop programs: $PROGRAMS_DIR"

@@ -66,7 +66,7 @@ For `tauri dev`, `scripts/desktop-dev-tauri.sh` first builds real PyInstaller `.
 
 ## Installation and PATH behavior
 
-On launch, Desktop replaces `%USERPROFILE%\.guildbotics\bin` with the bundled programs directory whenever its `build-id` differs, so the managed member CLI is `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`. While a managed `guildbotics.exe` is running the replacement fails, and the next launch retries it. The NSIS install hook adds `%USERPROFILE%\.guildbotics\bin` to the current user's PATH only when an equivalent entry is absent. It records ownership only when it adds the entry, and uninstall removes only that owned entry.
+On launch, Desktop copies the bundled programs once per build into `%USERPROFILE%\.guildbotics\programs\<build-id>\` and makes `%USERPROFILE%\.guildbotics\bin` a junction to it, so the managed member CLI is `%USERPROFILE%\.guildbotics\bin\guildbotics.exe`. While a `guildbotics.exe` from an older build is running, Windows refuses to move that build, and the switch waits for the next launch. The NSIS install hook adds `%USERPROFILE%\.guildbotics\bin` to the current user's PATH only when an equivalent entry is absent. It records ownership only when it adds the entry, and uninstall removes only that owned entry.
 
 Open a new cmd, PowerShell, or Git Bash session before testing bare `guildbotics`. Windows resolves the system PATH before the user PATH; a different system-wide `guildbotics` installation can therefore take precedence. Spawned AI CLI processes are unaffected because GuildBotics prepends its managed bin directory to their PATH.
 

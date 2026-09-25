@@ -322,7 +322,7 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 }
 
 fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
-    install_programs(programs, &home.join(".guildbotics").join("bin"))?;
+    install_programs(programs, &home.join(".guildbotics"))?;
 
     if should_install_shell_shim(std::env::consts::OS) {
         let local_bin = home.join(".local").join("bin");
@@ -339,34 +339,93 @@ fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Make `target` a copy of `source`, unless it already holds the same build.
+/// Install the bundled build under `root` and point `root/bin` at it.
 ///
-/// The copy is staged beside `target` and swapped in by renames, never written
-/// over the installed files: a running `guildbotics.exe` keeps its files open
-/// on Windows, and copying over them would leave a half-updated tree. While an
-/// old build runs there, the swap fails and the next launch retries it, since
-/// the installed build id still differs.
-fn install_programs(source: &Path, target: &Path) -> io::Result<()> {
-    let build_id = fs::read(source.join(BUILD_ID_FILE))?;
-    if fs::read(target.join(BUILD_ID_FILE)).ok() == Some(build_id) {
-        return Ok(());
+/// Each build is its own directory, `root/programs/<build id>`, which appears
+/// complete (it is copied under another name first) and is never modified, and
+/// `bin` is a link to one of them. Every step can therefore be interrupted and
+/// simply run again: nothing a process runs from is ever half-written.
+///
+/// A build still in use is never taken away. Before `bin` moves, every other
+/// build is retired, which a running program refuses: it holds a shared lock
+/// on its executable, and on Windows its image cannot be renamed either. Then
+/// the update waits for the next launch, and the running program keeps the
+/// files it started with.
+fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
+    let build_id = fs::read_to_string(source.join(BUILD_ID_FILE))?;
+    let build_id = build_id.trim();
+    let programs = root.join("programs");
+    let current = programs.join(build_id);
+    if !current.exists() {
+        let staging = programs.join(format!("{build_id}.staging"));
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        copy_dir(source, &staging)?;
+        fs::rename(&staging, &current)?;
     }
-    let staging = target.with_extension("staging");
-    let previous = target.with_extension("previous");
-    for leftover in [&staging, &previous] {
-        if leftover.exists() {
-            fs::remove_dir_all(leftover)?;
+    for entry in fs::read_dir(&programs)? {
+        let program = entry?.path();
+        if program == current || program.extension().is_some_and(|ext| ext == "gc") {
+            continue;
+        }
+        if let Err(error) = retire(&program) {
+            eprintln!(
+                "GuildBotics CLI update deferred: {} is in use ({error})",
+                program.display()
+            );
+            return Ok(());
         }
     }
-    copy_dir(source, &staging)?;
-    if target.exists() {
-        fs::rename(target, &previous)?;
+    let bin = root.join("bin");
+    if fs::read_link(&bin)
+        .ok()
+        .as_deref()
+        .and_then(Path::file_name)
+        != current.file_name()
+    {
+        if fs::symlink_metadata(&bin).is_ok() {
+            // Removes a link itself, not what it points at.
+            fs::remove_dir_all(&bin)?;
+        }
+        link_dir(&current, &bin)?;
     }
-    fs::rename(&staging, target)?;
-    fs::remove_dir_all(&previous).or_else(|error| match error.kind() {
-        io::ErrorKind::NotFound => Ok(()),
-        _ => Err(error),
-    })
+    for entry in fs::read_dir(&programs)? {
+        let program = entry?.path();
+        if program.extension().is_some_and(|ext| ext == "gc") {
+            // Retried on the next launch if something still holds a file.
+            let _ = fs::remove_dir_all(program);
+        }
+    }
+    Ok(())
+}
+
+/// Move a build out of the way, unless a program still runs from it.
+fn retire(program: &Path) -> io::Result<()> {
+    let executable = program.join(platform_executable_name("guildbotics"));
+    // Held across the rename, so that no program starts from it in between.
+    let _lock = match fs::File::open(&executable) {
+        Ok(file) => {
+            file.try_lock()?;
+            Some(file)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let mut retired = program.as_os_str().to_owned();
+    retired.push(".gc");
+    fs::rename(program, retired)
+}
+
+#[cfg(unix)]
+fn link_dir(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// A junction, since a symbolic link needs a privilege on Windows.
+#[cfg(windows)]
+fn link_dir(target: &Path, link: &Path) -> io::Result<()> {
+    junction::create(target, link)
 }
 
 /// Copy a directory tree, keeping symbolic links as links rather than following
@@ -940,39 +999,135 @@ mod tests {
         Ok(())
     }
 
-    fn write_build(dir: &Path, build_id: &str, program: &str) -> io::Result<()> {
+    fn write_build(dir: &Path, build_id: &str) -> io::Result<()> {
+        if dir.exists() {
+            fs::remove_dir_all(dir)?;
+        }
         fs::create_dir_all(dir.join("_internal"))?;
         fs::write(dir.join(BUILD_ID_FILE), build_id)?;
-        fs::write(dir.join("guildbotics"), program)?;
-        fs::write(dir.join("_internal").join(program), program)
+        fs::write(dir.join(platform_executable_name("guildbotics")), build_id)?;
+        fs::write(dir.join("_internal").join("data"), build_id)
+    }
+
+    /// What `bin` runs, and every entry left under `programs`.
+    fn installed(root: &Path) -> io::Result<(String, Vec<String>)> {
+        let running = fs::read_to_string(
+            root.join("bin")
+                .join(platform_executable_name("guildbotics")),
+        )?;
+        let mut programs = fs::read_dir(root.join("programs"))?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<io::Result<Vec<_>>>()?;
+        programs.sort();
+        Ok((running, programs))
     }
 
     #[test]
-    fn install_programs_replaces_the_whole_directory_only_for_another_build() -> io::Result<()> {
+    fn install_programs_points_bin_at_each_new_build_and_drops_the_old_one() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
         let source = temp_dir.path().join("resources");
-        let target = temp_dir.path().join("bin");
-        // What a one-file install left behind is replaced, not merged into.
-        fs::create_dir_all(&target)?;
-        fs::write(target.join("guildbotics"), "one-file")?;
+        let root = temp_dir.path().join("home");
 
-        write_build(&source, "build-1", "first")?;
-        install_programs(&source, &target)?;
-        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "first");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into()])
+        );
 
-        // The same build is left alone, even where the installed copy differs.
-        fs::write(target.join("guildbotics"), "running")?;
-        install_programs(&source, &target)?;
-        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "running");
+        // The same build is left alone.
+        let data = root
+            .join("programs")
+            .join("build-1")
+            .join("_internal")
+            .join("data");
+        fs::write(&data, "untouched")?;
+        install_programs(&source, &root)?;
+        assert_eq!(fs::read_to_string(&data)?, "untouched");
 
-        fs::remove_dir_all(&source)?;
-        write_build(&source, "build-2", "second")?;
-        install_programs(&source, &target)?;
-        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "second");
-        assert!(target.join("_internal").join("second").exists());
-        assert!(!target.join("_internal").join("first").exists());
-        assert!(!target.with_extension("staging").exists());
-        assert!(!target.with_extension("previous").exists());
+        write_build(&source, "build-2")?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-2".into(), vec!["build-2".into()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn install_programs_waits_while_a_program_runs_from_the_old_build() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+
+        // What a running CLI holds for its whole life.
+        let running = fs::File::open(
+            root.join("programs")
+                .join("build-1")
+                .join(platform_executable_name("guildbotics")),
+        )?;
+        running.lock_shared()?;
+        write_build(&source, "build-2")?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into(), "build-2".into()])
+        );
+
+        drop(running);
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-2".into(), vec!["build-2".into()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn install_programs_recovers_from_any_interrupted_or_earlier_state() -> io::Result<()> {
+        type Arrange = fn(&Path, &Path) -> io::Result<()>;
+        let states: [(&str, Arrange); 5] = [
+            ("staging left over", |_, root| {
+                let staging = root.join("programs").join("build-2.staging");
+                fs::create_dir_all(&staging)?;
+                fs::write(staging.join("partial"), "")
+            }),
+            ("bin removed before relinking", |_, root| {
+                fs::remove_dir_all(root.join("bin"))
+            }),
+            ("bin left dangling", |_, root| {
+                let old = root.join("programs").join("build-1");
+                fs::rename(&old, root.join("programs").join("build-1.gc"))
+            }),
+            ("retired build left over", |_, root| {
+                fs::create_dir_all(root.join("programs").join("build-0.gc"))
+            }),
+            ("bin is a directory of an earlier layout", |_, root| {
+                fs::remove_dir_all(root.join("bin"))?;
+                fs::create_dir_all(root.join("bin"))?;
+                fs::write(root.join("bin").join("guildbotics"), "one-file")
+            }),
+        ];
+        for (state, arrange) in states {
+            let temp_dir = TestDir::new()?;
+            let source = temp_dir.path().join("resources");
+            let root = temp_dir.path().join("home");
+            write_build(&source, "build-1")?;
+            install_programs(&source, &root)?;
+            write_build(&source, "build-2")?;
+            arrange(&source, &root)?;
+
+            install_programs(&source, &root)?;
+
+            assert_eq!(
+                installed(&root)?,
+                ("build-2".into(), vec!["build-2".into()]),
+                "{state}"
+            );
+            assert!(!root.join("bin").join("partial").exists(), "{state}");
+        }
         Ok(())
     }
 
@@ -981,15 +1136,15 @@ mod tests {
     fn install_programs_keeps_symbolic_links() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
         let source = temp_dir.path().join("resources");
-        let target = temp_dir.path().join("bin");
-        write_build(&source, "build-1", "first")?;
-        std::os::unix::fs::symlink("_internal/first", source.join("link"))?;
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        std::os::unix::fs::symlink("_internal/data", source.join("link"))?;
 
-        install_programs(&source, &target)?;
+        install_programs(&source, &root)?;
 
         assert_eq!(
-            fs::read_link(target.join("link"))?,
-            PathBuf::from("_internal/first")
+            fs::read_link(root.join("bin").join("link"))?,
+            PathBuf::from("_internal/data")
         );
         Ok(())
     }
