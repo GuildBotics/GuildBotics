@@ -9,34 +9,21 @@ case "$DESKTOP_TARGET" in
   x86_64-apple-darwin) export GUILDBOTICS_PYINSTALLER_TARGET_ARCH=x86_64 ;;
   *) unset GUILDBOTICS_PYINSTALLER_TARGET_ARCH ;;
 esac
-APP_API_NAME="guildbotics-app-api-${DESKTOP_TARGET}"
-CLI_NAME="guildbotics-cli-${DESKTOP_TARGET}"
-SOURCE_SUFFIX=""
-if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
-  APP_API_NAME="${APP_API_NAME}.exe"
-  CLI_NAME="${CLI_NAME}.exe"
-  SOURCE_SUFFIX=".exe"
-fi
+PROGRAMS_DIR="desktop/src-tauri/binaries/guildbotics"
 
 cd "$REPO_ROOT"
 
 uv sync --extra test --extra dev
 
 uv run --with pyinstaller python -m PyInstaller \
-  desktop/sidecar/guildbotics-app-api.spec \
+  desktop/sidecar/guildbotics.spec \
   --noconfirm --clean \
   --distpath dist --workpath build/sidecar
 
-uv run --with pyinstaller python -m PyInstaller \
-  desktop/sidecar/guildbotics-cli.spec \
-  --noconfirm --clean \
-  --distpath dist --workpath build/cli
+rm -rf "$PROGRAMS_DIR"
+mkdir -p "$(dirname "$PROGRAMS_DIR")"
+cp -R dist/guildbotics "$PROGRAMS_DIR"
+# The desktop app refreshes the installed CLI only when this id changes.
+uv run --no-sync python -c 'import uuid; print(uuid.uuid4())' >"$PROGRAMS_DIR/build-id"
 
-mkdir -p desktop/src-tauri/binaries
-cp "dist/guildbotics-app-api${SOURCE_SUFFIX}" "desktop/src-tauri/binaries/${APP_API_NAME}"
-cp "dist/guildbotics-cli${SOURCE_SUFFIX}" "desktop/src-tauri/binaries/${CLI_NAME}"
-chmod +x "desktop/src-tauri/binaries/${APP_API_NAME}"
-chmod +x "desktop/src-tauri/binaries/${CLI_NAME}"
-
-echo "Built backend sidecar: desktop/src-tauri/binaries/${APP_API_NAME}"
-echo "Built member CLI: desktop/src-tauri/binaries/${CLI_NAME}"
+echo "Built desktop programs: $PROGRAMS_DIR"

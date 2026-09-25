@@ -35,7 +35,7 @@ struct Sidecar {
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// What the process still needs after its teardown has finished: the server
-/// closing down and, in a packaged build, the bootloader cleaning up after it.
+/// closing down.
 /// How long the teardown itself may take is the backend's to say.
 const BACKEND_EXIT_MARGIN: Duration = Duration::from_secs(5);
 
@@ -300,57 +300,12 @@ fn resolve_home_dir(discovered: Option<PathBuf>) -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))
 }
 
-fn desktop_target_triple_for(os: &str, architecture: &str) -> Option<&'static str> {
-    Some(match (os, architecture) {
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
-        _ => return None,
-    })
-}
-
-fn desktop_target_triple() -> Option<&'static str> {
-    desktop_target_triple_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
-fn bundled_cli_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    let target_triple = desktop_target_triple();
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            candidates.push(dir.join(platform_executable_name("guildbotics-cli")));
-            if let Some(target_triple) = target_triple {
-                candidates.push(dir.join(platform_executable_name(&format!(
-                    "guildbotics-cli-{target_triple}"
-                ))));
-            }
-        }
-    }
-    if let Some(target_triple) = target_triple {
-        candidates.push(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join(platform_executable_name(&format!(
-                    "guildbotics-cli-{target_triple}"
-                ))),
-        );
-    }
-    candidates
-}
-
-fn find_bundled_cli() -> io::Result<PathBuf> {
-    bundled_cli_candidates()
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "bundled guildbotics-cli binary was not found",
-            )
-        })
-}
+/// The resource directory holding the bundled Python programs: the member CLI
+/// `guildbotics`, the Local API `guildbotics-app-api`, and the `_internal/`
+/// directory they share.
+const PROGRAMS_DIR: &str = "guildbotics";
+/// Names the build a programs directory came from.
+const BUILD_ID_FILE: &str = "build-id";
 
 #[cfg(unix)]
 fn make_executable(path: &Path) -> io::Result<()> {
@@ -366,13 +321,8 @@ fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn install_member_cli(home: &Path) -> io::Result<()> {
-    let source = find_bundled_cli()?;
-    let managed_dir = home.join(".guildbotics").join("bin");
-    let managed_cli = managed_dir.join(platform_executable_name("guildbotics"));
-    fs::create_dir_all(&managed_dir)?;
-    fs::copy(source, &managed_cli)?;
-    make_executable(&managed_cli)?;
+fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
+    install_programs(programs, &home.join(".guildbotics").join("bin"))?;
 
     if should_install_shell_shim(std::env::consts::OS) {
         let local_bin = home.join(".local").join("bin");
@@ -387,6 +337,65 @@ fn install_member_cli(home: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Make `target` a copy of `source`, unless it already holds the same build.
+///
+/// The copy is staged beside `target` and swapped in by renames, never written
+/// over the installed files: a running `guildbotics.exe` keeps its files open
+/// on Windows, and copying over them would leave a half-updated tree. While an
+/// old build runs there, the swap fails and the next launch retries it, since
+/// the installed build id still differs.
+fn install_programs(source: &Path, target: &Path) -> io::Result<()> {
+    let build_id = fs::read(source.join(BUILD_ID_FILE))?;
+    if fs::read(target.join(BUILD_ID_FILE)).ok() == Some(build_id) {
+        return Ok(());
+    }
+    let staging = target.with_extension("staging");
+    let previous = target.with_extension("previous");
+    for leftover in [&staging, &previous] {
+        if leftover.exists() {
+            fs::remove_dir_all(leftover)?;
+        }
+    }
+    copy_dir(source, &staging)?;
+    if target.exists() {
+        fs::rename(target, &previous)?;
+    }
+    fs::rename(&staging, target)?;
+    fs::remove_dir_all(&previous).or_else(|error| match error.kind() {
+        io::ErrorKind::NotFound => Ok(()),
+        _ => Err(error),
+    })
+}
+
+/// Copy a directory tree, keeping symbolic links as links rather than following
+/// them, since a PyInstaller build on a POSIX system may lay libraries out so.
+fn copy_dir(source: &Path, target: &Path) -> io::Result<()> {
+    fs::create_dir_all(target)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let destination = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            copy_symlink(&entry.path(), &destination)?;
+        } else if file_type.is_dir() {
+            copy_dir(&entry.path(), &destination)?;
+        } else {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(source)?, target)
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
+    fs::copy(source, target).map(drop)
 }
 
 fn executable_name_for(base: &str, os: &str) -> String {
@@ -588,9 +597,9 @@ fn cli_agent_skill_status(home: &Path, agent: &CliAgent) -> serde_json::Value {
     }
 }
 
-fn install_cli_agent_assets() -> io::Result<()> {
+fn install_cli_agent_assets(programs: &Path) -> io::Result<()> {
     let home = home_dir()?;
-    install_member_cli(&home)?;
+    install_member_cli(&home, programs)?;
 
     for agent in &CLI_AGENTS {
         let Some(agent_home) = configured_agent_home(&home, agent.home_env, agent.home_dir) else {
@@ -931,36 +940,62 @@ mod tests {
         Ok(())
     }
 
+    fn write_build(dir: &Path, build_id: &str, program: &str) -> io::Result<()> {
+        fs::create_dir_all(dir.join("_internal"))?;
+        fs::write(dir.join(BUILD_ID_FILE), build_id)?;
+        fs::write(dir.join("guildbotics"), program)?;
+        fs::write(dir.join("_internal").join(program), program)
+    }
+
     #[test]
-    fn desktop_target_triple_for_maps_supported_platforms() {
+    fn install_programs_replaces_the_whole_directory_only_for_another_build() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let target = temp_dir.path().join("bin");
+        // What a one-file install left behind is replaced, not merged into.
+        fs::create_dir_all(&target)?;
+        fs::write(target.join("guildbotics"), "one-file")?;
+
+        write_build(&source, "build-1", "first")?;
+        install_programs(&source, &target)?;
+        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "first");
+
+        // The same build is left alone, even where the installed copy differs.
+        fs::write(target.join("guildbotics"), "running")?;
+        install_programs(&source, &target)?;
+        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "running");
+
+        fs::remove_dir_all(&source)?;
+        write_build(&source, "build-2", "second")?;
+        install_programs(&source, &target)?;
+        assert_eq!(fs::read_to_string(target.join("guildbotics"))?, "second");
+        assert!(target.join("_internal").join("second").exists());
+        assert!(!target.join("_internal").join("first").exists());
+        assert!(!target.with_extension("staging").exists());
+        assert!(!target.with_extension("previous").exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_programs_keeps_symbolic_links() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let target = temp_dir.path().join("bin");
+        write_build(&source, "build-1", "first")?;
+        std::os::unix::fs::symlink("_internal/first", source.join("link"))?;
+
+        install_programs(&source, &target)?;
+
         assert_eq!(
-            desktop_target_triple_for("macos", "aarch64"),
-            Some("aarch64-apple-darwin")
+            fs::read_link(target.join("link"))?,
+            PathBuf::from("_internal/first")
         );
-        assert_eq!(
-            desktop_target_triple_for("macos", "x86_64"),
-            Some("x86_64-apple-darwin")
-        );
-        assert_eq!(
-            desktop_target_triple_for("linux", "aarch64"),
-            Some("aarch64-unknown-linux-gnu")
-        );
-        assert_eq!(
-            desktop_target_triple_for("linux", "x86_64"),
-            Some("x86_64-unknown-linux-gnu")
-        );
-        assert_eq!(
-            desktop_target_triple_for("windows", "x86_64"),
-            Some("x86_64-pc-windows-msvc")
-        );
+        Ok(())
     }
 
     #[test]
     fn windows_cli_names_include_executable_suffix_and_skip_shell_shim() {
-        assert_eq!(
-            executable_name_for("guildbotics-cli-x86_64-pc-windows-msvc", "windows"),
-            "guildbotics-cli-x86_64-pc-windows-msvc.exe"
-        );
         assert_eq!(
             executable_name_for("guildbotics", "windows"),
             "guildbotics.exe"
@@ -1072,7 +1107,8 @@ pub fn run() {
             app.manage(tray::TrayState::default());
             tray::build(app.handle())?;
 
-            if let Err(error) = install_cli_agent_assets() {
+            let programs = app.path().resource_dir()?.join(PROGRAMS_DIR);
+            if let Err(error) = install_cli_agent_assets(&programs) {
                 eprintln!("failed to install GuildBotics AI CLI tool assets: {error}");
             }
 
@@ -1083,33 +1119,29 @@ pub fn run() {
             let port_arg = port.to_string();
             let boot_log_path = app.path().app_log_dir()?.join("bootstrap.log");
             let _ = append_boot_log(&boot_log_path, b"--- GuildBotics backend start ---");
-            let spawn_result = app
+            let command = app
                 .shell()
-                .sidecar("guildbotics-app-api")
-                .and_then(|command| {
-                    let command = command
-                        // The sidecar is a PyInstaller one-file binary whose worker can
-                        // outlive a killed bootloader. Hand it our PID so it can exit on
-                        // its own if this app ever dies without a clean teardown.
-                        .env(
-                            "GUILDBOTICS_APP_API_PARENT_PID",
-                            std::process::id().to_string(),
-                        )
-                        // Handed over through the environment, never argv: on a
-                        // shared host `ps` exposes another user's command line.
-                        .env("GUILDBOTICS_APP_API_TOKEN", &token);
-                    // In `tauri dev` the webview is served from the Vite dev server
-                    // (`build.devUrl` in tauri.conf.json), so API requests carry that
-                    // origin instead of tauri://localhost.
-                    #[cfg(debug_assertions)]
-                    let command = command.env(
-                        "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
-                        "http://127.0.0.1:1420",
-                    );
-                    command
-                        .args(["--host", "127.0.0.1", "--port", &port_arg])
-                        .spawn()
-                });
+                .command(programs.join(platform_executable_name("guildbotics-app-api")))
+                // Hand the sidecar our PID so it can exit on its own if this app
+                // ever dies without a clean teardown.
+                .env(
+                    "GUILDBOTICS_APP_API_PARENT_PID",
+                    std::process::id().to_string(),
+                )
+                // Handed over through the environment, never argv: on a
+                // shared host `ps` exposes another user's command line.
+                .env("GUILDBOTICS_APP_API_TOKEN", &token);
+            // In `tauri dev` the webview is served from the Vite dev server
+            // (`build.devUrl` in tauri.conf.json), so API requests carry that
+            // origin instead of tauri://localhost.
+            #[cfg(debug_assertions)]
+            let command = command.env(
+                "GUILDBOTICS_APP_API_ALLOWED_ORIGINS",
+                "http://127.0.0.1:1420",
+            );
+            let spawn_result = command
+                .args(["--host", "127.0.0.1", "--port", &port_arg])
+                .spawn();
             let sidecar = match spawn_result {
                 Ok((mut rx, child)) => {
                     // Keep the child's stdout/stderr pipe drained so it never blocks.

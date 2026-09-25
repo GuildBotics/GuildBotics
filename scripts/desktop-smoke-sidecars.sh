@@ -4,8 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
-SIDECAR_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-app-api-${DESKTOP_TARGET}"
-CLI_PATH="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics-cli-${DESKTOP_TARGET}"
+PROGRAMS_DIR="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics"
+SIDECAR_PATH="$PROGRAMS_DIR/guildbotics-app-api"
+CLI_PATH="$PROGRAMS_DIR/guildbotics"
 if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   SIDECAR_PATH="${SIDECAR_PATH}.exe"
   CLI_PATH="${CLI_PATH}.exe"

@@ -904,9 +904,13 @@ a monorepo on purpose.
   use the same machine-wide `service.lock`, so only one background service can own
   scheduler workers / event listeners at a time. CLI `start` remains the headless
   equivalent.
-- **Packaging**: `scripts/desktop-build-backend.sh` builds two PyInstaller sidecars
-  (`guildbotics-app-api`, `guildbotics-cli`) into `desktop/src-tauri/binaries/`. The
-  app also installs a managed `guildbotics` CLI shim and the GuildBotics skill for
+- **Packaging**: `scripts/desktop-build-backend.sh` builds the Local API
+  (`guildbotics-app-api`) and the CLI (`guildbotics`) as one PyInstaller directory that
+  shares `_internal/`, into `desktop/src-tauri/binaries/guildbotics/` with a `build-id`.
+  Tauri bundles it as a resource; the app starts the Local API from it and swaps the
+  whole directory into `~/.guildbotics/bin` when the `build-id` changes (a one-file build
+  unpacks everything on every start, which cost seconds per CLI call). The
+  app also installs a `~/.local/bin/guildbotics` shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,
   verifies, and configures them only.
 - **Sync / Device and hub**: two settings sections (`desktop/src/sync/`). "Sync" covers

@@ -184,7 +184,7 @@ Linux の Tauri 実行に必要なパッケージはディストリビューシ�
 
 ### 2.1 Python sidecar（Local API + CLI）を build する
 
-GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) と [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) にまとめてあります。通常は `scripts/desktop-build-backend.sh` を使って 2 本まとめて build します。
+GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。通常は `scripts/desktop-build-backend.sh` を使います。
 
 ```bash
 # リポジトリルートで実行
@@ -192,18 +192,17 @@ uv sync --extra test --extra dev
 
 scripts/desktop-build-backend.sh
 
-# 生成物:
-# desktop/src-tauri/binaries/guildbotics-app-api-<target>
-# desktop/src-tauri/binaries/guildbotics-cli-<target>
+# 生成物（build-id は build ごとの識別子）:
+# desktop/src-tauri/binaries/guildbotics/{guildbotics-app-api,guildbotics,_internal/,build-id}
 ```
 
-生成される Local API sidecar は onefile で約 200MB 強です。CLI sidecar は desktop app の初回起動時に managed CLI として `~/.guildbotics/bin/guildbotics` へコピーされます。
+生成される directory は約 240MB です。Desktop はこの directory を同梱し、起動時に同梱物の `build-id` が `~/.guildbotics/bin` のものと違うときだけ、directory ごと `~/.guildbotics/bin` へ入れ替えます（managed CLI は `~/.guildbotics/bin/guildbotics`）。onefile は起動のたびに全体を一時 directory へ展開して CLI 1 回に数秒かかるため使いません。
 
 > **動作確認（任意）**: 配置前に sidecar 単体を起動して health を確認できます。
 >
 > ```bash
 > TOKEN="$(openssl rand -hex 32)"
-> GUILDBOTICS_APP_API_TOKEN="$TOKEN" dist/guildbotics-app-api --host 127.0.0.1 --port 8765 &
+> GUILDBOTICS_APP_API_TOKEN="$TOKEN" dist/guildbotics/guildbotics-app-api --host 127.0.0.1 --port 8765 &
 > curl -H "X-GuildBotics-Session-Token: $TOKEN" http://127.0.0.1:8765/health
 > # => {"status":"ok"}
 > ```
@@ -236,13 +235,13 @@ desktop/src-tauri/target/release/bundle/nsis/GuildBotics_<version>_x64-setup.exe
 
 `<version>` は [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `version` です。Tauri は各 OS 用の config を自動選択します。macOS は [src-tauri/tauri.macos.conf.json](src-tauri/tauri.macos.conf.json) で DMG、Linux は [src-tauri/tauri.linux.conf.json](src-tauri/tauri.linux.conf.json) で `.deb` と AppImage、Windows は [src-tauri/tauri.windows.conf.json](src-tauri/tauri.windows.conf.json) で NSIS を指定しています。
 
-各パッケージには desktop 本体、sidecar `guildbotics-app-api`、sidecar `guildbotics-cli` が同梱されます。macOS の secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
+各パッケージには desktop 本体と、Local API `guildbotics-app-api` と CLI `guildbotics` の directory が同梱されます。macOS の secrets を設定していないローカルビルドは **ad-hoc 署名（実質 unsigned）** です。署名・notarization は次節を参照。
 
 ---
 
 ## 3. 開発モード（`tauri dev`）
 
-macOS / Linux で毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは Tauri sidecar の配置先に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。Windows の Tauri は `.exe` sidecar を要求するため、同じ script が先に `desktop-build-backend.sh` で実体を build します。
+macOS / Linux で毎回 PyInstaller を build せずに開発したい場合は、`scripts/desktop-dev-tauri.sh` を使います。このスクリプトは `desktop/src-tauri/binaries/guildbotics/` に「ソースを直接実行する薄いシェルスクリプト」を Local API / CLI の両方について自動生成します。Windows では shell script を実行ファイルとして起動できないため、同じ script が先に `desktop-build-backend.sh` で実体を build します。
 
 ```bash
 scripts/desktop-dev-tauri.sh
@@ -296,7 +295,7 @@ chmod +x GuildBotics_<version>_amd64.AppImage
 
 ### 起動後
 
-- 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**onefile sidecar の自己展開のため、初回は起動完了まで約 10 秒かかります**（2 回目以降は速くなります）。
+- 初回起動時、アプリは同梱の sidecar（Local API）を起動します。**初回と更新後は、同梱の program を `~/.guildbotics/bin` へ配置し、OS が同梱ライブラリを初めて検査するため、起動完了まで時間がかかることがあります**（2 回目以降は速くなります）。
 - backend が立ち上がると、設定状態（config / `.env` / storage path）が画面に表示されます。
 - 初回起動時または setup 画面表示時に、同梱 CLI と GuildBotics skill を AI CLIツールから参照できる場所へ配置します。
   - `~/.guildbotics/bin/guildbotics`: managed CLI
@@ -335,10 +334,10 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 | 症状                                                                  | 原因 / 対処                                                                                                                                                                                                                                  |
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。                                                                                                                                                                                     |
-| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、現在の target に対応する `desktop/src-tauri/binaries/guildbotics-app-api-<target>` と `desktop/src-tauri/binaries/guildbotics-cli-<target>` が存在するか確認。                                                                |
-| PyInstaller 実行時に `ModuleNotFoundError`                            | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics-app-api.spec](sidecar/guildbotics-app-api.spec) または [sidecar/guildbotics-cli.spec](sidecar/guildbotics-cli.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
+| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics/` に `guildbotics-app-api` / `guildbotics` / `build-id` が存在するか確認。                                                                                                            |
+| PyInstaller 実行時に `ModuleNotFoundError`                            | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics.spec](sidecar/guildbotics.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
 | GUI で PDF 変換（`to_pdf`）が使えない                                 | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。                                                                                                                              |
 | 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                                                                                                        |
 | Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                                                                                                            |
-| 初回起動が遅い                                                        | onefile sidecar の自己展開のため。約 10 秒待つ。                                                                                                                                                                                             |
+| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/bin` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                                                                                                                                          |
 | `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                                                                                                             |

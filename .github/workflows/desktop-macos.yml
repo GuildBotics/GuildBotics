@@ -36,16 +36,6 @@ jobs:
       - name: Setup Rust target
         run: rustup target add aarch64-apple-darwin
 
-      - name: Build Python desktop binaries
-        run: scripts/desktop-build-backend.sh
-
-      - name: Smoke-test desktop sidecars
-        run: scripts/desktop-smoke-sidecars.sh
-
-      - name: Install frontend dependencies
-        working-directory: desktop
-        run: npm install
-
       # Optional code signing. When the APPLE_CERTIFICATE secret is absent the
       # build still succeeds and produces an unsigned DMG.
       - name: Detect signing secrets
@@ -83,6 +73,20 @@ jobs:
           security set-key-partition-list \
             -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      - name: Build Python desktop binaries
+        env:
+          # PyInstaller signs the programs and their libraries: the desktop app
+          # bundles them as a resource directory, which Tauri does not sign.
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing.outputs.sign == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+        run: scripts/desktop-build-backend.sh
+
+      - name: Smoke-test desktop sidecars
+        run: scripts/desktop-smoke-sidecars.sh
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm install
 
       - name: Build desktop app
         working-directory: desktop

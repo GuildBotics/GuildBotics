@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 DESKTOP_TARGET="${DESKTOP_TARGET:-$("$SCRIPT_DIR/desktop-target.sh")}"
-BIN_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
-SIDECAR_PATH="$BIN_DIR/guildbotics-app-api-${DESKTOP_TARGET}"
-CLI_PATH="$BIN_DIR/guildbotics-cli-${DESKTOP_TARGET}"
+PROGRAMS_DIR="$REPO_ROOT/desktop/src-tauri/binaries/guildbotics"
+SIDECAR_PATH="$PROGRAMS_DIR/guildbotics-app-api"
+CLI_PATH="$PROGRAMS_DIR/guildbotics"
 
 if [[ "$DESKTOP_TARGET" == *-pc-windows-msvc ]]; then
   "$SCRIPT_DIR/desktop-build-backend.sh"
@@ -25,7 +25,11 @@ if [[ -z "$UV_BIN" ]]; then
   exit 1
 fi
 
-mkdir -p "$BIN_DIR"
+rm -rf "$PROGRAMS_DIR"
+mkdir -p "$PROGRAMS_DIR"
+# A wrapper runs whatever the repository holds, so the installed copy never
+# needs refreshing.
+echo dev >"$PROGRAMS_DIR/build-id"
 cat >"$SIDECAR_PATH" <<SH
 #!/bin/sh
 set -eu

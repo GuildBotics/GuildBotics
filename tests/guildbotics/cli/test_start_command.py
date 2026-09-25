@@ -76,7 +76,7 @@ class _FakeEventListenerRunner:
 
 
 def test_service_lock_path_uses_machine_state_root(monkeypatch, tmp_path):
-    from guildbotics.cli import _service_lock_path
+    from guildbotics.cli.service import _service_lock_path
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
@@ -102,18 +102,21 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
         created["events"] = inst
         return inst
 
-    monkeypatch.setattr("guildbotics.cli.get_edition", lambda: edition)
-    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _scheduler_factory)
-    monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
-    monkeypatch.setattr("guildbotics.cli._apply_selected_workspace", lambda: Path.cwd())
+    monkeypatch.setattr("guildbotics.cli.service.get_edition", lambda: edition)
+    monkeypatch.setattr("guildbotics.cli.service.TaskScheduler", _scheduler_factory)
+    monkeypatch.setattr("guildbotics.cli.service.EventListenerRunner", _events_factory)
     monkeypatch.setattr(
-        "guildbotics.cli._service_lock_path", lambda: tmp_path / "service.lock"
+        "guildbotics.cli.service.selected_workspace", lambda: Path.cwd()
     )
     monkeypatch.setattr(
-        "guildbotics.cli._stop_request_path", lambda: tmp_path / "stop-request.json"
+        "guildbotics.cli.service._service_lock_path", lambda: tmp_path / "service.lock"
     )
     monkeypatch.setattr(
-        "guildbotics.cli.signal.signal",
+        "guildbotics.cli.service._stop_request_path",
+        lambda: tmp_path / "stop-request.json",
+    )
+    monkeypatch.setattr(
+        "guildbotics.cli.service.signal.signal",
         lambda sig, handler: handlers.__setitem__(sig, handler),
     )
 
@@ -160,9 +163,11 @@ def _patch_start_dependencies(monkeypatch, tmp_path: Path):
         inst.join = _join
         return inst
 
-    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _scheduler_factory_with_order)
     monkeypatch.setattr(
-        "guildbotics.cli.EventListenerRunner", _events_factory_with_order
+        "guildbotics.cli.service.TaskScheduler", _scheduler_factory_with_order
+    )
+    monkeypatch.setattr(
+        "guildbotics.cli.service.EventListenerRunner", _events_factory_with_order
     )
     return created, handlers, call_order
 
@@ -267,8 +272,8 @@ def test_start_only_events_waits_for_listener_when_scheduler_has_no_workers(
     def _sleep(_seconds):
         handlers[signal.SIGINT](signal.SIGINT, None)
 
-    monkeypatch.setattr("guildbotics.cli.EventListenerRunner", _events_factory)
-    monkeypatch.setattr("guildbotics.cli.time.sleep", _sleep)
+    monkeypatch.setattr("guildbotics.cli.service.EventListenerRunner", _events_factory)
+    monkeypatch.setattr("guildbotics.cli.service.time.sleep", _sleep)
 
     result = runner.invoke(cli_main, ["start", "--only", "events"])
 
@@ -342,7 +347,9 @@ def test_start_signal_handler_stops_events_then_scheduler(monkeypatch, tmp_path)
         inst.shutdown = _shutdown
         return inst
 
-    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _task_scheduler_factory)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.TaskScheduler", _task_scheduler_factory
+    )
 
     result = runner.invoke(cli_main, ["start"])
 
@@ -373,7 +380,9 @@ def test_start_second_signal_cancels_in_flight_work(monkeypatch, tmp_path):
         inst.start = _start
         return inst
 
-    monkeypatch.setattr("guildbotics.cli.TaskScheduler", _task_scheduler_factory)
+    monkeypatch.setattr(
+        "guildbotics.cli.service.TaskScheduler", _task_scheduler_factory
+    )
 
     result = runner.invoke(cli_main, ["start"])
 

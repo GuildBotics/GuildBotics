@@ -6,5 +6,5 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_ROOT/desktop/src-tauri"
 
-# Unit tests do not launch or package the configured external binaries.
-TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test "$@"
+# Unit tests do not launch or package the bundled programs.
+TAURI_CONFIG='{"bundle":{"resources":[]}}' cargo test "$@"

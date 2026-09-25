@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import importlib
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import click
 
 from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.fileio import get_workspace_root
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.workspace_state import (
@@ -41,6 +43,36 @@ class SharedWriteBusyGroup(click.Group):
             raise click.ClickException(t("cli.shared.write_busy")) from exc
 
 
+class LazyGroup(SharedWriteBusyGroup):
+    """A command group that imports a subcommand's module only to run it.
+
+    Every invocation starts a fresh process, and a subcommand's module brings
+    in everything that subcommand needs. Importing all of them up front made
+    one ``member`` command pay for the service, the hub, and the agent
+    environment too, so each is named here and imported on first use.
+
+    Args:
+        lazy_commands: Subcommand name to ``"<module>:<attribute>"``.
+    """
+
+    def __init__(
+        self, *args: Any, lazy_commands: Mapping[str, str], **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.lazy_commands = lazy_commands
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return sorted({*super().list_commands(ctx), *self.lazy_commands})
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        target = self.lazy_commands.get(cmd_name)
+        if target is None:
+            return super().get_command(ctx, cmd_name)
+        module, attribute = target.split(":")
+        command: click.Command = getattr(importlib.import_module(module), attribute)
+        return command
+
+
 workspace_option = click.option(
     "--workspace",
     "workspace_dir",
@@ -59,6 +91,19 @@ def format_option(default: str) -> Callable[[Any], Any]:
         default=default,
         help="Output format.",
     )
+
+
+def selected_workspace() -> Path:
+    """Apply the persisted active workspace and return its root.
+
+    Returns:
+        The active workspace, or the current directory's when none is selected.
+
+    Raises:
+        click.ClickException: If the active workspace cannot be resolved.
+    """
+    applied = apply_workspace_option(None)
+    return applied.workspace if applied is not None else get_workspace_root()
 
 
 def apply_workspace_option(workspace_dir: Path | None) -> WorkspaceState | None:

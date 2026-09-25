@@ -9,8 +9,9 @@ import pytest
 import httpx
 from click.testing import CliRunner
 
-import guildbotics.cli as cli_module
-from guildbotics.cli import _parse_command_spec
+import guildbotics.cli.run as run_module
+from guildbotics.cli import main
+from guildbotics.cli.run import _parse_command_spec
 from guildbotics.commands.errors import CommandError
 from guildbotics.cli import desktop_commands
 from guildbotics.utils import local_api
@@ -56,7 +57,7 @@ def test_parse_command_spec_without_person():
 @pytest.fixture
 def desktop_route(tmp_path, monkeypatch):
     monkeypatch.setattr(local_api, "endpoint_path", lambda: tmp_path / "app-api.json")
-    monkeypatch.setattr(cli_module, "_apply_selected_workspace", lambda: tmp_path)
+    monkeypatch.setattr(run_module, "selected_workspace", lambda: tmp_path)
     endpoint = LocalApiEndpoint(
         port=8765,
         token="test-token",
@@ -71,7 +72,7 @@ def desktop_route(tmp_path, monkeypatch):
         calls.append(("local", args))
         click.echo("local output")
 
-    monkeypatch.setattr(cli_module, "_run_custom_command", local)
+    monkeypatch.setattr(run_module, "_run_custom_command", local)
     client_type = httpx.Client
 
     def respond(handler):
@@ -125,7 +126,7 @@ def test_cli_delegates_stdin_args_person_and_absolute_cwd(
 
     respond(handler)
     result = CliRunner().invoke(
-        cli_module.main,
+        main,
         ["run", *person_args, "--cwd", str(tmp_path), "topic=review", "value"],
         input="日本語\nreview",
     )
@@ -169,7 +170,7 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
         return httpx.Response(200, json=payload)
 
     respond(handler)
-    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    result = CliRunner().invoke(main, ["run", "ask"], input="review")
     assert result.exit_code == 0, result.output
     assert result.stdout == "local output\n"
     assert calls[-1][0] == "local"
@@ -197,7 +198,7 @@ def test_cli_never_runs_locally_after_post(desktop_route, failure):
         )
 
     respond(handler)
-    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    result = CliRunner().invoke(main, ["run", "ask"], input="review")
     assert result.exit_code != 0
     assert (
         "実行中のため開始できません" in result.stderr
@@ -216,7 +217,7 @@ def test_cli_reports_plain_http_error_without_retry(desktop_route):
             else httpx.Response(500, text="Internal Server Error")
         )
     )
-    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    result = CliRunner().invoke(main, ["run", "ask"], input="review")
     assert result.exit_code == 1
     assert "HTTP 500: Internal Server Error" in result.stderr
     assert not any(path == "local" for path, _ in calls)
@@ -232,7 +233,7 @@ def test_cli_preserves_default_cwd_and_empty_desktop_output(desktop_route):
         return httpx.Response(200, json={"trace_id": "run", "output": ""})
 
     respond(handler)
-    result = CliRunner().invoke(cli_module.main, ["run", "ask"], input="review")
+    result = CliRunner().invoke(main, ["run", "ask"], input="review")
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert not any(path == "local" for path, _ in calls)
@@ -436,10 +437,10 @@ async def test_cli_run_rejects_human_member_without_traceback(
             assert message == ""
             return context
 
-    monkeypatch.setattr(cli_module, "get_edition", lambda: FakeEdition())
+    monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
 
     with pytest.raises(click.ClickException) as exc_info:
-        await cli_module._run_custom_command(command_spec, (), person_option, "")
+        await run_module._run_custom_command(command_spec, (), person_option, "")
 
     assert "cannot be used as an AI execution subject" in str(exc_info.value)
 

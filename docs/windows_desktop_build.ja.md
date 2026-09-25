@@ -45,7 +45,7 @@ scripts/desktop-test-rust.sh
 ```
 
 これらは Windows 上で native 実行してください。特に、GuildBotics process が nested Job Object を作成でき、suspended 状態の AI CLI process を所属させてから resume できることを確認します。
-Rust test wrapper はテスト時だけ Tauri の `externalBin` を空にするため、PyInstaller sidecar を build する前でも実行できます。実際の package build では通常の Tauri config が使われ、sidecar は引き続き必須です。
+Rust test wrapper はテスト時だけ Tauri の `bundle.resources` を空にするため、PyInstaller の program を build する前でも実行できます。実際の package build では通常の Tauri config が使われ、program は引き続き必須です。
 
 ## build
 
@@ -58,10 +58,7 @@ cd desktop
 npm run tauri build -- --bundles nsis
 ```
 
-PyInstaller executable は以下へ配置されます。
-
-- `desktop/src-tauri/binaries/guildbotics-app-api-x86_64-pc-windows-msvc.exe`
-- `desktop/src-tauri/binaries/guildbotics-cli-x86_64-pc-windows-msvc.exe`
+PyInstaller の program は 1 つの directory `desktop/src-tauri/binaries/guildbotics/` に配置されます。中身は `guildbotics-app-api.exe`、`guildbotics.exe`、両者が共有する `_internal\`、`build-id` です。
 
 NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成されます。Windows 用 Tauri overlay でも bundle target を NSIS に固定しているため、通常の Windows build が MSI を作ろうとすることはありません。
 
@@ -69,7 +66,7 @@ NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成さ�
 
 ## install と PATH
 
-初回起動時に Desktop は managed member CLI を `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` へコピーします。NSIS install hook は、同等の entry が存在しない場合だけ `%USERPROFILE%\.guildbotics\bin` を現在のユーザー PATH に追加します。実際に追加した場合だけ所有 marker を記録し、uninstall 時はその marker が示す自分の entry だけを削除します。
+起動時に Desktop は、同梱した program の directory の `build-id` が違う場合だけ `%USERPROFILE%\.guildbotics\bin` をその directory で入れ替えます。managed member CLI は `%USERPROFILE%\.guildbotics\bin\guildbotics.exe` です。managed の `guildbotics.exe` が実行中だと入れ替えは失敗し、次回の起動で再試行します。NSIS install hook は、同等の entry が存在しない場合だけ `%USERPROFILE%\.guildbotics\bin` を現在のユーザー PATH に追加します。実際に追加した場合だけ所有 marker を記録し、uninstall 時はその marker が示す自分の entry だけを削除します。
 
 bare `guildbotics` を確認するときは、新しい cmd、PowerShell、Git Bash session を開いてください。Windows では system PATH が user PATH より先に評価されるため、system-wide に別の `guildbotics` がある場合はそちらが優先されます。spawned AI CLI process では GuildBotics が managed bin を PATH の先頭へ置くため、この制約はありません。
 
