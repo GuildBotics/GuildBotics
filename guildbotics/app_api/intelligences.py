@@ -13,7 +13,6 @@ from guildbotics.app_api.models import (
     IntelligenceConfigUpdateRequest,
     ModelDefinition,
 )
-from guildbotics.editions.simple import simple_brain_factory
 from guildbotics.editions.simple.setup_service import (
     CreatedFile,
     SetupServiceError,
@@ -33,7 +32,6 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainError,
     parse_toolchain,
 )
-from guildbotics.intelligences.brains import agno_agent, cli_agent
 from guildbotics.intelligences.brains.jev import JEV_MODEL
 from guildbotics.intelligences.cli_agents import (
     cli_agent_default_path,
@@ -131,7 +129,6 @@ class IntelligenceConfigService:
         if request.person_id and request.inherit_team_defaults:
             if target_dir.exists():
                 shutil.rmtree(target_dir)
-            self._clear_runtime_caches(request.person_id)
             return IntelligenceConfigResult(
                 [CreatedFile(path=target_dir, action="delete")]
             )
@@ -194,7 +191,6 @@ class IntelligenceConfigService:
             )
             files.append(CreatedFile(path=declaration_file, action="update"))
 
-        self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
 
     def _update_member_overrides(
@@ -281,7 +277,6 @@ class IntelligenceConfigService:
         if target_dir.exists() and not any(target_dir.iterdir()):
             target_dir.rmdir()
 
-        self._clear_runtime_caches(request.person_id)
         return IntelligenceConfigResult(files)
 
     def _reconcile_mapping_file(
@@ -843,13 +838,3 @@ class IntelligenceConfigService:
         if len(parts) > MODEL_PATH_PROVIDER_INDEX:
             return parts[MODEL_PATH_PROVIDER_INDEX]
         return ""
-
-    def _clear_runtime_caches(self, person_id: str | None) -> None:
-        if person_id:
-            simple_brain_factory.person_brain_mapping.pop(person_id, None)
-            agno_agent.person_model_mapping.pop(person_id, None)
-            cli_agent.person_cli_agent_mapping.pop(person_id, None)
-            return
-        simple_brain_factory.person_brain_mapping.clear()
-        agno_agent.person_model_mapping.clear()
-        cli_agent.person_cli_agent_mapping.clear()
