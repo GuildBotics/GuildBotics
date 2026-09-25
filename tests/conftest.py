@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
+from guildbotics.runtime.member_invocation import RUN_ENV, TASK_RUN_ENV
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver

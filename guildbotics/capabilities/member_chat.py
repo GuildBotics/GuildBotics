@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from logging import Logger
 from typing import Any, cast
 
@@ -18,10 +17,10 @@ from guildbotics.integrations.chat_service import (
     ChatService,
     SemanticReaction,
 )
+from guildbotics.runtime.member_invocation import current_member_invocation
 
 SLACK_BOT_TOKEN_KEY = "SLACK_BOT_TOKEN"
 SLACK_APP_TOKEN_KEY = "SLACK_APP_TOKEN"
-CHAT_PARTICIPANT_LABELS_ENV = "GUILDBOTICS_CHAT_PARTICIPANT_LABELS"
 
 
 class MemberChatCapabilityService:
@@ -299,7 +298,7 @@ def _events_payload(events: list[ChatEvent]) -> list[dict[str, Any]]:
 
 
 def _load_participant_labels() -> dict[str, str]:
-    raw = os.getenv(CHAT_PARTICIPANT_LABELS_ENV, "").strip()
+    raw = current_member_invocation().participant_labels.strip()
     if not raw:
         return {}
     try:

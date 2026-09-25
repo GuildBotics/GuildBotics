@@ -6,11 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.runtime.person_lease import (
+from guildbotics.runtime.member_invocation import (
     DELEGATION_ID_ENV,
     LEASE_ID_ENV,
     LEASE_PERSON_ENV,
     LEASE_RUN_ENV,
+    MemberInvocation,
+    member_invocation_scope,
+)
+from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
     current_person_lease,
@@ -26,6 +30,11 @@ def _delegation_environment(lease: PersonExecutionLease, run_id: str) -> dict[st
         LEASE_PERSON_ENV: metadata.person_id,
         LEASE_RUN_ENV: metadata.run_id,
     }
+
+
+def _validate_delegation(person_id: str, workspace_root: Path, environ: dict[str, str]):
+    with member_invocation_scope(MemberInvocation.from_environment(environ)):
+        return validate_delegation(person_id, workspace_root=workspace_root)
 
 
 def _attempt_person_lease(data_root: str, connection) -> None:
@@ -96,15 +105,12 @@ def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
     lease.acquire(source="routine", command="ticket", work_id="work-1")
     env = _delegation_environment(lease, "run-1")
 
-    assert (
-        validate_delegation("aiko", workspace_root=tmp_path, environ=env)
-        == lease.metadata
-    )
+    assert _validate_delegation("aiko", tmp_path, env) == lease.metadata
 
     forged = dict(env)
     forged[DELEGATION_ID_ENV] = "forged"
-    assert validate_delegation("aiko", workspace_root=tmp_path, environ=forged) is None
-    assert validate_delegation("yuki", workspace_root=tmp_path, environ=env) is None
+    assert _validate_delegation("aiko", tmp_path, forged) is None
+    assert _validate_delegation("yuki", tmp_path, env) is None
     assert env == {
         LEASE_ID_ENV: lease.metadata.lease_id,
         DELEGATION_ID_ENV: lease.metadata.delegation_id,
@@ -113,7 +119,7 @@ def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
     }
 
     lease.release()
-    assert validate_delegation("aiko", workspace_root=tmp_path, environ=env) is None
+    assert _validate_delegation("aiko", tmp_path, env) is None
 
 
 def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
@@ -127,10 +133,8 @@ def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
     assert first[LEASE_RUN_ENV] == "run-1"
     assert second[LEASE_RUN_ENV] == "run-2"
     assert first[LEASE_ID_ENV] == second[LEASE_ID_ENV]
-    assert validate_delegation("aiko", workspace_root=tmp_path, environ=first) is None
-    assert (
-        validate_delegation("aiko", workspace_root=tmp_path, environ=second) is not None
-    )
+    assert _validate_delegation("aiko", tmp_path, first) is None
+    assert _validate_delegation("aiko", tmp_path, second) is not None
     lease.release()
 
 

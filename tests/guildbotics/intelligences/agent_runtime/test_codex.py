@@ -7,7 +7,14 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV, TASK_RUN_ENV
+from guildbotics.runtime.member_invocation import (
+    DELEGATION_ID_ENV,
+    LEASE_ID_ENV,
+    LEASE_PERSON_ENV,
+    LEASE_RUN_ENV,
+    RUN_ENV,
+    TASK_RUN_ENV,
+)
 from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     parse_network_policy,
@@ -38,12 +45,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
-)
-from guildbotics.runtime.person_lease import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 

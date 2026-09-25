@@ -1439,9 +1439,12 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
         check_chat_updates,
         ensure_chat_current,
     )
-    from guildbotics.capabilities.task_runs import RUN_ENV
     from guildbotics.integrations import chat_receive_status
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
+    from guildbotics.runtime.member_invocation import (
+        MemberInvocation,
+        member_invocation_scope,
+    )
     from guildbotics.utils.shared_write_lock import shared_write_lock
 
     scope = ("slack", "alice", "C1")
@@ -1457,7 +1460,7 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
             "event_ids": ["E1"],
         },
     )
-    monkeypatch.setenv(RUN_ENV, "run")
+    invocation = MemberInvocation(run_id="run")
     now = [100.0]
     monkeypatch.setattr(
         chat_receive_status,
@@ -1511,9 +1514,10 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
             now[0] = 100.0 + elapsed
             runner._flush_listener(key)
             assert ChatReceiveStatus().state(*scope) == "catching_up"
-            assert check_chat_updates("alice", "run")["status"] == "catching_up"
-            with pytest.raises(ChatUpdatesRequired):
-                ensure_chat_current("alice")
+            with member_invocation_scope(invocation):
+                assert check_chat_updates("alice", "run")["status"] == "catching_up"
+                with pytest.raises(ChatUpdatesRequired):
+                    ensure_chat_current("alice")
         assert not runner._state_store.load_pending_events(*scope)
     finally:
         release.set()
@@ -1522,9 +1526,10 @@ async def test_sync_lock_wait_keeps_heartbeat_alive_and_prevents_publication(
             await asyncio.wait_for(task, 2)
     runner._flush_listener(key)
     assert ChatReceiveStatus().state(*scope) == "ready"
-    result = check_chat_updates("alice", "run")
-    assert [item["event_id"] for item in result["messages"]] == ["E3"]
-    ensure_chat_current("alice")
+    with member_invocation_scope(invocation):
+        result = check_chat_updates("alice", "run")
+        assert [item["event_id"] for item in result["messages"]] == ["E3"]
+        ensure_chat_current("alice")
 
 
 def test_wake_receiver_uses_one_loop_reference_during_shutdown():

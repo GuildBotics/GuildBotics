@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from guildbotics.capabilities.task_runs import RUN_ENV
 from guildbotics.intelligences.agent_runtime import diagnostics, registry
 from guildbotics.intelligences.agent_runtime.environment import (
     member_command_environment,
@@ -22,6 +21,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
+from guildbotics.runtime.member_invocation import RUN_ENV, TRACE_ID_ENV
 
 
 class _Logger:
@@ -793,7 +793,6 @@ def test_member_command_environment_hands_over_the_turns_trace(tmp_path) -> None
     # The member CLI runs in another process; the trace it should record into
     # travels with the turn, not with the caller's context variables.
     from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
-    from guildbotics.observability import TRACE_ID_ENV
 
     context = AgentExecutionContext(
         person_id="aiko",

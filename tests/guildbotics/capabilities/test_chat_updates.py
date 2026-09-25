@@ -11,11 +11,15 @@ from guildbotics.capabilities.chat_updates import (
     check_chat_updates,
     ensure_chat_current,
 )
-from guildbotics.capabilities.task_runs import RUN_ENV, RunStore
+from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.integrations import chat_receive_status
 from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
 from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    member_invocation_scope,
+)
 from tests.guildbotics.capabilities.test_member_chat import _service as chat_service
 from tests.guildbotics.capabilities.test_member_github import (
     FakeClient,
@@ -24,22 +28,22 @@ from tests.guildbotics.capabilities.test_member_github import (
 
 
 @pytest.fixture
-def chat_run(monkeypatch):
-    monkeypatch.setenv(RUN_ENV, "chat-run")
-    RunStore().append_evidence(
-        "chat-run",
-        "chat_batch",
-        {
-            "person_id": "aiko",
-            "service": "slack",
-            "channel_id": "C1",
-            "thread_ts": "100.1",
-            "self_user_id": "U_BOT",
-            "event_ids": ["E1"],
-        },
-    )
-    ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
-    return FileConversationStateStore()
+def chat_run():
+    with member_invocation_scope(MemberInvocation(run_id="chat-run")):
+        RunStore().append_evidence(
+            "chat-run",
+            "chat_batch",
+            {
+                "person_id": "aiko",
+                "service": "slack",
+                "channel_id": "C1",
+                "thread_ts": "100.1",
+                "self_user_id": "U_BOT",
+                "event_ids": ["E1"],
+            },
+        )
+        ChatReceiveStatus().save("slack", "aiko", "C1", state="ready")
+        yield FileConversationStateStore()
 
 
 def event(number, **kwargs):
@@ -168,11 +172,10 @@ async def test_github_comment_checks_original_chat(chat_run):
     assert len(client.posts) == 1
 
 
-def test_interactive_and_ticket_runs_have_no_chat_precondition(monkeypatch):
-    monkeypatch.delenv(RUN_ENV, raising=False)
+def test_interactive_and_ticket_runs_have_no_chat_precondition():
     ensure_chat_current("aiko")
-    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "ticket-run")
-    ensure_chat_current("aiko")
+    with member_invocation_scope(MemberInvocation(task_run_id="ticket-run")):
+        ensure_chat_current("aiko")
 
 
 def test_pending_reads_the_processed_cursor_once(chat_run, monkeypatch):
