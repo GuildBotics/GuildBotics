@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import inspect
-import sys
-
 import pytest
 
 from guildbotics.intelligences.agent_runtime.antigravity import (
@@ -58,14 +55,3 @@ def test_every_registered_provider_uses_only_the_member_broker() -> None:
     for adapter_name in set(NATIVE_ADAPTERS.values()):
         adapter = create_native_adapter(adapter_name)
         assert isinstance(adapter._member_broker, MemberCapabilityBroker)
-        modules = {
-            sys.modules[adapter_type.__module__]
-            for adapter_type in type(adapter).__mro__
-            if adapter_type.__module__.startswith(
-                "guildbotics.intelligences.agent_runtime"
-            )
-        }
-        for module in modules:
-            source = inspect.getsource(module)
-            assert "delegation_environment(" not in source
-            assert "member_command_environment(" not in source

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, get_args
 
 from guildbotics.intelligences.agent_environment.contract import AccessContract
+from guildbotics.runtime.person_lease import PersonExecutionLease
 
 
 class ResumePolicy(StrEnum):
@@ -103,8 +104,9 @@ class AgentExecutionContext:
     resume_policy: ResumePolicy = ResumePolicy.AUTO
     context_cursor: str = ""
     event_id: str = ""
-    lease_id: str = ""
-    delegation_id: str = ""
+    #: The execution lease the turn holds, which the member commands it asks for
+    #: act under; a read-only turn holds none and so cannot ask for a write.
+    lease: PersonExecutionLease | None = None
     model: str = ""
     #: Resolved provider-neutral effort level (``low`` / ``high``), or ``""``
     #: when the turn must not intervene in the session's current settings.
@@ -117,8 +119,8 @@ class AgentExecutionContext:
     attempt: int = 1
     continuation_input: str = ""
     participant_labels: str = ""
-    #: The diagnostics trace the turn runs inside. The member CLI the broker
-    #: spawns records into it, so what the agent read or changed shows up on
+    #: The diagnostics trace the turn runs inside. The member commands the
+    #: broker runs record into it, so what the agent read or changed shows up on
     #: the execution that asked for it.
     trace_id: str = ""
     #: The workspace's own state the caller lets the turn inspect, mounted
@@ -139,6 +141,11 @@ class AgentExecutionContext:
             raise ValueError("run_id must not be empty.")
         if unknown := self.inspects - set(get_args(InspectionScope)):
             raise ValueError(f"Unknown inspection scopes: {sorted(unknown)}.")
+
+    @property
+    def lease_id(self) -> str:
+        """The held lease's id for diagnostics, or an empty string without one."""
+        return self.lease.metadata.lease_id if self.lease is not None else ""
 
 
 def settings_fingerprint(applied: Mapping[str, Any]) -> str:

@@ -15,7 +15,6 @@ from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
-from guildbotics.runtime.member_invocation import RUN_ENV, TASK_RUN_ENV
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
@@ -199,18 +198,6 @@ def host_time_zone(monkeypatch) -> str:
     monkeypatch.setattr(spec, "reload_localzone", lambda: None)
     monkeypatch.setattr(spec, "get_localzone_name", lambda: "Asia/Tokyo")
     return "Asia/Tokyo"
-
-
-@pytest.fixture(autouse=True)
-def _ignore_ambient_workflow_run(monkeypatch):
-    """Keep tests off the workflow execution path of the member CLI guard.
-
-    When the suite itself runs inside a GuildBotics workflow / member run,
-    these variables are inherited from the environment. Tests that verify
-    the workflow path set them explicitly via ``monkeypatch.setenv``.
-    """
-    monkeypatch.delenv(TASK_RUN_ENV, raising=False)
-    monkeypatch.delenv(RUN_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)

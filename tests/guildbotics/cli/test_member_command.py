@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+from contextlib import ExitStack
 from datetime import UTC, datetime
 
 import click
@@ -15,6 +16,11 @@ from guildbotics.entities.team import Person, Project, Team
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
+from guildbotics.runtime.member_invocation import (
+    MemberInvocation,
+    member_invocation_scope,
+)
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.observability.interactive_sessions import (
     InteractiveSessionStore,
     InteractiveTraceSession,
@@ -104,27 +110,22 @@ def test_member_write_without_sync_runs_without_a_one_shot_result(capsys):
     assert json.loads(capsys.readouterr().out) == result
 
 
-def _set_workflow_delegation(monkeypatch, person_id="aiko", run_id="run-1"):
-    from guildbotics.runtime.member_invocation import (
-        DELEGATION_ID_ENV,
-        LEASE_ID_ENV,
-        LEASE_PERSON_ENV,
-        LEASE_RUN_ENV,
-    )
-    from guildbotics.runtime.person_lease import (
-        PersonExecutionLease,
-    )
+@pytest.fixture
+def bind_invocation():
+    """Bind a member invocation for the rest of the test, as the broker does."""
+    with ExitStack() as stack:
 
+        def bind(**fields) -> None:
+            stack.enter_context(member_invocation_scope(MemberInvocation(**fields)))
+
+        yield bind
+
+
+def _bind_workflow(bind_invocation, person_id="aiko", **run_ids):
+    """Run as a workflow turn of ``person_id`` that holds the person's lease."""
     lease = PersonExecutionLease(person_id)
     lease.acquire(source="routine", command="test", work_id="work-1")
-    metadata = lease.bind_run_id(run_id)
-    for key, value in {
-        LEASE_ID_ENV: metadata.lease_id,
-        DELEGATION_ID_ENV: metadata.delegation_id,
-        LEASE_PERSON_ENV: metadata.person_id,
-        LEASE_RUN_ENV: metadata.run_id,
-    }.items():
-        monkeypatch.setenv(key, value)
+    bind_invocation(lease=lease, **run_ids)
     return lease
 
 
@@ -412,9 +413,11 @@ def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_
     assert persisted.rotation_reason == "reset"
 
 
-def test_workflow_member_write_rejects_missing_delegation(monkeypatch) -> None:
+def test_workflow_member_write_rejects_missing_delegation(
+    monkeypatch, bind_invocation
+) -> None:
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    bind_invocation(run_id="run-1")
     monkeypatch.setattr(
         member_module,
         "resolve_member_context",
@@ -1863,10 +1866,9 @@ def test_member_git_push_rejected_by_remote_exits_non_zero(monkeypatch, tmp_path
 
 
 def test_member_git_publish_current_mode_rejects_workflow_task_run(
-    monkeypatch, tmp_path
+    monkeypatch, bind_invocation, tmp_path
 ):
-    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+    lease = _bind_workflow(bind_invocation, task_run_id="run-1")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2381,10 +2383,9 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
 
 @pytest.mark.parametrize("content", ["", "\n", " \t\n"])
 def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
-    monkeypatch, content
+    monkeypatch, bind_invocation, content
 ):
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2690,10 +2691,9 @@ def test_member_github_issue_update_reads_entire_stdin_and_closes_service(monkey
 
 @pytest.mark.parametrize("content", ["", "\n", " \t\n"])
 def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
-    monkeypatch, content
+    monkeypatch, bind_invocation, content
 ):
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2754,9 +2754,10 @@ def test_member_github_issue_update_normalizes_blank_stdin_and_records_evidence(
     assert TaskRunStore().evidence("run-1")[0]["evidence_type"] == "issue_update"
 
 
-def test_member_github_pr_review_reads_stdin_and_records_evidence(monkeypatch):
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+def test_member_github_pr_review_reads_stdin_and_records_evidence(
+    monkeypatch, bind_invocation
+):
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2841,9 +2842,10 @@ def test_member_github_pr_review_rejects_unknown_event():
     assert "Invalid value for '--event'" in result.output
 
 
-def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(monkeypatch):
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+def test_member_github_pr_review_comment_reads_stdin_and_records_evidence(
+    monkeypatch, bind_invocation
+):
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -3010,12 +3012,12 @@ def test_member_task_status_ignores_missing_context_for_interactive_trace(
 
 
 def test_member_task_status_skips_interactive_trace_under_workflow(
-    monkeypatch, tmp_path
+    monkeypatch, bind_invocation, tmp_path
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
-    monkeypatch.setenv("GUILDBOTICS_TASK_RUN_ID", "run-1")
+    bind_invocation(task_run_id="run-1")
 
     def unexpected_context(_identifier):
         raise AssertionError("workflow command should not resolve interactive context")
@@ -3113,13 +3115,14 @@ def test_member_interactive_trace_uses_resolved_workspace(monkeypatch, tmp_path)
     assert calls["workspace"] == str(workspace.resolve())
 
 
-def test_member_chat_reply_reads_body_file_and_records_evidence(monkeypatch, tmp_path):
+def test_member_chat_reply_reads_body_file_and_records_evidence(
+    monkeypatch, bind_invocation, tmp_path
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     # The run id is injected by the workflow via env, not a CLI flag; the write
     # command records its evidence under the env-provided run id.
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
     context.get_chat_service = lambda: object()
@@ -3686,17 +3689,17 @@ def test_member_cli_help_stays_in_sync_with_capability_catalog():
     assert sorted(leaves) == sorted(command_summaries())
 
 
-def test_chat_updates_reads_queue_without_constructing_chat_service(monkeypatch):
+def test_chat_updates_reads_queue_without_constructing_chat_service(
+    monkeypatch, bind_invocation
+):
     from guildbotics.capabilities.task_runs import RunStore
     from guildbotics.integrations.chat_receive_status import ChatReceiveStatus
     from guildbotics.integrations.chat_service import ChatEvent
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,
     )
-    from guildbotics.runtime.member_invocation import RUN_ENV
 
-    monkeypatch.setenv(RUN_ENV, "run-1")
-    lease = _set_workflow_delegation(monkeypatch)
+    lease = _bind_workflow(bind_invocation, run_id="run-1")
     person = Person(person_id="aiko", name="Aiko")
     context = FakeContext(person)
 
@@ -3835,14 +3838,13 @@ def test_member_github_commands_declare_their_work_target(
     assert _domain_event_records("type") == []
 
 
-def test_workflow_member_command_records_into_the_turns_trace(monkeypatch):
+def test_workflow_member_command_records_into_the_turns_trace(
+    monkeypatch, bind_invocation
+):
     # The broker hands the workflow's trace over; the command's records then
     # belong to that execution instead of to a trace of their own.
-    from guildbotics.runtime.member_invocation import TRACE_ID_ENV
-
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    monkeypatch.setenv(TRACE_ID_ENV, "trace-parent")
+    bind_invocation(run_id="run-1", trace_id="trace-parent")
     _fake_github_service(
         monkeypatch,
         person,
@@ -3879,51 +3881,3 @@ def test_workflow_member_command_records_into_the_turns_trace(monkeypatch):
     assert [
         item["type"] for item in DiagnosticsStore().get_records("trace-parent")
     ] == ["github.work_target"]
-
-
-def test_outer_invocation_context_is_not_overwritten_at_the_cli_entry(monkeypatch):
-    # The in-process broker binds the invocation before Click runs; the entry
-    # must defer to it instead of re-reading the process environment.
-    from guildbotics.runtime.member_invocation import (
-        TRACE_ID_ENV,
-        MemberInvocation,
-        member_invocation_scope,
-    )
-
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
-    monkeypatch.setenv(TRACE_ID_ENV, "trace-from-env")
-    _fake_github_service(
-        monkeypatch,
-        person,
-        pr_inspect={
-            "target": {
-                "kind": "pull_request",
-                "repo": "owner/repo",
-                "number": 544,
-                "title": "Show the work target",
-                "html_url": "https://github.com/owner/repo/pull/544",
-            }
-        },
-    )
-
-    with member_invocation_scope(
-        MemberInvocation(run_id="run-1", trace_id="trace-parent")
-    ):
-        result = CliRunner().invoke(
-            member_module.member,
-            [
-                "github",
-                "pr",
-                "inspect",
-                "--person",
-                "aiko",
-                "--url",
-                "https://github.com/owner/repo/pull/544",
-            ],
-        )
-
-    assert result.exit_code == 0, result.output
-    summary = DiagnosticsStore().get_summary("trace-parent")
-    assert summary is not None
-    assert summary["title"] == "Show the work target"

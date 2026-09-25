@@ -95,8 +95,7 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   ワークスペースの`.guildbotics/config`や`state`は含みません
 - **調べるための読み取り専用mount**: 呼び出し側が許可したturn（`AgentExecutionContext.inspects`）
   にだけ、ワークスペース自身の状態の一部をhostと同じパスに読み取り専用でbindします。`diagnostics`は
-  記録済みの実行（`.guildbotics/local/run`。execution leaseの`person-leases`は空のmountで覆います。
-  leaseのdelegationは記録ではなくgrantそのものだからです）、`config`はワークスペースの設定
+  記録済みの実行（`.guildbotics/local/run`）、`config`はワークスペースの設定
   （`.guildbotics/config`）と、それが無いときに使われるパッケージ同梱のテンプレートです。現在許可する
   呼び出し側はDesktopのトラブルシューティングだけで、記録を、実行時のコマンドや設定と突き合わせて
   読みます。この許可は`read_only`とは独立しています。turnが何を変更してよいかと、何を読む必要が
@@ -424,11 +423,7 @@ GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CL
 LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）も渡りません。いずれもGuildBoticsのプロセス内で
 消費するものであり、member CLIは自分でOSキーチェーンから読み込むため、この除去の影響を
 受けません。認証情報を渡す代わりに呼び出させる`git`/`ssh`のhelperとsocket
-（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）も取り除きます。
-親プロセスのworkspace root、run識別子、execution delegationも同様に取り除きます。有効な
-delegationは単なる識別ラベルではなくそのまま使えるgrantであるため、継承させると、providerのプロセスがmember CLIを
-直接呼び出し、自身のtransportが敷いている境界を迂回できてしまいます。この情報を正当に運ぶ
-brokerだけが、実行contextと保持中のleaseから明示的に再注入します。
+（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）と、親プロセスのworkspace rootも取り除きます。
 
 Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityには、`127.0.0.1`にbindした
 adapter専用のHTTP MCP endpointと、推測困難なbearer grantを渡します。ACPを使うGrok Buildと
@@ -441,14 +436,16 @@ memberの実作業ディレクトリのまま維持します。
 `guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、
 workspaceを上書きすること、別personとして動くことはできません。endpointはproviderのsandbox外に
 あるGuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
-adapterとともに停止します。各provider processへmember execution leaseやdelegation identityを渡しません。
+adapterとともに停止します。各provider processへmember execution leaseを渡しません。
 
-brokerはmember CLIを別のtrusted processとして起動するため、OS KeychainなどのSecretStore backendを
-そのまま利用できます。有効期間の短いleaseは、そのCLI processだけへ渡します。CLIの
-`--workspace`には常に選択中のGuildBotics workspace rootを指定し、child processのcwdはmemberの
-隔離作業ディレクトリのまま維持します。workspace data rootはこれらと独立して上書きできます。
-read-only turnではdelegationを渡さないため、既存のmember CLI guardが書き込み可能なcommandを
-すべて拒否します。全native adapterがこの同じmember capability境界を使用します。
+brokerは呼び出しごとにCLI processを起動せず、turnを動かしているtrustedなGuildBotics processの
+中でmember CLIを実行するため、OS KeychainなどのSecretStore backendをそのまま利用できます。
+各commandは専用のworker threadで、専用の作業ディレクトリ・標準入出力・呼び出し情報を持って
+動くため、同時に動くcommand同士がそれらを見ることはありません。commandはturnが保持する
+execution leaseのもとで、そのprocessが選択中のworkspaceに対して動き、相対パスはmemberの
+隔離作業ディレクトリから読みます。brokerの時間切れを越えたcommandは、そのことをagentへ
+返したうえで完了まで放置します。read-only turnはleaseを持たないため、member CLI guardが
+書き込み可能なcommandをすべて拒否します。全native adapterがこの同じmember capability境界を使用します。
 
 ## Slackスレッド・チケットとセッションの対応付け
 
@@ -568,9 +565,9 @@ Slackの場合は、前述の`slack:<bot-user-id>:<channel-id>:<thread-root-ts>`
 
 OSのadvisory lockを使った実行権の管理により、スケジューラー、チャット、手動実行のAPIやCLI、
 別のGuildBoticsプロセスをまたいでも、同じメンバーのAI CLIツールが同時に実行されないように
-します。異なるメンバーの作業は並行して実行できます。AI CLIツールから呼び出された
-`guildbotics member ...`コマンドは、メンバー、実行権、委任情報、実行ID、実行中のプロセスID、
-保持中のロックがすべて一致した場合にだけ受け付けます。
+します。異なるメンバーの作業は並行して実行できます。ワークフローのAI CLIツールから呼び出された
+`guildbotics member ...`コマンドは、そのturnが保持する実行権のもとで、その実行権のメンバーとして
+だけ書き込めます。
 
 これらのAI CLIツールのプロセスは、独立したプロセスグループとして起動します。キャンセル、
 サービスの停止、通信エラー、実行コンテキストの終了時には、グループ全体を停止して終了を確認します。

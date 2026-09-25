@@ -847,7 +847,8 @@ class CliAgentBrain(Brain):
                     error_category="configuration",
                     error_details={"cli_agent": adapter_name},
                 )
-            lease_metadata = lease.bind_run_id(run_id) if lease is not None else None
+            if lease is not None:
+                lease.bind_run_id(run_id)
             context = AgentExecutionContext(
                 person_id=self.person_id,
                 run_id=run_id,
@@ -859,8 +860,7 @@ class CliAgentBrain(Brain):
                 resume_policy=policy,
                 context_cursor=str(configured.get("context_cursor") or ""),
                 event_id=str(configured.get("event_id") or ""),
-                lease_id=lease_metadata.lease_id if lease_metadata else "",
-                delegation_id=lease_metadata.delegation_id if lease_metadata else "",
+                lease=lease,
                 model=effort.model or str(configured.get("model") or ""),
                 # `default` and unspecified state nothing: the turn imposes no
                 # settings, which leaves a resumed session on the ones it

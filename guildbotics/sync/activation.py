@@ -100,13 +100,15 @@ def prepare_commit_and_push_once(
 ) -> PreparedOneShotSync | None:
     """Resolve one-shot prerequisites before its caller changes anything.
 
-    A workspace without synchronization keeps the no-op behavior. For a
-    connected workspace, repository setup and both identities are resolved
-    here so the later boundary has only commit and push work left to do.
+    A workspace without synchronization keeps the no-op behavior, and so does
+    one whose queue runs in this process: that queue already carries every
+    write announced through the port. For a connected workspace, repository
+    setup and both identities are resolved here so the later boundary has only
+    commit and push work left to do.
     """
     with _lock:
         manager = _one_shot_manager(workspace_root)
-        if manager is None:
+        if manager is None or manager is _manager:
             return None
         return PreparedOneShotSync(manager)
 

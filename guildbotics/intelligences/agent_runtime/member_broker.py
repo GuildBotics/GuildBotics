@@ -2,22 +2,21 @@
 
 The native agent stays inside its provider sandbox. This broker runs beside the
 agent in the GuildBotics process and exposes exactly one authenticated tool
-which launches the fixed ``guildbotics member`` entrypoint without a shell.
-Provider credentials therefore remain in the member CLI's trusted process.
+which runs the fixed ``guildbotics member`` commands in that process, without a
+shell. Provider credentials therefore remain in the trusted host process.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
-import os
 import secrets
-import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from functools import partial
 from typing import Any
 
 from mcp.server import MCPServer
@@ -27,18 +26,8 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
-from guildbotics.intelligences.agent_runtime.environment import (
-    create_agent_subprocess,
-    member_command_environment,
-    terminate_process_tree,
-)
 from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-)
+from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -107,14 +96,12 @@ class _ScopedTokenVerifier(TokenVerifier):
 class MemberCapabilityBroker:
     """Expose the active turn's member CLI through authenticated localhost MCP."""
 
-    def __init__(self, command: tuple[str, ...] | None = None) -> None:
-        self._command = command or _member_cli_command()
+    def __init__(self) -> None:
         self._token = secrets.token_urlsafe(32)
         self._name = f"guildbotics-member-{secrets.token_hex(6)}"
         self._turn_grant = ""
         self._context: AgentExecutionContext | None = None
         self._command_lock = asyncio.Lock()
-        self._process: asyncio.subprocess.Process | None = None
         self._server: LoopbackServer | None = None
         self._url = ""
         self._port = 0
@@ -202,14 +189,16 @@ class MemberCapabilityBroker:
         if context is None or self._context is context:
             self._context = None
             self._turn_grant = ""
-            process = self._process
-            if process is not None and process.returncode is None:
-                await terminate_process_tree(process)
 
     async def execute(
         self, turn_grant: str, arguments: list[str], stdin: str = ""
     ) -> MemberCommandResult:
         """Run one member command for the active person and workspace.
+
+        The command runs in this process, on a worker thread of its own that
+        starts from an empty context: the broker's server task still carries
+        whatever the turn that started it had bound. A command that outlasts
+        the timeout is reported and left to finish on its own.
 
         A request the broker refuses (expired grant, wrong person, oversized
         input) comes back as an ``exit_code`` 2 result instead of a raised
@@ -217,8 +206,7 @@ class MemberCapabilityBroker:
         whole run's status, failing a turn the agent already recovered from.
         Only infrastructure failures escape as exceptions.
         """
-        encoded_stdin = stdin.encode()
-        if len(encoded_stdin) > _MAX_STDIN_BYTES:
+        if len(stdin.encode()) > _MAX_STDIN_BYTES:
             return _rejected("Member command stdin is too large.")
         async with self._command_lock:
             context = self._context
@@ -228,56 +216,41 @@ class MemberCapabilityBroker:
                 return _rejected("The GuildBotics turn grant is invalid or expired.")
             if reason := _rejection_reason(arguments, context.person_id):
                 return _rejected(reason)
-            argv = (
-                *self._command,
-                "member",
-                "--workspace",
-                str(context.workspace_root),
-                *arguments,
+            # Imported here: the member CLI is the layer above this one.
+            from guildbotics.cli.member import run_in_process
+
+            chat = context.conversation_key.work_kind == "chat"
+            invocation = MemberInvocation(
+                run_id=context.run_id if chat else "",
+                task_run_id="" if chat else context.run_id,
+                participant_labels=context.participant_labels,
+                trace_id=context.trace_id,
+                lease=context.lease,
             )
-            env = _member_environment(context)
-            process = await create_agent_subprocess(
-                *argv,
-                cwd=str(context.cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-                limit=STREAM_READ_LIMIT,
+            command = partial(
+                run_in_process, arguments, invocation, cwd=context.cwd, stdin=stdin
             )
-            self._process = process
+            work = asyncio.get_running_loop().run_in_executor(
+                None, contextvars.Context().run, command
+            )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(encoded_stdin),
-                    timeout=_COMMAND_TIMEOUT_SECONDS,
+                exit_code, stdout, stderr = await asyncio.wait_for(
+                    work, timeout=_COMMAND_TIMEOUT_SECONDS
                 )
             except TimeoutError:
-                await terminate_process_tree(process)
                 return MemberCommandResult(
                     exit_code=124,
                     stdout="",
-                    stderr="Member capability command timed out.",
+                    stderr="Member capability command timed out; it may still complete.",
                 )
-            except BaseException:
-                if process.returncode is None:
-                    await terminate_process_tree(process)
-                raise
-            finally:
-                self._process = None
         return MemberCommandResult(
-            exit_code=int(process.returncode or 0),
-            stdout=_decode_output(stdout),
-            stderr=_decode_output(stderr),
+            exit_code=exit_code, stdout=_bounded(stdout), stderr=_bounded(stderr)
         )
 
     async def close(self) -> None:
         """Revoke the token and stop the loopback server."""
         self._context = None
         self._turn_grant = ""
-        process = self._process
-        if process is not None and process.returncode is None:
-            await terminate_process_tree(process)
         server = self._server
         self._server = None
         self._url = ""
@@ -360,35 +333,6 @@ def _root_logging_kept() -> Iterator[None]:
             root.handlers[:] = handlers
 
 
-def _member_cli_command() -> tuple[str, ...]:
-    """Resolve the matching CLI entrypoint for source and packaged runtimes."""
-    if not getattr(sys, "frozen", False):
-        return (sys.executable, "-m", "guildbotics.cli")
-    executable_name = "guildbotics.exe" if sys.platform == "win32" else "guildbotics"
-    executable = Path.home() / ".guildbotics" / "bin" / executable_name
-    if not executable.is_file():
-        raise RuntimeError(f"Bundled GuildBotics member CLI is missing: {executable}")
-    return (str(executable),)
-
-
-def _member_environment(context: AgentExecutionContext) -> dict[str, str]:
-    env = os.environ.copy()
-    env.update(member_command_environment(context))
-    if context.lease_id and context.delegation_id:
-        env.update(
-            {
-                LEASE_ID_ENV: context.lease_id,
-                DELEGATION_ID_ENV: context.delegation_id,
-                LEASE_PERSON_ENV: context.person_id,
-                LEASE_RUN_ENV: context.run_id,
-            }
-        )
-    else:
-        for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
-            env.pop(key, None)
-    return env
-
-
 def _rejected(reason: str) -> MemberCommandResult:
     """Present one refused request as a command result the agent can read."""
     return MemberCommandResult(exit_code=2, stdout="", stderr=reason)
@@ -429,10 +373,8 @@ def _rejection_reason(arguments: list[str], person_id: str) -> str | None:
     return None
 
 
-def _decode_output(value: bytes) -> str:
-    if len(value) > _MAX_OUTPUT_BYTES:
-        value = value[:_MAX_OUTPUT_BYTES]
-        suffix = "\n[output truncated]"
-    else:
-        suffix = ""
-    return value.decode(errors="replace") + suffix
+def _bounded(value: str) -> str:
+    encoded = value.encode()
+    if len(encoded) <= _MAX_OUTPUT_BYTES:
+        return value
+    return encoded[:_MAX_OUTPUT_BYTES].decode(errors="ignore") + "\n[output truncated]"

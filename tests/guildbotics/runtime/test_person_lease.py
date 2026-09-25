@@ -6,35 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    MemberInvocation,
-    member_invocation_scope,
-)
 from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     PersonLeaseUnavailableError,
     current_person_lease,
-    validate_delegation,
 )
-
-
-def _delegation_environment(lease: PersonExecutionLease, run_id: str) -> dict[str, str]:
-    metadata = lease.bind_run_id(run_id)
-    return {
-        LEASE_ID_ENV: metadata.lease_id,
-        DELEGATION_ID_ENV: metadata.delegation_id,
-        LEASE_PERSON_ENV: metadata.person_id,
-        LEASE_RUN_ENV: metadata.run_id,
-    }
-
-
-def _validate_delegation(person_id: str, workspace_root: Path, environ: dict[str, str]):
-    with member_invocation_scope(MemberInvocation.from_environment(environ)):
-        return validate_delegation(person_id, workspace_root=workspace_root)
 
 
 def _attempt_person_lease(data_root: str, connection) -> None:
@@ -100,41 +76,17 @@ def test_person_lease_serializes_across_processes(tmp_path: Path) -> None:
     assert _child_lease_result(tmp_path) == "acquired"
 
 
-def test_nested_delegation_requires_exact_locked_metadata(tmp_path) -> None:
+def test_a_lease_binds_one_run_at_a_time(tmp_path) -> None:
     lease = PersonExecutionLease("aiko", tmp_path)
     lease.acquire(source="routine", command="ticket", work_id="work-1")
-    env = _delegation_environment(lease, "run-1")
+    lease_id = lease.bind_run_id("run-1").lease_id
 
-    assert _validate_delegation("aiko", tmp_path, env) == lease.metadata
-
-    forged = dict(env)
-    forged[DELEGATION_ID_ENV] = "forged"
-    assert _validate_delegation("aiko", tmp_path, forged) is None
-    assert _validate_delegation("yuki", tmp_path, env) is None
-    assert env == {
-        LEASE_ID_ENV: lease.metadata.lease_id,
-        DELEGATION_ID_ENV: lease.metadata.delegation_id,
-        LEASE_PERSON_ENV: "aiko",
-        LEASE_RUN_ENV: "run-1",
-    }
-
-    lease.release()
-    assert _validate_delegation("aiko", tmp_path, env) is None
-
-
-def test_completed_delegation_can_bind_a_later_native_run(tmp_path) -> None:
-    lease = PersonExecutionLease("aiko", tmp_path)
-    lease.acquire(source="routine", command="ticket", work_id="work-1")
-
-    first = _delegation_environment(lease, "run-1")
+    with pytest.raises(RuntimeError, match="another run id"):
+        lease.bind_run_id("run-2")
     lease.unbind_run_id("run-1")
-    second = _delegation_environment(lease, "run-2")
 
-    assert first[LEASE_RUN_ENV] == "run-1"
-    assert second[LEASE_RUN_ENV] == "run-2"
-    assert first[LEASE_ID_ENV] == second[LEASE_ID_ENV]
-    assert _validate_delegation("aiko", tmp_path, first) is None
-    assert _validate_delegation("aiko", tmp_path, second) is not None
+    assert lease.bind_run_id("run-2").run_id == "run-2"
+    assert lease.metadata.lease_id == lease_id
     lease.release()
 
 

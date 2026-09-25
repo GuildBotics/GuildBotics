@@ -82,6 +82,20 @@ def test_an_enrolled_workspace_gets_a_running_queue(tmp_path: Path, hub: Path) -
     assert get_workspace_sync_port() is manager
 
 
+def test_a_one_shot_is_prepared_only_where_no_queue_runs(
+    tmp_path: Path, hub: Path
+) -> None:
+    """A member command run in the process that runs the queue announces its
+    writes to that queue; a one-shot beside it would push them again, while
+    the command waits."""
+    root = _workspace(tmp_path / "mac")
+    enrollment.enroll(str(hub), root)
+
+    assert activation.prepare_commit_and_push_once(root) is not None
+    activation.activate_workspace_sync(root)
+    assert activation.prepare_commit_and_push_once(root) is None
+
+
 def test_activation_refreshes_generated_ignore_rules(tmp_path: Path, hub: Path) -> None:
     root = _workspace(tmp_path / "mac")
     enrollment.enroll(str(hub), root)

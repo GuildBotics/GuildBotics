@@ -15,14 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    RUN_ENV,
-    TASK_RUN_ENV,
-)
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
@@ -254,17 +246,7 @@ def _named(events: list[AgentEvent], kind: AgentEventKind, name: str) -> AgentEv
 async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     monkeypatch, tmp_path
 ) -> None:
-    ambient_execution = (
-        RUN_ENV,
-        TASK_RUN_ENV,
-        "GUILDBOTICS_WORKSPACE_ROOT",
-        LEASE_ID_ENV,
-        DELEGATION_ID_ENV,
-        LEASE_PERSON_ENV,
-        LEASE_RUN_ENV,
-    )
-    for key in ambient_execution:
-        monkeypatch.setenv(key, "stale-parent-value")
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", "stale-parent-value")
     peer = _Peer(updates=[text_chunk("hello "), text_chunk("world")])
     launched = install(monkeypatch, peer)
 
@@ -284,7 +266,7 @@ async def test_a_new_session_streams_chunks_and_reports_the_session_id(
     assert launch_argv[4] == "--allow-tool"
     assert launch_argv[5].startswith("guildbotics-member-")
     assert launch_argv[5].endswith("(guildbotics_member)")
-    assert all(key not in launched[0][1]["env"] for key in ambient_execution)
+    assert "GUILDBOTICS_WORKSPACE_ROOT" not in launched[0][1]["env"]
     assert peer.methods() == [
         "initialize",
         "authenticate",

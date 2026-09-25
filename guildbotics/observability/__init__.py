@@ -101,11 +101,11 @@ def trace_scope(
 def join_trace(
     trace_id: str, *, person_id: str = "", command: str = ""
 ) -> Iterator[TraceContext]:
-    """Record into a trace another process opened, for the block.
+    """Record into a trace opened elsewhere, for the block.
 
-    A member CLI spawned by an agent turn runs outside the process that opened
-    the workflow's trace; this binds its records to that trace so they show up
-    as part of the same execution. Unlike :func:`trace_scope` it opens nothing
+    A member command an agent turn asks for runs outside the context that
+    opened the workflow's trace; this binds its records to that trace so they
+    show up as part of the same execution. Unlike :func:`trace_scope` it opens nothing
     and records no boundary: the owner of the trace records its end, and a
     member command's own start / finish events would otherwise flip the
     owner's still-running execution to success.

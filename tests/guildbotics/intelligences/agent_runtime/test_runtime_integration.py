@@ -6,9 +6,6 @@ import json
 import pytest
 
 from guildbotics.intelligences.agent_runtime import diagnostics, registry
-from guildbotics.intelligences.agent_runtime.environment import (
-    member_command_environment,
-)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
     AgentEvent,
@@ -21,7 +18,6 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
-from guildbotics.runtime.member_invocation import RUN_ENV, TRACE_ID_ENV
 
 
 class _Logger:
@@ -150,7 +146,7 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     assert 'mode="continuation"' in adapter.prompts[2]
     assert "continue-only" in adapter.prompts[2]
     assert "duplicate-second-turn" not in adapter.prompts[2]
-    assert all(context.lease_id for context in adapter.contexts)
+    assert all(context.lease is not None for context in adapter.contexts)
 
 
 @pytest.mark.asyncio
@@ -769,44 +765,6 @@ async def test_registry_keeps_only_one_native_process_per_person(monkeypatch) ->
     assert other_person.closed is True
 
 
-def test_member_command_environment_carries_only_execution_metadata(tmp_path) -> None:
-    from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
-
-    context = AgentExecutionContext(
-        person_id="aiko",
-        run_id="run-1",
-        cwd=tmp_path,
-        workspace_root=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1"),
-        participant_labels='{"U1":"aiko"}',
-    )
-
-    assert member_command_environment(context) == {
-        "GUILDBOTICS_WORKSPACE_ROOT": str(tmp_path),
-        RUN_ENV: "run-1",
-        "GUILDBOTICS_CHAT_PARTICIPANT_LABELS": '{"U1":"aiko"}',
-    }
-
-
-def test_member_command_environment_hands_over_the_turns_trace(tmp_path) -> None:
-    # The member CLI runs in another process; the trace it should record into
-    # travels with the turn, not with the caller's context variables.
-    from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
-
-    context = AgentExecutionContext(
-        person_id="aiko",
-        run_id="run-1",
-        cwd=tmp_path,
-        workspace_root=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1"),
-        trace_id="trace-parent",
-    )
-
-    assert member_command_environment(context)[TRACE_ID_ENV] == "trace-parent"
-
-
 def test_agent_diagnostics_redact_credentials_and_keep_correlation(
     monkeypatch, tmp_path
 ) -> None:
@@ -830,7 +788,6 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
         workspace_data_root=tmp_path,
         conversation_key=key,
         context_cursor="cursor-1",
-        lease_id="lease-1",
     )
     diagnostics.record_agent_event(
         AgentEvent(

@@ -124,8 +124,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 - **Inspected workspace state**: only for a turn whose caller lets it
   inspect (`AgentExecutionContext.inspects`), parts of the workspace's own state
   are bound read-only at their host paths. `diagnostics` is the recorded runs
-  (`.guildbotics/local/run`, with its `person-leases` covered by an empty mount:
-  a lease's delegation is a grant, not a record); `config` is the workspace
+  (`.guildbotics/local/run`); `config` is the workspace
   configuration (`.guildbotics/config`) and the packaged templates it falls back
   to. The Desktop troubleshooting assistant is the only such caller today; it
   reads the records against the commands and settings they ran with. The grant
@@ -511,11 +510,7 @@ provider API keys (`OPENAI_API_KEY` and friends): all of them are consumed insid
 GuildBotics process, and the member CLI loads its own from the OS keychain, so removing
 them changes nothing a member can legitimately do. The helpers and sockets that hand out
 a credential on demand (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`) are removed too,
-together with the parent process's workspace root, run identity, and execution
-delegation. A live delegation is a usable grant rather than a label, so
-inheriting one would let a provider process call the member CLI directly and bypass
-the boundary its own transport enforces. Only the broker re-injects that metadata from
-the execution context and the held lease.
+together with the parent process's workspace root.
 
 Codex, Claude Code, Grok Build, GitHub Copilot, and Antigravity each receive a
 per-adapter HTTP MCP endpoint bound to `127.0.0.1` and an unguessable bearer grant.
@@ -530,16 +525,18 @@ only tokenized arguments for the fixed `guildbotics member` entrypoint; it canno
 an executable, invoke a shell, override the workspace, or act as another person. The
 endpoint runs in the GuildBotics process outside the provider sandbox, is usable only
 while a turn is active, requires a second grant rotated on every turn, and is stopped
-with the adapter. Provider processes never receive the member execution lease or
-delegation identity.
+with the adapter. Provider processes never receive the member execution lease.
 
-The broker launches the member CLI as a separate trusted process, where OS Keychain and
-other SecretStore backends remain available. It supplies the active turn's short-lived
-lease only to that process. The CLI's `--workspace` always names the selected
-GuildBotics workspace root, while the child process cwd remains the member's isolated
-working directory; the workspace data root may be overridden independently. A read-only
-turn supplies no delegation, so the existing member CLI guard rejects every
-write-capable command. Every native adapter uses this same member capability boundary.
+The broker runs the member CLI inside the trusted GuildBotics process that runs the
+turn, where OS Keychain and other SecretStore backends remain available, instead of
+starting a CLI process per call. Each command runs on a worker thread of its own with
+its own working directory, standard streams, and invocation, so commands running at
+once never see each other's. It acts under the execution lease the turn holds, in the
+workspace that process has selected, and reads relative paths from the member's
+isolated working directory. A command that outlasts the broker's timeout is reported to
+the agent and left to finish. A read-only turn holds no lease, so the member CLI guard
+rejects every write-capable command. Every native adapter uses this same member
+capability boundary.
 
 ## Exact conversation identity and resume
 
@@ -654,8 +651,8 @@ For Slack, pass the stable identity format shown above as `--work-identity`.
 
 An OS advisory lease serializes all agent execution for one person across scheduler,
 chat, manual API/CLI, and separate GuildBotics processes. Different people may run in
-parallel. A nested member command is accepted only when its person, lease, delegation,
-run id, live PID, and currently-held lock all match.
+parallel. A workflow's member command writes only under the execution lease its turn
+holds, and only as that lease's person.
 
 Native subprocesses start in their own process group. Cancellation, service shutdown,
 protocol failure, and context close interrupt or terminate the group and reap the

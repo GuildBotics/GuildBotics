@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
-from collections.abc import Awaitable, Callable
+import traceback
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TextIO, cast
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -50,6 +53,8 @@ from guildbotics.capabilities.task_runs import (
     current_task_run_id,
 )
 from guildbotics.cli._options import (
+    CLI_CONTEXT_SETTINGS,
+    SharedWriteBusyGroup,
     apply_workspace_option,
     format_option,
     workspace_option,
@@ -70,9 +75,12 @@ from guildbotics.observability.interactive_sessions import (
 from guildbotics.runtime.member_context import resolve_member_context
 from guildbotics.runtime.member_invocation import (
     MemberInvocation,
-    active_member_invocation,
     current_member_invocation,
     member_invocation_scope,
+)
+from guildbotics.runtime.person_lease import (
+    PersonExecutionLease,
+    PersonLeaseUnavailableError,
 )
 from guildbotics.sync.activation import (
     ONE_SHOT_LOCK_TIMEOUT_SECONDS,
@@ -157,12 +165,7 @@ def _content_option(
 
         with_file = click.option(
             "--content-file",
-            type=click.Path(
-                path_type=Path,
-                exists=True,
-                dir_okay=False,
-                readable=True,
-            ),
+            type=_HostPath(exists=True, dir_okay=False, readable=True),
             help=t("cli.member.content.file_help"),
         )(wrapped)
         return click.option(
@@ -183,22 +186,73 @@ _human_approved_option = click.option(
 )
 
 
-@click.group()
+@dataclass(frozen=True, slots=True)
+class MemberCall:
+    """Where one member command resolves paths, reads input, and prints.
+
+    The defaults are the process's own. A command run inside the host process
+    that owns the member broker gets its own instead, because that process's
+    working directory and standard streams are shared by every command running
+    beside it.
+    """
+
+    cwd: Path = field(default_factory=Path.cwd)
+    stdin: str | None = None
+    stdout: TextIO | None = None
+
+
+def _call(ctx: click.Context | None = None) -> MemberCall:
+    ctx = ctx or click.get_current_context(silent=True)
+    found = ctx.find_object(MemberCall) if ctx is not None else None
+    return found or MemberCall()
+
+
+class _HostPath(click.Path):
+    """A path read from the command's working directory, then checked as usual."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(path_type=Path, **kwargs)
+
+    def convert(
+        self, value: Any, param: click.Parameter | None, ctx: click.Context | None
+    ) -> Any:
+        return super().convert(_call(ctx).cwd / value, param, ctx)
+
+
+def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
+    if value and not ctx.resilient_parsing:
+        click.echo(ctx.get_help(), color=ctx.color, file=_call(ctx).stdout)
+        ctx.exit()
+
+
+def _help_to_call(option: click.Option | None) -> click.Option | None:
+    """Print ``--help`` where the command's :class:`MemberCall` prints."""
+    if option is not None:
+        option.callback = _show_help
+    return option
+
+
+class _MemberCommand(click.Command):
+    def get_help_option(self, ctx: click.Context) -> click.Option | None:
+        return _help_to_call(super().get_help_option(ctx))
+
+
+class _MemberGroup(SharedWriteBusyGroup):
+    command_class = _MemberCommand
+    group_class = type
+
+    def get_help_option(self, ctx: click.Context) -> click.Option | None:
+        return _help_to_call(super().get_help_option(ctx))
+
+
+@click.group(cls=_MemberGroup, context_settings=CLI_CONTEXT_SETTINGS)
 @click.pass_context
 @workspace_option
 def member(ctx: click.Context, workspace_dir: Path | None) -> None:
     """Operate as a configured GuildBotics member."""
-    if active_member_invocation() is None:
-        ctx.with_resource(member_invocation_scope(MemberInvocation.from_environment()))
-    applied_workspace = apply_workspace_option(workspace_dir)
-    workspace = (
-        applied_workspace.workspace
-        if applied_workspace is not None
-        # None means an explicit env var already selected the workspace;
-        # resolve it rather than falling back to the caller's cwd.
-        else get_workspace_root()
-    )
-    ctx.obj = {"workspace": str(workspace.resolve())}
+    # A command run inside the host process uses the workspace it already has.
+    if ctx.find_object(MemberCall) is None:
+        apply_workspace_option(workspace_dir)
 
 
 @member.command(name="context")
@@ -226,7 +280,7 @@ def help_cmd() -> None:
     This is the same reference embedded in ``member context``; use it to reread
     the available commands without re-running the full context.
     """
-    click.echo(capability_reference_text())
+    click.echo(capability_reference_text(), file=_call().stdout)
 
 
 @member.group(name="agent", help=t("cli.member.agent.help"))
@@ -1343,7 +1397,7 @@ async def _git_prepare(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1383,7 +1437,7 @@ async def _git_commit(
             repo_path=repo_path,
             message=message,
             workspace_mode=_workspace_mode(workspace_mode),
-            cwd=Path.cwd(),
+            cwd=_call().cwd,
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_commit", payload)
@@ -1397,7 +1451,7 @@ async def _git_commit(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_workspace_mode_option
@@ -1427,7 +1481,7 @@ async def _git_push(
         result = await service.push(
             repo_path=repo_path,
             workspace_mode=_workspace_mode(workspace_mode),
-            cwd=Path.cwd(),
+            cwd=_call().cwd,
         )
         payload = result.to_dict()
         TaskRunStore().append_evidence(task_run_id, "git_push", payload)
@@ -1442,7 +1496,7 @@ async def _git_push(
 @click.option(
     "--repo-path",
     required=True,
-    type=click.Path(path_type=Path),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1481,7 +1535,7 @@ async def _git_publish(
     try:
         if workspace_mode == "current":
             result = await service.publish_current_workspace(
-                repo_path=repo_path, message=message, cwd=Path.cwd()
+                repo_path=repo_path, message=message, cwd=_call().cwd
             )
         else:
             result = await service.publish(repo_path=repo_path, message=message)
@@ -2008,7 +2062,7 @@ def artifact() -> None:
 @click.option("--name", required=True, help="Exact artifact name.")
 @click.option(
     "--dest",
-    type=click.Path(path_type=Path, file_okay=False),
+    type=_HostPath(file_okay=False),
     default=Path("."),
     help=(
         "Directory to extract into. Defaults to the current directory. Remove "
@@ -2184,7 +2238,7 @@ def _read_stdin(label: str, *, allow_empty: bool = False) -> str:
     text = (
         context.meta[_CONTENT_META_KEY]
         if context is not None and _CONTENT_META_KEY in context.meta
-        else click.get_text_stream("stdin").read()
+        else _read_call_stdin()
     )
     if text.strip():
         return text
@@ -2193,9 +2247,14 @@ def _read_stdin(label: str, *, allow_empty: bool = False) -> str:
     raise click.ClickException(f"{label} must not be empty.")
 
 
+def _read_call_stdin() -> str:
+    stdin = _call().stdin
+    return click.get_text_stream("stdin").read() if stdin is None else stdin
+
+
 def _read_content_source(content_file: Path | None) -> str:
     if content_file is None:
-        return click.get_text_stream("stdin").read()
+        return _read_call_stdin()
     try:
         return content_file.read_text(encoding="utf-8")
     except UnicodeError as exc:
@@ -2352,6 +2411,50 @@ def _run(coro, *, output_format: str) -> Any:
     return result
 
 
+def run_in_process(
+    arguments: Sequence[str],
+    invocation: MemberInvocation,
+    *,
+    cwd: Path,
+    stdin: str,
+) -> tuple[int, str, str]:
+    """Run one ``guildbotics member`` command in this process, as the CLI would.
+
+    The member broker runs its turn's commands here instead of starting a CLI
+    process for each. The command gets its own working directory, streams,
+    and invocation, so commands running at once on other threads never see
+    each other's, and the process's own are left alone.
+
+    Args:
+        arguments: The command's tokens after ``member``.
+        invocation: The asking turn's metadata and execution lease.
+        cwd: The directory relative paths are read from.
+        stdin: What ``--content-stdin`` reads.
+
+    Returns:
+        The exit code, standard output, and standard error of the command.
+    """
+    stdout, stderr = io.StringIO(), io.StringIO()
+    call = MemberCall(cwd=cwd, stdin=stdin, stdout=stdout)
+    try:
+        with (
+            member_invocation_scope(invocation),
+            member.make_context("guildbotics member", list(arguments), obj=call) as ctx,
+        ):
+            member.invoke(ctx)
+        exit_code = 0
+    except click.exceptions.Exit as exc:
+        exit_code = exc.exit_code
+    except click.ClickException as exc:
+        exc.show(stderr)
+        exit_code = exc.exit_code
+    except Exception:
+        # What an uncaught error prints and returns when the CLI runs alone.
+        stderr.write(traceback.format_exc())
+        exit_code = 1
+    return exit_code, stdout.getvalue(), stderr.getvalue()
+
+
 def _prepare_member_sync() -> PreparedOneShotSync | None:
     """Prepare one-shot sync and turn identity damage into an actionable error."""
     try:
@@ -2395,19 +2498,13 @@ def _member_execution_guard(command: str, session: InteractiveTraceSession | Non
     if not person:
         yield
         return
-    from guildbotics.runtime.person_lease import (
-        PersonExecutionLease,
-        PersonLeaseUnavailableError,
-        validate_delegation,
-    )
-
     if _running_under_workflow():
-        delegated_person = current_member_invocation().lease_person_id
-        person_id = delegated_person if delegated_person == person else ""
-        if not person_id:
-            _context, member_person = _resolve(person)
-            person_id = member_person.person_id
-        if validate_delegation(person_id) is None:
+        # The workflow's turn holds the person's lease; its commands act under it.
+        lease = current_member_invocation().lease
+        if lease is None or (
+            lease.person_id != person
+            and lease.person_id != _resolve(person)[1].person_id
+        ):
             raise click.ClickException(t("cli.member.lease.invalid_delegation"))
         yield
         return
@@ -2503,9 +2600,9 @@ def _record_interactive_session(
 
 
 def _run_in_owner_trace(coro, command: str) -> Any:
-    """Run a command spawned by an agent turn inside that turn's trace.
+    """Run a command an agent turn asked for inside that turn's trace.
 
-    The broker hands the trace over in the environment; without it (a plain
+    The broker hands the trace over in the invocation; without it (a plain
     workflow-less invocation) the command records on its own.
     """
     trace_id = current_member_invocation().trace_id
@@ -2527,10 +2624,9 @@ def _interactive_session_for_current_command() -> InteractiveTraceSession | None
         _context, member_person = _resolve(person)
     except (click.ClickException, FileNotFoundError):
         return None
-    workspace = _current_workspace()
     return InteractiveTraceStore().start_or_touch(
         person_id=member_person.person_id,
-        workspace=workspace,
+        workspace=str(get_workspace_root()),
         host=interactive_host(),
         thread_key=interactive_thread_key(),
     )
@@ -2549,16 +2645,6 @@ def _current_person() -> str:
             return value
         ctx = ctx.parent
     return ""
-
-
-def _current_workspace() -> str:
-    ctx = click.get_current_context(silent=True)
-    while ctx is not None:
-        workspace = ctx.obj.get("workspace") if isinstance(ctx.obj, dict) else None
-        if isinstance(workspace, str) and workspace:
-            return workspace
-        ctx = ctx.parent
-    return str(Path.cwd().resolve())
 
 
 def _current_command_path() -> str:
@@ -2580,9 +2666,12 @@ def _record_member_command_event(
 
 def _emit(payload: dict[str, Any], output_format: str) -> None:
     if output_format == "json":
-        click.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        click.echo(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            file=_call().stdout,
+        )
         return
-    click.echo(_to_markdown(payload))
+    click.echo(_to_markdown(payload), file=_call().stdout)
 
 
 def _to_markdown(payload: dict[str, Any]) -> str:
