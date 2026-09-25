@@ -1090,8 +1090,40 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
-def _is_codex_login_call(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and _call_name(node.func) == "_codex_login"
+def _reads_the_clock(function: ast.AST) -> bool:
+    """True when the function itself calls ``time.time``.
+
+    That call is what makes two builds of the same helper differ across a
+    second. Nested functions count, so a builder that hides the call still
+    joins the population.
+    """
+    return any(
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "time"
+        and node.attr == "time"
+        for node in ast.walk(function)
+    )
+
+
+def _clock_reading_helpers(tree: ast.AST) -> frozenset[str]:
+    """Module-level helpers whose bytes depend on ``time.time``.
+
+    The population is the clock read, not a provider name. ``_github_login``
+    stays out because it does not read the clock. Test functions stay out
+    because a ``time.time`` in an assertion is not a login being built.
+    """
+    return frozenset(
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and not node.name.startswith("test_")
+        and _reads_the_clock(node)
+    )
+
+
+def _is_login_call(node: ast.AST, helpers: frozenset[str]) -> bool:
+    return isinstance(node, ast.Call) and _call_name(node.func) in helpers
 
 
 def _local_nodes(function: ast.AST):
@@ -1105,93 +1137,150 @@ def _local_nodes(function: ast.AST):
         pending.extend(ast.iter_child_nodes(node))
 
 
-def _codex_login_in(expression: ast.AST) -> ast.Call | None:
-    calls = [node for node in ast.walk(expression) if _is_codex_login_call(node)]
+def _login_in(expression: ast.AST, helpers: frozenset[str]) -> ast.Call | None:
+    calls = [node for node in ast.walk(expression) if _is_login_call(node, helpers)]
     if len(calls) == 1:
         return calls[0]
     return None
 
 
-def _codex_login_bound_here(function: ast.AST) -> dict[str, ast.Call]:
-    """Names assigned in this function from an expression with one login call."""
+def _bind_login_names(
+    target: ast.expr,
+    value: ast.expr,
+    bound: dict[str, ast.Call],
+    helpers: frozenset[str],
+) -> None:
+    """Bind names to the one login call that initializes them.
+
+    A bare name uses the whole value. A tuple pairs each element with the
+    value in the same position, so ``sealed, other = helper(), helper()``
+    keeps both calls. Leaving the names unbound drops the function out of
+    the population (the guard passes without looking).
+    """
+    if isinstance(target, ast.Name):
+        call = _login_in(value, helpers)
+        if call is not None:
+            bound[target.id] = call
+        return
+    if not isinstance(target, ast.Tuple | ast.List):
+        return
+    if not isinstance(value, ast.Tuple | ast.List):
+        return
+    if len(target.elts) != len(value.elts):
+        return
+    if any(isinstance(elt, ast.Starred) for elt in (*target.elts, *value.elts)):
+        return
+    for elt, piece in zip(target.elts, value.elts, strict=True):
+        _bind_login_names(elt, piece, bound, helpers)
+
+
+def _login_bound_here(
+    function: ast.AST, helpers: frozenset[str]
+) -> dict[str, ast.Call]:
+    """Names assigned in this function from an expression with one login call.
+
+    The walk is ``_local_nodes``, the same one that finds ``_seal_login`` and
+    comparisons. Stopping at the function's top-level statements left a name
+    assigned inside ``if`` / ``for`` / ``with`` unresolved, and the function
+    then dropped out of the population.
+    """
     bound: dict[str, ast.Call] = {}
-    for statement in getattr(function, "body", []):
-        target: ast.expr | None = None
-        value: ast.expr | None = None
-        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
-            target = statement.targets[0]
-            value = statement.value
-        elif isinstance(statement, ast.AnnAssign):
-            target = statement.target
-            value = statement.value
-        if isinstance(target, ast.Name) and value is not None:
-            call = _codex_login_in(value)
-            if call is not None:
-                bound[target.id] = call
+    assignments = [
+        node
+        for node in _local_nodes(function)
+        if isinstance(node, ast.Assign | ast.AnnAssign)
+    ]
+    for statement in sorted(
+        assignments, key=lambda node: (node.lineno, node.col_offset)
+    ):
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                _bind_login_names(target, statement.value, bound, helpers)
+        elif statement.value is not None:
+            _bind_login_names(statement.target, statement.value, bound, helpers)
     return bound
 
 
-def _login_call(node: ast.AST, bound: dict[str, ast.Call]) -> ast.Call | None:
-    if _is_codex_login_call(node):
+def _login_call(
+    node: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> ast.Call | None:
+    if _is_login_call(node, helpers):
         return node
     if isinstance(node, ast.Name):
         return bound.get(node.id)
     return None
 
 
-def _calls_under(expression: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
+def _calls_under(
+    expression: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
     return {
         id(call)
         for node in ast.walk(expression)
-        if (call := _login_call(node, bound)) is not None
+        if (call := _login_call(node, bound, helpers)) is not None
     }
 
 
-def _sealed_codex_logins(function: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
+def _sealed_logins(
+    function: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
     sealed: set[int] = set()
     for node in _local_nodes(function):
         if isinstance(node, ast.Call) and _call_name(node.func) == "_seal_login":
-            sealed.update(_calls_under(node, bound))
+            sealed.update(_calls_under(node, bound, helpers))
     return sealed
 
 
-def _expected_codex_logins(function: ast.AST, bound: dict[str, ast.Call]) -> set[int]:
-    """Logins a test treats as the value it sealed: token reads and compares."""
+def _expected_logins(
+    function: ast.AST, bound: dict[str, ast.Call], helpers: frozenset[str]
+) -> set[int]:
+    """Logins a test treats as the value it sealed: token reads and compares.
+
+    ``_codex_tokens`` is named because the compared value is a piece of the
+    JWT, so the login call is not itself in the comparison. Other providers
+    compare a name bound to the call, which the comparison walk already sees.
+    """
     expected: set[int] = set()
     for node in _local_nodes(function):
         if isinstance(node, ast.Call) and _call_name(node.func) == "_codex_tokens":
             for arg in node.args:
-                expected.update(_calls_under(arg, bound))
+                expected.update(_calls_under(arg, bound, helpers))
         elif isinstance(node, ast.Compare):
-            expected.update(_calls_under(node.left, bound))
+            expected.update(_calls_under(node.left, bound, helpers))
             for comparator in node.comparators:
-                expected.update(_calls_under(comparator, bound))
+                expected.update(_calls_under(comparator, bound, helpers))
     return expected
 
 
-def _codex_logins_compared_apart_from_the_one_sealed() -> list[str]:
+def _logins_compared_apart_from_the_one_sealed() -> list[str]:
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    helpers = _clock_reading_helpers(tree)
     apart: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        bound = _codex_login_bound_here(node)
-        sealed = _sealed_codex_logins(node, bound)
+        bound = _login_bound_here(node, helpers)
+        sealed = _sealed_logins(node, bound, helpers)
         if not sealed:
             continue
-        stray = _expected_codex_logins(node, bound) - sealed
+        stray = _expected_logins(node, bound, helpers) - sealed
         if stray:
             apart.append(f"{node.name}:{node.lineno}")
     return sorted(apart)
 
 
-def test_a_codex_login_is_compared_with_the_one_that_was_sealed() -> None:
-    """Two calls of `_codex_login` can fall on either side of a second.
+def test_a_login_is_compared_with_the_one_that_was_sealed() -> None:
+    """A helper that reads ``time.time`` can fall on either side of a second.
 
     The bytes that are sealed and the bytes a test treats as what was sealed
     have to be the same call. A second call used as the expected value is the
-    flake, and the same shape on the `not in` side is the check that passes
-    without looking at the login that was sealed.
+    flake, and the same shape on the ``not in`` side is the check that passes
+    without looking at the login that was sealed. Which helpers those are is
+    derived from the clock read. An empty derivation would pass every test
+    without looking, so it fails here.
     """
-    apart = _codex_logins_compared_apart_from_the_one_sealed()
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    helpers = _clock_reading_helpers(tree)
+    assert helpers, "clock-reading helpers were not derived; the guard would pass open"
+    apart = _logins_compared_apart_from_the_one_sealed()
     assert not apart, apart
