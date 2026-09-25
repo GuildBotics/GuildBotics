@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatService
 from guildbotics.integrations.ticket_manager import TicketManager
@@ -31,7 +30,6 @@ class Context:
         brain_factory: BrainFactory,
         logger: Logger,
         person: Person,
-        task: Task,
         message: str,
     ):
         """
@@ -42,7 +40,6 @@ class Context:
             brain_factory (BrainFactory): Factory for creating brains.
             logger (Logger): Logger instance for logging messages.
             person (Person): The current person in the context.
-            task (Task): The current task in the context.
             message (str): The message or prompt associated with the context.
         """
         self.loader_factory = loader_factory
@@ -52,7 +49,6 @@ class Context:
         self.team = loader_factory.create_team_loader().load()
         set_language(self.team.project.get_language_code())
         self.person = person
-        self.task = task
         self.ticket_manager: TicketManager | None = None
         self.chat_service: ChatService | None = None
         self.pipe = message
@@ -90,7 +86,6 @@ class Context:
             brain_factory,
             get_logger(),
             Person(person_id="default_person", name="Default Person"),
-            Task(title="Default Task", description="This is a default task."),
             message,
         )
 
@@ -108,17 +103,8 @@ class Context:
             self.brain_factory,
             get_logger(),
             person,
-            self.task,
             self.pipe,
         )
-
-    def update_task(self, task: Task) -> None:
-        """
-        Update the current task in the context.
-        Args:
-            task (Task): The new task to set in the context.
-        """
-        self.task = task
 
     def get_brain(
         self, name: str, config: dict | None, class_resolver: ClassResolver | None

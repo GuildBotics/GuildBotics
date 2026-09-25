@@ -49,7 +49,6 @@ class _FakeContext:
             debug=lambda *a, **k: None,
             error=lambda *a, **k: None,
         )
-        self.task = Task(title="T", description="D")
         self.pipe = ""
         self.shared_state: dict = {}
         self._ticket_manager = ticket_manager or _FakeTicketManager()
@@ -146,6 +145,9 @@ def test_task_scheduler_uses_ticket_selector(monkeypatch):
                 trigger_type="ticket",
                 payload={"task": candidate.model_dump()},
             )
+
+        async def run(self, person, invocation, run_workflow):
+            return await run_workflow(invocation)
 
     dispatched = []
 
@@ -358,8 +360,8 @@ async def test_run_command_malformed():
     from guildbotics.drivers.utils import run_command
 
     context = _FakeContext()
-    ok = await run_command(context, 'echo "unterminated', "scheduled")
-    assert ok is False
+    with pytest.raises(ValueError):
+        await run_command(context, 'echo "unterminated', "scheduled")
 
 
 def test_task_scheduler_malformed_scheduled_command():
@@ -387,16 +389,50 @@ def test_task_scheduler_malformed_scheduled_command():
         loop.close()
 
 
-def test_task_scheduler_routine_with_args_falls_back_to_run_command(monkeypatch):
+def test_task_scheduler_malformed_routine_command():
+    # A routine that cannot be parsed fails like any other command: the error
+    # is counted and the worker keeps running.
+    context = _FakeContext()
+    scheduler = TaskScheduler(
+        context=context,  # type: ignore[arg-type]
+        routine_interval_minutes=10,
+    )
+    loop = asyncio.new_event_loop()
+    try:
+        _idx, consecutive_errors, _next_time, should_stop = (
+            scheduler._process_routine_tasks(
+                loop,
+                context,  # type: ignore[arg-type]
+                context.person,
+                ['echo "unterminated'],
+                0,
+                None,
+                datetime.datetime.now(),
+                0,
+            )
+        )
+        assert consecutive_errors == 1
+        assert should_stop is False
+    finally:
+        loop.close()
+
+
+def test_task_scheduler_routine_with_args_runs_as_a_command(monkeypatch):
+    # Only the bare routine is the patrol. A routine with arguments runs as a
+    # command, whose entry (``run_main_command``) selects its ticket.
     run_command_called = []
 
     async def fake_run_command(context, command, task_type):
         run_command_called.append((command, task_type))
         return True
 
+    def forbidden_patrol(self, loop, context, person, command, start_time):
+        raise AssertionError("a routine with arguments is not the patrol")
+
     monkeypatch.setattr(
         "guildbotics.drivers.task_scheduler.run_command", fake_run_command
     )
+    monkeypatch.setattr(TaskScheduler, "_patrol_tickets", forbidden_patrol)
 
     context = _FakeContext()
     scheduler = TaskScheduler(
@@ -405,20 +441,19 @@ def test_task_scheduler_routine_with_args_falls_back_to_run_command(monkeypatch)
     )
     loop = asyncio.new_event_loop()
     try:
-        routine_commands = ["workflows/ticket_driven_workflow --foo"]
-        _idx, _err, _next_time, _stop = scheduler._process_routine_tasks(
+        scheduler._process_routine_tasks(
             loop,
             context,  # type: ignore[arg-type]
             context.person,
-            routine_commands,
+            ["workflows/ticket_driven_workflow --foo"],
             0,
             None,
             datetime.datetime.now(),
             0,
         )
-        assert len(run_command_called) == 1
-        assert run_command_called[0][0] == "workflows/ticket_driven_workflow --foo"
-        assert run_command_called[0][1] == "routine"
+        assert run_command_called == [
+            ("workflows/ticket_driven_workflow --foo", "routine")
+        ]
     finally:
         loop.close()
 
@@ -495,5 +530,5 @@ async def test_run_command_empty():
     from guildbotics.drivers.utils import run_command
 
     context = _FakeContext()
-    ok = await run_command(context, "   ", "scheduled")
-    assert ok is False
+    with pytest.raises(ValueError, match="Empty"):
+        await run_command(context, "   ", "scheduled")

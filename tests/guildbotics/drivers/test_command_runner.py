@@ -221,3 +221,75 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
     assert result == "Review completed: local edit inspected."
     assert ctx.shared_state["ask"] == result
     assert edited_file.read_text(encoding="utf-8") == "local edit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["manual", "scheduled", "routine"])
+async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, source):
+    from guildbotics.drivers import command_runner, ticket_selector
+    from guildbotics.runtime.workflow_invocation import (
+        TICKET_WORKFLOW_COMMAND,
+        WORKFLOW_INVOCATION_KEY,
+    )
+
+    invocation = object()
+    selected: list[str] = []
+
+    class FakeRunner:
+        def __init__(self, context, name, args, cwd=None):
+            self.context = context
+
+        async def run(self):
+            # The workflow finds the ticket the host selected.
+            assert self.context.shared_state[WORKFLOW_INVOCATION_KEY] is invocation
+            return "worked"
+
+    class FakeSelector:
+        def __init__(self, context, *, source):
+            selected.append(source)
+
+        async def run_next(self, person, run_workflow):
+            return await run_workflow(invocation)
+
+    monkeypatch.setattr(command_runner, "CommandRunner", FakeRunner)
+    monkeypatch.setattr(ticket_selector, "TicketSelector", FakeSelector)
+    context = DummyContext()
+    context.person = SimpleNamespace(person_id="aiko")
+
+    output = await command_runner.run_main_command(
+        context, TICKET_WORKFLOW_COMMAND, [], None, source=source
+    )
+
+    assert output == "worked"
+    assert selected == [source]
+
+
+@pytest.mark.asyncio
+async def test_ticket_workflow_without_a_ticket_outputs_nothing(monkeypatch):
+    from guildbotics.drivers import command_runner, ticket_selector
+    from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
+
+    class FakeRunner:
+        def __init__(self, context, name, args, cwd=None):
+            pass
+
+        async def run(self):
+            raise AssertionError("no ticket, no workflow")
+
+    class IdleSelector:
+        def __init__(self, context, *, source):
+            pass
+
+        async def run_next(self, person, run_workflow):
+            return None
+
+    monkeypatch.setattr(command_runner, "CommandRunner", FakeRunner)
+    monkeypatch.setattr(ticket_selector, "TicketSelector", IdleSelector)
+    context = DummyContext()
+    context.person = SimpleNamespace(person_id="aiko")
+
+    output = await command_runner.run_main_command(
+        context, TICKET_WORKFLOW_COMMAND, [], None, source="manual"
+    )
+
+    assert output == ""

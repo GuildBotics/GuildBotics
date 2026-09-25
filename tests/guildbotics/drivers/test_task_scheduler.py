@@ -51,6 +51,7 @@ class _Logger:
 class _Context:
     def __init__(self, member: object) -> None:
         self.team = SimpleNamespace(members=[member])
+        self.person = member
         self.logger = _Logger()
 
     def clone_for(self, person: object) -> "_Context":
@@ -313,6 +314,11 @@ def _ticket_invocation(task: Task | None = None) -> WorkflowInvocation:
     )
 
 
+async def _passthrough_run(self, person, invocation, run_workflow):
+    """The selector's settlement is covered by ``test_ticket_selector.py``."""
+    return await run_workflow(invocation)
+
+
 def test_ticket_patrol_idle_leaves_no_trace_and_no_run_record(monkeypatch) -> None:
     from guildbotics.drivers import ticket_selector
     from guildbotics.drivers import utils as driver_utils
@@ -372,6 +378,7 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
 
     monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
     monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", fake_refresh)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "run", _passthrough_run)
     monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
@@ -397,6 +404,33 @@ def test_ticket_patrol_dispatches_as_tracked_work_under_a_titled_trace(
         "trigger_reason": "",
     }
     assert records[0].status == "succeeded"
+
+
+def test_failed_ticket_patrol_is_recorded_as_failed_and_counted(monkeypatch) -> None:
+    from guildbotics.drivers import ticket_selector, workflow_dispatcher
+
+    scheduler = TaskScheduler(_Context(_Person()))
+
+    async def fake_candidates(self, person):
+        return [_ticket_task()]
+
+    async def fake_refresh(self, person, candidate):
+        return _ticket_invocation(candidate)
+
+    class FailingDispatcher:
+        def __init__(self, context, service_run_id=None):
+            pass
+
+        async def dispatch(self, invocation, person):
+            raise RuntimeError("the turn never recorded a completion")
+
+    monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", fake_refresh)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "run", _passthrough_run)
+    monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FailingDispatcher)
+
+    assert _patrol(scheduler) == (False, True)
+    assert [record.status for record in RunStore().records()] == ["failed"]
 
 
 def test_ticket_patrol_keeps_next_candidate_due_and_uses_distinct_identity(
@@ -433,6 +467,7 @@ def test_ticket_patrol_keeps_next_candidate_due_and_uses_distinct_identity(
 
     monkeypatch.setattr(ticket_selector.TicketSelector, "candidates", fake_candidates)
     monkeypatch.setattr(ticket_selector.TicketSelector, "refresh", fake_refresh)
+    monkeypatch.setattr(ticket_selector.TicketSelector, "run", _passthrough_run)
     monkeypatch.setattr(workflow_dispatcher, "WorkflowDispatcher", FakeDispatcher)
     monkeypatch.setattr(driver_utils, "run_with_logging", fake_run_with_logging)
 
@@ -496,8 +531,9 @@ def test_ticket_patrol_selection_failure_is_recorded_under_a_trace(
         try:
             await action()
         except Exception as exc:
+            # Like the real one: record the failure, then re-raise it.
             recorded.append((trace.trace_id if trace else None, exc))
-            return False
+            raise
         recorded.append((trace.trace_id if trace else None, None))
         return True
 
@@ -568,6 +604,72 @@ def test_scheduled_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
     trace_id, work_ids = seen[0]
     assert trace_id is not None
     assert work_ids == [trace_id]
+
+
+class _FailingRunner:
+    """A command that raises, standing in for any failed scheduler command."""
+
+    def __init__(self, context, name, args, cwd=None) -> None:
+        pass
+
+    async def run(self) -> str:
+        raise RuntimeError("boom")
+
+
+def _run_scheduler_slot(scheduler: TaskScheduler, source: str) -> tuple[int, bool]:
+    person = scheduler.context.team.members[0]
+    loop = asyncio.new_event_loop()
+    start = dt.datetime(2026, 1, 1, 9, 0, 0)
+    try:
+        if source == "scheduled":
+            scheduled = SimpleNamespace(command="sched", should_run=lambda now: True)
+            return scheduler._process_scheduled_tasks(
+                loop, scheduler.context, person, [scheduled], start, 0
+            )
+        _, errors, _, stopped = scheduler._process_routine_tasks(
+            loop, scheduler.context, person, ["routine"], 0, None, start, 0
+        )
+        return errors, stopped
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("source", ["scheduled", "routine"])
+def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> None:
+    from guildbotics.drivers import command_runner
+
+    scheduler = TaskScheduler(_Context(_Person()))
+    monkeypatch.setattr(command_runner, "CommandRunner", _FailingRunner)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+
+    assert _run_scheduler_slot(scheduler, source) == (1, False)
+
+    records = list(RunStore().records())
+    assert [(record.source, record.status) for record in records] == [
+        (source, "failed")
+    ]
+
+
+def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
+    monkeypatch,
+) -> None:
+    from guildbotics.drivers import command_runner
+
+    scheduler = TaskScheduler(_Context(_Person()))
+
+    class _StoppedRunner(_FailingRunner):
+        async def run(self) -> str:
+            scheduler.request_shutdown(graceful=False)
+            await asyncio.sleep(30)
+            return ""
+
+    monkeypatch.setattr(command_runner, "CommandRunner", _StoppedRunner)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+
+    # A stop is not a command error, so the worker does not count it.
+    assert _run_scheduler_slot(scheduler, "routine") == (0, False)
+
+    assert [record.status for record in RunStore().records()] == ["cancelled"]
 
 
 @pytest.mark.asyncio

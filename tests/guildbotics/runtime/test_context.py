@@ -3,7 +3,6 @@
 This suite verifies:
 - `get_ticket_manager` caching behavior.
 - `clone_for` independence for person and cache.
-- `update_task` replaces the active task.
 - `get_brain` delegates to the provided `BrainFactory` with language code.
 """
 
@@ -14,7 +13,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.integrations.chat_service import ChatIdentity
 from guildbotics.integrations.ticket_manager import TicketManager
@@ -158,7 +156,6 @@ def test_get_ticket_manager_is_cached(monkeypatch):
     logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
-    task = Task(title="T", description="D")
 
     ctx = Context(
         loader_factory=loader_factory,
@@ -166,7 +163,6 @@ def test_get_ticket_manager_is_cached(monkeypatch):
         brain_factory=brain_factory,
         logger=logger,
         person=person,
-        task=task,
         message="Initial message",
     )
 
@@ -187,7 +183,6 @@ def test_clone_for_independence_person_and_cache():
 
     person1 = Person(person_id="p1", name="A")
     person2 = Person(person_id="p2", name="B")
-    task = Task(title="T", description="D")
 
     ctx1 = Context(
         loader_factory=loader_factory,
@@ -195,7 +190,6 @@ def test_clone_for_independence_person_and_cache():
         brain_factory=brain_factory,
         logger=logger,
         person=person1,
-        task=task,
         message="Initial message",
     )
 
@@ -222,14 +216,12 @@ async def test_context_aclose_closes_cached_chat_resources():
     logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
-    task = Task(title="T", description="D")
     ctx = Context(
         loader_factory=loader_factory,
         integration_factory=integration_factory,
         brain_factory=brain_factory,
         logger=logger,
         person=person,
-        task=task,
         message="Initial message",
     )
 
@@ -238,33 +230,6 @@ async def test_context_aclose_closes_cached_chat_resources():
 
     assert getattr(chat_service, "closed", False) is True
     assert ctx.chat_service is None
-
-
-def test_update_task_replaces_task():
-    """update_task should replace the current task without changing cached resources."""
-    team = _make_team(language="en")
-    loader_factory = DummyLoaderFactory(team)
-    integration_factory = DummyIntegrationFactory()
-    brain_factory = DummyBrainFactory()
-    logger = logging.getLogger("test")
-
-    person = Person(person_id="p1", name="Tester")
-    task1 = Task(title="T1", description="D1")
-    ctx = Context(
-        loader_factory=loader_factory,
-        integration_factory=integration_factory,
-        brain_factory=brain_factory,
-        logger=logger,
-        person=person,
-        task=task1,
-        message="Initial message",
-    )
-    ticket_manager = ctx.get_ticket_manager()
-
-    task2 = Task(title="T2", description="D2")
-    ctx.update_task(task2)
-    assert ctx.task is task2
-    assert ctx.get_ticket_manager() is ticket_manager
 
 
 def test_get_brain_delegates_to_factory_with_language():
@@ -277,7 +242,6 @@ def test_get_brain_delegates_to_factory_with_language():
     logger = logging.getLogger("test")
 
     person = Person(person_id="p1", name="Tester")
-    task = Task(title="T", description="D")
 
     ctx = Context(
         loader_factory=loader_factory,
@@ -285,7 +249,6 @@ def test_get_brain_delegates_to_factory_with_language():
         brain_factory=brain_factory,
         logger=logger,
         person=person,
-        task=task,
         message="Initial message",
     )
 

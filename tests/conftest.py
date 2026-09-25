@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 from _pytest.pathlib import rm_rf
 
-from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
@@ -384,10 +383,6 @@ class FakeContext:
             "git_user": "Test User",
             "git_email": "test@example.com",
         }
-        # Default task with id and repository
-        self.task = Task(title="T", description="D")
-        self.task.id = "task-123"
-        self.task.repository = "test-repo"
         self.logger = logging.getLogger("test.context")
         # Registry for fake brains
         self._brains: dict[str, FakeBrain] = {}

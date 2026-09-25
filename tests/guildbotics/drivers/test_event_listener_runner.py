@@ -15,7 +15,6 @@ from guildbotics.drivers.event_listener_runner import (
     EventListenerRunner,
     SlackConnectionKey,
 )
-from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import (
     ChatEvent,
@@ -268,7 +267,6 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
         brain_factory=DummyBrainFactory(),
         logger=logging.getLogger("test-event-runner"),
         person=person,
-        task=Task(title="t", description="d"),
         message="",
     )
 

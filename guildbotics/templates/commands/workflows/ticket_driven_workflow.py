@@ -1,28 +1,8 @@
-import os
-from contextlib import suppress
 from typing import Any
-from uuid import uuid4
 
-from guildbotics.capabilities.workflow_rate_limits import (
-    WorkflowRateLimit,
-    record_workflow_rate_limited,
-    workflow_rate_limit_from_exception,
-    workflow_rate_limit_notice_text,
-)
-from guildbotics.drivers.agent_turn import AgentTurnResult
-from guildbotics.entities.task import Task
-from guildbotics.integrations.ticket_manager import TicketManager
-from guildbotics.integrations.workflow_status_comment import (
-    render_workflow_status_comment,
-    workflow_status_comment_payload,
-)
-from guildbotics.intelligences.common import AgentResponse
-from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime import Context
-from guildbotics.utils.fileio import (
-    get_member_clone_path,
-    get_workspace_root,
-)
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
+from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -42,164 +22,8 @@ COMMAND_METADATA = {
     "routine": True,
 }
 
-TICKET_MAX_ATTEMPTS_ENV = "GUILDBOTICS_TICKET_MAX_ATTEMPTS"
-_DEFAULT_MAX_ATTEMPTS = 5
 
-
-def _max_agent_attempts() -> int:
-    """Number of agent turns per ticket dispatch before giving up.
-
-    A turn that leaves no terminal completion record is retried (resuming the
-    previous conversation) so a slow, multi-turn AI CLI tool can finish; the budget
-    bounds that so a permanently failing turn cannot loop.
-    """
-    raw = os.getenv(TICKET_MAX_ATTEMPTS_ENV, "").strip()
-    try:
-        return max(1, int(raw)) if raw else _DEFAULT_MAX_ATTEMPTS
-    except ValueError:
-        return _DEFAULT_MAX_ATTEMPTS
-
-
-async def _move_task_to_working_if_ready(
-    context: Context, ticket_manager: TicketManager
-) -> None:
-    """Move a newly selected task to the working lane when one is available."""
-    if context.task.status == Task.READY and context.task.id is not None:
-        moved = await ticket_manager.move_ticket(context.task, Task.IN_PROGRESS)
-        if moved:
-            context.task.status = Task.IN_PROGRESS
-
-
-async def _build_task_error_message(
-    context: Context, error: Exception | None = None
-) -> str:
-    # The traceback is logged (trace-scoped ERROR) by the command runner on
-    # re-raise; the ticket comment stays a safe, reader-facing message with no
-    # local paths or internal details.
-    error_text = t("drivers.task_scheduler.task_error")
-    try:
-        from guildbotics.intelligences.functions import talk_as
-
-        talked_text = await talk_as(context, error_text, "Ticket", [])
-        return talked_text or error_text
-    except Exception:
-        return error_text
-
-
-def _work_type(task: Task) -> str:
-    """``issue``, or the pull request role the patrol selected the task for."""
-    if task.pull_request_url:
-        return task.trigger_reason or "pull_request_feedback"
-    return "issue"
-
-
-def _normalize_agent_response(response: Any) -> AgentResponse:
-    if isinstance(response, AgentResponse):
-        return response
-    return AgentResponse(
-        status=AgentResponse.DONE,
-        message=str(response) if response is not None else "",
-        skip_ticket_comment=True,
-    )
-
-
-def _rate_limited_summary(retry_after: WorkflowRateLimit) -> str:
-    """Build a machine-summary for ``AgentResponse.message``."""
-    display = retry_after.retry_after_display
-    if display:
-        return f"Rate limited. Reset: {display}"
-    return "Rate limited."
-
-
-async def _handle_ticket_rate_limit(
-    *,
-    context: Context,
-    ticket_manager: TicketManager,
-    task: Task,
-    run_id: str,
-    retry_after: WorkflowRateLimit,
-) -> None:
-    """Post a rate-limit comment on the ticket and record the event."""
-    try:
-        ticket_url = await ticket_manager.get_ticket_url(task, markdown=False)
-    except Exception:
-        ticket_url = task.url or f"task:{task.id}"
-
-    message = workflow_rate_limit_notice_text(retry_after)
-    body = render_workflow_status_comment(
-        body=message,
-        payload=workflow_status_comment_payload(
-            reason="rate_limited",
-            person_id=context.person.person_id,
-            run_id=run_id,
-            subject_id=ticket_url,
-            retry_after_at=retry_after.retry_after_at,
-            retry_after_text=retry_after.retry_after_text,
-        ),
-    )
-    with suppress(Exception):
-        await ticket_manager.add_comment_to_ticket(task, body)
-    record_workflow_rate_limited(
-        person_id=context.person.person_id,
-        command="workflows/ticket_driven_workflow",
-        run_id=run_id,
-        subject_id=ticket_url,
-        retry_after=retry_after,
-        default_source="routine",
-    )
-
-
-async def _main(
-    context: Context, ticket_manager: TicketManager, run_id: str
-) -> AgentResponse:
-    await _move_task_to_working_if_ready(context, ticket_manager)
-
-    ticket_url = await ticket_manager.get_ticket_url(context.task, markdown=False)
-    workspace_root = get_workspace_root()
-    member_workspace = get_member_clone_path(context.person.person_id)
-    member_workspace.mkdir(parents=True, exist_ok=True)
-
-    result = await context.invoke(
-        "functions/handle_github_ticket",
-        person_id=context.person.person_id,
-        workflow_contract=t(
-            "commands.workflows.common.workflow_contract",
-            person_id=context.person.person_id,
-        ),
-        ticket_url=ticket_url,
-        pull_request_url=context.task.pull_request_url or "",
-        work_type=_work_type(context.task),
-        trigger_reason=context.task.trigger_reason or "",
-        language=context.language_name,
-        member_workspace=str(member_workspace),
-        workflow_run_id=run_id,
-        prepare_command=_prepare_command(context, ticket_url),
-        agent_execution_context={
-            "run_id": run_id,
-            "workspace_data_root": str(workspace_root),
-            "work_kind": "ticket",
-            "work_identity": ticket_url,
-            "resume_policy": "fresh",
-            "attempt": 1,
-            "max_completion_attempts": _max_agent_attempts(),
-        },
-        cwd=member_workspace,
-    )
-    if not isinstance(result, AgentTurnResult):
-        raise RuntimeError("Ticket agent turn returned no completion result.")
-    agent_response = _normalize_agent_response(result.response)
-    return AgentResponse(
-        status=(
-            AgentResponse.ASKING
-            if result.completion.status == AgentResponse.ASKING
-            else AgentResponse.DONE
-        ),
-        message=agent_response.message or result.completion.summary,
-        skip_ticket_comment=True,
-    )
-
-
-def _prepare_command(context: Context, ticket_url: str) -> str:
+def _prepare_command(person_id: str, ticket_url: str, pull_request_url: str) -> str:
     """Build the exact ``git prepare`` command for this run.
 
     The workflow already knows whether this is pull request work
@@ -208,86 +32,58 @@ def _prepare_command(context: Context, ticket_url: str) -> str:
     is checked out; without it ``prepare`` would work on a new ``ticket/<n>``
     branch instead of the PR.
     """
-    person_id = context.person.person_id
-    if context.task.pull_request_url:
+    if pull_request_url:
         return (
             f"guildbotics member git prepare --person {person_id} "
-            f"--pr-url {context.task.pull_request_url}"
+            f"--pr-url {pull_request_url}"
         )
     return (
         f"guildbotics member git prepare --person {person_id} --issue-url {ticket_url}"
     )
 
 
-async def main(context: Context) -> AgentResponse | None:
+async def main(context: Context) -> Any:
+    """Work on the GitHub issue or PR the host selected, with an AI CLI turn.
+
+    The host has already selected the ticket, moved it to the working lane,
+    and settles how the run ends; this workflow asks for the turn, which the
+    host drives until the member records a completion, and raises when it
+    cannot.
     """
-    Poll the ticket manager for one actionable GitHub issue or PR and delegate the
-    actual GitHub/git/PR work to the configured AI CLI tool.
-    """
-    ticket_manager = context.get_ticket_manager()
-
-    task = None
-    shared_state = getattr(context, "shared_state", None)
-    if isinstance(shared_state, dict):
-        from guildbotics.runtime.workflow_invocation import (
-            WORKFLOW_INVOCATION_KEY,
-            WorkflowInvocation,
-        )
-
-        invocation = shared_state.get(WORKFLOW_INVOCATION_KEY)
-        if (
-            isinstance(invocation, WorkflowInvocation)
-            and invocation.trigger_type == "ticket"
-        ):
-            payload = invocation.payload
-            if payload and "task" in payload:
-                task = Task(**payload["task"])
-
-    if task is None:
-        candidates = await ticket_manager.get_task_candidates()
-        task = candidates[0] if candidates else None
-
-    if task is None:
-        return None
-
-    context.update_task(task)
-    set_attributes(**task.trace_attributes())
-    # The run is its trace: the boundary that dispatched this ticket recorded
-    # the run under the trace id, and the member's completion lands on that
-    # same record. Without a trace (a plain CLI run) the run stands alone.
-    trace = current_trace()
-    run_id = trace.trace_id if trace is not None else uuid4().hex
-    try:
-        return await _main(context, ticket_manager, run_id)
-    except Exception as error:
-        rate_limit = workflow_rate_limit_from_exception(error)
-        if rate_limit is not None:
-            await _handle_ticket_rate_limit(
-                context=context,
-                ticket_manager=ticket_manager,
-                task=task,
-                run_id=run_id,
-                retry_after=rate_limit,
-            )
-            return AgentResponse(
-                status=AgentResponse.DONE,
-                message=_rate_limited_summary(rate_limit),
-                skip_ticket_comment=True,
-            )
-        message = await _build_task_error_message(context, error)
-        try:
-            ticket_url = await ticket_manager.get_ticket_url(task, markdown=False)
-        except Exception:
-            ticket_url = task.url or f"task:{task.id}"
-        message = render_workflow_status_comment(
-            body=message,
-            payload=workflow_status_comment_payload(
-                reason="failed",
-                person_id=context.person.person_id,
-                run_id=run_id,
-                subject_id=ticket_url,
-            ),
-        )
-        with suppress(Exception):
-            await ticket_manager.add_comment_to_ticket(task, message)
-        raise
+    turn = context.shared_state[WORKFLOW_INVOCATION_KEY].payload
+    person_id = context.person.person_id
+    ticket_url = turn["ticket_url"]
+    pull_request_url = turn["pull_request_url"]
+    trigger_reason = turn["trigger_reason"]
+    member_workspace = get_member_clone_path(person_id)
+    member_workspace.mkdir(parents=True, exist_ok=True)
+    result = await context.invoke(
+        "functions/handle_github_ticket",
+        person_id=person_id,
+        workflow_contract=t(
+            "commands.workflows.common.workflow_contract",
+            person_id=person_id,
+        ),
+        ticket_url=ticket_url,
+        pull_request_url=pull_request_url,
+        # ``issue``, or the pull request role the host selected the ticket for.
+        work_type=(
+            (trigger_reason or "pull_request_feedback") if pull_request_url else "issue"
+        ),
+        trigger_reason=trigger_reason,
+        language=context.language_name,
+        member_workspace=str(member_workspace),
+        workflow_run_id=turn["run_id"],
+        prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
+        agent_execution_context={
+            "run_id": turn["run_id"],
+            "workspace_data_root": str(get_workspace_root()),
+            "work_kind": "ticket",
+            "work_identity": ticket_url,
+            "resume_policy": "fresh",
+            "attempt": 1,
+            "max_completion_attempts": turn["max_completion_attempts"],
+        },
+        cwd=member_workspace,
+    )
+    return result.response

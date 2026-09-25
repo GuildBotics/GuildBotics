@@ -17,6 +17,12 @@ from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
+from guildbotics.runtime.workflow_invocation import (
+    TICKET_WORKFLOW_COMMAND,
+    WORKFLOW_INVOCATION_KEY,
+    WorkflowInvocation,
+    WorkflowSource,
+)
 
 __all__ = [
     "CommandRunner",
@@ -24,6 +30,7 @@ __all__ = [
     "PersonNotFoundError",
     "PersonSelectionRequiredError",
     "run_command",
+    "run_main_command",
 ]
 
 
@@ -184,11 +191,48 @@ async def run_command(
             raise CommandError(str(exc)) from exc
     context = base_context.clone_for(person)
     try:
-        runner = CommandRunner(context, command_name, command_args, cwd)
-        return await runner.run()
+        return await run_main_command(
+            context, command_name, command_args, cwd, source="manual"
+        )
     finally:
         try:
             await context.aclose()
         finally:
             if owned_lease is not None:
                 owned_lease.release()
+
+
+async def run_main_command(
+    context: Context,
+    command_name: str,
+    command_args: Sequence[str],
+    cwd: Path | None,
+    *,
+    source: WorkflowSource,
+) -> str:
+    """Run a top-level command from a host entry.
+
+    The ticket workflow runs only for a ticket the host selected, so it goes
+    through the ticket selector, which settles the ticket around the run.
+
+    Args:
+        context: Context of the member the command runs as.
+        command_name: Command to run.
+        command_args: Positional arguments for the command.
+        cwd: Working directory for the command.
+        source: Route that started the command.
+
+    Returns:
+        The command's output; empty when there was no ticket to work on.
+    """
+    runner = CommandRunner(context, command_name, command_args, cwd)
+    if command_name != TICKET_WORKFLOW_COMMAND:
+        return await runner.run()
+    from guildbotics.drivers.ticket_selector import TicketSelector
+
+    async def _run(invocation: WorkflowInvocation) -> str:
+        context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
+        return await runner.run()
+
+    selector = TicketSelector(context, source=source)
+    return await selector.run_next(context.person, _run) or ""
