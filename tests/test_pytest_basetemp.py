@@ -37,10 +37,31 @@ def test_windows_default_basetemp_is_short_and_removed(
     try:
         assert basetemp.parent == tmp_path / "tmp"
         assert basetemp.name.startswith("gb-")
-        (basetemp / "worker-file").write_text("worker output")
+        worker_file = basetemp / "worker-file"
+        worker_file.write_text("worker output")
+        worker_file.chmod(0o444)
     finally:
         root_conftest.pytest_unconfigure(config)
     assert not basetemp.exists()
+
+
+def test_windows_basetemp_cleanup_failure_only_warns(
+    root_conftest, monkeypatch, tmp_path: Path
+) -> None:
+    basetemp = tmp_path / "gb-failed-cleanup"
+    basetemp.mkdir()
+    config = _config()
+    config.stash[root_conftest._WINDOWS_BASETEMP] = basetemp
+
+    def fail_cleanup(_: Path) -> None:
+        raise PermissionError("file is in use")
+
+    monkeypatch.setattr(root_conftest, "rm_rf", fail_cleanup)
+
+    with pytest.warns(pytest.PytestWarning, match="Could not remove automatic"):
+        root_conftest.pytest_unconfigure(config)
+
+    assert basetemp.exists()
 
 
 @pytest.mark.parametrize("worker", [False, True])

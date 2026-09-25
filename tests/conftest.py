@@ -2,15 +2,16 @@ import contextlib
 import json
 import logging
 import os
-import shutil
 import sys
 import tempfile
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Role
@@ -67,7 +68,15 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_unconfigure(config: pytest.Config) -> None:
     basetemp = config.stash.get(_WINDOWS_BASETEMP, None)
     if basetemp is not None:
-        shutil.rmtree(basetemp)
+        try:
+            rm_rf(basetemp)
+        except OSError as exc:
+            warnings.warn(
+                pytest.PytestWarning(
+                    f"Could not remove automatic Windows basetemp {basetemp}: {exc}"
+                ),
+                stacklevel=2,
+            )
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
