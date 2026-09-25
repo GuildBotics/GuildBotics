@@ -466,13 +466,6 @@ class AccessContract:
     #: The turn may change nothing: it still sees the grants, but read-only,
     #: its working directory is empty, and ``network`` does not apply.
     read_only: bool = False
-    #: Only supplied input is visible; no workspace or previous provider
-    #: sessions. Such a turn is read-only as well.
-    input_only: bool = False
-
-    def __post_init__(self) -> None:
-        if self.input_only:
-            object.__setattr__(self, "read_only", True)
 
     @property
     def reached_network(self) -> NetworkPolicy:
@@ -493,7 +486,6 @@ class AccessContract:
 
         return {
             "read_only": self.read_only,
-            "input_only": self.input_only,
             "filesystem": {
                 "working_directory": mask(cwd),
                 "documents": [

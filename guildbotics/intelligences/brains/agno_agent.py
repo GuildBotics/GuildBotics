@@ -188,9 +188,6 @@ class AgnoAgentDefaultBrain(Brain):
         }
 
     async def run(self, message: str, **kwargs):
-        if kwargs.pop("input_only", False):
-            kwargs["tools"] = []
-            kwargs["tool_call_limit"] = 0
         kwargs["name"] = kwargs.get("name", self.name)
 
         description = kwargs.pop("description", self.description)

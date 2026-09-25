@@ -2503,8 +2503,9 @@ function IntelligenceEditor({
           label={t("setup.intelligence.engine")}
           data={[
             { value: "llm", label: "LLM" },
-            { value: "cli", label: "CLI" },
-            ...(name === "chat_decision" ? [{ value: "jev", label: "Jev" }] : []),
+            ...(name === "chat_decision"
+              ? [{ value: "jev", label: "Jev" }]
+              : [{ value: "cli", label: "CLI" }]),
           ]}
           value={assignment?.engine ?? null}
           onChange={(value) =>

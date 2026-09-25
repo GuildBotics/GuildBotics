@@ -10,7 +10,7 @@ from pathlib import Path
 from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.chat_policy import QUESTION_VERSION, QUESTIONS
 from guildbotics.intelligences.decisions.models import DecisionConfig, Question
-from guildbotics.utils.fileio import get_workspace_config_dir, get_workspace_local_path
+from guildbotics.utils.fileio import get_workspace_local_path
 from guildbotics.utils.workspace_state import apply_workspace_for_cli
 
 
@@ -60,7 +60,6 @@ async def main() -> None:
         selection, evaluation_id = await assess(
             case["state"],
             DecisionConfig(brain=args.brain),
-            config_dir=get_workspace_config_dir(),
             person_id=args.person,
             logger=logging.getLogger("decision-replay"),
             questions=questions,

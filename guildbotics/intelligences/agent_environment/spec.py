@@ -145,7 +145,7 @@ def build_environment_spec(
         home=guest_home(home),
         mounts=(
             *_mounts(
-                ResolvedAccess() if contract.input_only else contract.access,
+                contract.access,
                 cwd,
                 read_only=contract.read_only,
             ),
