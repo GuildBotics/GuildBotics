@@ -24,6 +24,28 @@ def _config(basetemp: str | None = None, *, worker: bool = False) -> SimpleNames
     return config
 
 
+def test_pytest_configure_wires_the_windows_basetemp(
+    root_conftest, fake_platform, monkeypatch, tmp_path: Path
+) -> None:
+    """CI passes --basetemp, so this hook connection needs its own test."""
+    fake_platform(root_conftest, "win32")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    config = _config()
+
+    try:
+        with monkeypatch.context() as isolated:
+            isolated.setattr(root_conftest, "_PHASE_DURATION_OUTPUT", None)
+            isolated.setattr(root_conftest, "_PHASE_DURATIONS", [])
+            root_conftest.pytest_configure(config)
+            assert config.option.basetemp is not None
+            basetemp = Path(config.option.basetemp)
+            assert basetemp.parent == tmp_path / "tmp"
+    finally:
+        root_conftest.pytest_unconfigure(config)
+    assert not basetemp.exists()
+
+
 def test_windows_default_basetemp_is_short_and_removed(
     root_conftest, fake_platform, monkeypatch, tmp_path: Path
 ) -> None:
