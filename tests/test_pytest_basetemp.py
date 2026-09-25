@@ -40,6 +40,10 @@ def test_windows_default_basetemp_is_short_and_removed(
         worker_file = basetemp / "worker-file"
         worker_file.write_text("worker output")
         worker_file.chmod(0o444)
+        read_only_dir = basetemp / "read-only-dir"
+        read_only_dir.mkdir()
+        (read_only_dir / "object").write_text("git loose object")
+        read_only_dir.chmod(0o555)
     finally:
         root_conftest.pytest_unconfigure(config)
     assert not basetemp.exists()

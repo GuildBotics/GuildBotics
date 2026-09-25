@@ -55,6 +55,7 @@ def pytest_configure(config: pytest.Config) -> None:
     if hasattr(config, "workerinput"):
         return
     if sys.platform == "win32" and config.option.basetemp is None:
+        # %TEMP% is too long for Git-backed tests; pytest resolves basetemp to its real path.
         root = Path.home() / "tmp"
         root.mkdir(parents=True, exist_ok=True)
         basetemp = Path(tempfile.mkdtemp(prefix="gb-", dir=root))
