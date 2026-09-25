@@ -78,7 +78,9 @@ async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch
 
     async def fake_run_agent_turn(*, invoke, execution_context):
         captured["execution_context"] = execution_context
-        return await invoke({**execution_context, "attempt": 2})
+        return await invoke(
+            {**execution_context, "attempt": 2}, {"previous_attempt_evidence": "[]"}
+        )
 
     def fake_build(anchor, entry):
         captured["entry"] = entry
@@ -104,6 +106,8 @@ async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch
     assert result == "completed"
     assert captured["execution_context"]["run_id"] == "run-1"
     assert captured["entry"]["params"]["agent_execution_context"]["attempt"] == 2
+    # The host's per-attempt prompt parameters reach the command.
+    assert captured["entry"]["params"]["previous_attempt_evidence"] == "[]"
     assert captured["entry"]["cwd"] == Path("/memory")
 
 

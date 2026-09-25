@@ -13,6 +13,7 @@ from guildbotics.capabilities.chat_selection import (
     ChatTurn,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.drivers.agent_turn import run_agent_turn
 from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import (
     ChatEvent,
@@ -146,7 +147,7 @@ class FakeInvokeContext(types.SimpleNamespace):
         self.assessments = []
         self.invocations: list[tuple[str, dict]] = []
         # When set, only the Nth handle_chat_event call records a completion, so
-        # earlier attempts fail the gate and the workflow retries.
+        # earlier attempts fail the gate and the host retries the turn.
         self.complete_on_attempt: int | None = None
         self._handle_calls = 0
         self.decision_reason = "request"
@@ -157,6 +158,29 @@ class FakeInvokeContext(types.SimpleNamespace):
         self.consumed_messages: list[tuple[str, str]] = []
 
     async def invoke(self, name: str, /, **kwargs):
+        # Mirror CommandRunner: a turn that names a completion budget is driven
+        # by the host until the member records its completion.
+        execution_context = kwargs.get("agent_execution_context")
+        if isinstance(execution_context, dict) and execution_context.get(
+            "max_completion_attempts"
+        ):
+
+            async def _turn(turn_context, parameters):
+                return await self._invoke_once(
+                    name,
+                    **{
+                        **kwargs,
+                        **parameters,
+                        "agent_execution_context": turn_context,
+                    },
+                )
+
+            return await run_agent_turn(
+                invoke=_turn, execution_context=execution_context
+            )
+        return await self._invoke_once(name, **kwargs)
+
+    async def _invoke_once(self, name: str, /, **kwargs):
         self.invocations.append((name, kwargs))
         # Mirror CommandRunner: a command without an explicit `message` reads
         # `Context.pipe`, and every command's output replaces it. Recording what
@@ -1532,7 +1556,7 @@ async def test_judgment_runs_once_per_event_not_per_retry(tmp_path, monkeypatch)
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("reply")
     ctx.response_effort = "high"
-    # The first agent attempt records no completion, so the workflow retries.
+    # The first agent attempt records no completion, so the host retries it.
     ctx.complete_on_attempt = 2
 
     await _run_chat_event(tmp_path, monkeypatch, ctx, state_store)

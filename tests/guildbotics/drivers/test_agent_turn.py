@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -19,6 +20,17 @@ def _store(tmp_path) -> RunStore:
     return RunStore(tmp_path / ".guildbotics" / "state" / "task-runs")
 
 
+def _chat_run(store: RunStore, run_id: str) -> None:
+    """Start the run the way chat selection does before it asks for a turn."""
+    store.start_record(
+        run_id,
+        work_kind="workflows/chat_conversation_workflow",
+        execution_mode="autonomous",
+        member_id="aiko",
+    )
+    store.append_evidence(run_id, "chat_batch", {"event_ids": ["E1"]})
+
+
 def _ticket_completion(store: RunStore, run_id: str) -> None:
     store.append_evidence(run_id, "issue_comment", {"url": "https://example.test/1"})
     store.complete(
@@ -35,7 +47,7 @@ async def test_host_retries_with_continuation_and_returns_completion(tmp_path):
     contexts: list[dict[str, Any]] = []
     store = _store(tmp_path)
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         contexts.append(context)
         if len(contexts) == 2:
             _ticket_completion(store, "run-1")
@@ -65,9 +77,10 @@ async def test_host_retries_with_continuation_and_returns_completion(tmp_path):
 @pytest.mark.asyncio
 async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_path):
     store = _store(tmp_path)
+    _chat_run(store, "run-chat")
     contexts: list[dict[str, Any]] = []
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         contexts.append(context)
         store.append_evidence("run-chat", "chat_reply", {"message_ts": "1.2"})
         store.complete_run(
@@ -93,7 +106,10 @@ async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_
     )
 
     assert result.completion.subject_type == "chat"
-    assert result.evidence[0]["evidence_type"] == "chat_reply"
+    assert [item["evidence_type"] for item in result.evidence] == [
+        "chat_batch",
+        "chat_reply",
+    ]
     assert "run-chat" in contexts[0]["continuation_input"]
     assert "E1" in contexts[0]["continuation_input"]
 
@@ -102,7 +118,7 @@ async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_
 async def test_host_exhausts_the_configured_attempt_budget(tmp_path):
     attempts: list[int] = []
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         attempts.append(context["attempt"])
         return "response"
 
@@ -141,7 +157,7 @@ async def test_host_reraises_rate_limits_without_retrying(
     def raise_wrapped_rate_limit(*args, **kwargs):
         raise CommandError("wrapped") from rate_limited
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
         if failure_stage == "invoke":
@@ -186,7 +202,7 @@ async def test_host_records_completion_missing_then_completed_events(
     store = _store(tmp_path)
     calls = 0
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
         if calls == completion_call:
@@ -224,7 +240,7 @@ async def test_host_does_not_record_completion_missing_for_invoke_failures(
         lambda **kwargs: recorded.append("missing"),
     )
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         raise RuntimeError("provider turn failed")
 
     with pytest.raises(CompletionRetryExhausted):
@@ -243,9 +259,10 @@ async def test_host_does_not_record_completion_missing_for_invoke_failures(
 
 @pytest.mark.asyncio
 async def test_host_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path):
+    _chat_run(_store(tmp_path), "run-chat")
     calls = 0
 
-    async def invoke(context: dict[str, Any]) -> str:
+    async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
         nonlocal calls
         calls += 1
         raise RuntimeError("provider failed")
@@ -263,3 +280,67 @@ async def test_host_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path)
         )
 
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_host_rereads_chat_evidence_for_every_attempt(tmp_path):
+    # A session recreated for the second attempt must see what the first one
+    # already did, so the host reads the run's evidence before each attempt.
+    store = _store(tmp_path)
+    _chat_run(store, "run-chat")
+    seen: list[list[dict[str, Any]]] = []
+
+    async def invoke(context: dict[str, Any], parameters: dict[str, str]) -> str:
+        seen.append(json.loads(parameters["previous_attempt_evidence"]))
+        if len(seen) == 1:
+            store.append_evidence("run-chat", "chat_reply", {"message_ts": "1.2"})
+        else:
+            store.complete_run(
+                "run-chat",
+                "done",
+                "replied",
+                subject_type="chat",
+                subject_id="E1",
+                person_id="aiko",
+            )
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        execution_context={
+            "run_id": "run-chat",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "chat",
+            "event_id": "E1",
+            "max_completion_attempts": 2,
+        },
+    )
+
+    # The batch membership is bookkeeping, not an action the member took.
+    assert [[item["evidence_type"] for item in attempt] for attempt in seen] == [
+        [],
+        ["chat_reply"],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_host_gives_ticket_turns_no_extra_parameters(tmp_path):
+    store = _store(tmp_path)
+    parameters: list[dict[str, str]] = []
+
+    async def invoke(context: dict[str, Any], params: dict[str, str]) -> str:
+        parameters.append(params)
+        _ticket_completion(store, "run-1")
+        return "response"
+
+    await run_agent_turn(
+        invoke=invoke,
+        execution_context={
+            "run_id": "run-1",
+            "workspace_data_root": str(tmp_path),
+            "work_kind": "ticket",
+            "max_completion_attempts": 1,
+        },
+    )
+
+    assert parameters == [{}]
