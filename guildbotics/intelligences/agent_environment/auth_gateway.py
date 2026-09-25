@@ -129,6 +129,8 @@ class CredentialGateway:
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._server: LoopbackServer | None = None
+        #: Routes this turn already refused, so each is logged once.
+        self._refused_routes: set[tuple[str, str]] = set()
 
     @property
     def port(self) -> int:
@@ -194,8 +196,12 @@ class CredentialGateway:
             return
         origin = self._broker.origin(scope["method"], scope["path"])
         if origin is None:
-            # What a tool asks for that its catalog does not name, and no more.
-            _LOGGER.info("Gateway refused %s %s", scope["method"], scope["path"])
+            # What a tool asks for that its catalog does not name, and no
+            # more: the same route once in this turn, which is this gateway.
+            route = (scope["method"], scope["path"])
+            if route not in self._refused_routes:
+                self._refused_routes.add(route)
+                _LOGGER.info("Gateway refused %s %s", *route)
             await _refuse(send, 403, "permission_error", "Not a forwarded route.")
             return
         try:

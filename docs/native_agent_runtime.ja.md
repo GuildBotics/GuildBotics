@@ -311,7 +311,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   member brokerが使うMCP SDKが設定したものも元に戻すため、既定ではこの行は出ません）。httpcoreの
   DEBUGのtraceは応答のヘッダーをそのまま記録するので、root loggerをDEBUGにして動かす場合は、
   ログに実値が残りえます。HTTP/1.1とstreaming（SSE）を転送し、HTTP/2はALPNで断り、WebSocketには
-  upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけをログに残します。カタログの経路は
+  upgradeしません（通常のHTTP要求として扱います）。転送しなかった経路は`METHOD /path`だけを、同じ経路はturnごとに1回だけログに残します。カタログの経路は
   pathの完全一致で、末尾が`/*`の経路（ツールがpathにリポジトリ名などを入れるもの）は、その下の
   通常の名前だけからなるpathを転送します（`.`で始まるsegment、空のsegment、%エンコードや
   ASCII以外の文字を含むpathは断ります）。
@@ -355,7 +355,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   （`lh3.googleusercontent.com`、認証情報を含まない）だけはturnから直接取得します。
   トークンを含むテレメトリー（`play.googleapis.com/log`）はturnから届かず、なくても動きます。
   会話の所有者をGoogle側に登録する`/v1internal:writeTrajectoryAcls`（本文は会話のIDだけ）は転送します。
-  ゲートウェイは転送しなかった経路を`METHOD /path`だけログに残します（トークン・query・本文は残しません）。
+  ゲートウェイは転送しなかった経路を`METHOD /path`だけ、同じ経路はturnごとに1回だけログに残します（トークン・query・本文は残しません）。
 - **GitHub Copilot固有**: ログインは期限を持たず、refreshもしません。ゲートウェイは拒否された
   ログインを更新しようとせず、再ログインを求めます。Copilotがホストする読み取り専用のGitHub
   MCP server（`/mcp/readonly`。利用者のGitHub権限で動く）と、リポジトリのcustom agentsは転送し、
