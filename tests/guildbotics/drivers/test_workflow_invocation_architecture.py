@@ -147,6 +147,9 @@ def test_task_scheduler_uses_ticket_selector(monkeypatch):
                 payload={"task": candidate.model_dump()},
             )
 
+        async def run(self, person, invocation, run_workflow):
+            return await run_workflow(invocation)
+
     dispatched = []
 
     class _FakeDispatcher:
@@ -358,8 +361,8 @@ async def test_run_command_malformed():
     from guildbotics.drivers.utils import run_command
 
     context = _FakeContext()
-    ok = await run_command(context, 'echo "unterminated', "scheduled")
-    assert ok is False
+    with pytest.raises(ValueError):
+        await run_command(context, 'echo "unterminated', "scheduled")
 
 
 def test_task_scheduler_malformed_scheduled_command():
@@ -387,16 +390,20 @@ def test_task_scheduler_malformed_scheduled_command():
         loop.close()
 
 
-def test_task_scheduler_routine_with_args_falls_back_to_run_command(monkeypatch):
-    run_command_called = []
+def test_task_scheduler_routine_with_args_is_the_ticket_patrol(monkeypatch):
+    patrolled = []
 
-    async def fake_run_command(context, command, task_type):
-        run_command_called.append((command, task_type))
-        return True
+    async def forbidden_run_command(context, command, task_type):
+        raise AssertionError("the ticket workflow runs only through its selector")
+
+    def fake_patrol(self, loop, context, person, command, start_time):
+        patrolled.append(command)
+        return True, True
 
     monkeypatch.setattr(
-        "guildbotics.drivers.task_scheduler.run_command", fake_run_command
+        "guildbotics.drivers.task_scheduler.run_command", forbidden_run_command
     )
+    monkeypatch.setattr(TaskScheduler, "_patrol_tickets", fake_patrol)
 
     context = _FakeContext()
     scheduler = TaskScheduler(
@@ -416,9 +423,7 @@ def test_task_scheduler_routine_with_args_falls_back_to_run_command(monkeypatch)
             datetime.datetime.now(),
             0,
         )
-        assert len(run_command_called) == 1
-        assert run_command_called[0][0] == "workflows/ticket_driven_workflow --foo"
-        assert run_command_called[0][1] == "routine"
+        assert patrolled == ["workflows/ticket_driven_workflow --foo"]
     finally:
         loop.close()
 
@@ -495,5 +500,5 @@ async def test_run_command_empty():
     from guildbotics.drivers.utils import run_command
 
     context = _FakeContext()
-    ok = await run_command(context, "   ", "scheduled")
-    assert ok is False
+    with pytest.raises(ValueError, match="Empty"):
+        await run_command(context, "   ", "scheduled")

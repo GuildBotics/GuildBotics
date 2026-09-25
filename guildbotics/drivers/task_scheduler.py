@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import shlex
 import threading
 import time
 from collections.abc import Coroutine
@@ -21,7 +22,10 @@ from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
-from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+from guildbotics.runtime.workflow_invocation import (
+    TICKET_WORKFLOW_COMMAND,
+    WorkflowInvocation,
+)
 
 DEFAULT_ROUTINE_INTERVAL_MINUTES = 10
 DEFAULT_CHAT_POLL_INTERVAL_SECONDS = 5.0
@@ -327,7 +331,7 @@ class TaskScheduler:
         routine_due = next_routine_time is None or start_time >= next_routine_time
         routine_command = ""
         if self.routine_source_enabled and pending_ticket_patrol:
-            routine_command = "workflows/ticket_driven_workflow"
+            routine_command = TICKET_WORKFLOW_COMMAND
         elif self.routine_source_enabled and routine_commands and routine_due:
             routine_command = routine_commands[
                 routine_command_index % len(routine_commands)
@@ -335,9 +339,12 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
-            if routine_command == "workflows/ticket_driven_workflow" and (
-                self._environment_unavailable()
-            ):
+            # The ticket workflow takes no arguments; a routine that names it
+            # with some is the same patrol.
+            ticket_patrol = shlex.split(routine_command)[:1] == [
+                TICKET_WORKFLOW_COMMAND
+            ]
+            if ticket_patrol and self._environment_unavailable():
                 # The AI CLI turn the patrol would dispatch cannot start here
                 # yet (the environment is being built, or is not set up). It
                 # is deferred, not failed: the worker stays up and the ticket
@@ -345,7 +352,7 @@ class TaskScheduler:
                 self._ticket_patrol_candidates.pop(person.person_id, None)
                 ok = True
                 patrol_exhausted = True
-            elif routine_command == "workflows/ticket_driven_workflow":
+            elif ticket_patrol:
                 ok, patrol_exhausted = self._patrol_tickets(
                     loop, context, person, routine_command, start_time
                 )
@@ -433,10 +440,11 @@ class TaskScheduler:
         Selection runs outside any trace and outside the execution boundary:
         an idle patrol (no actionable ticket) leaves neither diagnostics
         records nor a task-run record. Both are opened only for a ticket that
-        is actually dispatched -- so a run record means work was taken -- or
-        for a selection that failed, which the trace records as the failure it
-        is. The trace opens with the ticket's attributes so the run names its
-        PR / issue from its first record.
+        is actually dispatched, so a run record means work was taken; a
+        selection that failed opens only a trace, which records it as the
+        failure it is. The trace opens with the ticket's attributes so the run
+        names its PR / issue from its first record, and the selector settles
+        the ticket around the workflow it runs.
         """
         from guildbotics.drivers.ticket_selector import TicketSelector
         from guildbotics.drivers.utils import run_with_logging
@@ -464,21 +472,17 @@ class TaskScheduler:
             async def _reraise() -> None:
                 raise failure
 
-            with trace_scope(
-                "routine",
-                person_id=person.person_id,
-                command=command,
-                attributes=attributes,
+            with (
+                trace_scope(
+                    "routine",
+                    person_id=person.person_id,
+                    command=command,
+                    attributes=attributes,
+                ),
+                suppress(Exception),
             ):
-                return (
-                    bool(
-                        self._run(
-                            loop,
-                            run_with_logging(context, command, "routine", _reraise),
-                        )
-                    ),
-                    not candidates,
-                )
+                self._run(loop, run_with_logging(context, command, "routine", _reraise))
+            return False, not candidates
 
         if not invocation:
             if not candidates:
@@ -487,7 +491,9 @@ class TaskScheduler:
 
         async def _dispatch() -> None:
             dispatcher = WorkflowDispatcher(context, service_run_id=self.service_run_id)
-            await dispatcher.dispatch(invocation, person)
+            await selector.run(
+                person, invocation, lambda turn: dispatcher.dispatch(turn, person)
+            )
 
         task_payload = invocation.payload.get("task")
         if isinstance(task_payload, dict):
@@ -540,7 +546,14 @@ class TaskScheduler:
         work_id: str | None = None,
         work_identity: dict[str, str] | None = None,
     ) -> Any:
-        try:
+        """Run one unit of work inside the task-run boundary.
+
+        The boundary sits inside the awaited coroutine, as it does for chat, so
+        both a failure and a forced cancellation reach it and close the run as
+        failed or cancelled; only then is the failure turned into ``False``.
+        """
+
+        async def _tracked() -> Any:
             with self._execution.track_work(
                 source=source,
                 person_id=person.person_id,
@@ -549,14 +562,16 @@ class TaskScheduler:
                 cancel=self._cancel_event.set,
                 work_identity=work_identity,
             ):
-                return self._run(loop, coro)
+                return await coro
+
+        try:
+            return self._run(loop, _tracked())
         except TaskRunSyncUnavailableError as exc:
             self.context.logger.warning(
                 "Service work result is not shared yet: %s", exc
             )
             return True
         except WorkRejectedError as exc:
-            coro.close()
             if exc.reason == "draining":
                 # A stop of this scheduler is already in progress; mirror it
                 # locally so worker loops exit without counting a command error.
@@ -586,6 +601,14 @@ class TaskScheduler:
                 person.person_id,
             )
             return True
+        except Exception:
+            # The command already logged its failure and the boundary closed
+            # the run as failed; the worker counts it as a command error.
+            return False
+        finally:
+            # Work that was rejected or cancelled before it started was never
+            # awaited; closing an awaited coroutine is a no-op.
+            coro.close()
 
     async def _run_cancellable(self, coro: Coroutine) -> Any:
         task: asyncio.Task = asyncio.ensure_future(coro)

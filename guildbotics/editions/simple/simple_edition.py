@@ -5,12 +5,13 @@ from guildbotics.editions.simple.simple_integration_factory import (
 )
 from guildbotics.editions.simple.simple_loader_factory import SimpleLoaderFactory
 from guildbotics.runtime import Context
+from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 
-# The single source of the routine command name in this edition. Routine
-# candidates are discovered from each command's own ``routine`` declaration; this
-# constant only names the edition's preferred default to seed / fall back to when
-# several candidates exist.
-DEFAULT_ROUTINE_COMMAND = "workflows/ticket_driven_workflow"
+# The routine command name of this edition. Routine candidates are discovered
+# from each command's own ``routine`` declaration; this constant only names the
+# edition's preferred default to seed / fall back to when several candidates
+# exist.
+DEFAULT_ROUTINE_COMMAND = TICKET_WORKFLOW_COMMAND
 
 
 class SimpleEdition(Edition):

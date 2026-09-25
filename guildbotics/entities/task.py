@@ -80,9 +80,9 @@ class Task(BaseModel):
     def trace_attributes(self) -> dict[str, str]:
         """Correlation attributes that name this ticket in diagnostics.
 
-        The scheduler opens the run's trace with them and the workflow sets
-        them when it runs without a caller trace, so the run names its PR /
-        issue from its first record on every device.
+        The patrol opens the run's trace with them and the ticket selector
+        sets them on a trace opened before selection, so the run names its
+        PR / issue on every device.
         """
         attributes: dict[str, str] = {}
         if self.repository:

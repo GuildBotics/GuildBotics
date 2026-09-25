@@ -93,10 +93,10 @@ workflow (orchestration)
   reads the run record, retries the turn with a continuation prompt until the member
   records its completion, and returns that completion and its evidence; workflows
   never read or write the run record themselves. It never produces work products
-  (code changes, PRs, replies, review comments) itself, but it does perform a narrow
-  set of orchestration/status writes of its own through its integration clients:
-  moving the Project lane, posting rate-limit / failure status comments on the ticket,
-  and posting failure notices in the Slack thread.
+  (code changes, PRs, replies, review comments) and makes no writes of its own: the
+  host selection around the turn — the ticket selector (`drivers/ticket_selector.py`)
+  and chat selection (`capabilities/chat_selection.py`) — moves the Project lane and
+  posts the rate-limit / failure status on the ticket or in the Slack thread.
 - **CLI agent**: reads the ticket/thread, investigates, edits, and decides. It never
   receives GitHub/Slack tokens and never calls provider APIs directly; every external
   write goes through `guildbotics member ...`.
@@ -163,7 +163,14 @@ purpose:
   Simple edition): a routine that _polls_ GitHub ProjectV2. The project board is treated
   as a loose queue/trigger — GuildBotics does not reimplement fine-grained GitHub/git
   operations around it, and there is no GitHub webhook receiver (local-first design).
-  Ticket selection lives in `drivers/ticket_selector.py`.
+  Every route that runs it — the patrol, a scheduled command, a manual run
+  (`guildbotics run`, Desktop) — selects the ticket in `drivers/ticket_selector.py`
+  and runs the workflow through `TicketSelector.run`, which owns what surrounds the
+  AI CLI turn: moving the ticket to the working lane, the run id and completion
+  budget (`GUILDBOTICS_TICKET_MAX_ATTEMPTS`), the trace attributes that name the
+  ticket, and the status comment of a failed or rate-limited run. The patrol selects
+  outside any trace and dispatches each candidate in turn; a scheduled or manual run
+  takes the ticket the patrol would take next. The workflow only runs the turn.
 - **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
   and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
   then drained per member by `drivers/pending_chat_dispatcher.py`. Like the ticket
@@ -248,8 +255,8 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   `chat_dispatch.retry_scheduled` / `chat_dispatch.abandoned`.
   `retry_scheduled` requires an actual `chat_dispatch.retry_scheduled` event;
   completion evidence alone does not imply a retry is scheduled, since the ticket
-  workflow shares the same completion layer but exhausts its attempt budget by
-  posting an error comment instead of dispatching a retry, so missing completion
+  workflow shares the same completion layer but, when its attempt budget runs out,
+  the ticket selector posts an error comment instead of dispatching a retry, so missing completion
   evidence without a dispatch event resolves to `incomplete`.
 - Status derivation for one execution lives in `observability/trace_status.py` and
   nowhere else: the execution index summaries and the activity history sessions ask
@@ -589,7 +596,9 @@ selects it before opening a trace, so an event that is not work for the member
 nor a record. For an event that is, it opens the trace, claims only the event's
 identity (`record_start=False`), and selection records the start itself, under
 the same barrier, before judging the batch; the boundary finishes only a run
-that started. The run is its trace (`run_id == trace_id`, for the ticket workflow
+that started. The boundary sits inside the work it tracks on every route, so a
+failure or a forced stop reaches it and the run ends `failed` or `cancelled`, not
+`succeeded`. The run is its trace (`run_id == trace_id`, for the ticket workflow
 too), and the boundary mirrors the trace's source and attributes into the record
 at start and at finish, so the record names the run's PR / issue or chat thread
 on every device without the trace.
@@ -842,7 +851,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   about the same execution: a trace's status (`trace_status.py`, which the timeline
   seeds with the lifecycle record through `TraceStatus.observe`) and its title
   (`trace_title.py`). A trace is titled by the first PR / issue recorded inside it
-  (`github.title`): the ticket workflow declares it when it starts, and a chat workflow
+  (`github.title`): the ticket selector declares it before the turn, and a chat workflow
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed
   over in the member invocation), records a `github.work_target`. A read
   (`inspect`) declares the target too but, like a memory read, never becomes an
