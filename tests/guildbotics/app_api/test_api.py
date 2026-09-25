@@ -49,6 +49,7 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.editions.simple.setup_service import (
     GitHubUserReference,
     SetupServiceError,
@@ -2249,10 +2250,10 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         started.set()
         await release.wait()
-        return "done"
+        return CommandOutcome(result="done", text_output="done")
 
     team = Team(
         project=Project(name="demo"),
@@ -2303,8 +2304,8 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
         ],
     )
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
-        return "done"
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
+        return CommandOutcome(result="done", text_output="done")
 
     monkeypatch.setattr(
         runtime,
@@ -3235,14 +3236,13 @@ async def test_command_event_preserves_authentication_cause(
         raise error
 
     monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", fail)
-    request = CommandRunRequest(command="test", cwd=str(tmp_path))
-    with pytest.raises(AppApiError if wrapped else CliAgentExecutionError):
-        await runtime._run_command_traced(request, None, "alice")
+    execution = runtime_module._Execution(
+        command="test", label="test", cwd=tmp_path, failure_code="command_error"
+    )
+    # A failed agent is a failed command, wrapped or not.
+    with pytest.raises(AppApiError):
+        await runtime._run_command_traced(execution, None, "alice")
     assert events[-1][0] == "command.failed"
     assert events[-1][1]["code"] == (
-        "cli_agent_authentication"
-        if category == "authentication"
-        else "command_error"
-        if wrapped
-        else ""
+        "cli_agent_authentication" if category == "authentication" else ""
     )

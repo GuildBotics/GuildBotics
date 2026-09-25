@@ -12,6 +12,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.commands.metadata import command_access
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.intelligences.agent_runtime.environment import command_environment
@@ -46,12 +47,25 @@ class CommandRunner:
         self._cwd = cwd if cwd is not None else Path.cwd()
         self._spec_factory = CommandSpecFactory(context)
         self._main_spec = self._prepare_main_spec()
+        assert self._main_spec.path is not None
+        #: What the main command declares of its turns' access; every turn of
+        #: the run, its subcommands' included, is held to it.
+        self.access = command_access(self._main_spec.path)
 
-    async def run(self) -> str:
+    async def run(self) -> CommandOutcome:
+        """Run the command and return the main command's result.
+
+        Returns:
+            The main command's own result (``None`` when it produced none) and
+            the run's text output, ``Context.pipe``.
+        """
         # The command's AI CLI turns share one microVM, discarded with the run.
-        async with command_environment():
-            await self._run_with_children(self._main_spec)
-        return self._context.pipe
+        async with command_environment(self.access):
+            outcome = await self._run_with_children(self._main_spec)
+        return CommandOutcome(
+            result=outcome.result if outcome is not None else None,
+            text_output=self._context.pipe,
+        )
 
     def _prepare_main_spec(self) -> CommandSpec:
         path = resolve_named_command(self._context, self._command_name)
@@ -157,8 +171,12 @@ async def run_command(
     command_args: Sequence[str],
     person_identifier: str | None = None,
     cwd: Path | None = None,
-) -> str:
-    """Execute a command within the given context."""
+) -> CommandOutcome:
+    """Execute a command within the given context.
+
+    A command that declares itself read-only takes no execution lease: its
+    turns can change nothing, so it runs while the member is busy.
+    """
     person = ensure_execution_subject(
         resolve_person(base_context.team, person_identifier, allow_default=True)
     )
@@ -171,20 +189,19 @@ async def run_command(
     inherited_lease = current_person_lease()
     if inherited_lease is not None and inherited_lease.person_id != person.person_id:
         raise RuntimeError("The active execution lease belongs to another person.")
-    owned_lease = None
-    if inherited_lease is None:
-        owned_lease = PersonExecutionLease(person.person_id)
-        try:
-            owned_lease.acquire(
-                source="manual",
-                command=command_name,
-                work_id=uuid4().hex,
-            )
-        except PersonLeaseUnavailableError as exc:
-            raise CommandError(str(exc)) from exc
     context = base_context.clone_for(person)
+    owned_lease = None
     try:
         runner = CommandRunner(context, command_name, command_args, cwd)
+        if inherited_lease is None and not runner.access.read_only:
+            lease = PersonExecutionLease(person.person_id)
+            try:
+                lease.acquire(
+                    source="manual", command=command_name, work_id=uuid4().hex
+                )
+            except PersonLeaseUnavailableError as exc:
+                raise CommandError(str(exc)) from exc
+            owned_lease = lease
         return await runner.run()
     finally:
         try:

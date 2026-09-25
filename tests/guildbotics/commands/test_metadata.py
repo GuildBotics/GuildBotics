@@ -8,9 +8,11 @@ import pytest
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
+    CommandAccess,
     CommandInputPolicy,
     extract_placeholders,
     load_command_metadata,
+    parse_command_access,
     parse_command_arguments,
     parse_command_input_policy,
     parse_metadata_arguments,
@@ -162,3 +164,19 @@ def test_parse_python_arguments_tolerates_non_utf8_source(tmp_path: Path) -> Non
     command.write_bytes(b"\xff")
 
     assert parse_command_arguments(command, {}) == []
+
+
+def test_a_command_declares_no_access_unless_it_says_so() -> None:
+    assert parse_command_access({}) == CommandAccess()
+    assert parse_command_access(
+        {"read_only": True, "inspects": ["config", "diagnostics"]}
+    ) == CommandAccess(read_only=True, inspects=frozenset({"config", "diagnostics"}))
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [{"read_only": "true"}, {"inspects": ["secrets"]}, {"inspects": "config"}],
+)
+def test_an_invalid_access_declaration_is_an_error(metadata: dict) -> None:
+    with pytest.raises(CommandError):
+        parse_command_access(metadata)

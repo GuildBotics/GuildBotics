@@ -33,11 +33,10 @@ REPOSITORY_ROOT = PACKAGE_ROOT.parent
 
 #: ``(module path, enclosing function) -> completion event that route records``
 TRACE_ROOTS: dict[tuple[str, str], str] = {
-    # The Desktop assistant turn publishes its boundary on the event bus,
-    # which records it into the same diagnostics store.
-    ("guildbotics/app_api/runtime.py", "_assistant_turn"): "command.finished",
-    # A Desktop command run; ``_run_command_traced`` publishes the boundary.
-    ("guildbotics/app_api/runtime.py", "_run_reserved_command"): "command.finished",
+    # A command the Desktop runs, its assistants' included;
+    # ``_run_command_traced`` publishes the boundary on the event bus, which
+    # records it into the same diagnostics store.
+    ("guildbotics/app_api/runtime.py", "_execute_command"): "command.finished",
     # Diagnostics runs do not run a command: each records its own end event.
     ("guildbotics/app_api/runtime.py", "verify"): "verify.completed",
     (
@@ -118,8 +117,7 @@ def test_declared_completion_events_can_end_a_trace() -> None:
 COMMAND_BOUNDARIES: set[tuple[str, str]] = {
     # Chat dispatch and the scheduler's commands, through ``run_with_logging``.
     ("guildbotics/drivers/utils.py", "command_boundary"),
-    # The Desktop assistant turn and manual command run.
-    ("guildbotics/app_api/runtime.py", "_assistant_turn"),
+    # A command the Desktop runs, its assistants' included.
     ("guildbotics/app_api/runtime.py", "_run_command_traced"),
     # An interactive member CLI command.
     ("guildbotics/cli/member.py", "_run_interactive"),

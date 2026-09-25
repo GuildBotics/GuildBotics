@@ -39,6 +39,7 @@ def _main_spec():
         name="main",
         base_dir=Path("."),
         command_class=DummyCommand,
+        path=Path("main.md"),
         cwd=Path("/workspace"),
     )
 
@@ -124,6 +125,9 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
     seen: list[object] = []
 
     class Shared:
+        def __init__(self, access) -> None:
+            self.access = access
+
         async def close(self) -> None:
             closed.append(self)
 
@@ -216,8 +220,9 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
         return SimpleNamespace(run=run, response_class=None)
 
     ctx.get_brain = get_brain
-    result = await CommandRunner(ctx, "ask", [], cwd=working_tree).run()
+    outcome = await CommandRunner(ctx, "ask", [], cwd=working_tree).run()
 
-    assert result == "Review completed: local edit inspected."
+    result = "Review completed: local edit inspected."
+    assert outcome.result == outcome.text_output == result
     assert ctx.shared_state["ask"] == result
     assert edited_file.read_text(encoding="utf-8") == "local edit"

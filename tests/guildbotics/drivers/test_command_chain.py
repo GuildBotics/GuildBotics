@@ -25,6 +25,7 @@ on native libraries.
 from __future__ import annotations
 
 import base64
+import contextvars
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,9 +37,11 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.command_runner import CommandRunner, run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
@@ -549,8 +552,121 @@ async def test_run_command_selects_single_active_member(config_dir: Path):
     )
     ctx = _make_context()
 
-    result = await run_command(
+    outcome = await run_command(
         ctx, "whoami", [], person_identifier=None, cwd=config_dir
     )
 
-    assert result == "alice"
+    assert outcome.result == outcome.text_output == "alice"
+
+
+# --- declared access ------------------------------------------------------
+
+_ACCESS_PROBE = (
+    "from guildbotics.intelligences.agent_runtime.environment import (\n"
+    "    current_command_access,\n"
+    ")\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_command_runs_while_its_member_is_busy(config_dir: Path):
+    """Only a command that declares itself read-only goes without the lease."""
+    commands = config_dir / "commands"
+    (commands / "look.py").write_text(
+        'COMMAND_METADATA = {"read_only": True}\n\n'
+        "def main():\n    return 'looked'\n",
+        encoding="utf-8",
+    )
+    (commands / "change.py").write_text(
+        "def main():\n    return 'changed'\n", encoding="utf-8"
+    )
+    # Another run holds the member's lease, in a context of its own.
+    other_run = contextvars.Context()
+    busy = PersonExecutionLease("alice")
+    other_run.run(
+        busy.acquire, source="routine", command="workflows/ticket", work_id="other"
+    )
+    try:
+        outcome = await run_command(_make_context(), "look", [], cwd=config_dir)
+        with pytest.raises(CommandError):
+            await run_command(_make_context(), "change", [], cwd=config_dir)
+    finally:
+        other_run.run(busy.release)
+
+    assert outcome.result == "looked"
+
+
+@pytest.mark.asyncio
+async def test_every_turn_of_a_run_is_held_to_the_main_commands_declaration(
+    config_dir: Path,
+):
+    """A subcommand declares nothing of its own: the run is one isolation."""
+    commands = config_dir / "commands"
+    (commands / "probe.py").write_text(
+        _ACCESS_PROBE
+        + 'COMMAND_METADATA = {"read_only": True, "inspects": ["diagnostics"]}\n\n'
+        "async def main(context):\n"
+        "    child = await context.invoke('child')\n"
+        "    return [current_command_access(), child]\n",
+        encoding="utf-8",
+    )
+    (commands / "child.py").write_text(
+        _ACCESS_PROBE + "\ndef main():\n    return current_command_access()\n",
+        encoding="utf-8",
+    )
+
+    outcome = await run_command(_make_context(), "probe", [], cwd=config_dir)
+
+    declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
+    assert outcome.result == [declared, declared]
+
+
+@pytest.mark.asyncio
+async def test_a_command_run_inside_another_cannot_declare_other_access(
+    config_dir: Path,
+):
+    """A writing command run from a read-only one is refused, not widened."""
+    commands = config_dir / "commands"
+    (commands / "nested.py").write_text(
+        "from guildbotics.drivers.command_runner import run_command\n"
+        'COMMAND_METADATA = {"read_only": True}\n\n'
+        "async def main(context):\n"
+        "    return await run_command(context, 'change', [])\n",
+        encoding="utf-8",
+    )
+    (commands / "change.py").write_text(
+        "def main():\n    return 'changed'\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CommandError, match="declares other access"):
+        await run_command(_make_context(), "nested", [], cwd=config_dir)
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_access_declaration_refuses_the_command(config_dir: Path):
+    (config_dir / "commands" / "odd.md").write_text(
+        "---\nbrain: none\ninspects: [secrets]\n---\nhello\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CommandError, match="inspects"):
+        await run_command(_make_context(), "odd", [], cwd=config_dir)
+
+
+@pytest.mark.asyncio
+async def test_a_subcommands_own_declaration_is_not_consulted(config_dir: Path):
+    """Only the command that was run declares: a read-only subcommand of a
+    command that can write runs as that command's turns do."""
+    commands = config_dir / "commands"
+    (commands / "writer.py").write_text(
+        "async def main(context):\n    return await context.invoke('looker')\n",
+        encoding="utf-8",
+    )
+    (commands / "looker.py").write_text(
+        _ACCESS_PROBE + 'COMMAND_METADATA = {"read_only": True}\n\n'
+        "def main():\n    return current_command_access()\n",
+        encoding="utf-8",
+    )
+
+    outcome = await run_command(_make_context(), "writer", [], cwd=config_dir)
+
+    assert outcome.result == CommandAccess()

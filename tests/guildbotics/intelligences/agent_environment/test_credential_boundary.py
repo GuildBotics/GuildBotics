@@ -38,6 +38,7 @@ import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment import (
     credential_vault,
     provider_state,
@@ -307,6 +309,8 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         contract=AccessContract(),
     )
     before = _sandboxes()
+    running = AsyncExitStack()
+    await running.enter_async_context(turn.command_environment(CommandAccess()))
     environment = await turn.start_turn_environment(context, name)
     try:
         (sandbox,) = _sandboxes() - before
@@ -340,6 +344,7 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         )
     finally:
         await environment.close()
+        await running.aclose()
 
     # Nothing of the login in the turn, from a shell or a tool's own reads:
     # what the checks find is what they were given to find.
@@ -414,7 +419,7 @@ async def test_the_turns_of_a_command_share_one_microvm(
 
     before = _sandboxes()
     answers: list[str] = []
-    async with turn.command_environment():
+    async with turn.command_environment(CommandAccess()):
         first = await turn.start_turn_environment(
             context("antigravity", work), "antigravity"
         )

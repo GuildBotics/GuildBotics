@@ -9,11 +9,14 @@ import shlex
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
+
+from pydantic import BaseModel
 
 from guildbotics.app_api.activity_history import (
     ActivityLifecycle,
@@ -94,7 +97,6 @@ from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
 from guildbotics.capabilities.completion_retry import (
     command_failure_payload,
-    find_cli_agent_execution_error,
 )
 from guildbotics.capabilities.github_activity_events import (
     refresh_github_activity_events,
@@ -104,7 +106,7 @@ from guildbotics.capabilities.member_memory_audit import (
     parse_memory_audit_timestamp,
 )
 from guildbotics.capabilities.task_runs import RunStore
-from guildbotics.commands.authoring import author_command_turn
+from guildbotics.commands.authoring import CommandAuthoringResult
 from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.discovery import (
     command_source,
@@ -117,11 +119,14 @@ from guildbotics.commands.discovery import (
 )
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
+    CommandAccess,
+    command_access,
     default_command_label,
     load_command_metadata,
     parse_command_arguments,
     parse_command_input_policy,
 )
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
@@ -135,7 +140,6 @@ from guildbotics.drivers.execution import (
     ExecutionStatusPublisher,
     TaskRunCoordinator,
     WorkRejectedError,
-    WorkSource,
 )
 from guildbotics.editions import get_edition
 from guildbotics.editions.simple.setup_service import (
@@ -152,14 +156,16 @@ from guildbotics.intelligences.agent_environment.runtime import (
     doctor,
 )
 from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
 )
+from guildbotics.intelligences.agent_runtime.environment import inspected_directories
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
-from guildbotics.intelligences.troubleshooting import troubleshoot_turn
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import (
@@ -198,6 +204,7 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
     get_workspace_root,
     get_workspace_state_path,
+    get_workspace_work_path,
     load_yaml_file,
 )
 from guildbotics.utils.workspace_state import write_active_workspace
@@ -207,9 +214,6 @@ WORKSPACE_DOTENV_PROTECTED_KEYS = {
     *HOME_ENV_PROTECTED_KEYS,
 }
 MIN_MEMORY_DOCUMENT_PATH_PARTS = 2
-# Desktop AI assistant turns are manual runs: user-initiated, frequent, and
-# scoped to one session. The agent work kind stays separate from this.
-ASSISTANT_TRACE_SOURCE: WorkSource = "manual"
 ACTIVITY_SYNC_COOLDOWN_SECONDS = 5 * 60
 ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
 ACTIVITY_SYNC_PERIOD_PARTS = 2
@@ -250,6 +254,34 @@ def _mark_activity_week_completed(period: tuple[str, str]) -> None:
         path.write_text(json.dumps({"completed": sorted(completed)}), encoding="utf-8")
     except OSError:
         return
+
+
+@dataclass(frozen=True, slots=True)
+class _Execution:
+    """One command the Desktop runs, and how its run is reported."""
+
+    command: str
+    #: What the run is called in the runtime status, its trace and its events.
+    label: str
+    cwd: Path
+    #: The App API error code a failed run becomes.
+    failure_code: str
+    failure_status: int = 400
+    args: Sequence[str] = ()
+    attributes: Mapping[str, str] | None = None
+    #: The result the command must return, when the caller reads it.
+    result_type: type[BaseModel] | None = None
+
+    def failure(self, exc: CommandError | CliAgentExecutionError) -> AppApiError:
+        """The App API error a failed run becomes.
+
+        A command drives foreign agents: an AI CLI tool that exits non-zero, a
+        provider that rejects the credential, a response the prompt cannot
+        use. Each is a failed run the screen must explain with its own reason.
+        """
+        return AppApiError(
+            self.failure_code, reason=str(exc), status_code=self.failure_status
+        )
 
 
 class AppRuntime:
@@ -500,145 +532,41 @@ class AppRuntime:
             lambda: self._command_file_service().delete_file(file_id, expected_revision)
         )
 
-    @asynccontextmanager
-    async def _assistant_turn(
-        self,
-        *,
-        work_kind: str,
-        label: str,
-        conversation_id: str,
-        message: str,
-        person: str | None,
-        failure_code: str,
-        read_only: bool = False,
-    ) -> AsyncIterator[tuple[Context, str]]:
-        """Scope one Desktop AI assistant turn.
-
-        Resolves the acting member, tracks the turn as cancellable manual work
-        and correlates everything it records under a fresh trace.
-
-        Args:
-            work_kind: Trace name and agent work kind, such as ``troubleshooting``.
-            label: Command label reported in the runtime status and trace.
-            conversation_id: Stable identity shared by every turn of the conversation.
-            message: Latest user instruction, used to resolve the context language.
-            person: Requested member identifier, or ``None`` for the team default.
-            failure_code: App API error code used when the assistant fails.
-            read_only: Whether the turn's environment holds it read-only,
-                whatever provider runs it. Only such a turn skips the member's
-                execution lease, so
-                it stays usable while that member runs scheduled work. A turn
-                that can write keeps the lease it has always held.
-
-        Yields:
-            The member-scoped context and this turn's trace id.
-
-        Raises:
-            AppApiError: If the member cannot be resolved, the runtime rejects
-                the work, or the assistant fails.
-        """
-        base_context = self._get_context(message)
-        acting = self._resolve_execution_person(base_context, person, label)
-        context = base_context.clone_for(acting)
-        trace_id = new_id()
-        loop = asyncio.get_running_loop()
-        task = asyncio.current_task()
-
-        def _cancel_turn() -> None:
-            if task is not None:
-                loop.call_soon_threadsafe(task.cancel)
-
-        try:
-            with (
-                self._execution.track_work(
-                    source=ASSISTANT_TRACE_SOURCE,
-                    person_id=acting.person_id,
-                    command=label,
-                    work_id=trace_id,
-                    cancel=_cancel_turn,
-                    exclusive=not read_only,
-                ),
-                trace_scope(
-                    # An assistant turn is a Desktop-initiated run like any
-                    # other manual command, so it belongs to that source: it is
-                    # then filterable in diagnostics and, like other manual
-                    # runs, stays off the activity timeline it fires too often
-                    # for. `work_kind` scopes the provider conversation, not the
-                    # trace, and the `label` prefix still identifies the turn.
-                    ASSISTANT_TRACE_SOURCE,
-                    command=label,
-                    person_id=acting.person_id,
-                    trace_id=trace_id,
-                    attributes={f"{work_kind}.conversation_id": conversation_id},
-                ),
-            ):
-                # This block opens the turn's trace, so it is the only layer
-                # that can say the whole turn started and ended. Without these
-                # the trace shows the LLM spans it is made of and never says
-                # the turn itself is over. Cancellation ends the turn too: a
-                # force stop cancels this task, and a ``CancelledError`` that
-                # escaped here would leave the turn reading as still running.
-                self._event_bus.publish_event(
-                    "command.started", {"command": label, "person": acting.person_id}
-                )
-                try:
-                    yield context, trace_id
-                except BaseException as exc:
-                    self._event_bus.publish_event(
-                        "command.failed",
-                        {
-                            "command": label,
-                            "person": acting.person_id,
-                            **command_failure_payload(exc),
-                        },
-                    )
-                    raise
-                self._event_bus.publish_event(
-                    "command.finished", {"command": label, "person": acting.person_id}
-                )
-        except AppApiError:
-            raise
-        except WorkRejectedError as exc:
-            raise AppApiError(
-                "work_rejected", reason=str(exc), status_code=409
-            ) from exc
-        except (CommandError, CliAgentExecutionError) as exc:
-            # The turn drives a foreign agent: an AI CLI tool that exits
-            # non-zero, a provider that rejects the credential, a response the
-            # prompt cannot use. Every one of them is a failed assistant turn
-            # the panel must be able to explain with the tool's own reason.
-            # Anything else is a defect, not an agent failure: it stays a
-            # generic 500 so internal wording never reaches the client.
-            raise AppApiError(failure_code, reason=str(exc), status_code=502) from exc
-        finally:
-            await context.aclose()
-
     async def author_command(
         self, request: CommandAuthoringRequest
     ) -> CommandAuthoringResponse:
         """Return one answer or reviewed-change proposal for shared commands."""
-        command_label = request.command or "new-command"
-        async with self._assistant_turn(
-            work_kind="command_authoring",
-            label=f"author:{command_label}",
-            conversation_id=request.conversation_id,
-            message=request.message,
-            person=request.person,
-            failure_code="command_authoring_failed",
-            read_only=True,
-        ) as (context, trace_id):
-            result = await author_command_turn(
-                context,
-                mode=request.mode,
-                conversation_id=request.conversation_id,
-                trace_id=trace_id,
-                command=request.command,
-                command_format=request.format,
-                content=request.content,
-                instruction=request.message,
-                available_commands=self._command_authoring_context(),
-                workspace_data_root=get_workspace_root(),
+
+        def message(_access: CommandAccess) -> str:
+            return json.dumps(
+                {
+                    "mode": request.mode,
+                    "command": request.command,
+                    "format": request.format,
+                    "current_content": request.content,
+                    "instruction": request.message,
+                    "available_commands": self._command_authoring_context(),
+                },
+                ensure_ascii=False,
             )
+
+        trace_id, outcome = await self._execute_command(
+            _Execution(
+                command="assistants/author_command",
+                label=f"author:{request.command or 'new-command'}",
+                args=[f"conversation_id={request.conversation_id}"],
+                cwd=_assistant_cwd("command-authoring"),
+                failure_code="command_authoring_failed",
+                failure_status=502,
+                attributes={
+                    "command_authoring.conversation_id": request.conversation_id
+                },
+                result_type=CommandAuthoringResult,
+            ),
+            person=request.person,
+            message=message,
+        )
+        result = cast(CommandAuthoringResult, outcome.result)
         return CommandAuthoringResponse(
             trace_id=trace_id,
             message=result.message,
@@ -906,55 +834,116 @@ class AppRuntime:
             )
 
     async def run_command(self, request: CommandRunRequest) -> CommandRunResponse:
-        trace_id = new_id()
-        self._reserve_command(trace_id, request.expected_workspace)
-        try:
-            return await self._run_reserved_command(request, trace_id)
-        finally:
-            self._release_command(trace_id)
+        trace_id, outcome = await self._execute_command(
+            _Execution(
+                command=request.command,
+                label=request.command,
+                args=request.args,
+                cwd=command_cwd(request.cwd) or _default_command_cwd(),
+                failure_code="command_error",
+            ),
+            person=request.person,
+            message=lambda _access: request.message,
+            expected_workspace=request.expected_workspace,
+            guard=(
+                partial(self._guard_run_target, request)
+                if request.expected_command_file_id is not None
+                else None
+            ),
+        )
+        return CommandRunResponse(trace_id=trace_id, output=outcome.text_output)
 
-    async def _run_reserved_command(
-        self, request: CommandRunRequest, trace_id: str
-    ) -> CommandRunResponse:
-        context = self._get_context(request.message)
+    async def _execute_command(
+        self,
+        execution: _Execution,
+        *,
+        person: str | None,
+        message: Callable[[CommandAccess], str],
+        expected_workspace: Path | None = None,
+        guard: Callable[[Context], None] | None = None,
+    ) -> tuple[str, CommandOutcome]:
+        """Run one command the Desktop starts, as manual work under a new trace.
+
+        A command that declares itself read-only takes no manual-command
+        reservation and no exclusive work slot: its turns can change nothing,
+        so it stays usable while another command or that member's scheduled
+        work runs.
+
+        Args:
+            execution: The command and how its run is reported.
+            person: Requested member identifier, or ``None`` for the team default.
+            message: Builds the command's input from what it declares.
+            expected_workspace: Workspace the caller expects to be selected.
+            guard: Checks the command against the member it runs as before
+                anything starts.
+
+        Returns:
+            The run's trace id and the command's outcome.
+
+        Raises:
+            AppApiError: If the member cannot be resolved, the runtime rejects
+                the work, or the command fails.
+        """
+        # The workspace is accepted before anything is resolved in it, and a
+        # command that takes the slot is reserved for that same workspace: only
+        # the resolved command says whether it takes the slot at all.
+        workspace = self._reserve_command(None, expected_workspace)
+        context = self._get_context()
         # Resolve the member up front: the guard must check the file that this
         # very member runs, and an omitted person would otherwise resolve twice
         # (placeholder context for the guard, team default for the run).
-        person = self._resolve_execution_person(
-            context, request.person, request.command
+        acting = self._resolve_execution_person(context, person, execution.label)
+        if guard is not None:
+            guard(context.clone_for(acting))
+        path = resolve_command_path(
+            execution.command,
+            context.team.project.get_language_code(),
+            acting.person_id,
         )
-        person_id = person.person_id
-        if request.expected_command_file_id is not None:
-            self._guard_run_target(request, context.clone_for(person))
         try:
-            loop = asyncio.get_running_loop()
-            task = asyncio.current_task()
+            access = command_access(path) if path is not None else CommandAccess()
+        except CommandError:
+            # What cannot be resolved declares nothing; the run reports why.
+            access = CommandAccess()
+        context.pipe = message(access)
+        trace_id = new_id()
+        if not access.read_only:
+            self._reserve_command(trace_id, workspace)
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
 
-            def _cancel_manual_command() -> None:
-                if task is not None:
-                    loop.call_soon_threadsafe(task.cancel)
+        def _cancel() -> None:
+            if task is not None:
+                loop.call_soon_threadsafe(task.cancel)
 
+        try:
             with (
                 self._execution.track_work(
                     source="manual",
-                    person_id=person_id,
-                    command=request.command,
+                    person_id=acting.person_id,
+                    command=execution.label,
                     work_id=trace_id,
-                    cancel=_cancel_manual_command,
+                    cancel=_cancel,
+                    exclusive=not access.read_only,
                 ),
                 trace_scope(
                     "manual",
-                    command=request.command,
-                    person_id=person_id,
+                    command=execution.label,
+                    person_id=acting.person_id,
                     trace_id=trace_id,
+                    attributes=execution.attributes,
                 ),
             ):
-                output = await self._run_command_traced(request, context, person_id)
+                outcome = await self._run_command_traced(
+                    execution, context, acting.person_id
+                )
         except WorkRejectedError as exc:
             raise AppApiError(
                 "work_rejected", reason=str(exc), status_code=409
             ) from exc
-        return CommandRunResponse(trace_id=trace_id, output=output)
+        finally:
+            self._release_command(trace_id)
+        return trace_id, outcome
 
     def _resolve_execution_person(
         self, context: Context, person_identifier: str | None, command: str
@@ -1013,47 +1002,51 @@ class AppRuntime:
             ) from exc
 
     async def _run_command_traced(
-        self, request: CommandRunRequest, context: Context, person_id: str
-    ) -> str:
-        # Events carry the resolved person so an omitted request person still
-        # shows the member the run actually belongs to.
+        self, execution: _Execution, context: Context, person_id: str
+    ) -> CommandOutcome:
+        # This opens the run's trace, so it is the only layer that can say the
+        # whole run started and ended. Events carry the resolved person so an
+        # omitted request person still shows the member the run belongs to.
         self._event_bus.publish_event(
-            "command.started",
-            {"command": request.command, "person": person_id},
+            "command.started", {"command": execution.label, "person": person_id}
         )
         try:
-            output = await LocalCommandExecutor().run(
+            outcome = await LocalCommandExecutor().run(
                 context,
-                command_name=request.command,
-                command_args=request.args,
+                command_name=execution.command,
+                command_args=execution.args,
                 person_identifier=person_id,
-                cwd=command_cwd(request.cwd) or _default_command_cwd(),
+                cwd=execution.cwd,
             )
-        except CommandError as exc:
-            self._event_bus.publish_event(
-                "command.failed",
-                {
-                    "command": request.command,
-                    "code": "cli_agent_authentication"
-                    if find_cli_agent_execution_error(exc, category="authentication")
-                    else "command_error",
-                    "message": str(exc),
-                },
-            )
-            raise AppApiError("command_error", reason=str(exc)) from exc
+            if execution.result_type is not None and not isinstance(
+                outcome.result, execution.result_type
+            ):
+                raise CommandError(
+                    f"Command '{execution.command}' did not return a "
+                    f"{execution.result_type.__name__}."
+                )
         except BaseException as exc:
             # Cancellation lands here as well: a force stop cancels this task,
             # and the run it started has to be reported as ended either way.
+            # Anything but a failed command is a defect: it stays a generic 500,
+            # so internal wording never reaches the client.
+            failed = isinstance(exc, CommandError | CliAgentExecutionError)
             self._event_bus.publish_event(
                 "command.failed",
-                {"command": request.command, **command_failure_payload(exc)},
+                {
+                    "command": execution.label,
+                    "person": person_id,
+                    **command_failure_payload(exc),
+                    **({"message": str(exc)} if failed else {}),
+                },
             )
+            if isinstance(exc, CommandError | CliAgentExecutionError):
+                raise execution.failure(exc) from exc
             raise
         self._event_bus.publish_event(
-            "command.finished",
-            {"command": request.command, "output_length": len(output)},
+            "command.finished", {"command": execution.label, "person": person_id}
         )
-        return output
+        return outcome
 
     def start_scheduler(self, request: SchedulerStartRequest) -> RuntimeStatus:
         try:
@@ -1432,24 +1425,37 @@ class AppRuntime:
     ) -> TroubleshootingResponse:
         """Answer one troubleshooting question about the recorded diagnostics."""
         focus = request.focus or TroubleshootingFocus()
-        label = f"troubleshoot:{focus.trace_id or focus.view}"
-        async with self._assistant_turn(
-            work_kind="troubleshooting",
-            label=label,
-            conversation_id=request.conversation_id,
-            message=request.message,
-            person=request.person,
-            failure_code="troubleshooting_failed",
-            read_only=True,
-        ) as (context, trace_id):
-            result = await troubleshoot_turn(
-                context,
-                conversation_id=request.conversation_id,
-                trace_id=trace_id,
-                question=request.message,
-                focus=focus.model_dump(),
-                workspace_data_root=get_workspace_root(),
+
+        def message(access: CommandAccess) -> str:
+            # The directories are named the way the agent's environment mounts
+            # them, from what the command declares it inspects.
+            directories = inspected_directories(access.inspects, get_workspace_root())
+            return json.dumps(
+                {
+                    "question": request.message,
+                    "focus": focus.model_dump(),
+                    "directories": {
+                        name: guest_path(path) for name, path in directories.items()
+                    },
+                },
+                ensure_ascii=False,
             )
+
+        trace_id, outcome = await self._execute_command(
+            _Execution(
+                command="assistants/troubleshoot",
+                label=f"troubleshoot:{focus.trace_id or focus.view}",
+                args=[f"conversation_id={request.conversation_id}"],
+                cwd=_assistant_cwd("troubleshooting"),
+                failure_code="troubleshooting_failed",
+                failure_status=502,
+                attributes={"troubleshooting.conversation_id": request.conversation_id},
+                result_type=TroubleshootingResult,
+            ),
+            person=request.person,
+            message=message,
+        )
+        result = cast(TroubleshootingResult, outcome.result)
         return TroubleshootingResponse(
             trace_id=trace_id,
             message=result.message,
@@ -1834,25 +1840,42 @@ class AppRuntime:
         self._loaded_dotenv_keys = loaded_keys
 
     def _reserve_command(
-        self, trace_id: str, expected_workspace: Path | None = None
-    ) -> None:
+        self, trace_id: str | None, expected_workspace: Path | None = None
+    ) -> Path | None:
+        """Accept a command for the selected workspace and reserve its slot.
+
+        Args:
+            trace_id: The run taking the one manual-command slot, or ``None``
+                to only accept the workspace.
+            expected_workspace: The workspace the command was asked for.
+
+        Returns:
+            The selected workspace the command was accepted for.
+
+        Raises:
+            AppApiError: If the workspace is switching or is not the expected
+                one, or another command holds the slot.
+        """
         # Workspace switching may wait for I/O while holding this lock. A
         # command arrives on the event loop, so reject it instead of blocking.
         if not self._lock.acquire(blocking=False):
             raise AppApiError("command_workspace_changing", status_code=409)
         try:
+            workspace = self.get_config_status().workspace
             if (
                 expected_workspace is not None
-                and self.get_config_status().workspace != expected_workspace.resolve()
+                and workspace != expected_workspace.resolve()
             ):
                 raise AppApiError("command_workspace_changed", status_code=409)
-            if self._running_command_id is not None:
-                raise AppApiError(
-                    "command_already_running",
-                    status_code=409,
-                    context={"trace_id": self._running_command_id},
-                )
-            self._running_command_id = trace_id
+            if trace_id is not None:
+                if self._running_command_id is not None:
+                    raise AppApiError(
+                        "command_already_running",
+                        status_code=409,
+                        context={"trace_id": self._running_command_id},
+                    )
+                self._running_command_id = trace_id
+            return workspace
         finally:
             self._lock.release()
 
@@ -2397,5 +2420,13 @@ def _default_command_cwd() -> Path:
     """Where a command runs when the screen names no directory: the exchange
     directory, so what it produces lands where the user looks for it."""
     cwd = exchange_dir()
+    cwd.mkdir(parents=True, exist_ok=True)
+    return cwd
+
+
+def _assistant_cwd(name: str) -> Path:
+    """Where a Desktop assistant's turns work: its own directory under
+    ``.guildbotics/local/work``."""
+    cwd = get_workspace_work_path(name, workspace_root=get_workspace_root())
     cwd.mkdir(parents=True, exist_ok=True)
     return cwd

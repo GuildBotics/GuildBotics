@@ -16,6 +16,8 @@ no real LLM / GitHub / subprocess I/O runs.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -38,24 +40,31 @@ from guildbotics.commands.authoring import (
     CommandAuthoringChange,
     CommandAuthoringResult,
 )
-from guildbotics.intelligences.brains.cli_agent import (
-    CliAgentExecutionError,
-    CliAgentExecutionResult,
-)
-from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.commands.errors import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
+from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
+from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability import correlation_fields
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
     ServiceLockUnavailableError,
+)
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT, get_template_path
+from tests.guildbotics.templates.commands.assistant_doubles import (
+    AgentContext,
+    ScriptedAgent,
 )
 
 HTTP_BAD_REQUEST = 400
@@ -936,240 +945,8 @@ def test_routine_command_options_person_not_found_raises(
 
 
 # ---------------------------------------------------------------------------
-# author_command / run_command
+# run_command
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_author_command_uses_stable_authoring_identity_and_unique_trace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    ocr_source = "def main(context):\n    return context.pipe\n"
-    _write(config_dir / "commands/ocr/extract-text.py", ocr_source)
-    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
-    captured: dict[str, Any] = {}
-
-    async def fake_author_command_turn(context: object, **kwargs: Any) -> Any:
-        captured["context"] = context
-        captured.update(kwargs)
-        captured["correlation"] = correlation_fields()
-        return CommandAuthoringResult(
-            action="propose_changes",
-            message="Review the proposed change.",
-            changes=[
-                CommandAuthoringChange(
-                    operation="update",
-                    command="reports/weekly",
-                    format="python",
-                    content="def main(context):\n    return 'updated'\n",
-                )
-            ],
-        )
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author_command_turn)
-
-    response = await runtime.author_command(
-        CommandAuthoringRequest(
-            mode="edit",
-            conversation_id="authoring-1",
-            command="reports/weekly",
-            format="python",
-            content="old source",
-            file_id="cmVwb3J0cy93ZWVrbHkucHk",
-            revision="revision-1",
-            message="Add a weekly report.",
-            person="bot",
-        )
-    )
-
-    assert response.message == "Review the proposed change."
-    assert response.action == "propose_changes"
-    assert response.changes[0].content == "def main(context):\n    return 'updated'\n"
-    assert response.changes[0].relative_path == "reports/weekly.py"
-    assert response.changes[0].file_id == "cmVwb3J0cy93ZWVrbHkucHk"
-    assert captured["conversation_id"] == "authoring-1"
-    assert captured["mode"] == "edit"
-    assert captured["trace_id"] == response.trace_id
-    assert captured["instruction"] == "Add a weekly report."
-    assert {
-        "command": "ocr/extract-text",
-        "format": "python",
-        "relative_path": "ocr/extract-text.py",
-        "content": ocr_source,
-    } in captured["available_commands"]
-    assert captured["correlation"]["trace_id"] == response.trace_id
-    # A Desktop-initiated turn is a manual run, so it is filterable in
-    # diagnostics and stays off the activity timeline like other manual runs.
-    assert captured["correlation"]["source"] == "manual"
-    assert captured["correlation"]["command"] == "author:reports/weekly"
-    assert captured["correlation"]["attributes"] == {
-        "command_authoring.conversation_id": "authoring-1"
-    }
-    assert captured["context"].closed is True
-
-
-@pytest.mark.asyncio
-async def test_author_command_maps_work_rejection_to_conflict(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    def reject_work(**_: Any) -> Any:
-        raise WorkRejectedError("busy", reason="lease_unavailable")
-
-    monkeypatch.setattr(runtime._execution, "track_work", reject_work)
-
-    with pytest.raises(AppApiError) as caught:
-        await runtime.author_command(
-            CommandAuthoringRequest(
-                mode="create",
-                conversation_id="authoring-1",
-                message="Create a command.",
-                person="bot",
-            )
-        )
-
-    assert caught.value.status_code == 409
-    assert caught.value.code == "work_rejected"
-
-
-@pytest.mark.asyncio
-async def test_author_command_maps_command_error_to_bad_gateway(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    context = _make_context([_make_person()])
-    runtime = _runtime_with_context(monkeypatch, context)
-
-    async def fail_authoring(*_: Any, **__: Any) -> Any:
-        raise CommandError("invalid agent response")
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", fail_authoring)
-
-    with pytest.raises(AppApiError) as caught:
-        await runtime.author_command(
-            CommandAuthoringRequest(
-                mode="create",
-                conversation_id="authoring-1",
-                message="Create a command.",
-                person="bot",
-            )
-        )
-
-    assert caught.value.status_code == 502
-    assert caught.value.code == "command_authoring_failed"
-
-
-@pytest.mark.asyncio
-async def test_assistant_turn_publishes_its_trace_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The turn opens its own trace, so it is the only layer that can say the
-    # turn ended. Without this, the trace shows only the LLM spans it is made
-    # of and never resolves past "running".
-    _isolate_workspace(tmp_path, monkeypatch)
-    event_bus = EventBus()
-    runtime = AppRuntime(event_bus)
-    monkeypatch.setattr(
-        runtime, "_get_context", lambda message="": _make_context([_make_person()])
-    )
-
-    async def fake_author_command_turn(_context: object, **_kwargs: Any) -> Any:
-        return CommandAuthoringResult(action="answer", message="Done.")
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author_command_turn)
-
-    response = await runtime.author_command(
-        CommandAuthoringRequest(
-            mode="create", conversation_id="authoring-1", message="How?", person="bot"
-        )
-    )
-
-    events = event_bus.snapshot_events()
-    assert [event["type"] for event in events] == [
-        "command.started",
-        "command.finished",
-    ]
-    assert {event["trace_id"] for event in events} == {response.trace_id}
-    assert (
-        resolve_trace_status([{"kind": "event", **event} for event in events])
-        == "success"
-    )
-
-
-@pytest.mark.asyncio
-async def test_assistant_turn_publishes_a_failed_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    event_bus = EventBus()
-    runtime = AppRuntime(event_bus)
-    monkeypatch.setattr(
-        runtime, "_get_context", lambda message="": _make_context([_make_person()])
-    )
-
-    async def failing_turn(_context: object, **_kwargs: Any) -> Any:
-        raise CommandError("agent refused")
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", failing_turn)
-
-    with pytest.raises(AppApiError):
-        await runtime.author_command(
-            CommandAuthoringRequest(
-                mode="create",
-                conversation_id="authoring-1",
-                message="How?",
-                person="bot",
-            )
-        )
-
-    events = event_bus.snapshot_events()
-    assert [event["type"] for event in events] == ["command.started", "command.failed"]
-    assert events[-1]["payload"]["error_type"] == "CommandError"
-
-
-@pytest.mark.asyncio
-async def test_assistant_turn_publishes_a_failed_boundary_when_cancelled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A force stop cancels the turn's task. ``CancelledError`` is not an
-    # ``Exception``, so a boundary that only caught ``Exception`` published
-    # ``command.started`` and nothing else, and the turn read as still running
-    # after the stop finished.
-    _isolate_workspace(tmp_path, monkeypatch)
-    event_bus = EventBus()
-    runtime = AppRuntime(event_bus)
-    monkeypatch.setattr(
-        runtime, "_get_context", lambda message="": _make_context([_make_person()])
-    )
-
-    async def cancelled_turn(_context: object, **_kwargs: Any) -> Any:
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", cancelled_turn)
-
-    with pytest.raises(asyncio.CancelledError):
-        await runtime.author_command(
-            CommandAuthoringRequest(
-                mode="create",
-                conversation_id="authoring-1",
-                message="How?",
-                person="bot",
-            )
-        )
-
-    events = event_bus.snapshot_events()
-    assert [event["type"] for event in events] == ["command.started", "command.failed"]
-    # A cancelled turn is the expected end of a stop, so it opens no Desktop
-    # execution alert.
-    assert events[-1]["payload"]["code"] == "cancelled"
-    assert (
-        resolve_trace_status([{"kind": "event", **event} for event in events])
-        == "failed"
-    )
 
 
 @pytest.mark.asyncio
@@ -1179,8 +956,8 @@ async def test_run_command_publishes_started_and_finished_events(
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
-        return "output-value"
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
+        return CommandOutcome(result="output-value", text_output="output-value")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1200,10 +977,7 @@ async def test_run_command_publishes_started_and_finished_events(
         "command.finished",
     ]
     assert events[0]["payload"] == {"command": "demo", "person": "bot"}
-    assert events[1]["payload"] == {
-        "command": "demo",
-        "output_length": len("output-value"),
-    }
+    assert events[1]["payload"] == {"command": "demo", "person": "bot"}
     assert {event["trace_id"] for event in events} == {response.trace_id}
     assert {event["source"] for event in events} == {"manual"}
 
@@ -1216,11 +990,13 @@ async def test_run_command_passes_cwd_and_args_into_execution(
     captured: dict[str, Any] = {}
     sentinel_context = _make_context([_make_person()])
 
-    async def fake_run_command(self: object, context: object, **kwargs: Any) -> str:
+    async def fake_run_command(
+        self: object, context: object, **kwargs: Any
+    ) -> CommandOutcome:
         del self
         captured["context"] = context
         captured.update(kwargs)
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(runtime, "_get_context", lambda message="": sentinel_context)
     monkeypatch.setattr(
@@ -1253,10 +1029,12 @@ async def test_run_command_without_cwd_runs_in_the_exchange_directory(
     runtime = AppRuntime(EventBus())
     captured: dict[str, Any] = {}
 
-    async def fake_run_command(self: object, context: object, **kwargs: Any) -> str:
+    async def fake_run_command(
+        self: object, context: object, **kwargs: Any
+    ) -> CommandOutcome:
         del self, context
         captured.update(kwargs)
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1283,10 +1061,12 @@ async def test_run_command_expands_the_home_in_the_working_directory(
     runtime = AppRuntime(EventBus())
     captured: dict[str, Any] = {}
 
-    async def fake_run_command(self: object, context: object, **kwargs: Any) -> str:
+    async def fake_run_command(
+        self: object, context: object, **kwargs: Any
+    ) -> CommandOutcome:
         del self, context
         captured.update(kwargs)
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1318,9 +1098,9 @@ async def test_logs_during_run_command_carry_the_trace_id(
     guildbotics_logger.addHandler(log_handler)
     log_sub = event_bus.subscribe_logs()
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         guildbotics_logger.info("progress message")
-        return "done"
+        return CommandOutcome(result="done", text_output="done")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1360,7 +1140,7 @@ async def test_run_command_publishes_failed_event_for_person_selection(
         ]
     )
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         raise AssertionError("The run must not start without a member.")
 
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
@@ -1393,7 +1173,7 @@ async def test_run_command_publishes_failed_event_for_person_not_found(
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         raise AssertionError("The run must not start for an unknown member.")
 
     monkeypatch.setattr(
@@ -1428,7 +1208,7 @@ async def test_run_command_publishes_failed_event_for_command_error(
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         raise CommandError("boom")
 
     monkeypatch.setattr(
@@ -1448,9 +1228,12 @@ async def test_run_command_publishes_failed_event_for_command_error(
         for event in event_bus.snapshot_events()
         if event["type"] == "command.failed"
     ]
+    # One classification for every recording site (``command_failure_payload``).
     assert failed[0]["payload"] == {
         "command": "demo",
-        "code": "command_error",
+        "person": "bot",
+        "error_type": "CommandError",
+        "code": "",
         "message": "boom",
     }
 
@@ -1462,7 +1245,7 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
     event_bus = EventBus()
     runtime = AppRuntime(event_bus)
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         raise ValueError("unexpected")
 
     monkeypatch.setattr(
@@ -1480,8 +1263,10 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
         for event in event_bus.snapshot_events()
         if event["type"] == "command.failed"
     ]
+    # A defect's wording stays out of what the client is shown.
     assert failed[0]["payload"] == {
         "command": "demo",
+        "person": "bot",
         "error_type": "ValueError",
         "code": "",
     }
@@ -1494,11 +1279,11 @@ async def test_run_command_releases_reservation_after_failure(
     runtime = AppRuntime(EventBus())
     attempts: list[str] = []
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         attempts.append("called")
         if len(attempts) == 1:
             raise CommandError("first failure")
-        return "second ok"
+        return CommandOutcome(result="second ok", text_output="second ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1524,11 +1309,11 @@ async def test_run_command_releases_reservation_after_unexpected_error(
     runtime = AppRuntime(EventBus())
     attempts: list[str] = []
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         attempts.append("called")
         if len(attempts) == 1:
             raise RuntimeError("crash")
-        return "recovered"
+        return CommandOutcome(result="recovered", text_output="recovered")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1614,9 +1399,9 @@ async def test_run_command_rejects_person_lease_conflict_with_http_409(
     runtime = _runtime_with_context(monkeypatch, context)
     calls: list[str] = []
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         calls.append("called")
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
@@ -1647,10 +1432,10 @@ async def test_run_command_appears_in_runtime_active_work(
     started = asyncio.Event()
     finish = asyncio.Event()
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         started.set()
         await finish.wait()
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1683,10 +1468,10 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
     started = asyncio.Event()
     finish = asyncio.Event()
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         started.set()
         await finish.wait()
-        return "ok"
+        return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -1719,14 +1504,14 @@ async def test_force_stop_scheduler_cancels_manual_command(
     started = asyncio.Event()
     cancelled = {"value": False}
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         started.set()
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             cancelled["value"] = True
             raise
-        return "unreachable"
+        return CommandOutcome(result="unreachable", text_output="unreachable")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
@@ -2167,233 +1952,336 @@ def test_run_command_guards_the_file_of_the_default_person(
 
 
 # ---------------------------------------------------------------------------
-# troubleshoot
+# Desktop assistants: bundled commands, run like any other command
 # ---------------------------------------------------------------------------
 
 
-def _troubleshooting_runtime(
-    monkeypatch: pytest.MonkeyPatch, recorded_trace_ids: set[str]
+def _assistant_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: ScriptedAgent,
+    recorded: frozenset[str] = frozenset(),
 ) -> AppRuntime:
-    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    """A runtime whose member's agent is ``agent``; nothing else is replaced."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
+    runtime = _runtime_with_context(monkeypatch, AgentContext(agent))
 
     class _StoreStub:
         def get_summary(self, trace_id: str) -> dict[str, Any] | None:
-            return {"trace_id": trace_id} if trace_id in recorded_trace_ids else None
+            return {"trace_id": trace_id} if trace_id in recorded else None
 
     runtime._diagnostics_store = _StoreStub()  # type: ignore[assignment]
     return runtime
 
 
-@pytest.mark.asyncio
-async def test_troubleshoot_scopes_the_turn_and_returns_the_answer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, {"abc123"})
-    captured: dict[str, Any] = {}
-
-    async def fake_turn(context: object, **kwargs: Any) -> Any:
-        captured["context"] = context
-        captured.update(kwargs)
-        captured["correlation"] = correlation_fields()
-        return TroubleshootingResult(message="The token expired.", trace_ids=["abc123"])
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
-
-    response = await runtime.troubleshoot(
+def _troubleshoot(runtime: AppRuntime, **focus: Any) -> Any:
+    return runtime.troubleshoot(
         TroubleshootingRequest(
             conversation_id="conv-1",
             message="Why did this fail?",
             person="bot",
-            focus=TroubleshootingFocus(view="trace", trace_id="abc123"),
+            focus=TroubleshootingFocus(**focus) if focus else None,
         )
     )
 
+
+def _author(runtime: AppRuntime) -> Any:
+    return runtime.author_command(
+        CommandAuthoringRequest(
+            mode="edit",
+            conversation_id="authoring-1",
+            command="reports/weekly",
+            format="python",
+            content="old source",
+            file_id="cmVwb3J0cy93ZWVrbHkucHk",
+            revision="revision-1",
+            message="Add a weekly report.",
+            person="bot",
+        )
+    )
+
+
+_ANSWER = CommandAuthoringResult(action="answer", message="This is possible.")
+#: Each assistant, what its agent answers, and the error code it fails with.
+_ASSISTANTS = {
+    "troubleshoot": (
+        _troubleshoot,
+        TroubleshootingResult,
+        TroubleshootingResult(message="…"),
+        "troubleshooting_failed",
+    ),
+    "author": (_author, CommandAuthoringResult, _ANSWER, "command_authoring_failed"),
+}
+
+
+@pytest.mark.asyncio
+async def test_troubleshoot_runs_its_bundled_command_as_a_manual_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answer = TroubleshootingResult(message="The token expired.", trace_ids=["abc123"])
+    agent = ScriptedAgent(TroubleshootingResult, answer)
+    runtime = _assistant_runtime(tmp_path, monkeypatch, agent, frozenset({"abc123"}))
+    state = tmp_path / ".guildbotics"
+    (state / "local" / "run").mkdir(parents=True)
+    (state / "config").mkdir(parents=True)
+
+    response = await _troubleshoot(runtime, view="trace", trace_id="abc123")
+
     assert response.message == "The token expired."
     assert response.trace_ids == ["abc123"]
-    assert captured["question"] == "Why did this fail?"
-    assert captured["conversation_id"] == "conv-1"
-    assert captured["trace_id"] == response.trace_id
-    assert captured["focus"]["trace_id"] == "abc123"
-    assert captured["correlation"]["source"] == "manual"
-    assert captured["correlation"]["command"] == "troubleshoot:abc123"
-    assert captured["correlation"]["attributes"] == {
+    (turn,) = agent.turns
+    # Where to look is what the command declares it inspects, named the way
+    # the turn's environment mounts it.
+    assert json.loads(turn["message"]) == {
+        "question": "Why did this fail?",
+        "focus": TroubleshootingFocus(view="trace", trace_id="abc123").model_dump(),
+        "directories": {
+            "config": guest_path(state / "config"),
+            "diagnostics": guest_path(state / "local" / "run"),
+            "templates": guest_path(get_template_path()),
+        },
+    }
+    assert turn["execution"]["work_identity"] == "conv-1"
+    assert turn["cwd"] == state / "local" / "work" / "troubleshooting"
+    # A Desktop-initiated run like any other manual command: filterable in
+    # diagnostics, off the activity timeline, named by its label.
+    assert turn["correlation"]["trace_id"] == response.trace_id
+    assert turn["correlation"]["source"] == "manual"
+    assert turn["correlation"]["command"] == "troubleshoot:abc123"
+    assert turn["correlation"]["attributes"] == {
         "troubleshooting.conversation_id": "conv-1"
     }
-    assert captured["context"].closed is True
 
 
 @pytest.mark.asyncio
 async def test_troubleshoot_drops_trace_ids_that_were_never_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, {"real"})
-
-    async def fake_turn(*_: Any, **__: Any) -> Any:
-        return TroubleshootingResult(message="…", trace_ids=["real", "invented", ""])
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
-
-    response = await runtime.troubleshoot(
-        TroubleshootingRequest(conversation_id="conv-1", message="Why?", person="bot")
+    agent = ScriptedAgent(
+        TroubleshootingResult,
+        TroubleshootingResult(message="…", trace_ids=["real", "invented", ""]),
     )
+    runtime = _assistant_runtime(tmp_path, monkeypatch, agent, frozenset({"real"}))
+
+    response = await _troubleshoot(runtime)
 
     # Every reference becomes a link, so an invented trace id must not survive.
     assert response.trace_ids == ["real"]
 
 
 @pytest.mark.asyncio
-async def test_author_command_is_read_only_and_skips_the_member_execution_lease(
+async def test_author_command_runs_its_bundled_command_with_the_editor_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
-    exclusivity: dict[str, Any] = {}
-    original = runtime._execution.track_work
+    ocr_source = "def main(context):\n    return context.pipe\n"
+    _write(tmp_path / ".guildbotics/config/commands/ocr/extract-text.py", ocr_source)
+    change = CommandAuthoringChange(
+        operation="update",
+        command="reports/weekly",
+        format="python",
+        content="def main(context):\n    return 'updated'\n",
+    )
+    agent = ScriptedAgent(
+        CommandAuthoringResult,
+        CommandAuthoringResult(
+            action="propose_changes", message="Review it.", changes=[change]
+        ),
+    )
+    runtime = _assistant_runtime(tmp_path, monkeypatch, agent)
+
+    response = await _author(runtime)
+
+    assert response.action == "propose_changes"
+    (proposed,) = response.changes
+    assert proposed.content == change.content
+    assert proposed.relative_path == "reports/weekly.py"
+    assert proposed.file_id == "cmVwb3J0cy93ZWVrbHkucHk"
+    assert proposed.expected_revision == "revision-1"
+    (turn,) = agent.turns
+    sent = json.loads(turn["message"])
+    assert (sent["mode"], sent["command"], sent["current_content"]) == (
+        "edit",
+        "reports/weekly",
+        "old source",
+    )
+    assert sent["instruction"] == "Add a weekly report."
+    assert {
+        "command": "ocr/extract-text",
+        "format": "python",
+        "relative_path": "ocr/extract-text.py",
+        "content": ocr_source,
+    } in sent["available_commands"]
+    assert turn["execution"]["work_identity"] == "authoring-1"
+    assert turn["cwd"] == tmp_path / ".guildbotics/local/work/command-authoring"
+    assert turn["correlation"]["trace_id"] == response.trace_id
+    assert turn["correlation"]["source"] == "manual"
+    assert turn["correlation"]["command"] == "author:reports/weekly"
+    assert turn["correlation"]["attributes"] == {
+        "command_authoring.conversation_id": "authoring-1"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("assistant", sorted(_ASSISTANTS))
+async def test_an_assistant_runs_while_a_command_and_the_members_work_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, assistant: str
+) -> None:
+    """A read-only command takes neither the manual-command slot nor the
+    member's execution lease."""
+    ask, result_type, answer, _ = _ASSISTANTS[assistant]
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(result_type, answer)
+    )
+    exclusivity: list[bool] = []
+    track_work = runtime._execution.track_work
 
     def record_exclusive(**kwargs: Any) -> Any:
-        exclusivity["exclusive"] = kwargs.get("exclusive", True)
-        return original(**kwargs)
+        exclusivity.append(kwargs["exclusive"])
+        return track_work(**kwargs)
 
     monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
-
-    async def fake_author(*_: Any, **__: Any) -> Any:
-        return CommandAuthoringResult(
-            action="answer", message="This is possible.", changes=[]
-        )
-
-    monkeypatch.setattr(runtime_module, "author_command_turn", fake_author)
-
-    await runtime.author_command(
-        CommandAuthoringRequest(
-            mode="create", conversation_id="c", message="Create it.", person="bot"
-        )
-    )
-
-    assert exclusivity["exclusive"] is False
-
-
-@pytest.mark.asyncio
-async def test_troubleshoot_runs_while_the_member_is_busy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
-
-    async def fake_turn(*_: Any, **__: Any) -> Any:
-        return TroubleshootingResult(message="…")
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fake_turn)
-
+    runtime._reserve_command("manual-command")
+    scheduled = contextvars.Context()
     lease = PersonExecutionLease("bot")
-    lease.acquire(source="routine", command="workflows/ticket", work_id="other")
+    scheduled.run(lease.acquire, source="routine", command="ticket", work_id="other")
     try:
-        response = await runtime.troubleshoot(
-            TroubleshootingRequest(
-                conversation_id="conv-1", message="Why?", person="bot"
-            )
-        )
+        response = await ask(runtime)
     finally:
-        lease.release()
+        scheduled.run(lease.release)
+        runtime._release_command("manual-command")
 
-    assert response.message == "…"
-
-
-@pytest.mark.asyncio
-async def test_troubleshoot_maps_assistant_failure_to_bad_gateway(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
-
-    async def fail(*_: Any, **__: Any) -> Any:
-        raise CommandError("invalid agent response")
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
-
-    with pytest.raises(AppApiError) as caught:
-        await runtime.troubleshoot(
-            TroubleshootingRequest(
-                conversation_id="conv-1", message="Why?", person="bot"
-            )
-        )
-
-    assert caught.value.status_code == 502
-    assert caught.value.code == "troubleshooting_failed"
+    assert response.message == answer.message
+    assert exclusivity == [False]
 
 
 @pytest.mark.asyncio
-async def test_troubleshoot_maps_cli_agent_failure_to_bad_gateway(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An AI CLI tool that exits non-zero must reach the panel as its own reason."""
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
-
-    async def fail(*_: Any, **__: Any) -> Any:
-        raise CliAgentExecutionError(
+@pytest.mark.parametrize("assistant", sorted(_ASSISTANTS))
+@pytest.mark.parametrize(
+    "reply",
+    [
+        CommandError("invalid agent response"),
+        CliAgentExecutionError(
             cli_agent="default",
             result=CliAgentExecutionResult(
                 stdout="", stderr="not logged in", returncode=1
             ),
-        )
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+        ),
+        "not structured",
+    ],
+    ids=["command-error", "cli-agent-error", "unstructured"],
+)
+async def test_a_failed_agent_is_a_bad_gateway_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, assistant: str, reply: Any
+) -> None:
+    ask, result_type, _, code = _ASSISTANTS[assistant]
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(result_type, reply)
+    )
 
     with pytest.raises(AppApiError) as caught:
-        await runtime.troubleshoot(
-            TroubleshootingRequest(
-                conversation_id="conv-1", message="Why?", person="bot"
-            )
-        )
+        await ask(runtime)
 
     assert caught.value.status_code == 502
-    assert caught.value.code == "troubleshooting_failed"
-    assert "not logged in" in caught.value.message
+    assert caught.value.code == code
+    if isinstance(reply, BaseException):
+        # The panel explains the failure with the tool's own reason.
+        assert str(reply).split(": ")[-1] in caught.value.message
 
 
 @pytest.mark.asyncio
-async def test_troubleshoot_lets_unexpected_defects_stay_internal_errors(
+async def test_an_assistant_run_publishes_its_trace_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A defect inside the turn must not be dressed up as an agent failure."""
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(CommandAuthoringResult, _ANSWER)
+    )
 
-    async def fail(*_: Any, **__: Any) -> Any:
-        raise TypeError("'NoneType' object is not subscriptable")
+    response = await _author(runtime)
 
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
-
-    with pytest.raises(TypeError):
-        await runtime.troubleshoot(
-            TroubleshootingRequest(
-                conversation_id="conv-1", message="Why?", person="bot"
-            )
-        )
+    events = runtime._event_bus.snapshot_events()
+    assert [event["type"] for event in events] == [
+        "command.started",
+        "command.finished",
+    ]
+    assert {event["trace_id"] for event in events} == {response.trace_id}
+    assert events[0]["payload"] == {
+        "command": "author:reports/weekly",
+        "person": "bot",
+    }
+    assert (
+        resolve_trace_status([{"kind": "event", **event} for event in events])
+        == "success"
+    )
 
 
 @pytest.mark.asyncio
-async def test_troubleshoot_keeps_the_app_api_error_a_turn_raises(
+@pytest.mark.parametrize(
+    ("reply", "raised", "code"),
+    [
+        (CommandError("agent refused"), AppApiError, ""),
+        # A force stop cancels the run's task. ``CancelledError`` is not an
+        # ``Exception``, and a cancelled run is the expected end of a stop, so
+        # it opens no Desktop execution alert.
+        (asyncio.CancelledError(), asyncio.CancelledError, "cancelled"),
+    ],
+    ids=["failure", "cancellation"],
+)
+async def test_an_assistant_run_publishes_a_failed_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reply: BaseException,
+    raised: type[BaseException],
+    code: str,
+) -> None:
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(CommandAuthoringResult, reply)
+    )
+
+    with pytest.raises(raised):
+        await _author(runtime)
+
+    events = runtime._event_bus.snapshot_events()
+    assert [event["type"] for event in events] == ["command.started", "command.failed"]
+    assert events[-1]["payload"]["code"] == code
+    assert (
+        resolve_trace_status([{"kind": "event", **event} for event in events])
+        == "failed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_assistant_rejected_by_the_runtime_is_a_conflict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An already-typed failure keeps its code and status instead of becoming 502."""
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(CommandAuthoringResult, _ANSWER)
+    )
 
-    async def fail(*_: Any, **__: Any) -> Any:
-        raise AppApiError(
-            "person_not_found", reason="Person 'bot' not found.", status_code=400
-        )
+    def reject_work(**_: Any) -> Any:
+        raise WorkRejectedError("busy", reason="lease_unavailable")
 
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", fail)
+    monkeypatch.setattr(runtime._execution, "track_work", reject_work)
+
+    with pytest.raises(AppApiError) as caught:
+        await _author(runtime)
+
+    assert caught.value.status_code == 409
+    assert caught.value.code == "work_rejected"
+
+
+@pytest.mark.asyncio
+async def test_an_assistant_for_an_unknown_member_keeps_its_own_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An already-typed failure keeps its code and status instead of 502."""
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(TroubleshootingResult)
+    )
 
     with pytest.raises(AppApiError) as caught:
         await runtime.troubleshoot(
-            TroubleshootingRequest(
-                conversation_id="conv-1", message="Why?", person="bot"
-            )
+            TroubleshootingRequest(conversation_id="c", message="Why?", person="ghost")
         )
 
     assert caught.value.status_code == 400
@@ -2401,38 +2289,57 @@ async def test_troubleshoot_keeps_the_app_api_error_a_turn_raises(
 
 
 @pytest.mark.asyncio
-async def test_assistant_turns_are_recorded_as_manual_runs(
+async def test_a_defect_running_an_assistant_stays_an_internal_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Both assistants must be filterable, and neither may reach activity."""
-    from guildbotics.app_api.activity_history import MANUAL_SESSION_SOURCE
-
-    _isolate_workspace(tmp_path, monkeypatch)
-    runtime = _troubleshooting_runtime(monkeypatch, set())
-    sources: list[str] = []
-
-    async def capture_troubleshoot(*_: Any, **__: Any) -> Any:
-        sources.append(str(correlation_fields()["source"]))
-        return TroubleshootingResult(message="…")
-
-    async def capture_author(*_: Any, **__: Any) -> Any:
-        sources.append(str(correlation_fields()["source"]))
-        return CommandAuthoringResult(
-            action="answer", message="This is possible.", changes=[]
-        )
-
-    monkeypatch.setattr(runtime_module, "troubleshoot_turn", capture_troubleshoot)
-    monkeypatch.setattr(runtime_module, "author_command_turn", capture_author)
-
-    await runtime.troubleshoot(
-        TroubleshootingRequest(conversation_id="c", message="Why?", person="bot")
-    )
-    await runtime.author_command(
-        CommandAuthoringRequest(
-            mode="create", conversation_id="c", message="Create it.", person="bot"
-        )
+    """A defect is not dressed up as an agent failure."""
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(TroubleshootingResult)
     )
 
-    # "manual" is both a source the diagnostics screen offers as a filter and
-    # the one activity history excludes, which is what these turns need.
-    assert sources == [MANUAL_SESSION_SOURCE, MANUAL_SESSION_SOURCE]
+    async def defect(*_: Any, **__: Any) -> Any:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", defect)
+
+    with pytest.raises(TypeError):
+        await _troubleshoot(runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_only", [True, False])
+async def test_only_a_writing_command_takes_the_manual_command_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_only: bool
+) -> None:
+    """Any command the Desktop runs is held to what it declares, not only the
+    assistants: a read-only one runs beside another command, non-exclusively."""
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/look.md",
+        f"---\nbrain: none\nread_only: {str(read_only).lower()}\n---\nlooked\n",
+    )
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    exclusivity: list[bool] = []
+    track_work = runtime._execution.track_work
+
+    def record_exclusive(**kwargs: Any) -> Any:
+        exclusivity.append(kwargs["exclusive"])
+        return track_work(**kwargs)
+
+    async def ran(*_: Any, **__: Any) -> CommandOutcome:
+        return CommandOutcome(result="looked", text_output="looked")
+
+    monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
+    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", ran)
+    runtime._reserve_command("manual-command")
+    try:
+        if read_only:
+            response = await runtime.run_command(CommandRunRequest(command="look"))
+            assert response.output == "looked"
+            assert exclusivity == [False]
+        else:
+            with pytest.raises(AppApiError) as caught:
+                await runtime.run_command(CommandRunRequest(command="look"))
+            assert caught.value.code == "command_already_running"
+    finally:
+        runtime._release_command("manual-command")
