@@ -2558,7 +2558,6 @@ command-authoring等                  .guildbotics/local/work/
 - `guildbotics/drivers/event_listener_runner.py`
 - `guildbotics/drivers/pending_chat_dispatcher.py`
 - `guildbotics/templates/commands/workflows/chat_conversation_workflow.py`
-- `guildbotics/templates/commands/workflows/chat/chat_scheduled_post_workflow.py`
 - `guildbotics/app_api/activity_*`
 - `guildbotics/app_api/models.py`
 - `guildbotics/app_api/runtime.py`
