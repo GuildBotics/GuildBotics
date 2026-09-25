@@ -49,7 +49,6 @@ class _FakeContext:
             debug=lambda *a, **k: None,
             error=lambda *a, **k: None,
         )
-        self.task = Task(title="T", description="D")
         self.pipe = ""
         self.shared_state: dict = {}
         self._ticket_manager = ticket_manager or _FakeTicketManager()

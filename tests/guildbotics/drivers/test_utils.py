@@ -5,7 +5,6 @@ from typing import List
 import pytest
 
 from guildbotics.drivers.utils import run_command
-from guildbotics.entities import Task
 
 
 class StubLogger:
@@ -28,10 +27,6 @@ class FakeContext:
     def __init__(self, person_id: str = "p1") -> None:
         self.logger = StubLogger()
         self.person = SimpleNamespace(person_id=person_id)
-        self.task: Task | None = None
-
-    def update_task(self, task: Task) -> None:
-        self.task = task
 
 
 @pytest.mark.asyncio
