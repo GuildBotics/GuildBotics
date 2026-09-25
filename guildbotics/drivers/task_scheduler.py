@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import shlex
 import threading
 import time
 from collections.abc import Coroutine
@@ -339,11 +338,9 @@ class TaskScheduler:
             routine_command_index += 1
 
         if routine_command and not self._stop_event.is_set():
-            # The ticket workflow takes no arguments; a routine that names it
-            # with some is the same patrol.
-            ticket_patrol = shlex.split(routine_command)[:1] == [
-                TICKET_WORKFLOW_COMMAND
-            ]
+            # Any other routine, one naming the ticket workflow with arguments
+            # included, runs as a command whose entry selects its ticket.
+            ticket_patrol = routine_command == TICKET_WORKFLOW_COMMAND
             if ticket_patrol and self._environment_unavailable():
                 # The AI CLI turn the patrol would dispatch cannot start here
                 # yet (the environment is being built, or is not set up). It

@@ -224,7 +224,7 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["manual", "scheduled"])
+@pytest.mark.parametrize("source", ["manual", "scheduled", "routine"])
 async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, source):
     from guildbotics.drivers import command_runner, ticket_selector
     from guildbotics.runtime.workflow_invocation import (

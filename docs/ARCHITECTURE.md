@@ -169,8 +169,9 @@ purpose:
   AI CLI turn: moving the ticket to the working lane, the run id and completion
   budget (`GUILDBOTICS_TICKET_MAX_ATTEMPTS`), the trace attributes that name the
   ticket, and the status comment of a failed or rate-limited run. The patrol selects
-  outside any trace and dispatches each candidate in turn; a scheduled or manual run
-  takes the ticket the patrol would take next. The workflow only runs the turn.
+  outside any trace and dispatches each candidate in turn; a scheduled or manual run,
+  or a routine that names the workflow with arguments, takes the ticket the patrol
+  would take next. The workflow only runs the turn.
 - **Chat workflow** (`workflows/chat_conversation_workflow`): Slack Socket Mode events
   and backfill are persisted as pending events by `drivers/event_listener_runner.py`,
   then drained per member by `drivers/pending_chat_dispatcher.py`. Like the ticket
