@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from guildbotics.integrations.chat_profile import (
     get_chat_profile,
-    get_chat_scheduled_posts,
     get_chat_slack_base_url,
     get_chat_subscriptions,
 )
@@ -21,17 +20,9 @@ def test_get_chat_profile_returns_empty_for_non_dict():
 
 
 def test_get_chat_profile_and_collections_normalize():
-    person = _Person(
-        profile={
-            "chat": {
-                "scheduled_posts": [{"name": "a"}, 1],
-                "slack_base_url": " https://slack.local/api ",
-            }
-        }
-    )
+    person = _Person(profile={"chat": {"slack_base_url": " https://slack.local/api "}})
 
     assert get_chat_profile(person) == person.profile["chat"]
-    assert get_chat_scheduled_posts(person) == [{"name": "a"}]
     assert get_chat_slack_base_url(person) == "https://slack.local/api"
 
 

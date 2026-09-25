@@ -67,11 +67,6 @@ class ThreadMessageState:
 
 
 @dataclass(slots=True)
-class ScheduledPostState:
-    last_run_slot: str | None = None
-
-
-@dataclass(slots=True)
 class PendingChatEvent:
     """A queued chat event plus the participation policy of its channel.
 
@@ -273,22 +268,6 @@ class ConversationStateStore(ABC):
         message: ThreadMessageState,
     ) -> None:
         """Append or update a locally cached thread message."""
-
-    @abstractmethod
-    def load_scheduled_post_state(
-        self, service: str, person_id: str, schedule_name: str
-    ) -> ScheduledPostState:
-        """Load state for a scheduled chat post definition."""
-
-    @abstractmethod
-    def save_scheduled_post_state(
-        self,
-        service: str,
-        person_id: str,
-        schedule_name: str,
-        state: ScheduledPostState,
-    ) -> None:
-        """Persist state for a scheduled chat post definition."""
 
     @abstractmethod
     def load_pending_events(
