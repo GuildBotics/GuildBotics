@@ -812,6 +812,10 @@ class IntelligenceConfigService:
         return assignments
 
     def _to_brain_config(self, assignment: BrainAssignment) -> dict[str, Any]:
+        if assignment.engine == "cli" and assignment.name == "chat_decision":
+            raise SetupServiceError(
+                "invalid_decision", "AI CLI is not supported for chat_decision"
+            )
         if assignment.engine == "jev" and assignment.name != "chat_decision":
             raise SetupServiceError(
                 "invalid_decision", "Jev is only supported for chat_decision"

@@ -15,7 +15,6 @@ from guildbotics.app_api.intelligences import (
 from guildbotics.app_api.models import BrainAssignment, IntelligenceConfigUpdateRequest
 from guildbotics.editions.simple.setup_service import SetupServiceError
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
-from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.brains.jev import JEV_KEY, JevBrain
 from guildbotics.utils.secret_store import KeyringSecretStore
 
@@ -105,7 +104,7 @@ def test_jev_cannot_be_assigned_to_text_commands(configured, name):
     assert not (root / "intelligences/brain_mapping.yml").exists()
 
 
-def test_member_inherits_and_overrides_through_brain_factory(configured):
+def test_member_rejects_cli_override_and_keeps_inherited_assignment(configured):
     root, _ = configured
     service = IntelligenceConfigService()
     service.update_config(
@@ -129,63 +128,46 @@ def test_member_inherits_and_overrides_through_brain_factory(configured):
     assert isinstance(selected(), JevBrain)
     assert selected().model == "jev-latest"
     assert not (root / "intelligences/decision.yml").exists()
-    service.update_config(
-        IntelligenceConfigUpdateRequest(
-            config_dir=root,
-            person_id="alice",
-            cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
-            brain_mapping=[
-                BrainAssignment(
-                    name="chat_decision",
-                    brain_class=CLI_BRAIN_CLASS,
-                    engine="cli",
-                    target="default",
-                )
-            ],
+    with pytest.raises(SetupServiceError, match="not supported for chat_decision"):
+        service.update_config(
+            IntelligenceConfigUpdateRequest(
+                config_dir=root,
+                person_id="alice",
+                cli_agent_mapping={"default": "cli_agents/codex/default.yml"},
+                brain_mapping=[
+                    BrainAssignment(
+                        name="chat_decision",
+                        brain_class=CLI_BRAIN_CLASS,
+                        engine="cli",
+                        target="default",
+                    )
+                ],
+            )
         )
-    )
-    assert isinstance(selected(), CliAgentBrain)
-    service.update_config(
-        IntelligenceConfigUpdateRequest(
-            config_dir=root, person_id="alice", inherit_team_defaults=True
-        )
-    )
+    assert not (root / "team/members/alice/intelligences/brain_mapping.yml").exists()
     assert selected().model == "jev-latest"
 
 
 @pytest.mark.parametrize("tool", ["codex", "claude", "grok", "copilot", "antigravity"])
-def test_cli_assignment_uses_existing_slot(configured, tool):
+def test_cli_assignment_cannot_be_saved_for_chat_decision(configured, tool):
     root, _ = configured
     service = IntelligenceConfigService()
-    service.update_config(
-        IntelligenceConfigUpdateRequest(
-            config_dir=root,
-            cli_agent_mapping={"judge": f"cli_agents/{tool}/default.yml"},
-            brain_mapping=[
-                BrainAssignment(
-                    name="chat_decision",
-                    brain_class=CLI_BRAIN_CLASS,
-                    engine="cli",
-                    target="judge",
-                )
-            ],
+    with pytest.raises(SetupServiceError, match="not supported for chat_decision"):
+        service.update_config(
+            IntelligenceConfigUpdateRequest(
+                config_dir=root,
+                cli_agent_mapping={"judge": f"cli_agents/{tool}/default.yml"},
+                brain_mapping=[
+                    BrainAssignment(
+                        name="chat_decision",
+                        brain_class=CLI_BRAIN_CLASS,
+                        engine="cli",
+                        target="judge",
+                    )
+                ],
+            )
         )
-    )
-    brain = SimpleBrainFactory().create_brain(
-        "alice",
-        "chat_decision",
-        "",
-        logging.getLogger(),
-        config={"brain": "chat_decision"},
-    )
-    assert brain.cli_agent == "judge"
-    assert tool in brain.executable_info.adapter
-    selection = next(
-        a
-        for a in service.read_config(config_dir=root).brain_mapping
-        if a.name == "chat_decision"
-    )
-    assert selection.engine == "cli" and selection.target == "judge"
+    assert not (root / "intelligences/brain_mapping.yml").exists()
 
 
 def test_member_model_resolves_with_inherited_assignment(

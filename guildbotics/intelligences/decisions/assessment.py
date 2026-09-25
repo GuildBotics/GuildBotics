@@ -4,7 +4,6 @@ import hashlib
 import json
 import time
 from logging import Logger
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -34,7 +33,6 @@ async def assess(
     state: dict[str, Any],
     config: DecisionConfig | None,
     *,
-    config_dir: Path,
     person_id: str,
     logger: Logger,
     questions: dict[str, Question] | None = None,
@@ -96,7 +94,6 @@ async def assess(
                 config,
                 state,
                 questions,
-                config_dir=config_dir,
                 person_id=person_id,
                 logger=logger,
                 brain_factory=brain_factory,

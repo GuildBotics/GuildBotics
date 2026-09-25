@@ -5,12 +5,12 @@ import json
 from collections.abc import Callable
 from dataclasses import asdict
 from logging import Logger
-from pathlib import Path
 from typing import Any
 
 import httpx
 
 from guildbotics.editions import get_edition
+from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
 from guildbotics.intelligences.decisions.models import (
     DecisionConfig,
     Evaluation,
@@ -32,7 +32,6 @@ async def evaluate(
     state: dict[str, Any],
     questions: dict[str, Question],
     *,
-    config_dir: Path,
     person_id: str,
     logger: Logger,
     brain_factory: BrainFactory | None = None,
@@ -59,6 +58,8 @@ async def evaluate(
             except Exception:
                 result.error = "recording_failed"
                 return result
+        if isinstance(brain, CliAgentBrain):
+            raise ValueError("AI CLI is not supported for chat_decision")
         request = {
             "state": state,
             "questions": {
@@ -67,9 +68,7 @@ async def evaluate(
         }
         async with asyncio.timeout(120):
             raw = await brain.run(
-                json.dumps(request, ensure_ascii=False, sort_keys=True),
-                cwd=config_dir.parent.parent,
-                input_only=True,
+                json.dumps(request, ensure_ascii=False, sort_keys=True)
             )
         if isinstance(raw, str):
             raw = json.loads(raw)

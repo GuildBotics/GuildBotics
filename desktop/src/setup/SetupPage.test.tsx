@@ -4266,37 +4266,58 @@ describe("IntelligenceEditor (team default)", () => {
     expect(screen.queryByRole("option", { name: "Jev" })).not.toBeInTheDocument();
   });
 
-  it.each(["LLM", "CLI", "Jev"])(
-    "creates an absent chat assignment by selecting %s",
-    async (label) => {
-      const user = userEvent.setup();
-      await openTeamIntelligenceAdvanced(user);
-      const card = within(
-        screen.getByText(t("decision.title")).closest(".mantine-Card-root")! as HTMLElement,
-      );
-      const engine = card.getByRole("combobox", { name: t("setup.intelligence.engine") });
-      expect(engine).toHaveValue("");
-      expect(card.getByRole("combobox", { name: t("setup.intelligence.target") })).toBeDisabled();
-      await user.click(engine);
-      await user.click(await screen.findByRole("option", { name: label }));
-      if (label === "Jev") {
-        expect(
-          card.queryByRole("combobox", { name: t("setup.intelligence.target") }),
-        ).not.toBeInTheDocument();
-        expect(card.getByText(t("decision.jevLatest"))).toBeInTheDocument();
-      }
-      await saveSection(user);
-      await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].brain_mapping).toEqual([
-        teamIntelligenceConfig().brain_mapping[0],
-        expect.objectContaining({
-          name: "chat_decision",
-          engine: label.toLowerCase(),
-          target: label === "Jev" ? "jev-latest" : "default",
-        }),
-      ]);
-    },
-  );
+  it.each(["LLM", "Jev"])("creates an absent chat assignment by selecting %s", async (label) => {
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const card = within(
+      screen.getByText(t("decision.title")).closest(".mantine-Card-root")! as HTMLElement,
+    );
+    const engine = card.getByRole("combobox", { name: t("setup.intelligence.engine") });
+    expect(engine).toHaveValue("");
+    expect(card.getByRole("combobox", { name: t("setup.intelligence.target") })).toBeDisabled();
+    await user.click(engine);
+    await user.click(await screen.findByRole("option", { name: label }));
+    if (label === "Jev") {
+      expect(
+        card.queryByRole("combobox", { name: t("setup.intelligence.target") }),
+      ).not.toBeInTheDocument();
+      expect(card.getByText(t("decision.jevLatest"))).toBeInTheDocument();
+    }
+    await saveSection(user);
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateIntelligenceConfig).mock.calls[0][0].brain_mapping).toEqual([
+      teamIntelligenceConfig().brain_mapping[0],
+      expect.objectContaining({
+        name: "chat_decision",
+        engine: label.toLowerCase(),
+        target: label === "Jev" ? "jev-latest" : "default",
+      }),
+    ]);
+  });
+
+  it("shows an existing CLI chat assignment as unresolved", async () => {
+    vi.mocked(getIntelligenceConfig).mockResolvedValue(
+      teamIntelligenceConfig({
+        brain_mapping: [
+          {
+            name: "chat_decision",
+            brain_class: "guildbotics.intelligences.brains.cli_agent.CliAgentBrain",
+            engine: "cli",
+            target: "default",
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    await openTeamIntelligenceAdvanced(user);
+    const card = within(document.getElementById("decision-settings")!);
+    const engine = card.getByRole("combobox", { name: t("setup.intelligence.engine") });
+    expect(engine).toHaveValue("");
+    await user.click(engine);
+    expect(screen.getByRole("option", { name: "LLM" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Jev" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "CLI" })).not.toBeInTheDocument();
+  });
 
   it("saves a Jev key through the section save without including it in config", async () => {
     const user = userEvent.setup();

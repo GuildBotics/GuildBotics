@@ -209,15 +209,8 @@ async def start_turn_environment(
                 **env,
             },
             nameservers=where.nameservers,
-            # A turn that evaluates input holds nothing of the store: no
-            # session, no account, no cache. A read-only turn resumes its
-            # sessions from a store of its own.
             mounts=(
-                *(
-                    ()
-                    if context.input_only
-                    else bind_state(tool, read_only=context.contract.read_only)
-                ),
+                *bind_state(tool, read_only=context.contract.read_only),
                 *_inspected_mounts(context),
                 *mounts,
             ),

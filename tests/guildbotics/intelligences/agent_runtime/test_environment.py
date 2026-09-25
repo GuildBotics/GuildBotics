@@ -252,40 +252,6 @@ async def _claude_turn_spec(tmp_path, monkeypatch, context):
 
 
 @pytest.mark.asyncio
-async def test_input_only_environment_does_not_mount_the_workspace(
-    tmp_path, monkeypatch
-):
-    """A turn that evaluates input sees the input only: no workspace, none of
-    the provider's store, closed egress."""
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
-    from guildbotics.intelligences.agent_environment.spec import (
-        EnvironmentMount,
-        guest_path,
-    )
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentExecutionContext,
-        ConversationKey,
-    )
-
-    context = AgentExecutionContext(
-        person_id="aiko",
-        run_id="judge",
-        cwd=tmp_path / "repository",
-        workspace_root=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "claude", "manual", "judge"),
-        contract=AccessContract(input_only=True),
-    )
-
-    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
-
-    assert spec.mounts == (EnvironmentMount(guest_path(context.cwd), None, True),)
-    assert not spec.network.unrestricted and not spec.network.local_network
-    assert spec.network.domains == ()
-    assert spec.network.host_ports[0] == 1234
-
-
-@pytest.mark.asyncio
 async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
     tmp_path, monkeypatch
 ):
@@ -394,8 +360,7 @@ def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
     assert directories["config"] == tmp_path / ".guildbotics" / "config"
 
 
-def test_inspecting_is_limited_to_known_scopes_and_never_input_only(tmp_path):
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
+def test_inspecting_is_limited_to_known_scopes(tmp_path):
     from guildbotics.intelligences.agent_runtime.models import (
         AgentExecutionContext,
         ConversationKey,
@@ -414,11 +379,6 @@ def test_inspecting_is_limited_to_known_scopes_and_never_input_only(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown inspection scopes"):
         context(inspects=frozenset({"secrets"}))
-    with pytest.raises(ValueError, match="input-only"):
-        context(
-            inspects=frozenset({"diagnostics"}),
-            contract=AccessContract(input_only=True),
-        )
 
 
 def _jwt(claims: dict[str, object]) -> str:

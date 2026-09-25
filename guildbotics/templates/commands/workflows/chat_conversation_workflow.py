@@ -56,7 +56,6 @@ from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.utils.fileio import (
     get_member_clone_path,
-    get_workspace_config_dir,
     get_workspace_root,
     get_workspace_state_path,
 )
@@ -405,7 +404,6 @@ async def _handle_event(
                     reaction=saved["reaction"],
                 )
         if decision is None:
-            config_dir = get_workspace_config_dir()
             decision, evaluation_id = await assess(
                 {
                     **decision_state,
@@ -413,7 +411,6 @@ async def _handle_event(
                     "previous_outcomes": RunStore(task_run_root).evidence(run_id),
                 },
                 None,
-                config_dir=config_dir,
                 person_id=person_id,
                 logger=context.logger,
                 brain_factory=context.brain_factory,
