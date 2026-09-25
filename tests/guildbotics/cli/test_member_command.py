@@ -3879,3 +3879,51 @@ def test_workflow_member_command_records_into_the_turns_trace(monkeypatch):
     assert [
         item["type"] for item in DiagnosticsStore().get_records("trace-parent")
     ] == ["github.work_target"]
+
+
+def test_outer_invocation_context_is_not_overwritten_at_the_cli_entry(monkeypatch):
+    # The in-process broker binds the invocation before Click runs; the entry
+    # must defer to it instead of re-reading the process environment.
+    from guildbotics.runtime.member_invocation import (
+        TRACE_ID_ENV,
+        MemberInvocation,
+        member_invocation_scope,
+    )
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    monkeypatch.setenv("GUILDBOTICS_RUN_ID", "run-1")
+    monkeypatch.setenv(TRACE_ID_ENV, "trace-from-env")
+    _fake_github_service(
+        monkeypatch,
+        person,
+        pr_inspect={
+            "target": {
+                "kind": "pull_request",
+                "repo": "owner/repo",
+                "number": 544,
+                "title": "Show the work target",
+                "html_url": "https://github.com/owner/repo/pull/544",
+            }
+        },
+    )
+
+    with member_invocation_scope(
+        MemberInvocation(run_id="run-1", trace_id="trace-parent")
+    ):
+        result = CliRunner().invoke(
+            member_module.member,
+            [
+                "github",
+                "pr",
+                "inspect",
+                "--person",
+                "aiko",
+                "--url",
+                "https://github.com/owner/repo/pull/544",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    summary = DiagnosticsStore().get_summary("trace-parent")
+    assert summary is not None
+    assert summary["title"] == "Show the work target"
