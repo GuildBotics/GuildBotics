@@ -201,7 +201,7 @@ Key points:
 - Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched
 - `chat.participation` corresponds to **When to join** in the GUI. `strict` (default) handles explicit mentions and follow-ups in threads it was already invited to, `social` also allows natural participation without a mention in casual channels, and `muted` handles explicit mentions only
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
-- `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through the AI CLI tool
+- `character` defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine
 
 The Bot Token and App-Level Token are not stored in `person.yml`. They are passed through the OS keychain or the environment variables `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` (for example `ALICE_SLACK_BOT_TOKEN` for `alice`).
 

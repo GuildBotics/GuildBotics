@@ -5,7 +5,6 @@ import json
 from collections.abc import Callable
 from dataclasses import asdict
 from logging import Logger
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -33,7 +32,6 @@ async def evaluate(
     state: dict[str, Any],
     questions: dict[str, Question],
     *,
-    config_dir: Path,
     person_id: str,
     logger: Logger,
     brain_factory: BrainFactory | None = None,
@@ -70,8 +68,7 @@ async def evaluate(
         }
         async with asyncio.timeout(120):
             raw = await brain.run(
-                json.dumps(request, ensure_ascii=False, sort_keys=True),
-                cwd=config_dir.parent.parent,
+                json.dumps(request, ensure_ascii=False, sort_keys=True)
             )
         if isinstance(raw, str):
             raw = json.loads(raw)

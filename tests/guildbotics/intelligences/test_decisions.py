@@ -377,7 +377,6 @@ async def test_snapshot_is_full_and_replayable_even_without_transcripts(
     result, record_id = await assessment.assess(
         state,
         DecisionConfig(),
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
     )
@@ -405,7 +404,6 @@ async def test_record_failure_cannot_skip_agent(tmp_path, monkeypatch):
     result, _ = await assessment.assess(
         {"thread_context_complete": True},
         DecisionConfig(),
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
     )
@@ -465,7 +463,6 @@ async def test_recorded_response_effort_is_separate_from_judgment_settings(
     selection, _ = await assessment.assess(
         {"thread_context_complete": True},
         None,
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
     )
@@ -532,7 +529,6 @@ async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
         DecisionConfig(),
         {"text": "依頼"},
         QUESTIONS,
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
         brain_factory=factory,
@@ -577,7 +573,6 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
         DecisionConfig(brain="custom_judgment"),
         state,
         QUESTIONS,
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
         brain_factory=SimpleNamespace(create_brain=create),
@@ -586,7 +581,7 @@ async def test_common_factory_run_and_execution_metadata(tmp_path):
     assert len(calls) == 1
     request, kwargs = calls[0]
     assert request["state"] == state and set(request["questions"]) == set(QUESTIONS)
-    assert set(kwargs) == {"cwd"}
+    assert not kwargs
     assert result.model == "resolved-model" and result.usage == {"input_tokens": 12}
     assert result.retries is None
 
@@ -662,7 +657,6 @@ async def test_resolved_configuration_is_durable_before_failed_call(
     selection, record_id = await assessment.assess(
         {"thread_context_complete": True},
         DecisionConfig(),
-        config_dir=tmp_path,
         person_id="alice",
         logger=logger,
         brain_factory=SimpleNamespace(create_brain=lambda *args, **kwargs: brain),
@@ -714,7 +708,6 @@ async def test_failed_configuration_record_does_not_call_model(tmp_path, monkeyp
     selection, _ = await assessment.assess(
         {"thread_context_complete": True},
         DecisionConfig(),
-        config_dir=tmp_path,
         person_id="alice",
         logger=logging.getLogger(),
         brain_factory=SimpleNamespace(create_brain=lambda *args, **kwargs: brain),

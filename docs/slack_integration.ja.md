@@ -201,7 +201,7 @@ task_schedules:
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものが対象になります
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
-- `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は AI CLI ツール経由で参照します
+- `character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します
 
 Bot Token と App-Level Token は `person.yml` には保存されません。OS キーチェーンまたは環境変数 `{PERSON_ID}_SLACK_BOT_TOKEN` / `{PERSON_ID}_SLACK_APP_TOKEN` で渡します（例: `alice` なら `ALICE_SLACK_BOT_TOKEN`）。
 
