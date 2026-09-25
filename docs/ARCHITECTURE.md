@@ -911,9 +911,10 @@ a monorepo on purpose.
   copied once per build into `~/.guildbotics/programs/<build-id>/`, never modified
   afterwards, and `~/.guildbotics/bin` is a link to the current one (a junction on
   Windows). While a process still runs from an older build the switch waits for the next
-  launch: the CLI holds a shared lock on its executable (the PyInstaller runtime hook
-  `desktop/sidecar/hold_program_lock.py`), and on Windows the running image already
-  refuses the move. A one-file build unpacks everything on every start, which cost
+  launch, and an old build is removed only after the switch and once nothing runs from
+  it: the CLI holds a shared lock on its executable (the PyInstaller runtime hook
+  `desktop/sidecar/hold_program_lock.py`), and on Windows a running executable cannot be
+  opened for writing. A one-file build unpacks everything on every start, which cost
   seconds per CLI call. The
   app also installs a `~/.local/bin/guildbotics` shim and the GuildBotics skill for
   interactive agents. External AI CLI tools are _not_ bundled — the GUI detects,

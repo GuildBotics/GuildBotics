@@ -343,14 +343,13 @@ fn install_member_cli(home: &Path, programs: &Path) -> io::Result<()> {
 ///
 /// Each build is its own directory, `root/programs/<build id>`, which appears
 /// complete (it is copied under another name first) and is never modified, and
-/// `bin` is a link to one of them. Every step can therefore be interrupted and
-/// simply run again: nothing a process runs from is ever half-written.
+/// `bin` is a link to one of them. `bin` moves only once the new link exists,
+/// and an old build is removed only after that, so there is always a working
+/// CLI: an interrupted step is simply run again on the next launch.
 ///
-/// A build still in use is never taken away. Before `bin` moves, every other
-/// build is retired, which a running program refuses: it holds a shared lock
-/// on its executable, and on Windows its image cannot be renamed either. Then
-/// the update waits for the next launch, and the running program keeps the
-/// files it started with.
+/// A build still in use is never taken away. While a program runs from an old
+/// build, `bin` keeps pointing at it until a later launch, since on Windows a
+/// program started through the junction reads its files through `bin`.
 fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
     let build_id = fs::read_to_string(source.join(BUILD_ID_FILE))?;
     let build_id = build_id.trim();
@@ -364,17 +363,17 @@ fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
         copy_dir(source, &staging)?;
         fs::rename(&staging, &current)?;
     }
+    let mut unused = Vec::new();
+    let mut in_use = false;
     for entry in fs::read_dir(&programs)? {
         let program = entry?.path();
-        if program == current || program.extension().is_some_and(|ext| ext == "gc") {
+        if program == current {
             continue;
         }
-        if let Err(error) = retire(&program) {
-            eprintln!(
-                "GuildBotics CLI update deferred: {} is in use ({error})",
-                program.display()
-            );
-            return Ok(());
+        if is_running(&program) {
+            in_use = true;
+        } else {
+            unused.push(program);
         }
     }
     let bin = root.join("bin");
@@ -384,48 +383,86 @@ fn install_programs(source: &Path, root: &Path) -> io::Result<()> {
         .and_then(Path::file_name)
         != current.file_name()
     {
-        if fs::symlink_metadata(&bin).is_ok() {
-            // Removes a link itself, not what it points at.
-            fs::remove_dir_all(&bin)?;
+        if in_use {
+            eprintln!("GuildBotics CLI update deferred: a program runs from an older build");
+            return Ok(());
         }
-        link_dir(&current, &bin)?;
+        point_link(&bin, &current)?;
     }
-    for entry in fs::read_dir(&programs)? {
-        let program = entry?.path();
-        if program.extension().is_some_and(|ext| ext == "gc") {
-            // Retried on the next launch if something still holds a file.
-            let _ = fs::remove_dir_all(program);
-        }
+    for program in unused {
+        // Retried on the next launch if something still holds a file.
+        let _ = fs::remove_dir_all(program);
     }
     Ok(())
 }
 
-/// Move a build out of the way, unless a program still runs from it.
-fn retire(program: &Path) -> io::Result<()> {
-    let executable = program.join(platform_executable_name("guildbotics"));
-    // Held across the rename, so that no program starts from it in between.
-    let _lock = match fs::File::open(&executable) {
-        Ok(file) => {
-            file.try_lock()?;
-            Some(file)
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let mut retired = program.as_os_str().to_owned();
-    retired.push(".gc");
-    fs::rename(program, retired)
-}
-
+/// Whether a program runs from `build`, answering yes when that cannot be
+/// ruled out. A running CLI holds a shared lock on its executable for its
+/// whole life (`desktop/sidecar/hold_program_lock.py`).
 #[cfg(unix)]
-fn link_dir(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
+fn is_running(build: &Path) -> bool {
+    match fs::File::open(build.join("guildbotics")) {
+        Ok(executable) => executable.try_lock().is_err(),
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    }
 }
 
-/// A junction, since a symbolic link needs a privilege on Windows.
+/// Whether a program runs from `build`, answering yes when that cannot be
+/// ruled out. Windows refuses to open a running executable for writing.
 #[cfg(windows)]
-fn link_dir(target: &Path, link: &Path) -> io::Result<()> {
-    junction::create(target, link)
+fn is_running(build: &Path) -> bool {
+    match fs::OpenOptions::new()
+        .write(true)
+        .open(build.join("guildbotics.exe"))
+    {
+        Ok(_) => false,
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    }
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Replace whatever `link` is with a link to `target`, in one rename.
+#[cfg(unix)]
+fn point_link(link: &Path, target: &Path) -> io::Result<()> {
+    let pending = sibling(link, ".pending");
+    let _ = fs::remove_file(&pending);
+    std::os::unix::fs::symlink(target, &pending)?;
+    if fs::symlink_metadata(link).is_ok_and(|metadata| metadata.is_dir()) {
+        // A directory is not renamed over; only an earlier layout left one.
+        fs::remove_dir_all(link)?;
+    }
+    fs::rename(&pending, link)
+}
+
+/// Replace whatever `link` is with a junction to `target` (a symbolic link
+/// needs a privilege on Windows). A directory cannot be renamed over, so the
+/// old one steps aside first and comes back if the new one cannot take its
+/// place.
+#[cfg(windows)]
+fn point_link(link: &Path, target: &Path) -> io::Result<()> {
+    let pending = sibling(link, ".pending");
+    let previous = sibling(link, ".previous");
+    for leftover in [&pending, &previous] {
+        if fs::symlink_metadata(leftover).is_ok() {
+            // Removes a junction itself, not what it points at.
+            fs::remove_dir_all(leftover)?;
+        }
+    }
+    junction::create(target, &pending)?;
+    if fs::symlink_metadata(link).is_ok() {
+        fs::rename(link, &previous)?;
+    }
+    if let Err(error) = fs::rename(&pending, link) {
+        let _ = fs::rename(&previous, link);
+        return Err(error);
+    }
+    let _ = fs::remove_dir_all(&previous);
+    Ok(())
 }
 
 /// Copy a directory tree, keeping symbolic links as links rather than following
@@ -1054,6 +1091,25 @@ mod tests {
         Ok(())
     }
 
+    /// Hold the build's executable the way a program running from it does.
+    #[cfg(unix)]
+    fn run_from(build: &Path) -> io::Result<fs::File> {
+        let executable = fs::File::open(build.join("guildbotics"))?;
+        executable.lock_shared()?;
+        Ok(executable)
+    }
+
+    #[cfg(windows)]
+    fn run_from(build: &Path) -> io::Result<fs::File> {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 1;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(build.join("guildbotics.exe"))
+    }
+
     #[test]
     fn install_programs_waits_while_a_program_runs_from_the_old_build() -> io::Result<()> {
         let temp_dir = TestDir::new()?;
@@ -1062,13 +1118,7 @@ mod tests {
         write_build(&source, "build-1")?;
         install_programs(&source, &root)?;
 
-        // What a running CLI holds for its whole life.
-        let running = fs::File::open(
-            root.join("programs")
-                .join("build-1")
-                .join(platform_executable_name("guildbotics")),
-        )?;
-        running.lock_shared()?;
+        let running = run_from(&root.join("programs").join("build-1"))?;
         write_build(&source, "build-2")?;
         install_programs(&source, &root)?;
         assert_eq!(
@@ -1086,25 +1136,91 @@ mod tests {
     }
 
     #[test]
+    fn install_programs_removes_an_old_build_only_once_nothing_runs_from_it() -> io::Result<()> {
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+        let old = root.join("programs").join("build-0");
+        write_build(&old, "build-0")?;
+
+        let running = run_from(&old)?;
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-0".into(), "build-1".into()])
+        );
+
+        drop(running);
+        install_programs(&source, &root)?;
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into()])
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_programs_keeps_the_old_link_when_the_new_one_cannot_be_made() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TestDir::new()?;
+        let source = temp_dir.path().join("resources");
+        let root = temp_dir.path().join("home");
+        write_build(&source, "build-1")?;
+        install_programs(&source, &root)?;
+        write_build(&source, "build-2")?;
+        copy_dir(&source, &root.join("programs").join("build-2"))?;
+
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o555))?;
+        let result = install_programs(&source, &root);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))?;
+
+        assert!(result.is_err());
+        assert_eq!(
+            installed(&root)?,
+            ("build-1".into(), vec!["build-1".into(), "build-2".into()])
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn link_to(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn link_to(target: &Path, link: &Path) -> io::Result<()> {
+        junction::create(target, link)
+    }
+
+    #[test]
     fn install_programs_recovers_from_any_interrupted_or_earlier_state() -> io::Result<()> {
-        type Arrange = fn(&Path, &Path) -> io::Result<()>;
-        let states: [(&str, Arrange); 5] = [
-            ("staging left over", |_, root| {
+        type Arrange = fn(&Path) -> io::Result<()>;
+        let states: [(&str, Arrange); 6] = [
+            ("staging left over", |root| {
                 let staging = root.join("programs").join("build-2.staging");
                 fs::create_dir_all(&staging)?;
                 fs::write(staging.join("partial"), "")
             }),
-            ("bin removed before relinking", |_, root| {
-                fs::remove_dir_all(root.join("bin"))
+            ("new link left pending", |root| {
+                link_to(
+                    &root.join("programs").join("build-1"),
+                    &root.join("bin.pending"),
+                )
             }),
-            ("bin left dangling", |_, root| {
-                let old = root.join("programs").join("build-1");
-                fs::rename(&old, root.join("programs").join("build-1.gc"))
+            ("old link stepped aside", |root| {
+                fs::rename(root.join("bin"), root.join("bin.previous"))
             }),
-            ("retired build left over", |_, root| {
+            ("bin left dangling", |root| {
+                fs::remove_dir_all(root.join("programs").join("build-1"))
+            }),
+            ("stale entry left over", |root| {
                 fs::create_dir_all(root.join("programs").join("build-0.gc"))
             }),
-            ("bin is a directory of an earlier layout", |_, root| {
+            ("bin is a directory of an earlier layout", |root| {
                 fs::remove_dir_all(root.join("bin"))?;
                 fs::create_dir_all(root.join("bin"))?;
                 fs::write(root.join("bin").join("guildbotics"), "one-file")
@@ -1117,7 +1233,7 @@ mod tests {
             write_build(&source, "build-1")?;
             install_programs(&source, &root)?;
             write_build(&source, "build-2")?;
-            arrange(&source, &root)?;
+            arrange(&root)?;
 
             install_programs(&source, &root)?;
 
