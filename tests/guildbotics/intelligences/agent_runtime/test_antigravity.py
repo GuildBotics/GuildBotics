@@ -7,14 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    RUN_ENV,
-    TASK_RUN_ENV,
-)
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import antigravity as antigravity_module
 from guildbotics.intelligences.agent_runtime.antigravity import (
@@ -198,16 +190,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
     assert prompt.endswith("\n\ngo")
     assert kwargs_log[-1]["limit"] == STREAM_READ_LIMIT
     env = kwargs_log[-1]["env"]
-    for key in (
-        RUN_ENV,
-        TASK_RUN_ENV,
-        "GUILDBOTICS_WORKSPACE_ROOT",
-        LEASE_ID_ENV,
-        DELEGATION_ID_ENV,
-        LEASE_PERSON_ENV,
-        LEASE_RUN_ENV,
-    ):
-        assert key not in env
+    assert "GUILDBOTICS_WORKSPACE_ROOT" not in env
     assert kwargs_log[-1]["cwd"] == str(tmp_path)
     # The adapter's own workspace is bound into the environment, so the host
     # directory is the mount's, and the argument is how the guest names it.

@@ -507,7 +507,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert result.stdout == "answer"
     assert captured["context"].contract.read_only is True
     assert captured["context"].inspects == frozenset({"diagnostics"})
-    assert captured["context"].lease_id == ""
+    assert captured["context"].lease is None
     assert captured["context"].cwd == isolated_cwd
     assert captured["context"].workspace_root == workspace_root
 
@@ -557,7 +557,7 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
     context = captured["context"]
     assert context.effort == ""
     assert context.provider_options == {}
-    assert captured["context"].delegation_id == ""
+    assert captured["context"].lease is None
 
 
 @pytest.mark.asyncio

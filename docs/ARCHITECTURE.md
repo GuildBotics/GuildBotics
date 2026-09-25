@@ -99,12 +99,13 @@ workflow (orchestration)
 - **Trusted member transport**: interactive skill sessions invoke the member CLI
   directly. Every native provider session instead receives one authenticated localhost
   MCP tool that can invoke only the fixed member CLI for the active person, workspace,
-  and turn. The broker, not the provider process, holds the short-lived execution
-  delegation and a separately rotated per-turn grant, and terminates any outstanding
-  member command when the turn ends. The broker keeps the selected GuildBotics
-  workspace root (used by the member CLI for config resolution) separate from the
-  agent's isolated working directory and the independently overridable workspace data
-  root.
+  and turn. The broker runs each command inside the GuildBotics process that runs the
+  turn (Desktop, `guildbotics start`, or a local `guildbotics run`), on a worker
+  thread with its own working directory, streams, and invocation, instead of starting
+  a CLI process per call. The broker, not the provider process, holds the turn's
+  execution lease and a separately rotated per-turn grant; a command that outlasts
+  the broker's timeout is reported and left to finish. Relative paths in a command
+  resolve against the agent's isolated working directory.
 - **Member capability** (`guildbotics/capabilities/*` + `guildbotics/cli/member.py`):
   the boundary for member actions decided by the AI agent — the only path through
   which the agent's provider operations run and the only layer that resolves the
@@ -831,7 +832,7 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   (`trace_title.py`). A trace is titled by the first PR / issue recorded inside it
   (`github.title`): the ticket workflow declares it when it starts, and a chat workflow
   acquires it when the member CLI, running inside the same trace (`join_trace`, handed
-  over through `GUILDBOTICS_TRACE_ID`), records a `github.work_target`. A read
+  over in the member invocation), records a `github.work_target`. A read
   (`inspect`) declares the target too but, like a memory read, never becomes an
   activity link. Manual desktop command runs (`source: manual`)
   are excluded from the session timeline because they fire constantly; anything they

@@ -65,15 +65,7 @@ from guildbotics.intelligences.agent_runtime.windows_job import (
     terminate_process_job,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
-from guildbotics.runtime.member_invocation import (
-    CHAT_PARTICIPANT_LABELS_ENV,
-    RUN_ENV,
-    TASK_RUN_ENV,
-    TRACE_ID_ENV,
-)
-from guildbotics.runtime.person_lease import lease_directory
 from guildbotics.utils.fileio import (
-    GUILDBOTICS_WORKSPACE_ROOT,
     get_template_path,
     get_workspace_config_dir,
     get_workspace_local_path,
@@ -141,26 +133,6 @@ def inspected_directories(
     }
 
 
-def _inspected_mounts(context: AgentExecutionContext) -> tuple[EnvironmentMount, ...]:
-    """Read-only mounts for what the turn inspects, with the leases covered.
-
-    The run directory holds the execution leases beside the diagnostics, and a
-    lease's delegation is a grant: the environment never carries one. The
-    lease directory is made first, so a lease taken during the turn still
-    lands under the cover rather than in view.
-    """
-    leases = lease_directory(context.workspace_root)
-    mounts: list[EnvironmentMount] = []
-    for path in inspected_directories(
-        context.inspects, context.workspace_root
-    ).values():
-        mounts.append(EnvironmentMount(guest_path(path), path, readonly=True))
-        if leases.is_relative_to(path):
-            leases.mkdir(parents=True, exist_ok=True)
-            mounts.append(EnvironmentMount(guest_path(leases), None, readonly=True))
-    return tuple(mounts)
-
-
 async def start_turn_environment(
     context: AgentExecutionContext,
     tool_name: str,
@@ -214,7 +186,12 @@ async def start_turn_environment(
             nameservers=where.nameservers,
             mounts=(
                 *bind_state(tool, read_only=context.contract.read_only),
-                *_inspected_mounts(context),
+                *(
+                    EnvironmentMount(guest_path(path), path, readonly=True)
+                    for path in inspected_directories(
+                        context.inspects, context.workspace_root
+                    ).values()
+                ),
                 *mounts,
             ),
         )
@@ -385,20 +362,6 @@ async def _start(
         )
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
-
-
-def member_command_environment(context: AgentExecutionContext) -> dict[str, str]:
-    """Build verified-execution metadata for the host-side member CLI."""
-    run_key = RUN_ENV if context.conversation_key.work_kind == "chat" else TASK_RUN_ENV
-    env = {
-        GUILDBOTICS_WORKSPACE_ROOT: str(context.workspace_data_root),
-        run_key: context.run_id,
-    }
-    if context.participant_labels:
-        env[CHAT_PARTICIPANT_LABELS_ENV] = context.participant_labels
-    if context.trace_id:
-        env[TRACE_ID_ENV] = context.trace_id
-    return env
 
 
 async def terminate_process_tree(

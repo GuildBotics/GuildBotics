@@ -746,7 +746,7 @@ guildbotics member chat complete [OPTIONS]
 | `--event-id TEXT` | Event id of the chat trigger. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -839,7 +839,7 @@ guildbotics member chat noop [OPTIONS]
 | `--thread-ts TEXT` | Thread timestamp of the triggering event. [required] |
 | `--event-id TEXT` | Event id of the chat trigger. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -858,7 +858,7 @@ guildbotics member chat post [OPTIONS]
 | `--channel-id TEXT` | Channel id of the target channel. [default: ""] |
 | `--channel-name TEXT` | Channel name (alternative to --channel-id). [default: ""] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -915,7 +915,7 @@ guildbotics member chat reply [OPTIONS]
 | `--thread-ts TEXT` | Thread timestamp (with --channel-id). [default: ""] |
 | `--message-url TEXT` | Slack message URL (alternative to channel/timestamp options). [default: ""] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -985,7 +985,7 @@ guildbotics member git commit [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -1025,7 +1025,7 @@ guildbotics member git publish [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--repo-path PATH` | Path to the member repository workspace. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--workspace-mode [member\|current]` | Use 'member' for isolated workflow workspaces or 'current' for the repository currently open in an interactive coding session. [default: member] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -1097,7 +1097,7 @@ guildbotics member github issue comment [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Issue URL. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1115,7 +1115,7 @@ guildbotics member github issue create [OPTIONS]
 | `--repo TEXT` | Target repository as \<owner\>/\<repo\>. [required] |
 | `--title TEXT` | Issue title. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--label TEXT` | Label already defined in the repository. Repeat for several labels. |
 | `--add-to-project / --no-add-to-project` | Add the created issue to the configured project board. [default: add-to-project] |
 | `--human-approved` | Confirm that a human instructed or approved this change. |
@@ -1150,7 +1150,7 @@ guildbotics member github issue update [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Issue URL. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the issue title. |
 | `--add-label TEXT` | Add a label already defined in the repository. Repeat for several labels. |
 | `--remove-label TEXT` | Remove a label from the issue. Repeat for several labels. |
@@ -1213,7 +1213,7 @@ guildbotics member github pr comment [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1233,7 +1233,7 @@ guildbotics member github pr create [OPTIONS]
 | `--base TEXT` | Base branch for the pull request. Defaults to the repository default branch. [default: ""] |
 | `--title TEXT` | Pull request title. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--issue-url TEXT` | Related issue URL to link to the PR. [default: ""] |
 | `--closes-issue / --refs-issue` | When --issue-url is set, append Closes #\<n\> or Refs #\<n\> to the PR body. Defaults to Refs. [default: refs-issue] |
 | `--draft [true\|false]` | Open the pull request as a draft. [default: false] |
@@ -1271,7 +1271,7 @@ guildbotics member github pr reply [OPTIONS]
 | `--url TEXT` | Pull request URL. [required] |
 | `--reply-target-id INTEGER` | reply_target_id from 'pr inspect --include-comments'. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1289,7 +1289,7 @@ guildbotics member github pr review [OPTIONS]
 | `--url TEXT` | Pull request URL. [required] |
 | `--event [approve\|request-changes\|comment]` | Review verdict submitted on the current PR head. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1311,7 +1311,7 @@ guildbotics member github pr review-comment [OPTIONS]
 | `--start-line INTEGER RANGE` | Start line for a multi-line comment. [x\>=1] |
 | `--start-side [LEFT\|RIGHT]` | Diff side of --start-line. |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1328,7 +1328,7 @@ guildbotics member github pr update [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the pull request title. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
@@ -1412,7 +1412,7 @@ guildbotics member github run artifact download [OPTIONS]
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL or GitHub Actions run URL. [required] |
 | `--name TEXT` | Exact artifact name. [required] |
-| `--dest DIRECTORY` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
+| `--dest PATH` | Directory to extract into. Defaults to the current directory. Remove downloaded files after inspection when this is inside a repository. [default: .] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
@@ -1540,7 +1540,7 @@ guildbotics member memory record [OPTIONS]
 | `--kind [note\|policy]` | Document kind; 'policy' requires --policy-approved. [default: note] |
 | `--pin` | Pin as a standing rule included in member context. |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--policy-approved` | Confirm that a human approved this policy memory change. |
 | `--set TEXT` | Extra metadata as key=value. May be repeated. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1588,7 +1588,7 @@ guildbotics member memory update [OPTIONS]
 | `--unpin` | Remove the pin. |
 | `--kind [note\|policy]` | Change the document kind; 'policy' requires --policy-approved. |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--policy-approved` | Confirm that a human approved this policy memory change. |
 | `--set TEXT` | Extra metadata as key=value. May be repeated. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1626,7 +1626,7 @@ guildbotics member task complete [OPTIONS]
 | `--ticket-url TEXT` | Ticket URL the completed run worked on. [required] |
 | `--status [done\|asking\|blocked]` | Run outcome. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
-| `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
+| `--content-file PATH` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

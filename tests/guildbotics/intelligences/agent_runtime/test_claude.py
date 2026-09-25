@@ -7,14 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    RUN_ENV,
-    TASK_RUN_ENV,
-)
 from guildbotics.intelligences.agent_runtime.claude import (
     ClaudeStreamJsonAdapter,
     _decode_events,
@@ -224,16 +216,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     # Root inside the microVM: without this, Claude Code refuses the permission
     # mode above ("cannot be used with root/sudo privileges").
     assert env["IS_SANDBOX"] == "1"
-    for key in (
-        RUN_ENV,
-        TASK_RUN_ENV,
-        "GUILDBOTICS_WORKSPACE_ROOT",
-        LEASE_ID_ENV,
-        DELEGATION_ID_ENV,
-        LEASE_PERSON_ENV,
-        LEASE_RUN_ENV,
-    ):
-        assert key not in env
+    assert "GUILDBOTICS_WORKSPACE_ROOT" not in env
     command_events = [event for event in events if event.kind is AgentEventKind.COMMAND]
     assert [(event.name, event.item_id) for event in command_events] == [
         ("started", "tool-1"),

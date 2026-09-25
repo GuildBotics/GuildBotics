@@ -7,14 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    RUN_ENV,
-    TASK_RUN_ENV,
-)
 from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     parse_network_policy,
@@ -285,16 +277,7 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
             '"requires_openai_auth" = true}',
         } <= set(config)
         assert kwargs["env"][MEMBER_BROKER_TOKEN_ENV]
-        for key in (
-            RUN_ENV,
-            TASK_RUN_ENV,
-            "GUILDBOTICS_WORKSPACE_ROOT",
-            LEASE_ID_ENV,
-            DELEGATION_ID_ENV,
-            LEASE_PERSON_ENV,
-            LEASE_RUN_ENV,
-        ):
-            assert key not in kwargs["env"]
+        assert "GUILDBOTICS_WORKSPACE_ROOT" not in kwargs["env"]
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
@@ -345,37 +328,6 @@ async def test_codex_app_server_protocol_resumes_exact_thread_and_streams(
     assert any(
         event.name == "decision" and event.approval == "decline" for event in events
     )
-
-
-@pytest.mark.asyncio
-async def test_codex_provider_never_inherits_the_parent_execution_grant(
-    monkeypatch, tmp_path
-) -> None:
-    for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
-        monkeypatch.setenv(key, "stale-parent-value")
-    process = _Process()
-    launched: list[dict[str, Any]] = []
-
-    async def create_process(*_args, **kwargs):
-        launched.append(kwargs["env"])
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    context = _context(tmp_path)
-    events: list[AgentEvent] = []
-    await adapter.run_turn(
-        "continue",
-        context,
-        ConversationRecord(key=context.conversation_key),
-        events.append,
-    )
-    await adapter.close()
-
-    env = launched[0]
-    assert env[MEMBER_BROKER_TOKEN_ENV]
-    for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
-        assert key not in env
 
 
 @pytest.mark.asyncio

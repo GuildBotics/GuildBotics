@@ -9,6 +9,8 @@ from typing import Any
 import click
 
 from guildbotics.utils.env_loader import load_guildbotics_env
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.workspace_state import (
     WorkspaceState,
     WorkspaceUnresolvedError,
@@ -16,6 +18,25 @@ from guildbotics.utils.workspace_state import (
 )
 
 FormatChoice = click.Choice(["json", "markdown"])
+
+
+class SharedWriteBusyGroup(click.Group):
+    """A command group, with the one failure every command shares.
+
+    Any command that changes a workspace's shared files can find another
+    writer -- the synchronization queue, or a second GuildBotics process --
+    holding the lock for longer than the wait. That is not a fault of the
+    command, and every command would otherwise need its own handler for a
+    condition none of them causes, so it is answered once here. The API layer
+    answers the same condition once, in its own exception handler.
+    """
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except SharedWriteBusyError as exc:
+            raise click.ClickException(t("cli.shared.write_busy")) from exc
+
 
 workspace_option = click.option(
     "--workspace",

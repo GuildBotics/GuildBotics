@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import importlib
 import json
 import logging
-import os
 import socket
 import threading
 import time
@@ -20,8 +21,6 @@ from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
-    _member_cli_command,
-    _member_environment,
     _rejection_reason,
     _ScopedTokenVerifier,
 )
@@ -29,28 +28,35 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     ConversationKey,
 )
-from guildbotics.runtime.member_invocation import (
-    DELEGATION_ID_ENV,
-    LEASE_ID_ENV,
-    LEASE_PERSON_ENV,
-    LEASE_RUN_ENV,
-    TASK_RUN_ENV,
-)
+from guildbotics.capabilities.member_reference import capability_reference_text
+from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.loopback_server import LoopbackServer
 
+#: The module, not the `member` group `guildbotics.cli` re-exports by that name.
+_MEMBER_CLI = importlib.import_module("guildbotics.cli.member")
 
-def _context(tmp_path: Path, *, read_only: bool = False) -> AgentExecutionContext:
+
+def _context(tmp_path: Path, *, work_kind: str = "ticket") -> AgentExecutionContext:
     return AgentExecutionContext(
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path / "data" / "workspaces" / "aiko",
         workspace_root=tmp_path / "workspace",
         workspace_data_root=tmp_path / "data",
-        conversation_key=ConversationKey("aiko", "grok", "ticket", "issue-1"),
-        lease_id="lease-1" if not read_only else "",
-        delegation_id="delegation-1" if not read_only else "",
-        contract=AccessContract(read_only=read_only),
+        conversation_key=ConversationKey("aiko", "grok", work_kind, "work-1"),
+        lease=PersonExecutionLease("aiko", tmp_path),
+        participant_labels='{"U1":"aiko"}',
+        trace_id="trace-parent",
+        contract=AccessContract(),
     )
+
+
+def _active_broker(context: AgentExecutionContext) -> MemberCapabilityBroker:
+    broker = MemberCapabilityBroker()
+    broker._context = context
+    broker._turn_grant = "turn-1"
+    return broker
 
 
 def _can_bind_localhost() -> bool:
@@ -62,101 +68,127 @@ def _can_bind_localhost() -> bool:
         return False
 
 
-class _Process:
-    def __init__(self) -> None:
-        self.returncode: int | None = None
-        self.stdin = None
-        self.stdout = None
-        self.stderr = None
-        self.input = b""
-
-    async def communicate(self, value: bytes) -> tuple[bytes, bytes]:
-        self.input = value
-        self.returncode = 0
-        return b'{"ok": true}\n', b""
-
-
-class _HangingProcess(_Process):
-    def __init__(self) -> None:
-        super().__init__()
-        self.started = asyncio.Event()
-        self.stopped = asyncio.Event()
-
-    async def communicate(self, value: bytes) -> tuple[bytes, bytes]:
-        self.input = value
-        self.started.set()
-        await self.stopped.wait()
-        return b"", b"terminated"
-
-
-@pytest.mark.parametrize(
-    ("platform", "executable_name"),
-    [("win32", "guildbotics.exe"), ("linux", "guildbotics")],
-)
-def test_frozen_member_cli_uses_the_platform_executable_name(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    platform: str,
-    executable_name: str,
-    fake_platform,
-) -> None:
-    executable = tmp_path / ".guildbotics" / "bin" / executable_name
-    executable.parent.mkdir(parents=True)
-    executable.write_text("launcher", encoding="utf-8")
-    view = fake_platform(member_broker, platform)
-    monkeypatch.setattr(view, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.Path.home",
-        lambda: tmp_path,
-    )
-
-    assert _member_cli_command() == (str(executable),)
-
-
 @pytest.mark.asyncio
-async def test_execute_uses_fixed_member_entrypoint_and_trusted_environment(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("work_kind", "run_id", "task_run_id"),
+    [("ticket", "", "run-1"), ("chat", "run-1", "")],
+)
+async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
+    monkeypatch, tmp_path, work_kind: str, run_id: str, task_run_id: str
 ) -> None:
-    process = _Process()
-    launched: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    calls: list[dict[str, Any]] = []
 
-    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _Process:
-        launched.append((argv, kwargs))
-        return process
+    def run_in_process(arguments, invocation, *, cwd, stdin):
+        calls.append(
+            {
+                "arguments": arguments,
+                "invocation": invocation,
+                "cwd": cwd,
+                "stdin": stdin,
+                "thread": threading.get_ident(),
+            }
+        )
+        return 3, "out", "err"
 
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
-        create_agent_subprocess,
-    )
-    context = _context(tmp_path)
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
-    broker._context = context
-    broker._turn_grant = "turn-1"
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    context = _context(tmp_path, work_kind=work_kind)
+    broker = _active_broker(context)
 
     result = await broker.execute(
         "turn-1", ["context", "--person", "aiko"], stdin="member input"
     )
 
-    argv, options = launched[0]
-    assert argv == (
-        "/trusted/guildbotics",
-        "member",
-        "--workspace",
-        str(tmp_path / "workspace"),
-        "context",
-        "--person",
-        "aiko",
+    assert calls == [
+        {
+            "arguments": ["context", "--person", "aiko"],
+            "invocation": MemberInvocation(
+                run_id=run_id,
+                task_run_id=task_run_id,
+                participant_labels='{"U1":"aiko"}',
+                trace_id="trace-parent",
+                lease=context.lease,
+            ),
+            "cwd": context.cwd,
+            "stdin": "member input",
+            "thread": calls[0]["thread"],
+        }
+    ]
+    # A worker thread of its own: Click and asyncio.run need one per command.
+    assert calls[0]["thread"] != threading.get_ident()
+    assert (result.exit_code, result.stdout, result.stderr) == (3, "out", "err")
+
+
+_INHERITED: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "inherited", default=""
+)
+
+
+@pytest.mark.asyncio
+async def test_member_command_starts_from_an_empty_context(
+    monkeypatch, tmp_path
+) -> None:
+    """The broker's server task holds what the turn that started it had bound;
+    a command must see only the invocation it is handed."""
+    seen: list[str] = []
+
+    def run_in_process(arguments, invocation, *, cwd, stdin):
+        seen.append(_INHERITED.get())
+        return 0, "", ""
+
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    broker = _active_broker(_context(tmp_path))
+    token = _INHERITED.set("an earlier turn")
+    try:
+        await broker.execute("turn-1", ["help"])
+    finally:
+        _INHERITED.reset(token)
+
+    assert seen == [""]
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_times_out_is_reported_and_frees_the_turn(
+    monkeypatch, tmp_path
+) -> None:
+    release = threading.Event()
+    started: list[list[str]] = []
+
+    def run_in_process(arguments, invocation, *, cwd, stdin):
+        started.append(arguments)
+        if arguments == ["hang"]:
+            release.wait(5)
+        return 0, "done", ""
+
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    monkeypatch.setattr(member_broker, "_COMMAND_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(member_broker, "_rejection_reason", lambda *_: None)
+    broker = _active_broker(_context(tmp_path))
+    try:
+        timed_out = await broker.execute("turn-1", ["hang"])
+        following = await broker.execute("turn-1", ["help"])
+    finally:
+        release.set()
+
+    assert timed_out.exit_code == 124
+    assert "may still complete" in timed_out.stderr
+    assert (following.exit_code, following.stdout) == (0, "done")
+    assert started == [["hang"], ["help"]]
+
+
+@pytest.mark.asyncio
+async def test_output_beyond_the_limit_is_truncated(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(member_broker, "_MAX_OUTPUT_BYTES", 4)
+    monkeypatch.setattr(
+        _MEMBER_CLI,
+        "run_in_process",
+        lambda *_args, **_kwargs: (0, "abcdef", "ab"),
     )
-    assert options["cwd"] == str(tmp_path / "data" / "workspaces" / "aiko")
-    assert options["start_new_session"] is True
-    assert options["env"][TASK_RUN_ENV] == "run-1"
-    assert options["env"][LEASE_ID_ENV] == "lease-1"
-    assert options["env"][DELEGATION_ID_ENV] == "delegation-1"
-    assert options["env"][LEASE_PERSON_ENV] == "aiko"
-    assert options["env"][LEASE_RUN_ENV] == "run-1"
-    assert process.input == b"member input"
-    assert result.exit_code == 0
-    assert result.stdout == '{"ok": true}\n'
+    broker = _active_broker(_context(tmp_path))
+
+    result = await broker.execute("turn-1", ["help"])
+
+    assert result.stdout == "abcd\n[output truncated]"
+    assert result.stderr == "ab"
 
 
 @pytest.mark.parametrize(
@@ -181,25 +213,10 @@ def test_help_is_the_only_command_that_does_not_require_a_person() -> None:
     assert _rejection_reason(["help"], "aiko") is None
 
 
-def test_read_only_environment_removes_inherited_delegation(
-    monkeypatch, tmp_path
-) -> None:
-    for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV):
-        monkeypatch.setenv(key, "stale")
-
-    env = _member_environment(_context(tmp_path, read_only=True))
-
-    assert TASK_RUN_ENV in env
-    assert all(
-        key not in env
-        for key in (LEASE_ID_ENV, DELEGATION_ID_ENV, LEASE_PERSON_ENV, LEASE_RUN_ENV)
-    )
-
-
 @pytest.mark.asyncio
 async def test_broker_rejects_commands_outside_an_active_turn(tmp_path) -> None:
     """Rejections stay in-band; a raised MCP tool error would fail the turn."""
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
 
     result = await broker.execute("expired", ["help"])
 
@@ -210,7 +227,7 @@ async def test_broker_rejects_commands_outside_an_active_turn(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_broker_rejects_an_expired_turn_grant(tmp_path) -> None:
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
     broker._context = _context(tmp_path)
     broker._turn_grant = "current"
 
@@ -226,7 +243,7 @@ async def test_activate_normalizes_start_failure(monkeypatch, tmp_path) -> None:
         raise OSError("bind failed")
 
     monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
 
     with pytest.raises(MemberCapabilityBrokerError, match="could not start") as excinfo:
         await broker.activate(_context(tmp_path))
@@ -239,7 +256,7 @@ async def test_activate_normalizes_failed_server_task(tmp_path) -> None:
     async def fail() -> None:
         raise OSError("server failed")
 
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
     broker._server = LoopbackServer(
         cast(Any, None), asyncio.create_task(fail()), port=0
     )
@@ -266,7 +283,7 @@ async def test_the_broker_leaves_the_process_logging_as_it_was(
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(root, "level", logging.WARNING)
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
     context = _context(tmp_path)
     await broker.activate(context)
     await broker.deactivate(context)
@@ -312,18 +329,9 @@ def test_brokers_starting_at_once_leave_the_process_logging_as_it_was(
     not _can_bind_localhost(), reason="Environment cannot bind a local TCP socket."
 )
 async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
-    monkeypatch, tmp_path
+    tmp_path,
 ) -> None:
-    process = _Process()
-
-    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _Process:
-        return process
-
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
-        create_agent_subprocess,
-    )
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
+    broker = MemberCapabilityBroker()
     context = _context(tmp_path)
     await broker.activate(context)
     descriptor = broker.mcp_server
@@ -409,7 +417,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     assert result.is_error is False
     assert result.structured_content == {
         "exit_code": 0,
-        "stdout": '{"ok": true}\n',
+        "stdout": capability_reference_text() + "\n",
         "stderr": "",
     }
     returned = json.dumps(result.structured_content)
@@ -422,79 +430,6 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
 
 
 @pytest.mark.asyncio
-async def test_deactivate_terminates_an_outstanding_member_command(
-    monkeypatch, tmp_path
-) -> None:
-    process = _HangingProcess()
-
-    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _HangingProcess:
-        return process
-
-    async def terminate(candidate: _HangingProcess) -> None:
-        assert candidate is process
-        candidate.returncode = -15
-        candidate.stopped.set()
-
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
-        create_agent_subprocess,
-    )
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.terminate_process_tree",
-        terminate,
-    )
-    context = _context(tmp_path)
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
-    broker._context = context
-    broker._turn_grant = "turn-1"
-    command = asyncio.create_task(broker.execute("turn-1", ["help"]))
-    await process.started.wait()
-
-    await broker.deactivate(context)
-    result = await command
-
-    assert result.exit_code == -15
-    assert broker._context is None
-    assert broker._turn_grant == ""
-
-
-@pytest.mark.asyncio
-async def test_cancelled_request_does_not_leave_a_member_process_running(
-    monkeypatch, tmp_path
-) -> None:
-    process = _HangingProcess()
-    terminated: list[_HangingProcess] = []
-
-    async def create_agent_subprocess(*argv: str, **kwargs: Any) -> _HangingProcess:
-        return process
-
-    async def terminate(candidate: _HangingProcess) -> None:
-        terminated.append(candidate)
-        candidate.returncode = -15
-        candidate.stopped.set()
-
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
-        create_agent_subprocess,
-    )
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.terminate_process_tree",
-        terminate,
-    )
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
-    broker._context = _context(tmp_path)
-    broker._turn_grant = "turn-1"
-    command = asyncio.create_task(broker.execute("turn-1", ["help"]))
-    await process.started.wait()
-
-    command.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await command
-
-    assert terminated == [process]
-
-
-@pytest.mark.asyncio
 async def test_bearer_token_is_exact_and_scoped() -> None:
     verifier = _ScopedTokenVerifier("expected-token")
 
@@ -504,48 +439,3 @@ async def test_bearer_token_is_exact_and_scoped() -> None:
     assert accepted is not None
     assert accepted.scopes == ["member:execute"]
     assert rejected is None
-
-
-def test_member_environment_preserves_unrelated_host_values(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.setenv("GUILDBOTICS_TEST_HOST_VALUE", "kept")
-
-    env = _member_environment(_context(tmp_path))
-
-    assert env["GUILDBOTICS_TEST_HOST_VALUE"] == "kept"
-    assert env is not os.environ
-
-
-@pytest.mark.asyncio
-async def test_execute_hands_the_turns_trace_to_the_member_cli(
-    monkeypatch, tmp_path
-) -> None:
-    from guildbotics.runtime.member_invocation import TRACE_ID_ENV
-
-    launched: list[dict[str, Any]] = []
-
-    async def create_agent_subprocess(*_argv: str, **kwargs: Any) -> _Process:
-        launched.append(kwargs)
-        return _Process()
-
-    monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.member_broker.create_agent_subprocess",
-        create_agent_subprocess,
-    )
-    context = AgentExecutionContext(
-        person_id="aiko",
-        run_id="run-1",
-        cwd=tmp_path,
-        workspace_root=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("aiko", "grok", "chat", "slack:bot:C1:1"),
-        trace_id="trace-parent",
-    )
-    broker = MemberCapabilityBroker(command=("/trusted/guildbotics",))
-    broker._context = context
-    broker._turn_grant = "turn-1"
-
-    await broker.execute("turn-1", ["context", "--person", "aiko"])
-
-    assert launched[0]["env"][TRACE_ID_ENV] == "trace-parent"

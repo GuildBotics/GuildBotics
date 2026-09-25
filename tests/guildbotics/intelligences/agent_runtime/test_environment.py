@@ -299,12 +299,11 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
 @pytest.mark.parametrize(
     "inspects", [frozenset(), frozenset({"diagnostics", "config"})]
 )
-async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
+async def test_what_a_turn_inspects_is_mounted_read_only(
     tmp_path, monkeypatch, inspects
 ):
     """The recorded runs and the configuration are mounted read-only only for
-    a turn whose caller lets it inspect them, and the leases beside the runs
-    stay covered: a delegation is a grant, not a record."""
+    a turn whose caller lets it inspect them."""
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
         guest_path,
@@ -317,7 +316,6 @@ async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
 
     state = tmp_path / ".guildbotics"
     run = state / "local" / "run"
-    # No lease taken yet: the cover must still be there for one taken later.
     run.mkdir(parents=True)
     (state / "config").mkdir()
     context = AgentExecutionContext(
@@ -334,17 +332,11 @@ async def test_what_a_turn_inspects_is_mounted_read_only_without_the_leases(
     mounts = set(spec.mounts)
     expected = {
         EnvironmentMount(guest_path(run), run, True),
-        EnvironmentMount(guest_path(run / "person-leases"), None, True),
         EnvironmentMount(guest_path(state / "config"), state / "config", True),
         EnvironmentMount(guest_path(get_template_path()), get_template_path(), True),
     }
     if inspects:
         assert expected <= mounts
-        # The cover is applied over the run directory, so it comes after it.
-        order = list(spec.mounts)
-        assert order.index(EnvironmentMount(guest_path(run), run, True)) < order.index(
-            EnvironmentMount(guest_path(run / "person-leases"), None, True)
-        )
     else:
         assert not expected & mounts
 
