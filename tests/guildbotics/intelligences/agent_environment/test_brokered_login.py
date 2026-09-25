@@ -696,7 +696,17 @@ async def test_a_login_named_for_its_account_is_refreshed_and_kept_whole(
 def test_a_login_file_with_more_than_one_account_is_not_a_login(
     machine: Path,
 ) -> None:
-    (entry,) = json.loads(_grok_login()).values()
+    """Two names are not the one account a tool keeps. The bytes are written
+    here, not taken from ``_grok_login``: that helper reads the clock, and a
+    value the guard cannot follow back to one call would have to be reported.
+    """
+    entry = {
+        "key": "REAL-GROK-459",
+        "auth_mode": "oidc",
+        "refresh_token": "REAL-GROK-459-REFRESH",
+        "expires_at": "2026-09-01T00:00:00.000000123Z",
+        "oidc_issuer": "https://auth.x.ai",
+    }
     two = json.dumps({"a": entry, "b": entry}).encode()
     provider_state._seal_login(GROK, {GROK_AUTH: two})
 
@@ -1037,24 +1047,17 @@ def _values(data: bytes) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize(
-    ("tool", "login", "kept"),
-    [
-        (CLAUDE, _login(), {"user:inference", "user:profile", "max"}),
-        (CODEX, _codex_login(), {"chatgpt", "account-459", "2026-09-01T00:00:00Z"}),
-        (GROK, _grok_login(), {"oidc"}),
-        (ANTIGRAVITY, _google_login(), {"Bearer", "consumer"}),
-        (COPILOT, _github_login(), set()),
-    ],
-    ids=["claude", "codex", "grok", "antigravity", "copilot"],
-)
-def test_what_comes_from_where_a_login_is_held_is_told_with_it_masked(
-    machine: Path, tool: CliAgentInfo, login: bytes, kept: set[str]
+def _assert_the_login_is_told_masked(
+    tool: CliAgentInfo, login: bytes, kept: set[str]
 ) -> None:
     """Every value of the login is masked but those a turn is lent anyway,
     and those too short to be a credential; a credential the file gains in a
-    later version of the tool is masked too."""
-    provider_state._seal_login(tool, {tool.provision.auth: login})
+    later version of the tool is masked too.
+
+    The login is built in the test and passed in. A parameter or a
+    ``parametrize`` argument is evaluated where this function cannot see the
+    call, so the guard would have to report it instead of checking it.
+    """
     said = " | ".join(_values(login))
 
     told = provider_state.masked(tool, f"failed: {said}")
@@ -1065,6 +1068,42 @@ def test_what_comes_from_where_a_login_is_held_is_told_with_it_masked(
             assert value in told, value
         else:
             assert value not in told, value
+
+
+def test_what_comes_from_a_claude_login_is_told_with_it_masked(machine: Path) -> None:
+    login = _login()
+    provider_state._seal_login(CLAUDE, {AUTH: login})
+    _assert_the_login_is_told_masked(
+        CLAUDE, login, {"user:inference", "user:profile", "max"}
+    )
+
+
+def test_what_comes_from_a_codex_login_is_told_with_it_masked(machine: Path) -> None:
+    login = _codex_login()
+    provider_state._seal_login(CODEX, {CODEX_AUTH: login})
+    _assert_the_login_is_told_masked(
+        CODEX, login, {"chatgpt", "account-459", "2026-09-01T00:00:00Z"}
+    )
+
+
+def test_what_comes_from_a_grok_login_is_told_with_it_masked(machine: Path) -> None:
+    login = _grok_login()
+    provider_state._seal_login(GROK, {GROK_AUTH: login})
+    _assert_the_login_is_told_masked(GROK, login, {"oidc"})
+
+
+def test_what_comes_from_an_antigravity_login_is_told_with_it_masked(
+    machine: Path,
+) -> None:
+    login = _google_login()
+    provider_state._seal_login(ANTIGRAVITY, {ANTIGRAVITY_AUTH: login})
+    _assert_the_login_is_told_masked(ANTIGRAVITY, login, {"Bearer", "consumer"})
+
+
+def test_what_comes_from_a_copilot_login_is_told_with_it_masked(machine: Path) -> None:
+    login = _github_login()
+    provider_state._seal_login(COPILOT, {COPILOT_AUTH: login})
+    _assert_the_login_is_told_masked(COPILOT, login, set())
 
 
 def test_a_part_of_a_jwt_is_masked_on_its_own(machine: Path) -> None:
@@ -1090,20 +1129,27 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
-def _reads_the_clock(function: ast.AST) -> bool:
-    """True when the function itself calls ``time.time``.
+def _is_clock_read(node: ast.AST) -> bool:
+    """True for the attribute ``time.time`` itself.
 
-    That call is what makes two builds of the same helper differ across a
-    second. Nested functions count, so a builder that hides the call still
-    joins the population.
+    That call is what makes two builds differ across a second. The attribute
+    is the whole definition; a callee in another module is not one of these.
     """
-    return any(
+    return (
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "time"
         and node.attr == "time"
-        for node in ast.walk(function)
     )
+
+
+def _reads_the_clock(function: ast.AST) -> bool:
+    """True when the function itself calls ``time.time``.
+
+    Nested functions count, so a builder that hides the call still joins the
+    population.
+    """
+    return any(_is_clock_read(node) for node in ast.walk(function))
 
 
 def _clock_reading_helpers(tree: ast.AST) -> frozenset[str]:
@@ -1154,8 +1200,8 @@ def _bind_login_names(
 
     A bare name uses the whole value. A tuple pairs each element with the
     value in the same position, so ``sealed, other = helper(), helper()``
-    keeps both calls. Leaving the names unbound drops the function out of
-    the population (the guard passes without looking).
+    keeps both calls. A name this does not bind is not a sealed call. The
+    guard reports that, unless the sealed bytes are not a clock read.
     """
     if isinstance(target, ast.Name):
         call = _login_in(value, helpers)
@@ -1252,19 +1298,247 @@ def _expected_logins(
     return expected
 
 
-def _logins_compared_apart_from_the_one_sealed() -> list[str]:
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+def _module_names(tree: ast.AST) -> frozenset[str]:
+    """Imports, classes, and functions on the module, plus builtins.
+
+    An assignment is not one of these. Its value is followed, and a name
+    this walk cannot follow is ``unknown``. A parameter is neither.
+    """
+    import builtins
+
+    names = set(dir(builtins))
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add("*" if alias.name == "*" else alias.asname or alias.name)
+    return frozenset(names)
+
+
+def _module_functions(tree: ast.AST) -> frozenset[str]:
+    """Functions defined on the module body, not inside another function.
+
+    A call of one of these that is not a clock-reading helper is a call this
+    walk can see does not read the clock. A parameter, a local name, or a
+    free name is not that function.
+    """
+    return frozenset(
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    )
+
+
+def _parameter_names(function: ast.AST) -> frozenset[str]:
+    args = getattr(function, "args", None)
+    if args is None:
+        return frozenset()
+    found = [arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    if args.vararg is not None:
+        found.append(args.vararg.arg)
+    if args.kwarg is not None:
+        found.append(args.kwarg.arg)
+    return frozenset(found)
+
+
+def _simple_assignments(function: ast.AST) -> dict[str, ast.expr]:
+    """Last simple assignment of each name. A tuple target is not one call."""
+    assigned: dict[str, ast.expr] = {}
+    statements = [
+        node
+        for node in _local_nodes(function)
+        if isinstance(node, ast.Assign | ast.AnnAssign)
+    ]
+    for statement in sorted(
+        statements, key=lambda node: (node.lineno, node.col_offset)
+    ):
+        if isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    assigned[target.id] = statement.value
+        elif isinstance(statement.target, ast.Name) and statement.value is not None:
+            assigned[statement.target.id] = statement.value
+    return assigned
+
+
+def _sealed_byte_expressions(function: ast.AST) -> list[ast.expr | None]:
+    """The file bytes passed to each ``_seal_login``, or None when unseen.
+
+    ``None`` is a call whose mapping this walk cannot see. That is the same
+    as a login it cannot name: the function is reported.
+    """
+    found: list[ast.expr | None] = []
+    for node in _local_nodes(function):
+        if not isinstance(node, ast.Call) or _call_name(node.func) != "_seal_login":
+            continue
+        mapping: ast.expr | None = node.args[1] if len(node.args) >= 2 else None
+        for keyword in node.keywords:
+            if keyword.arg == "files":
+                mapping = keyword.value
+        if not isinstance(mapping, ast.Dict):
+            found.append(mapping)
+            continue
+        values = [value for value in mapping.values if value is not None]
+        found.extend(values or [None])
+    return found
+
+
+def _combine_origins(origins: list[str]) -> str:
+    if "clock" in origins:
+        return "clock"
+    if "unknown" in origins:
+        return "unknown"
+    return "plain"
+
+
+def _byte_origin(
+    node: ast.AST,
+    *,
+    assigned: dict[str, ast.expr],
+    parameters: frozenset[str],
+    module_names: frozenset[str],
+    module_assigned: dict[str, ast.expr],
+    module_functions: frozenset[str],
+    helpers: frozenset[str],
+    visiting: set[str],
+) -> str:
+    """Where sealed bytes come from: a clock read, plainly not, or unnamed.
+
+    ``plain`` is the only answer that leaves a call out of the population,
+    and only when this walk has seen that the bytes are not a clock read: a
+    literal, a module import or function used as a value, or a call of a
+    module function that does not read the clock. A direct ``time.time()``
+    is that clock read, in the expression or through a simple assignment.
+    A module assignment is followed the same way as one in the function. A
+    parameter, a free name, a name this walk cannot follow, or a call through
+    anything other than such a function is ``unknown`` and is reported.
+    Following one more shape (a decorator, a fixture, a tuple unpack) is the
+    path this refuses to grow.
+
+    An attribute callee's body is not in this file, so it is not followed.
+    The call stays ``plain`` when it is not ``time.time()`` and its arguments
+    and receiver are. That is the boundary, not a claim that the callee
+    ignores the clock.
+    """
+
+    def origin(
+        child: ast.AST,
+        *,
+        assigned: dict[str, ast.expr] = assigned,
+        parameters: frozenset[str] = parameters,
+    ) -> str:
+        return _byte_origin(
+            child,
+            assigned=assigned,
+            parameters=parameters,
+            module_names=module_names,
+            module_assigned=module_assigned,
+            module_functions=module_functions,
+            helpers=helpers,
+            visiting=visiting,
+        )
+
+    if isinstance(node, ast.Constant):
+        return "plain"
+    if isinstance(node, ast.Name):
+        if node.id in visiting:
+            return "unknown"
+        if node.id in parameters:
+            return "unknown"
+        if node.id in assigned or node.id in module_assigned:
+            visiting.add(node.id)
+            try:
+                if node.id in assigned:
+                    return origin(assigned[node.id])
+                # A module assignment is not inside this function. Names in
+                # it are module names, not this function's parameters.
+                return origin(
+                    module_assigned[node.id],
+                    assigned={},
+                    parameters=frozenset(),
+                )
+            finally:
+                visiting.discard(node.id)
+        if node.id in module_names:
+            return "plain"
+        return "unknown"
+    if isinstance(
+        node,
+        ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp | ast.Lambda,
+    ):
+        return "unknown"
+    if isinstance(node, ast.Call):
+        if _is_login_call(node, helpers) or _is_clock_read(node.func):
+            return "clock"
+        # A Name callee counts only when it is a module function this walk
+        # already classified. A parameter, a local, or a free name is not.
+        if not isinstance(node.func, ast.Name | ast.Attribute):
+            return "unknown"
+        if isinstance(node.func, ast.Name) and (
+            node.func.id in assigned
+            or node.func.id in parameters
+            or node.func.id not in module_functions
+        ):
+            return "unknown"
+        parts = [origin(arg) for arg in node.args]
+        parts.extend(origin(keyword.value) for keyword in node.keywords)
+        if isinstance(node.func, ast.Attribute):
+            parts.append(origin(node.func.value))
+        return _combine_origins(parts)
+    children = [
+        child for child in ast.iter_child_nodes(node) if isinstance(child, ast.expr)
+    ]
+    if not children:
+        return "plain" if isinstance(node, ast.expr) else "unknown"
+    return _combine_origins([origin(child) for child in children])
+
+
+def _logins_the_guard_reports(tree: ast.AST) -> list[str]:
+    """Tests that seal one clock read and compare another, or seal unnamed bytes.
+
+    A ``_seal_login`` whose bytes are not a clock-reading helper, and can be
+    seen to be so, is outside the population (``_github_login``). Anything
+    else that does not name the sealed call is reported. Skipping it is how
+    a login built in ``parametrize`` or a fixture used to pass unexamined.
+    """
     helpers = _clock_reading_helpers(tree)
+    module_names = _module_names(tree)
+    module_assigned = _simple_assignments(tree)
+    module_functions = _module_functions(tree)
     apart: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         bound = _login_bound_here(node, helpers)
         sealed = _sealed_logins(node, bound, helpers)
-        if not sealed:
-            continue
+        assigned = _simple_assignments(node)
+        parameters = _parameter_names(node)
+        unnamed = False
+        for expression in _sealed_byte_expressions(node):
+            if expression is not None and _calls_under(expression, bound, helpers):
+                continue
+            origin = (
+                "unknown"
+                if expression is None
+                else _byte_origin(
+                    expression,
+                    assigned=assigned,
+                    parameters=parameters,
+                    module_names=module_names,
+                    module_assigned=module_assigned,
+                    module_functions=module_functions,
+                    helpers=helpers,
+                    visiting=set(),
+                )
+            )
+            if origin != "plain":
+                unnamed = True
         stray = _expected_logins(node, bound, helpers) - sealed
-        if stray:
+        if unnamed or (sealed and stray):
             apart.append(f"{node.name}:{node.lineno}")
     return sorted(apart)
 
@@ -1277,10 +1551,109 @@ def test_a_login_is_compared_with_the_one_that_was_sealed() -> None:
     flake, and the same shape on the ``not in`` side is the check that passes
     without looking at the login that was sealed. Which helpers those are is
     derived from the clock read. An empty derivation would pass every test
-    without looking, so it fails here.
+    without looking, so it fails here. A ``_seal_login`` whose call cannot be
+    named fails too, unless the bytes are visibly not that clock read.
     """
     tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     helpers = _clock_reading_helpers(tree)
     assert helpers, "clock-reading helpers were not derived; the guard would pass open"
-    apart = _logins_compared_apart_from_the_one_sealed()
+    apart = _logins_the_guard_reports(tree)
     assert not apart, apart
+
+
+def test_a_login_the_guard_cannot_name_is_reported() -> None:
+    """The population is not grown by reading decorators, fixtures, or unpacks.
+
+    A parameter (what ``parametrize`` and a fixture pass in), a call through
+    a parameter or a free name, a tuple unpack of a clock read, a module
+    assignment of a clock read, and bytes written out with ``time.time`` are
+    reported by name. A helper that does not read the clock, and bytes that
+    are not a login, are not, including when that helper or those bytes are
+    named at module level. An attribute call whose arguments do not read the
+    clock is one of those: its body is not in this file.
+    """
+    sample = "\n".join(
+        (
+            "import json",
+            "import time",
+            "",
+            "def _login():",
+            "    return time.time()",
+            "",
+            "def _github_login():",
+            "    return b'gho'",
+            "",
+            "_MODULE_LOGIN = _login()",
+            "_MODULE_GITHUB = _github_login()",
+            "_MODULE_LITERAL = b'written'",
+            "",
+            "def test_direct():",
+            "    provider_state._seal_login(CLAUDE, {AUTH: _login()})",
+            "",
+            "def test_reused():",
+            "    sealed = _login()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: sealed})",
+            "",
+            "def test_second_call():",
+            "    sealed = _login()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: sealed})",
+            "    _codex_tokens(_login())",
+            "",
+            "def test_github():",
+            "    provider_state._seal_login(COPILOT, {AUTH: _github_login()})",
+            "",
+            "def test_github_reused():",
+            "    sealed = _github_login()",
+            "    provider_state._seal_login(COPILOT, {AUTH: sealed})",
+            "",
+            "def test_module_name():",
+            "    provider_state._seal_login(CODEX, {AUTH: _MODULE_LOGIN})",
+            "",
+            "def test_module_github():",
+            "    provider_state._seal_login(COPILOT, {AUTH: _MODULE_GITHUB})",
+            "",
+            "def test_module_literal():",
+            "    provider_state._seal_login(GROK, {AUTH: _MODULE_LITERAL})",
+            "",
+            "def test_parameter(login):",
+            "    provider_state._seal_login(CODEX, {AUTH: login})",
+            "",
+            "def test_parameter_call(make_login):",
+            "    provider_state._seal_login(CODEX, {AUTH: make_login()})",
+            "",
+            "def test_free_name():",
+            "    provider_state._seal_login(CODEX, {AUTH: build_a_login()})",
+            "",
+            "def test_tuple_unpack():",
+            "    (entry,) = json.loads(_login()).values()",
+            "    two = json.dumps({'a': entry, 'b': entry}).encode()",
+            "    provider_state._seal_login(GROK, {AUTH: two})",
+            "",
+            "def test_literal():",
+            "    two = json.dumps({'a': {}, 'b': {}}).encode()",
+            "    provider_state._seal_login(GROK, {AUTH: two})",
+            "",
+            "def test_written_clock():",
+            "    blob = json.dumps({'expires_at': time.time() + 3600}).encode()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: blob})",
+            "",
+            "def test_named_clock():",
+            "    now = time.time()",
+            "    blob = json.dumps({'expires_at': now + 3600}).encode()",
+            "    provider_state._seal_login(CLAUDE, {AUTH: blob})",
+            "",
+        )
+    )
+    reported = {
+        item.split(":", 1)[0] for item in _logins_the_guard_reports(ast.parse(sample))
+    }
+    assert reported == {
+        "test_second_call",
+        "test_parameter",
+        "test_parameter_call",
+        "test_free_name",
+        "test_tuple_unpack",
+        "test_module_name",
+        "test_written_clock",
+        "test_named_clock",
+    }
