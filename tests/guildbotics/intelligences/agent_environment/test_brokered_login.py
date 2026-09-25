@@ -1292,7 +1292,11 @@ def _expected_logins(
 
 
 def _module_names(tree: ast.AST) -> frozenset[str]:
-    """Names defined on the module, plus builtins. A parameter is neither."""
+    """Imports, classes, and functions on the module, plus builtins.
+
+    An assignment is not one of these. Its value is followed, and a name
+    this walk cannot follow is ``unknown``. A parameter is neither.
+    """
     import builtins
 
     names = set(dir(builtins))
@@ -1305,23 +1309,21 @@ def _module_names(tree: ast.AST) -> frozenset[str]:
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 names.add("*" if alias.name == "*" else alias.asname or alias.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                names.update(_assigned_names(target))
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
     return frozenset(names)
 
 
-def _assigned_names(target: ast.AST) -> set[str]:
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, ast.Tuple | ast.List):
-        names: set[str] = set()
-        for elt in target.elts:
-            names.update(_assigned_names(elt))
-        return names
-    return set()
+def _module_functions(tree: ast.AST) -> frozenset[str]:
+    """Functions defined on the module body, not inside another function.
+
+    A call of one of these that is not a clock-reading helper is a call this
+    walk can see does not read the clock. A parameter, a local name, or a
+    free name is not that function.
+    """
+    return frozenset(
+        node.name
+        for node in getattr(tree, "body", [])
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    )
 
 
 def _parameter_names(function: ast.AST) -> frozenset[str]:
@@ -1392,33 +1394,58 @@ def _byte_origin(
     assigned: dict[str, ast.expr],
     parameters: frozenset[str],
     module_names: frozenset[str],
+    module_assigned: dict[str, ast.expr],
+    module_functions: frozenset[str],
     helpers: frozenset[str],
     visiting: set[str],
 ) -> str:
     """Where sealed bytes come from: a clock read, plainly not, or unnamed.
 
-    ``plain`` is the only answer that leaves a call out of the population.
-    A parameter, a free name, or a call this walk will not follow is
-    ``unknown`` and is reported. Following one more shape (a decorator, a
-    fixture, a tuple unpack) is the path this refuses to grow.
+    ``plain`` is the only answer that leaves a call out of the population,
+    and only when this walk has seen that the bytes are not a clock read: a
+    literal, a module import or function used as a value, or a call of a
+    module function that does not read the clock. A module assignment is
+    followed the same way as one in the function. A parameter, a free name,
+    a name this walk cannot follow, or a call through anything other than
+    such a function is ``unknown`` and is reported. Following one more shape
+    (a decorator, a fixture, a tuple unpack) is the path this refuses to grow.
     """
+
+    def origin(
+        child: ast.AST,
+        *,
+        assigned: dict[str, ast.expr] = assigned,
+        parameters: frozenset[str] = parameters,
+    ) -> str:
+        return _byte_origin(
+            child,
+            assigned=assigned,
+            parameters=parameters,
+            module_names=module_names,
+            module_assigned=module_assigned,
+            module_functions=module_functions,
+            helpers=helpers,
+            visiting=visiting,
+        )
+
     if isinstance(node, ast.Constant):
         return "plain"
     if isinstance(node, ast.Name):
         if node.id in visiting:
             return "unknown"
-        if node.id in parameters or node.id in assigned:
-            if node.id in parameters:
-                return "unknown"
+        if node.id in parameters:
+            return "unknown"
+        if node.id in assigned or node.id in module_assigned:
             visiting.add(node.id)
             try:
-                return _byte_origin(
-                    assigned[node.id],
-                    assigned=assigned,
-                    parameters=parameters,
-                    module_names=module_names,
-                    helpers=helpers,
-                    visiting=visiting,
+                if node.id in assigned:
+                    return origin(assigned[node.id])
+                # A module assignment is not inside this function. Names in
+                # it are module names, not this function's parameters.
+                return origin(
+                    module_assigned[node.id],
+                    assigned={},
+                    parameters=frozenset(),
                 )
             finally:
                 visiting.discard(node.id)
@@ -1433,62 +1460,27 @@ def _byte_origin(
     if isinstance(node, ast.Call):
         if _is_login_call(node, helpers):
             return "clock"
-        parts = [
-            _byte_origin(
-                arg,
-                assigned=assigned,
-                parameters=parameters,
-                module_names=module_names,
-                helpers=helpers,
-                visiting=visiting,
-            )
-            for arg in node.args
-        ]
-        parts.extend(
-            _byte_origin(
-                keyword.value,
-                assigned=assigned,
-                parameters=parameters,
-                module_names=module_names,
-                helpers=helpers,
-                visiting=visiting,
-            )
-            for keyword in node.keywords
-        )
+        # A Name callee counts only when it is a module function this walk
+        # already classified. A parameter, a local, or a free name is not.
         if not isinstance(node.func, ast.Name | ast.Attribute):
             return "unknown"
-        if isinstance(node.func, ast.Name) and node.func.id in assigned:
+        if isinstance(node.func, ast.Name) and (
+            node.func.id in assigned
+            or node.func.id in parameters
+            or node.func.id not in module_functions
+        ):
             return "unknown"
+        parts = [origin(arg) for arg in node.args]
+        parts.extend(origin(keyword.value) for keyword in node.keywords)
         if isinstance(node.func, ast.Attribute):
-            parts.append(
-                _byte_origin(
-                    node.func.value,
-                    assigned=assigned,
-                    parameters=parameters,
-                    module_names=module_names,
-                    helpers=helpers,
-                    visiting=visiting,
-                )
-            )
+            parts.append(origin(node.func.value))
         return _combine_origins(parts)
     children = [
         child for child in ast.iter_child_nodes(node) if isinstance(child, ast.expr)
     ]
     if not children:
         return "plain" if isinstance(node, ast.expr) else "unknown"
-    return _combine_origins(
-        [
-            _byte_origin(
-                child,
-                assigned=assigned,
-                parameters=parameters,
-                module_names=module_names,
-                helpers=helpers,
-                visiting=visiting,
-            )
-            for child in children
-        ]
-    )
+    return _combine_origins([origin(child) for child in children])
 
 
 def _logins_the_guard_reports(tree: ast.AST) -> list[str]:
@@ -1501,6 +1493,8 @@ def _logins_the_guard_reports(tree: ast.AST) -> list[str]:
     """
     helpers = _clock_reading_helpers(tree)
     module_names = _module_names(tree)
+    module_assigned = _simple_assignments(tree)
+    module_functions = _module_functions(tree)
     apart: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -1521,6 +1515,8 @@ def _logins_the_guard_reports(tree: ast.AST) -> list[str]:
                     assigned=assigned,
                     parameters=parameters,
                     module_names=module_names,
+                    module_assigned=module_assigned,
+                    module_functions=module_functions,
                     helpers=helpers,
                     visiting=set(),
                 )
@@ -1554,9 +1550,11 @@ def test_a_login_is_compared_with_the_one_that_was_sealed() -> None:
 def test_a_login_the_guard_cannot_name_is_reported() -> None:
     """The population is not grown by reading decorators, fixtures, or unpacks.
 
-    A parameter (what ``parametrize`` and a fixture pass in) and a tuple
-    unpack of a clock read are reported by name. A helper that does not read
-    the clock, and bytes that are not a login, are not.
+    A parameter (what ``parametrize`` and a fixture pass in), a call through
+    a parameter or a free name, a tuple unpack of a clock read, and a module
+    assignment of a clock read are reported by name. A helper that does not
+    read the clock, and bytes that are not a login, are not, including when
+    that helper or those bytes are named at module level.
     """
     sample = "\n".join(
         (
@@ -1568,6 +1566,10 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
             "",
             "def _github_login():",
             "    return b'gho'",
+            "",
+            "_MODULE_LOGIN = _login()",
+            "_MODULE_GITHUB = _github_login()",
+            "_MODULE_LITERAL = b'written'",
             "",
             "def test_direct():",
             "    provider_state._seal_login(CLAUDE, {AUTH: _login()})",
@@ -1588,8 +1590,23 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
             "    sealed = _github_login()",
             "    provider_state._seal_login(COPILOT, {AUTH: sealed})",
             "",
+            "def test_module_name():",
+            "    provider_state._seal_login(CODEX, {AUTH: _MODULE_LOGIN})",
+            "",
+            "def test_module_github():",
+            "    provider_state._seal_login(COPILOT, {AUTH: _MODULE_GITHUB})",
+            "",
+            "def test_module_literal():",
+            "    provider_state._seal_login(GROK, {AUTH: _MODULE_LITERAL})",
+            "",
             "def test_parameter(login):",
             "    provider_state._seal_login(CODEX, {AUTH: login})",
+            "",
+            "def test_parameter_call(make_login):",
+            "    provider_state._seal_login(CODEX, {AUTH: make_login()})",
+            "",
+            "def test_free_name():",
+            "    provider_state._seal_login(CODEX, {AUTH: build_a_login()})",
             "",
             "def test_tuple_unpack():",
             "    (entry,) = json.loads(_login()).values()",
@@ -1605,4 +1622,11 @@ def test_a_login_the_guard_cannot_name_is_reported() -> None:
     reported = {
         item.split(":", 1)[0] for item in _logins_the_guard_reports(ast.parse(sample))
     }
-    assert reported == {"test_second_call", "test_parameter", "test_tuple_unpack"}
+    assert reported == {
+        "test_second_call",
+        "test_parameter",
+        "test_parameter_call",
+        "test_free_name",
+        "test_tuple_unpack",
+        "test_module_name",
+    }
