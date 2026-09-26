@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from guildbotics.app_api import diagnostics as diagnostics_module
 from guildbotics.app_api.diagnostics import ScenarioDiagnosticsService
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.metadata import CommandAccess, command_access
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.entities.team import (
     MessageChannel,
     Person,
@@ -16,7 +20,13 @@ from guildbotics.entities.team import (
     Team,
 )
 from guildbotics.integrations.chat_service import ChatIdentity
-from guildbotics.intelligences.brains.cli_agent import CliAgentBrain, ExecutableInfo
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentBrain,
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+    ExecutableInfo,
+)
+from guildbotics.utils.fileio import get_template_path
 
 TICKET_STATUSES = ["Todo", "Doing", "Done"]
 CLI_AGENT_FAILURE_RETURNCODE = 2
@@ -30,18 +40,57 @@ class _CliResult:
 
 
 class _StubBrain(CliAgentBrain):
-    """Minimal CliAgentBrain stand-in returning a canned execution result."""
+    """Minimal CliAgentBrain stand-in answering from a canned execution result.
+
+    Like the real brain, a tool that fails or says nothing fails the turn.
+    """
 
     def __init__(
         self, result: _CliResult | Exception, *, adapter: str = "codex"
     ) -> None:
         self._result = result
         self.executable_info = ExecutableInfo(adapter=adapter)
+        self.cli_agent = adapter
 
-    async def run_with_execution_details(self, message: str, cwd: Any) -> _CliResult:
+    async def run(self, message: str, **kwargs: Any) -> str:
         if isinstance(self._result, Exception):
             raise self._result
-        return self._result
+        result = CliAgentExecutionResult(
+            stdout=self._result.stdout,
+            stderr=self._result.stderr,
+            returncode=self._result.returncode,
+        )
+        if result.returncode != 0 or not result.stdout:
+            raise CliAgentExecutionError(cli_agent=self.cli_agent, result=result)
+        return result.stdout
+
+
+#: The check commands run, as ``(command, person, cwd, message)``.
+_CHECK_RUNS: list[tuple[str, str | None, Path, str]] = []
+
+
+@pytest.fixture(autouse=True)
+def _check_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the check's command on the member's stub brain, reporting a failed
+    turn the way a Markdown command does."""
+    _CHECK_RUNS.clear()
+
+    async def run_command(
+        context: Any,
+        command: str,
+        args: list[str],
+        *,
+        person_identifier: str | None,
+        cwd: Path,
+    ) -> CommandOutcome:
+        _CHECK_RUNS.append((command, person_identifier, cwd, context.pipe))
+        try:
+            output = await context.brain.run(context.pipe, cwd=cwd)
+        except Exception as exc:
+            raise CommandError(f"Custom command '{command}' failed: {exc}") from exc
+        return CommandOutcome(result=output, text_output=output)
+
+    monkeypatch.setattr(diagnostics_module, "run_command", run_command)
 
 
 class _StubChatService:
@@ -553,6 +602,17 @@ async def test_cli_agent_executable_found_and_brain_ok(
     assert checks["cli_agent_brain"].status == "ok"
     assert checks["cli_agent_brain"].person_id == "alice"
     assert checks["cli_agent_brain"].target == "codex"
+    # The check is a turn of the bundled command, run as the member.
+    ((command, person, _, message),) = _CHECK_RUNS
+    assert (command, person) == ("diagnostics/cli_agent", "alice")
+    assert "read-only diagnostics check" in message
+
+
+def test_the_cli_agent_check_command_changes_nothing() -> None:
+    """Its turn is read-only, so it runs while the member is busy."""
+    path = get_template_path() / "commands" / "diagnostics" / "cli_agent.md"
+
+    assert command_access(path) == CommandAccess(read_only=True)
 
 
 @pytest.mark.asyncio

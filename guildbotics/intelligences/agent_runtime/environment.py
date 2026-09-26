@@ -3,16 +3,15 @@
 Every adapter starts its provider CLI the same way, through
 :func:`start_turn_environment`, in a microVM booted from this device's
 snapshot. The turns of one command execution (:func:`command_environment`)
-share one. It boots before the first of them and is shaped once for all,
-since a running microVM cannot be reshaped: the turn's access contract, the
-persisted state of every AI CLI tool the member is configured with, whatever
-of the workspace's own state the caller lets the turns inspect mounted
-read-only, and the ports of the member broker and of each tool's credential
-gateway opened. It is discarded when the command ends, however it ends. A
-turn outside a command (the Desktop's assistants) boots one of its own and
-discards it when it ends. What changes from turn to turn is only what can be
-given to a running microVM: the working directory, the environment, and the
-login the turn is lent.
+share one, and no turn runs outside a command. It boots before the first of
+them and is shaped once for all, since a running microVM cannot be reshaped:
+the turn's access contract, the persisted state of every AI CLI tool the
+member is configured with, whatever of the workspace's own state the command
+declares its turns inspect mounted read-only, and the ports of the member
+broker and of each tool's credential gateway opened. It is discarded when the
+command ends, however it ends. What changes from turn to turn is only what
+can be given to a running microVM: the working directory, the environment,
+and the login the turn is lent.
 
 The adapter runs the CLI inside and speaks its protocol over the bridged
 stdio. Nothing of the host -- its environment variables, its credentials,
@@ -34,6 +33,8 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from guildbotics.commands.errors import CommandError
+from guildbotics.commands.metadata import CommandAccess, InspectionScope
 from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialGateway,
     CredentialUnavailableError,
@@ -67,10 +68,10 @@ from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    AgentAdapter,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
-    InspectionScope,
 )
 from guildbotics.intelligences.agent_runtime.windows_job import (
     WindowsJob,
@@ -120,7 +121,7 @@ def inspected_directories(
     neither. The workspace's ``.guildbotics`` stays closed otherwise.
 
     Args:
-        scopes: What the caller lets the turn inspect.
+        scopes: What the turn's command declares it inspects.
         workspace_root: The selected workspace.
 
     Returns:
@@ -154,17 +155,30 @@ _COMMAND: ContextVar[_SharedEnvironment | None] = ContextVar(
 
 
 @asynccontextmanager
-async def command_environment() -> AsyncIterator[None]:
+async def command_environment(access: CommandAccess) -> AsyncIterator[None]:
     """Run the AI CLI turns of one command execution in one microVM.
 
     Nothing boots until a turn needs it, and what did is discarded when the
     command ends, cancellation included. A command run inside another one
-    shares that one's: a command and its subcommands are one isolation.
+    shares that one's: a command and its subcommands are one isolation, held
+    to the access the outer command declared.
+
+    Args:
+        access: What the command declares of its turns' access.
+
+    Raises:
+        CommandError: If a command run inside another declares other access;
+            it cannot be given the isolation it declared.
     """
-    if _COMMAND.get() is not None:
+    shared = _COMMAND.get()
+    if shared is not None:
+        if shared.access != access:
+            raise CommandError(
+                "A command cannot run inside a command that declares other access."
+            )
         yield
         return
-    shared = _SharedEnvironment()
+    shared = _SharedEnvironment(access)
     token = _COMMAND.set(shared)
     try:
         yield
@@ -173,18 +187,42 @@ async def command_environment() -> AsyncIterator[None]:
         await shared.close()
 
 
+def running_command() -> _SharedEnvironment:
+    """The environment of the command running now.
+
+    Raises:
+        AgentRuntimeError: ``configuration`` when no command is running.
+    """
+    shared = _COMMAND.get()
+    if shared is None:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.CONFIGURATION,
+            "An AI CLI turn runs only inside a command.",
+        )
+    return shared
+
+
+def current_command_access() -> CommandAccess:
+    """The access the running command declared; none outside a command.
+
+    A turn outside a command is refused when it starts, so what this reports
+    there only has to be the narrowest thing that asks for nothing.
+    """
+    shared = _COMMAND.get()
+    return shared.access if shared is not None else CommandAccess()
+
+
 async def start_turn_environment(
     context: AgentExecutionContext,
     tool_name: str,
     *,
     env: Mapping[str, str] | None = None,
 ) -> TurnEnvironment:
-    """Start one turn of ``tool_name`` in the environment it runs in.
+    """Start one turn of ``tool_name`` in the running command's environment.
 
-    Inside a command that is the command's microVM, booted by its first
-    turn; outside one, a microVM of the turn's own. The turn holds it until
-    it is closed, and the command's next turn waits until then: the member
-    broker serves one turn at a time.
+    The command's microVM is booted by its first turn. The turn holds it
+    until it is closed, and the command's next turn waits until then: the
+    member broker serves one turn at a time.
 
     Args:
         context: The turn: its working directory and access contract.
@@ -193,20 +231,16 @@ async def start_turn_environment(
             state variables, its gateway, and the member broker's token.
 
     Raises:
-        AgentRuntimeError: ``configuration`` when this device cannot run the
-            environment or holds no snapshot for the declaration, or when the
-            command's microVM was not started for this turn (another
-            contract, a tool it does not hold, a working directory outside
-            what it mounted); ``authentication`` when the tool is not logged
-            in here; ``process`` when the microVM or the broker does not
-            start. Nothing is widened: a turn that cannot be confined does
-            not run.
+        AgentRuntimeError: ``configuration`` when no command is running,
+            when this device cannot run the environment or holds no snapshot
+            for the declaration, or when the command's microVM was not
+            started for this turn (another contract, a tool it does not hold,
+            a working directory outside what it mounted); ``authentication``
+            when the tool is not logged in here; ``process`` when the microVM
+            or the broker does not start. Nothing is widened: a turn that
+            cannot be confined does not run.
     """
-    shared = _COMMAND.get()
-    owned = shared is None
-    return await (shared or _SharedEnvironment()).turn(
-        context, tool_name, env or {}, owned=owned
-    )
+    return await running_command().turn(context, tool_name, env or {})
 
 
 class TurnEnvironment:
@@ -259,7 +293,9 @@ class TurnEnvironment:
 class _SharedEnvironment:
     """A microVM, what it was started with, and the turns it runs in turn."""
 
-    def __init__(self) -> None:
+    def __init__(self, access: CommandAccess) -> None:
+        #: What the command declared; every turn of it is held to this.
+        self.access = access
         self._broker = MemberCapabilityBroker()
         self._turn = asyncio.Lock()
         self._environment: AgentEnvironment | None = None
@@ -273,19 +309,18 @@ class _SharedEnvironment:
         self._gateways: dict[str, CredentialGateway] = {}
         #: The relays running, each started by its tool's first turn.
         self._relays: dict[str, EnvironmentProcess] = {}
+        #: The native adapters the command's turns speak through, by member and
+        #: adapter; they end with the command, and no other command's touch them.
+        self.adapters: dict[tuple[str, str], AgentAdapter] = {}
+        self.adapters_lock = asyncio.Lock()
 
     async def turn(
         self,
         context: AgentExecutionContext,
         tool_name: str,
         env: Mapping[str, str],
-        *,
-        owned: bool,
     ) -> TurnEnvironment:
-        """Start a turn, booting the microVM first when none runs yet.
-
-        ``owned`` discards the microVM when the turn ends.
-        """
+        """Start a turn, booting the microVM first when none runs yet."""
         await self._turn.acquire()
         gateway: CredentialGateway | None = None
 
@@ -293,11 +328,7 @@ class _SharedEnvironment:
             if gateway is not None:
                 gateway.revoke()
             await self._broker.deactivate(context)
-            try:
-                if owned:
-                    await self.close()
-            finally:
-                self._turn.release()
+            self._turn.release()
 
         try:
             tool, where = _ready(tool_name)
@@ -496,18 +527,24 @@ class _SharedEnvironment:
                 await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
 
     async def close(self) -> None:
-        """Discard the microVM, then stop the gateways and the broker; the
-        stand-ins open nothing once the microVM is gone. Idempotent."""
+        """Close the command's adapters, discard the microVM, then stop the
+        gateways and the broker; the stand-ins open nothing once the microVM
+        is gone. Idempotent."""
+        adapters, self.adapters = list(self.adapters.values()), {}
         environment, self._environment = self._environment, None
         try:
-            if environment is not None:
-                await environment.close()
+            for adapter in adapters:
+                await adapter.close()
         finally:
             try:
-                for gateway in self._gateways.values():
-                    await gateway.close()
+                if environment is not None:
+                    await environment.close()
             finally:
-                await self._broker.close()
+                try:
+                    for gateway in self._gateways.values():
+                        await gateway.close()
+                finally:
+                    await self._broker.close()
 
 
 async def _trust(environment: AgentEnvironment, ca_pem: bytes) -> None:

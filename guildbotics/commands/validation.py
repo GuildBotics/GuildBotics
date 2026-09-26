@@ -22,6 +22,7 @@ from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
     find_main_function,
+    parse_command_access,
     parse_command_input_policy,
     parse_python_metadata_from_module,
 )
@@ -150,6 +151,7 @@ def validate_python_source(content: str) -> None:
         metadata = parse_python_metadata_from_module(module)
         parse_command_input_policy(metadata.get("inputs"))
         parse_command_argument_definitions(metadata)
+        parse_command_access(metadata)
     except CommandError as exc:
         raise CommandValidationError("command_file_invalid_source", str(exc)) from exc
 
@@ -193,6 +195,7 @@ def _validate_declarations(config: dict[str, Any]) -> None:
     try:
         parse_command_input_policy(config.get("inputs"))
         parse_command_argument_definitions(config)
+        parse_command_access(config)
     except CommandError as exc:
         raise CommandValidationError("command_file_invalid_source", str(exc)) from exc
     _validate_commands_shape(config)

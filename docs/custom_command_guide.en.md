@@ -13,6 +13,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [2.3. Using the `context` variable](#23-using-the-context-variable)
     - [2.4. Configuring Desktop inputs](#24-configuring-desktop-inputs)
   - [3. Using the AI CLI tool](#3-using-the-ai-cli-tool)
+    - [3.1. Declaring a command read-only](#31-declaring-a-command-read-only)
   - [4. Using built-in commands](#4-using-built-in-commands)
   - [5. Using subcommands](#5-using-subcommands)
     - [5.1. Naming subcommands and referencing outputs](#51-naming-subcommands-and-referencing-outputs)
@@ -238,6 +239,23 @@ GuildBotics is an alpha tool for collaborating with AI agents and a task board; 
 ```
 
 For AI CLI tools, set the working directory for system commands via the `cwd` parameter.
+
+### 3.1. Declaring a command read-only
+
+A command that changes nothing can declare `read_only: true` in its metadata (`"read_only": True` in a Python command's `COMMAND_METADATA`). The declaration is the command's: every AI CLI turn of its run, its subcommands' included, is confined read-only in the isolated environment (everything visible from the host is read-only, the working directory included, and the network reaches only the provider's API). In exchange, it can run alongside a running manual command and that member's scheduled work.
+
+Declaring `inspects` lets its turns read the workspace's own state, read-only: `diagnostics` is the recorded runs, `config` the workspace configuration and the bundled templates.
+
+```markdown
+---
+brain: agent
+read_only: true
+inspects: [diagnostics]
+---
+Read the records of the most recent failed run and explain its cause in one paragraph.
+```
+
+Only the declaration of the command you run counts; a subcommand's own declaration is not consulted. A read-only command cannot run a command that declares otherwise (through `run_command` or the like); that run is refused. The isolated environment confines only the AI CLI turns: the command's own shell scripts and Python code run on the host, so a command that declares `read_only: true` must keep them from changing anything too.
 
 
 ## 4. Using built-in commands

@@ -85,7 +85,7 @@ async def _run_custom_command(
     identifier = person_option or inline_person
 
     try:
-        rendered = await LocalCommandExecutor().run(
+        outcome = await LocalCommandExecutor().run(
             context,
             command_name=command_name,
             command_args=command_args,
@@ -112,8 +112,8 @@ async def _run_custom_command(
         traceback.print_exc()
         raise click.ClickException(str(exc)) from exc
 
-    if rendered:
-        click.echo(rendered)
+    if outcome.text_output:
+        click.echo(outcome.text_output)
 
 
 def _parse_command_spec(command_spec: str) -> tuple[str, str | None]:

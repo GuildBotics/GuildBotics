@@ -1,103 +1,16 @@
-"""Tests for the troubleshooting turn contract and its prompt."""
+"""Tests for the troubleshooting prompt.
+
+The command that sends it is tested in
+``tests/guildbotics/templates/commands/test_assistant_commands.py``.
+"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.assistants import AssistantResponseError
-from guildbotics.intelligences.troubleshooting import (
-    TroubleshootingResult,
-    troubleshoot_turn,
-)
-
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT, get_template_path
-
 TROUBLESHOOT_PROMPT = Path("guildbotics/templates/commands/functions/troubleshoot")
-
-
-class _BrainStub:
-    def __init__(self, reply: Any | None = None) -> None:
-        self.reply = reply or TroubleshootingResult(
-            message="The push failed because the GitHub token expired.",
-            trace_ids=["abc123"],
-        )
-        self.message = ""
-        self.kwargs: dict[str, Any] = {}
-
-    async def run(self, message: str, **kwargs: Any) -> Any:
-        self.message = message
-        self.kwargs = kwargs
-        return self.reply
-
-
-class _ContextStub:
-    def __init__(self, brain: Any) -> None:
-        self.brain = brain
-
-    def get_brain(self, name: str, config: None, class_resolver: None) -> Any:
-        assert name == "functions/troubleshoot"
-        return self.brain
-
-
-@pytest.mark.asyncio
-async def test_troubleshoot_turn_sends_question_and_focus(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    state_dir = tmp_path / ".guildbotics"
-    (state_dir / "local" / "run").mkdir(parents=True)
-    (state_dir / "config").mkdir()
-    brain = _BrainStub()
-
-    result = await troubleshoot_turn(
-        _ContextStub(brain),
-        conversation_id="conv-1",
-        trace_id="trace-1",
-        question="Why did this fail?",
-        focus={"view": "trace", "trace_id": "abc123", "source": "routine"},
-        workspace_data_root=tmp_path,
-    )
-
-    assert result.message.startswith("The push failed")
-    assert result.trace_ids == ["abc123"]
-    # Where to look is named the way the turn's environment mounts it.
-    assert json.loads(brain.message) == {
-        "question": "Why did this fail?",
-        "focus": {"view": "trace", "trace_id": "abc123", "source": "routine"},
-        "directories": {
-            "diagnostics": guest_path(state_dir / "local" / "run"),
-            "config": guest_path(state_dir / "config"),
-            "templates": guest_path(get_template_path()),
-        },
-    }
-    state = brain.kwargs["session_state"]["agent_execution_context"]
-    assert state["work_kind"] == "troubleshooting"
-    assert state["work_identity"] == "conv-1"
-    assert state["run_id"] == "trace-1"
-    # It only inspects: the recorded runs and what they ran with.
-    assert state["read_only"] is True
-    assert state["inspects"] == ["config", "diagnostics"]
-    assert brain.kwargs["cwd"] == (
-        tmp_path / ".guildbotics" / "local" / "work" / "troubleshooting"
-    )
-
-
-@pytest.mark.asyncio
-async def test_troubleshoot_turn_rejects_unstructured_output(tmp_path: Path) -> None:
-    with pytest.raises(AssistantResponseError):
-        await troubleshoot_turn(
-            _ContextStub(_BrainStub("not structured")),
-            conversation_id="conv-1",
-            trace_id="trace-1",
-            question="Why?",
-            focus={},
-            workspace_data_root=tmp_path,
-        )
 
 
 @pytest.mark.parametrize("language", ["en", "ja"])

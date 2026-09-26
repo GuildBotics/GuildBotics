@@ -100,8 +100,9 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 test("sends a troubleshooting question through the real backend and reports the failure", async ({
   page,
 }) => {
-  // `functions/troubleshoot` is a `brain: agent` command, so the assistant turn
-  // reaches the real FastAPI endpoint and launches the member's AI CLI tool —
+  // The assistant is the bundled `assistants/troubleshoot` command, whose prompt
+  // is `brain: agent`, so the question reaches the real FastAPI endpoint, runs
+  // through the command path, and launches the member's AI CLI tool —
   // Every turn of an AI CLI tool boots inside the isolated agent environment,
   // and the harness makes this stack a device that cannot hold that
   // environment's runtime (see `start-stack.mjs`), so the device refuses the

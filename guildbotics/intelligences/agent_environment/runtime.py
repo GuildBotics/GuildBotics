@@ -1,8 +1,8 @@
 """The microVMs AI CLI turns run in, driven through the microsandbox SDK.
 
 This is the only module that talks to the runtime. A :class:`AgentEnvironment` is
-created from a snapshot -- for the turns of one command, or for one turn that
-runs outside a command -- with the mounts and network policy a
+created from a snapshot -- for the turns of one command, or for a login or
+probe of its own -- with the mounts and network policy a
 :class:`AgentEnvironmentSpec` states, runs the provider CLI inside with its
 stdio bridged to the host, and is discarded when what it was booted for ends.
 Stopping it ends every process inside, so no process survives it.

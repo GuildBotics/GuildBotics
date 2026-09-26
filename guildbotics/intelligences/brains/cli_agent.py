@@ -739,6 +739,9 @@ class CliAgentBrain(Brain):
         kwargs: dict[str, Any],
         effort: EffortDecision,
     ) -> CliAgentExecutionResult:
+        from guildbotics.intelligences.agent_runtime.environment import (
+            current_command_access,
+        )
         from guildbotics.intelligences.agent_runtime.models import (
             ConversationKey,
             ResumePolicy,
@@ -773,10 +776,13 @@ class CliAgentBrain(Brain):
             policy = ResumePolicy(str(configured.get("resume_policy") or "fresh"))
         except ValueError:
             policy = ResumePolicy.FRESH
-        # A read-only turn takes no execution lease. It never touches the
-        # member's workspace, chat or tickets, and holding the lease would make
-        # it unusable exactly when it is most needed: while that member is busy.
-        read_only = bool(configured.get("read_only"))
+        # The command declares its turns' access, and every turn of it is held
+        # to that. A read-only turn takes no execution lease. It never touches
+        # the member's workspace, chat or tickets, and holding the lease would
+        # make it unusable exactly when it is most needed: while that member
+        # is busy.
+        access = current_command_access()
+        read_only = access.read_only
         lease = None if read_only else current_person_lease()
         owned_lease: PersonExecutionLease | None = None
         if lease is None and not read_only:
@@ -846,7 +852,7 @@ class CliAgentBrain(Brain):
                 attempt=_attempt(configured),
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
-                inspects=frozenset(configured.get("inspects") or ()),
+                inspects=access.inspects,
                 contract=contract,
                 tools=frozenset(
                     info.adapter

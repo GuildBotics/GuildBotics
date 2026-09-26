@@ -203,3 +203,38 @@ def test_unsupported_format() -> None:
     with pytest.raises(CommandValidationError) as exc:
         validate_command_source(".txt", "anything")
     assert exc.value.code == "command_file_unsupported_format"
+
+
+@pytest.mark.parametrize(
+    ("extension", "source"),
+    [
+        (".md", "---\nbrain: none\nread_only: true\ninspects: [config]\n---\nBody.\n"),
+        (
+            ".py",
+            "COMMAND_METADATA = {'read_only': True, 'inspects': ['diagnostics']}\n\n"
+            "def main(context):\n    return ''\n",
+        ),
+        (".yml", "read_only: true\ncommands: []\n"),
+    ],
+)
+def test_every_format_may_declare_its_access(extension: str, source: str) -> None:
+    validate_generated_command_source(extension, source)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "field"),
+    [
+        ("read_only: yes please", "read_only"),
+        ("inspects: [secrets]", "inspects"),
+        ("inspects: config", "inspects"),
+    ],
+)
+def test_an_invalid_access_declaration_is_refused(declaration: str, field: str) -> None:
+    """A proposal the command editor could apply is held to what runs."""
+    with pytest.raises(CommandValidationError) as exc:
+        validate_generated_command_source(
+            ".md", f"---\nbrain: none\n{declaration}\n---\nBody.\n"
+        )
+
+    assert exc.value.code == "command_file_invalid_source"
+    assert f"'{field}'" in str(exc.value)

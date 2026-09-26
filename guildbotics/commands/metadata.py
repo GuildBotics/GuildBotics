@@ -13,7 +13,7 @@ import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 import yaml
 
@@ -50,6 +50,51 @@ class CommandInputPolicy:
     defined_args: str = "auto"
     extra_args: str = "hidden"
     message: str = "optional"
+
+
+#: The workspace's own state a command may let its AI CLI turns inspect:
+#: ``diagnostics`` is the recorded runs, ``config`` the workspace
+#: configuration and the packaged templates it falls back to.
+InspectionScope = Literal["diagnostics", "config"]
+
+
+@dataclass(frozen=True)
+class CommandAccess:
+    """What a command declares about the access of its AI CLI turns.
+
+    Mirrors the ``read_only`` / ``inspects`` metadata. A command declares it
+    and every turn of its run is held to it: a read-only command's turns can
+    change nothing, which is what lets the run take no execution lease and no
+    manual-command reservation. ``inspects`` is independent of that: what a
+    command needs to read is its work's business.
+    """
+
+    read_only: bool = False
+    inspects: frozenset[InspectionScope] = frozenset()
+
+
+def parse_command_access(metadata: dict[str, Any]) -> CommandAccess:
+    """Parse and validate the ``read_only`` / ``inspects`` metadata.
+
+    Args:
+        metadata: The command's metadata mapping.
+
+    Returns:
+        The declared access.
+
+    Raises:
+        CommandError: If either field is invalid.
+    """
+    read_only = metadata.get("read_only", False)
+    if not isinstance(read_only, bool):
+        raise CommandError("Command 'read_only' must be true or false.")
+    inspects = metadata.get("inspects", [])
+    if not isinstance(inspects, list) or not all(
+        scope in get_args(InspectionScope) for scope in inspects
+    ):
+        allowed = ", ".join(get_args(InspectionScope))
+        raise CommandError(f"Command 'inspects' must be a list of: {allowed}.")
+    return CommandAccess(read_only=read_only, inspects=frozenset(inspects))
 
 
 @dataclass(frozen=True)
@@ -242,6 +287,15 @@ def literal_default(node: ast.expr | None) -> str:
 def load_command_metadata(path: Path, language_code: str = "") -> dict[str, Any]:
     """Load and localize metadata embedded in a command file."""
     return _localize_metadata(load_command_file_metadata(path), language_code)
+
+
+def command_access(path: Path) -> CommandAccess:
+    """Return what the command at ``path`` declares of its turns' access.
+
+    Raises:
+        CommandError: If the declaration is invalid.
+    """
+    return parse_command_access(load_command_metadata(path))
 
 
 def load_command_file_metadata(path: Path) -> dict[str, Any]:

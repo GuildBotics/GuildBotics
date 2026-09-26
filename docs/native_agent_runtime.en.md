@@ -51,9 +51,9 @@ command execution share one microVM: it boots before the first of them,
 able to run every AI CLI tool the member is configured with, and is
 discarded when the command ends, whether it succeeded, failed, or was
 cancelled. The turns run one at a time and see what an earlier one left in
-it, since a command and its subcommands are one isolation. A turn outside a
-command (the Desktop's assistants) boots a microVM of its own and discards it
-when it ends. A running microVM is never reshaped: a turn whose working
+it, since a command and its subcommands are one isolation. No turn runs
+outside a command: the Desktop's assistants and the diagnostics screen's AI CLI
+tool check run as bundled commands too. A running microVM is never reshaped: a turn whose working
 directory is outside what the microVM mounted when it booted, or that asks
 for another access contract, is refused. A tool that is configured but not
 logged in stops nothing until a turn of it comes. What the turn may reach is the access
@@ -130,14 +130,14 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   read/write at the same path it has on the host (a read-only turn gets an
   empty read-only mount there instead). The workspace's
   `.guildbotics/config` and `state` are not part of it.
-- **Inspected workspace state**: only for a turn whose caller lets it
-  inspect (`AgentExecutionContext.inspects`), parts of the workspace's own state
-  are bound read-only at their host paths. `diagnostics` is the recorded runs
+- **Inspected workspace state**: only for the turns of a command that
+  declares it (`inspects`), parts of the workspace's own state are bound
+  read-only at their host paths. `diagnostics` is the recorded runs
   (`.guildbotics/local/run`); `config` is the workspace
   configuration (`.guildbotics/config`) and the packaged templates it falls back
-  to. The Desktop troubleshooting assistant is the only such caller today; it
-  reads the records against the commands and settings they ran with. The grant
-  is independent of `read_only`: what a turn may change and what it needs to
+  to. The bundled troubleshooting command (`assistants/troubleshoot`) is the only
+  one that declares it today; it reads the records against the commands and
+  settings they ran with. The declaration is independent of `read_only`: what a turn may change and what it needs to
   read are separate questions.
 - **Beyond the working directory** there are two things, both bound at their
   host paths under a home directory that is the host's own. **documents**:
@@ -229,10 +229,13 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
     allow_local_network: false
   ```
 
-- **Read-only turns**: a turn that may change nothing (the Desktop's
-  troubleshooting and command-authoring assistants) says so in its contract
-  (`AccessContract.read_only`), and the environment confines it the same way
-  whatever provider runs it. Every directory bound from the host is
+- **Read-only turns**: a command that may change nothing declares so
+  (`read_only: true`; among the bundled commands, the Desktop's troubleshooting
+  and command-authoring assistants and the diagnostics screen's AI CLI tool
+  check). The declaration is the command's: every turn of its run, its
+  subcommands' included, is held to it, and no turn can make itself read-only.
+  The contract (`AccessContract.read_only`) states it, and the environment
+  confines it the same way whatever provider runs it. Every directory bound from the host is
   read-only, the exchange directory and `read_write` grants included, and the
   working directory is an empty read-only mount. The workspace's `network:`
   does not apply: only the provider's API domains and the member broker are

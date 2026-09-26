@@ -376,8 +376,8 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
         """,
     )
 
-    result = await run_command(_get_context("stdin text"), "solo", ["world"])
-    assert result == "Greetings world\nstdin text"
+    outcome = await run_command(_get_context("stdin text"), "solo", ["world"])
+    assert outcome.text_output == "Greetings world\nstdin text"
 
 
 @pytest.mark.asyncio
@@ -399,7 +399,8 @@ async def test_run_command_runs_as_configured_default_person(tmp_path, monkeypat
         default_person_id="akira",
     )
 
-    assert await run_command(_context_for_team(team), "whoami", []) == "akira"
+    outcome = await run_command(_context_for_team(team), "whoami", [])
+    assert outcome.text_output == "akira"
 
 
 @pytest.mark.asyncio
@@ -413,7 +414,7 @@ async def test_run_command_releases_person_lease_when_discovery_fails(
         await run_command(context, "missing", [])
 
     _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
-    assert await run_command(context, "solo", []) == "done"
+    assert (await run_command(context, "solo", [])).text_output == "done"
 
 
 @pytest.mark.asyncio
@@ -510,9 +511,9 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
 
     context = _get_context("initial")
     executor = CommandRunner(context, "pipeline", ["ARG"])
-    result = await executor.run()
+    result = (await executor.run()).text_output
 
-    runner = executor._context
+    runner = executor.context
     assert runner.shared_state["pipeline"].startswith("Main start for ARG")
     assert "first_payload" in runner.shared_state
     assert runner.shared_state["python_payload"] == {
@@ -561,9 +562,9 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
 
     context = _get_context("initial")
     executor = CommandRunner(context, "shell_driver", ["ARG"])
-    result = await executor.run()
+    result = (await executor.run()).text_output
 
-    runner = executor._context
+    runner = executor.context
     shell_output = runner.shared_state["shell_output"]
 
     assert "args:alpha beta" in shell_output
@@ -601,7 +602,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     executor = CommandRunner(context, "driver", [])
     await executor.run()
 
-    shared = executor._context.shared_state
+    shared = executor.context.shared_state
     assert shared["invoked_md"].startswith("Placeholder value")
     assert shared["driver"]["invoked"] == shared["invoked_md"]
     assert shared["driver"]["stdin"] == shared["invoked_md"]
@@ -621,7 +622,7 @@ async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
     )
 
     executor = CommandRunner(_get_context(), "functions/cached", [])
-    result = await executor.run()
+    result = (await executor.run()).text_output
 
     assert result == "done"
     assert not (tmp_path / "commands/functions/__pycache__").exists()

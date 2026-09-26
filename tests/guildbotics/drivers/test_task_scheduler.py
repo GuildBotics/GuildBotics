@@ -610,7 +610,7 @@ class _FailingRunner:
     """A command that raises, standing in for any failed scheduler command."""
 
     def __init__(self, context, name, args, cwd=None) -> None:
-        pass
+        self.command_name = name
 
     async def run(self) -> str:
         raise RuntimeError("boom")
@@ -636,10 +636,10 @@ def _run_scheduler_slot(scheduler: TaskScheduler, source: str) -> tuple[int, boo
 
 @pytest.mark.parametrize("source", ["scheduled", "routine"])
 def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> None:
-    from guildbotics.drivers import command_runner
+    from guildbotics.drivers import utils
 
     scheduler = TaskScheduler(_Context(_Person()))
-    monkeypatch.setattr(command_runner, "CommandRunner", _FailingRunner)
+    monkeypatch.setattr(utils, "CommandRunner", _FailingRunner)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     assert _run_scheduler_slot(scheduler, source) == (1, False)
@@ -653,7 +653,7 @@ def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> 
 def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
     monkeypatch,
 ) -> None:
-    from guildbotics.drivers import command_runner
+    from guildbotics.drivers import utils
 
     scheduler = TaskScheduler(_Context(_Person()))
 
@@ -663,7 +663,7 @@ def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
             await asyncio.sleep(30)
             return ""
 
-    monkeypatch.setattr(command_runner, "CommandRunner", _StoppedRunner)
+    monkeypatch.setattr(utils, "CommandRunner", _StoppedRunner)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     # A stop is not a command error, so the worker does not count it.
