@@ -23,13 +23,9 @@ jobs:
             --no-progress
             --scheme file
             --include-fragments
-            --exclude-path 'desktop[\\/]node_modules'
-            --exclude-path 'desktop[\\/]src-tauri[\\/]binaries'
-            --exclude-path 'desktop[\\/]src-tauri[\\/]target'
+            --extensions md
             './*.md'
-            './docs/**/*.md'
-            './desktop/**/*.md'
-            './skills/**/*.md'
+            docs desktop skills
           fail: true
 
   test:
