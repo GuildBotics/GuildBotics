@@ -18,7 +18,10 @@
 # - GuildBotics resolves brains / commands dynamically from config via
 #   `guildbotics.utils.import_utils.load_class`, so the whole `guildbotics`
 #   package (submodules + data files) must be collected, not just the modules
-#   reachable by PyInstaller's static import graph.
+#   reachable by PyInstaller's static import graph. `collect_submodules` only
+#   descends into regular packages, so every directory of `guildbotics` holding
+#   modules needs an `__init__.py`; `tests/guildbotics/test_package_module_discovery.py`
+#   fails when a module is not reachable that way.
 # - `weasyprint` is intentionally NOT bundled. `ToPdfCommand` imports it lazily
 #   and raises a friendly `CommandError` when its native libraries are missing,
 #   so the sidecar stays buildable without GTK/Pango/Cairo. PDF conversion in
