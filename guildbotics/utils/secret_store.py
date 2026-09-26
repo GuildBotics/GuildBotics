@@ -106,9 +106,8 @@ def is_secret_env_key(key: str) -> bool:
     """True when an environment variable carries a credential value.
 
     A key qualifies by name pattern or by provenance: keys seen in the
-    workspace SecretStore are secret whatever they are called. Used both to
-    keep such values out of AI CLI subprocess environments and to redact them
-    from anything a member writes down, so the two answers cannot drift apart.
+    workspace SecretStore are secret whatever they are called. Used to redact
+    such values from anything a member writes down.
     """
     if key in _KNOWN_SECRET_ENV_KEYS:
         return True
