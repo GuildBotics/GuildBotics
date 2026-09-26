@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.utils import stringify_output
 from guildbotics.integrations.chat_service import ChatService
 
@@ -15,26 +16,31 @@ async def main(
     channel_name: str = "",
     command: str = "",
 ) -> str:
-    """Run a GuildBotics command and post its output to a chat channel."""
+    """Run a GuildBotics command and post its output to a chat channel.
+
+    Raises:
+        CommandError: If the channel is missing or cannot be resolved, or the
+            command is empty or cannot be split. An empty command output is
+            not a failure: nothing is posted.
+    """
     service_name = str(service).strip().lower()
     if service_name != "slack":
         raise ValueError(f"Unsupported chat service: {service}")
 
     chat_service = context.get_chat_service()
     resolved_channel_id = await _resolve_channel_id(
-        context,
         chat_service,
         channel_id=str(channel_id or "").strip(),
         channel_name=str(channel_name or "").strip(),
     )
-    if not resolved_channel_id:
-        return ""
+    try:
+        parts = shlex.split(str(command or ""))
+    except ValueError as exc:
+        raise CommandError(f"Invalid command syntax: {exc}") from exc
+    if not parts:
+        raise CommandError("A command to post is required.")
 
-    command_text = str(command or "").strip()
-    if not command_text:
-        return ""
-
-    text = await _run_command_text(context, command_text)
+    text = stringify_output(await context.invoke(parts[0], *parts[1:]))
     if not text.strip():
         return ""
 
@@ -43,53 +49,17 @@ async def main(
 
 
 async def _resolve_channel_id(
-    context: Any,
-    chat_service: ChatService,
-    *,
-    channel_id: str,
-    channel_name: str,
+    chat_service: ChatService, *, channel_id: str, channel_name: str
 ) -> str:
     if channel_id:
         return channel_id
     if not channel_name:
-        _log_info(
-            context, "chat_post_command skipped: channel_id or channel_name is required"
-        )
-        return ""
+        raise CommandError("Either channel_id or channel_name is required.")
     resolved = await chat_service.resolve_channel_id(channel_name)
     if not resolved:
-        _log_info(
-            context,
-            "chat_post_command skipped: channel_name=%s could not be resolved "
-            "(check channel name, bot channel membership, and Slack scopes "
-            "channels:read/groups:read)",
-            channel_name,
+        raise CommandError(
+            f"Chat channel was not found: {channel_name} (check the channel "
+            "name, the bot's channel membership, and the Slack scopes "
+            "channels:read/groups:read)"
         )
-        return ""
     return resolved
-
-
-async def _run_command_text(context: Any, command_text: str) -> str:
-    try:
-        parts = shlex.split(command_text)
-    except ValueError as e:
-        _log_info(
-            context,
-            "chat_post_command skipped: invalid command syntax (check quotes): %s",
-            e,
-        )
-        return ""
-    if not parts:
-        return ""
-    result = await context.invoke(parts[0], *parts[1:])
-    return stringify_output(result)
-
-
-def _log_info(context: Any, msg: str, *args: Any) -> None:
-    logger = getattr(context, "logger", None)
-    if logger is None:
-        return
-    try:
-        logger.info(msg, *args)
-    except Exception:
-        return

@@ -171,6 +171,8 @@ Running the whole thing including the post, once, by hand:
 guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
+If the channel is not specified or `channel_name` cannot be resolved (check the channel name, the bot's channel membership, and the `channels:read` / `groups:read` scopes), or `command` is empty or has unbalanced quotes, the run fails and is recorded as failed. When the command produces empty output, nothing is posted and the run succeeds.
+
 ## `person.yml` Reference
 
 The Slack settings you save in the desktop app are written to `team/members/<person_id>/person.yml` in the following form. On a server without the GUI, edit this file directly.
