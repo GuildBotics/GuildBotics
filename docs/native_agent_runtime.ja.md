@@ -89,9 +89,8 @@ build）を、どのturnのmicroVMにも`/opt/guildbotics/code/guildbotics`へ�
 同じパスにしないのは、GuildBoticsのチェックアウト自身を作業ディレクトリにしたturnで、その中の
 `guildbotics/`が読み取り専用で覆われないようにするためです。
 
-既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルド時間と大きさ（macOS、
-ベースイメージ取得済み、書き込み層`upper.ext4`の使用量）は、GuildBotics自身のPython環境を入れる
-前が約25秒・1.3 GB、入れた後が約35秒・1.8 GBです。
+既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルドは、macOSで約35秒、
+大きさは約1.8 GBです（ベースイメージ取得済み、書き込み層`upper.ext4`の使用量）。
 
 ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
 ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る

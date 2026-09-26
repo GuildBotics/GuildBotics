@@ -113,9 +113,8 @@ It is not bound at its host path so that a turn working in the GuildBotics
 checkout itself does not find its `guildbotics/` covered read-only.
 
 With the default base image (`node:22.23.2-bookworm`, arm64), the snapshot
-build took about 25 s and 1.3 GB before GuildBotics' own Python environment
-was added and about 35 s and 1.8 GB after (macOS, base image already pulled,
-space used by the writable layer `upper.ext4`).
+build takes about 35 s on macOS and the snapshot is about 1.8 GB (base image
+already pulled, space used by the writable layer `upper.ext4`).
 
 The base image is GuildBotics' own by default (Debian + Node.js + npm + git
 + uv). A workspace that needs another toolchain -- a Python interpreter,
