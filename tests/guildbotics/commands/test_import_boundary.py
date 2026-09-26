@@ -62,19 +62,64 @@ for module in pkgutil.iter_modules(package.__path__, package.__name__ + "."):
 print(json.dumps(sorted(sys.modules)))
 """
 
+#: Drives a completion-managed invocation against a stub ledger: the first
+#: attempt ends without completion, the second completes. The ledger is the
+#: only way to the run record, so no host module is needed at run time either.
+_TURN_PROBE = """
+import asyncio, json, sys
+from guildbotics.commands.runner import CommandRunner
 
-def test_importing_the_machinery_loads_nothing_host_only() -> None:
-    loaded = json.loads(
+calls = []
+
+class Ledger:
+    def require_completion(self, run_id):
+        calls.append("require_completion")
+        if calls.count("require_completion") == 1:
+            raise RuntimeError("not completed")
+
+    def evidence(self, run_id):
+        calls.append("evidence")
+        return []
+
+    def record_completed(self, run_id, attempt):
+        calls.append("record_completed")
+
+    def record_completion_missing(self, run_id, attempt, max_attempts, error):
+        calls.append("record_completion_missing")
+
+async def invoke_once(name, args, kwargs, cwd):
+    return "response"
+
+runner = CommandRunner.__new__(CommandRunner)
+runner._ledger = Ledger()
+runner._invoke_once = invoke_once
+result = asyncio.run(
+    runner._invoke(
+        "functions/handle_chat_event",
+        agent_execution_context={
+            "run_id": "run-1",
+            "work_kind": "chat",
+            "max_completion_attempts": 2,
+        },
+    )
+)
+print(json.dumps({"result": result, "calls": calls, "loaded": sorted(sys.modules)}))
+"""
+
+
+def _run(probe: str) -> object:
+    return json.loads(
         subprocess.run(
-            [sys.executable, "-c", _PROBE],
+            [sys.executable, "-c", probe],
             capture_output=True,
             check=True,
             text=True,
         ).stdout
     )
 
-    assert "guildbotics.commands.runner" in loaded
-    assert [
+
+def _host_only(loaded: list[str]) -> list[str]:
+    return [
         name
         for name in loaded
         if name.startswith("guildbotics")
@@ -82,5 +127,32 @@ def test_importing_the_machinery_loads_nothing_host_only() -> None:
         and not any(
             name == allowed or name.startswith(allowed + ".") for allowed in _ALLOWED
         )
+    ] + sorted({name.split(".")[0] for name in loaded} & _HOST_ONLY)
+
+
+def test_importing_the_machinery_loads_nothing_host_only() -> None:
+    loaded = _run(_PROBE)
+
+    assert isinstance(loaded, list)
+    assert "guildbotics.commands.runner" in loaded
+    assert _host_only(loaded) == []
+
+
+def test_a_completion_managed_turn_reaches_the_run_record_only_through_the_ledger() -> (
+    None
+):
+    outcome = _run(_TURN_PROBE)
+
+    assert isinstance(outcome, dict)
+    assert outcome["result"] == "response"
+    assert outcome["calls"] == [
+        "evidence",
+        "require_completion",
+        "record_completion_missing",
+        "evidence",
+        "require_completion",
+        "record_completed",
+    ]
+    assert [
+        name for name in outcome["loaded"] if name.startswith("guildbotics.drivers")
     ] == []
-    assert sorted({name.split(".")[0] for name in loaded} & _HOST_ONLY) == []

@@ -14,7 +14,8 @@ from guildbotics.capabilities.chat_selection import (
 )
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.drivers.agent_turn import run_agent_turn
+from guildbotics.commands.agent_turn import run_agent_turn
+from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import (
     ChatEvent,
@@ -176,7 +177,9 @@ class FakeInvokeContext(types.SimpleNamespace):
                 )
 
             return await run_agent_turn(
-                invoke=_turn, execution_context=execution_context
+                invoke=_turn,
+                execution_context=execution_context,
+                ledger=HostRunLedger(),
             )
         return await self._invoke_once(name, **kwargs)
 
@@ -1783,7 +1786,7 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
     class Runner:
         access = CommandAccess()
 
-        def __init__(self, context, *_args):
+        def __init__(self, context, *_args, ledger):
             self.context = context
 
         async def run(self):

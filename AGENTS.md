@@ -40,7 +40,7 @@
 
 - `guildbotics/cli/*` … Click コマンド。`member.py` に member capability の入口
 - `guildbotics/app_api/*` … Desktop 向け Local API（FastAPI + EventBus + normalizer）
-- `guildbotics/drivers/*` … スケジューラ、コマンドを始める host の入口（`command_runner.py`。`prepare_command` / `run_command` / `run_main_command` / `run_in_environment`）、workflow dispatcher、ticket selector（`ticket_selector.py`。ticket workflow を動かすすべての経路が候補選びと turn の前後の処理をここで行う）
+- `guildbotics/drivers/*` … スケジューラ、コマンドを始める host の入口（`command_runner.py`。`prepare_command` / `run_command` / `run_main_command` / `run_in_environment`。`CommandRunner` を作るときに、完了まで turn を回す処理（`commands/agent_turn.py`）が帳簿を読み・完了を記録する窓口 `HostRunLedger` を渡す）、workflow dispatcher、ticket selector（`ticket_selector.py`。ticket workflow を動かすすべての経路が候補選びと turn の前後の処理をここで行う）
 - `guildbotics/capabilities/*` … member の git / github / chat / memory 操作と domain event 記録
 - `guildbotics/commands/*` … コマンド種別（md/py/sh/yml + inline）とコマンド実行の仕組み（`runner.py` の `CommandRunner`）。host 専用のモジュール（隔離環境・member broker・scheduler と dispatcher・`mcp` / `uvicorn` / `microsandbox` / `keyring` など）を import 時に読み込まない（`tests/guildbotics/commands/test_import_boundary.py` が「読み込んでよいもの」の側で固定する）。`guildbotics/drivers/__init__.py` は再 export を持たない（持つと scheduler まで読み込まれる）
 - `guildbotics/editions/*` … Edition 抽象と Simple edition（setup_service は GUI からも再利用）

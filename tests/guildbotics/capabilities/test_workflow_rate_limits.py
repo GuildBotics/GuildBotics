@@ -7,7 +7,7 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_from_exception,
     workflow_rate_limit_notice_text,
 )
-from guildbotics.drivers.agent_turn import CompletionRetryExhausted
+from guildbotics.commands.agent_turn import CompletionRetryExhausted
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
