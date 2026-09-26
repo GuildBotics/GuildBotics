@@ -76,8 +76,8 @@ created once with an elevation prompt. Inside the environment a Windows host
 path appears with its drive letter as the top-level directory (`C:\work`
 is `/c/work`); the working directory is bound under the same convention.
 
-What the environment holds -- the base image and the provider CLIs GuildBotics
-installs at pinned versions -- is built per device as a snapshot and rebuilt
+What the environment holds -- the base image, the provider CLIs GuildBotics
+installs at pinned versions, and GuildBotics' own Python environment -- is built per device as a snapshot and rebuilt
 when it no longer matches the declaration. Additional development tools belong
 in the base image, not in a package list. The
 **Agent execution environment** screen in the Desktop shows the runtime, the
@@ -93,6 +93,32 @@ ticket patrol and chat dispatch are deferred rather than failed. Why a turn
 cannot start here (no runtime, an unreadable declaration, a base image not
 loaded, an unbuilt snapshot, no login) is shown in the same words in the
 alert band at the top of the screen.
+
+GuildBotics' own Python environment is what GuildBotics' code runs with inside
+the environment. `/opt/guildbotics/venv` holds Python 3.12 (the image's own
+when it has one, otherwise installed by uv under `/opt/uv/python`) and the
+pinned dependencies, and `apt-get` installs WeasyPrint's native libraries
+(Pango) for `to_pdf` with fonts for Latin and Japanese text
+(`fonts-dejavu-core`, `fonts-noto-cjk`). The dependency list is
+`guildbotics/intelligences/agent_environment/requirements.txt`, exported
+from `uv.lock` without `microsandbox`, which only the host uses (export it
+again after changing `uv.lock`; the drift test `test_requirements.py`
+prints the command when it fails). The snapshot is named after the content
+of every build step, so a changed list makes it stale and it is rebuilt;
+turns cannot start during the rebuild (tens of seconds to minutes). The code
+itself is not in the snapshot: every turn's microVM binds the running process's own
+`guildbotics` package (the checkout when running from source, the process's
+own build when packaged) read-only at `/opt/guildbotics/code/guildbotics`.
+It is not bound at its host path so that a turn working in the GuildBotics
+checkout itself does not find its `guildbotics/` covered read-only.
+
+With the default base image (`node:22.23.2-bookworm`, arm64), the snapshot
+build takes about 35 s on macOS (base image already pulled). A snapshot holds
+only what the build adds on top of the base image (the writable layer
+`upper.ext4`), which uses about 1.8 GB; the whole environment is that plus the
+base image. An image that already has what the build installs (Python 3.12,
+say) therefore gives a smaller snapshot even when the whole environment is
+larger.
 
 The base image is GuildBotics' own by default (Debian + Node.js + npm + git
 + uv). A workspace that needs another toolchain -- a Python interpreter,
@@ -115,7 +141,7 @@ band, and in `environment status` that says how to fall in line. The
 snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
-build steps what they use (Node.js with `npm`, `curl` and
+build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
 `tar`), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
@@ -135,7 +161,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   read-only at their host paths. `diagnostics` is the recorded runs
   (`.guildbotics/local/run`); `config` is the workspace
   configuration (`.guildbotics/config`) and the packaged templates it falls back
-  to. The bundled troubleshooting command (`assistants/troubleshoot`) is the only
+  to (`templates` inside the GuildBotics code mount above). The bundled troubleshooting command (`assistants/troubleshoot`) is the only
   one that declares it today; it reads the records against the commands and
   settings they ran with. The declaration is independent of `read_only`: what a turn may change and what it needs to
   read are separate questions.

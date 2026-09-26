@@ -58,7 +58,7 @@ cd desktop
 npm run tauri build -- --bundles nsis
 ```
 
-PyInstaller の program は 1 つの directory `desktop/src-tauri/binaries/guildbotics/` に配置されます。中身は `guildbotics-app-api.exe`、`guildbotics.exe`、両者が共有する `_internal\`、`build-id` です。
+PyInstaller の program は 1 つの directory `desktop/src-tauri/binaries/guildbotics/` に配置されます。中身は `guildbotics-app-api.exe`、`guildbotics.exe`、両者が共有する `_internal\`、`build-id` です。`_internal\guildbotics\` には template のほかに package の `.py` のソースと隔離環境の依存の一覧（`intelligences\agent_environment\requirements.txt`）が入ります。隔離環境の microVM はこの directory を mount し、GuildBotics 自身のコードをそこから動かします。
 
 NSIS installer は `desktop/src-tauri/target/release/bundle/nsis/` に生成されます。Windows 用 Tauri overlay でも bundle target を NSIS に固定しているため、通常の Windows build が MSI を作ろうとすることはありません。
 

@@ -184,7 +184,7 @@ Linux の Tauri 実行に必要なパッケージはディストリビューシ�
 
 ### 2.1 Python sidecar（Local API + CLI）を build する
 
-GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。通常は `scripts/desktop-build-backend.sh` を使います。
+GuildBotics は config 経由で brain / command を動的解決するため、PyInstaller の static import graph だけでは不足します。収集設定は [sidecar/guildbotics.spec](sidecar/guildbotics.spec) にまとめてあります。Local API（`guildbotics-app-api`）と CLI（`guildbotics`）は `_internal/` を共有する 1 つの directory（PyInstaller の onedir）として build します。`_internal/guildbotics/` には package の `.py` のソースと隔離環境の依存の一覧も入ります（隔離環境の microVM がこの directory を mount して GuildBotics 自身のコードを動かすため）。通常は `scripts/desktop-build-backend.sh` を使います。
 
 ```bash
 # リポジトリルートで実行

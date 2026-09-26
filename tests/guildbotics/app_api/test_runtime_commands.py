@@ -62,7 +62,7 @@ from guildbotics.runtime.service_lock import (
     ServiceLockMetadata,
     ServiceLockUnavailableError,
 )
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT, get_template_path
+from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.app_api.command_doubles import stub_commands
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
@@ -2075,7 +2075,7 @@ async def test_troubleshoot_runs_its_bundled_command_as_a_manual_run(
         "directories": {
             "config": guest_path(state / "config"),
             "diagnostics": guest_path(state / "local" / "run"),
-            "templates": guest_path(get_template_path()),
+            "templates": "/opt/guildbotics/code/guildbotics/templates",
         },
     }
     assert turn["execution"]["work_identity"] == "conv-1"

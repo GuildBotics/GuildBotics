@@ -58,7 +58,7 @@ cd desktop
 npm run tauri build -- --bundles nsis
 ```
 
-The PyInstaller programs are written as one directory, `desktop/src-tauri/binaries/guildbotics/`, holding `guildbotics-app-api.exe`, `guildbotics.exe`, the `_internal\` directory they share, and a `build-id`.
+The PyInstaller programs are written as one directory, `desktop/src-tauri/binaries/guildbotics/`, holding `guildbotics-app-api.exe`, `guildbotics.exe`, the `_internal\` directory they share, and a `build-id`. `_internal\guildbotics\` holds the package's `.py` sources and the agent environment's dependency list (`intelligences\agent_environment\requirements.txt`) beside its templates: the agent environment's microVMs mount that directory and run GuildBotics' own code from it.
 
 The NSIS installer is produced under `desktop/src-tauri/target/release/bundle/nsis/`. The Windows Tauri overlay fixes the bundle target to NSIS so a normal Windows build does not attempt an MSI build.
 

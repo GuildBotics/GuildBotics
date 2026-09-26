@@ -3,15 +3,22 @@
 A device holds one snapshot per workspace, under the workspace's device-local
 directory. Its name is a digest of everything that went into it -- the base
 image (the recipe's pinned tag, or the digest of the image this device holds
-under the declared reference, which is what the build starts from), the
-provider CLIs at the versions GuildBotics pins, and the version of this recipe
--- so a snapshot built from an older recipe or image is recognised by its name
-alone and rebuilt.
+under the declared reference, which is what the build starts from) and every
+build step's script, which carry the provider CLIs at the versions GuildBotics
+pins and the Python dependencies pinned in :data:`REQUIREMENTS` -- so a
+snapshot built from an older recipe or image is recognised by its name alone
+and rebuilt.
 
-The build is not interactive: it installs provider CLIs and nothing more, so the
-CLI, the Desktop, and the background service all run the same one. Logging
-in to a provider is a separate, interactive step (:mod:`.provider_state`)
-whose result lives outside the snapshot.
+Beside the provider CLIs, the build puts in what GuildBotics' own code runs
+with inside the microVM: CPython :data:`PYTHON_VERSION` in :data:`VENV` with
+the pinned dependencies, and the native libraries and fonts WeasyPrint draws
+PDFs with. The code itself is not in the snapshot; every turn's microVM mounts
+the running process's own (``agent_runtime.environment``).
+
+The build is not interactive, so the CLI, the Desktop, and the background
+service all run the same one. Logging in to a provider is a separate,
+interactive step (:mod:`.provider_state`) whose result lives outside the
+snapshot.
 """
 
 from __future__ import annotations
@@ -58,8 +65,26 @@ from guildbotics.utils.i18n_tool import t
 #: uv, available to agents as the default image's Python toolchain; installed
 #: from its release archive because that image has no Python of its own.
 UV_VERSION = "0.12.10"
-#: Bumped when the build steps change in a way the data above does not show.
-RECIPE_VERSION = 1
+#: The Python GuildBotics' own code runs with inside the microVM, and where
+#: its environment is. uv keeps the interpreters it installs under
+#: ``/opt/uv/python`` (not the home, which turns bind over); an image that
+#: already has this version on its PATH is used as it is.
+PYTHON_VERSION = "3.12"
+VENV = "/opt/guildbotics/venv"
+#: The dependencies of GuildBotics installed into :data:`VENV`: ``uv.lock``
+#: exported without what only the host uses (see the test that regenerates
+#: it). Its content is part of the build step, so a change rebuilds.
+REQUIREMENTS = Path(__file__).with_name("requirements.txt")
+#: What WeasyPrint loads to draw a PDF (``to_pdf``), and fonts for Latin and
+#: CJK text: without them Japanese renders as empty boxes.
+PDF_PACKAGES = (
+    "libpango-1.0-0",
+    "libpangoft2-1.0-0",
+    "libharfbuzz-subset0",
+    "fontconfig",
+    "fonts-dejavu-core",
+    "fonts-noto-cjk",
+)
 
 SNAPSHOT_PREFIX = "guildbotics-"
 _LOCK_FILE = "build.lock"
@@ -122,18 +147,16 @@ def snapshot_name(image: ImageStatus) -> str:
     snapshot is built from what is held, so that is what names it.
     """
     recipe = {
-        "recipe": RECIPE_VERSION,
         "image": image.held if image.declared else IMAGE,
-        "uv": UV_VERSION,
-        "providers": provisioned_packages(),
-        "installs": provisioned_installs(),
+        "steps": [[step.label, step.script] for step in build_steps()],
     }
     encoded = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
     return SNAPSHOT_PREFIX + hashlib.sha256(encoded).hexdigest()[:16]
 
 
 def build_steps() -> tuple[BuildStep, ...]:
-    """The scripts that install GuildBotics' provider CLIs into the base image."""
+    """The scripts that install GuildBotics' Python environment and the
+    provider CLIs into the base image."""
     steps = [BuildStep("home", 'install -d -m 0700 "$HOME"')]
     archive = "uv-${arch}-unknown-linux-gnu"
     steps.append(
@@ -145,6 +168,27 @@ def build_steps() -> tuple[BuildStep, ...]:
             " | tar -xz -C /usr/local/bin --strip-components=1"
             f' "{archive}/uv" "{archive}/uvx"\n'
             "uv --version",
+        )
+    )
+    steps.append(
+        BuildStep(
+            "pdf",
+            "apt-get update\n"
+            f"apt-get install -y --no-install-recommends {_args(list(PDF_PACKAGES))}\n"
+            "rm -rf /var/lib/apt/lists/*",
+        )
+    )
+    steps.append(
+        BuildStep(
+            "python",
+            "export UV_PYTHON_INSTALL_DIR=/opt/uv/python\n"
+            f"uv venv --no-cache --python {PYTHON_VERSION} {VENV}\n"
+            f"cat > {VENV}/requirements.txt <<'REQUIREMENTS'\n"
+            f"{REQUIREMENTS.read_text(encoding='utf-8').rstrip()}\n"
+            "REQUIREMENTS\n"
+            f"uv pip install --no-cache --python {VENV}"
+            f" -r {VENV}/requirements.txt\n"
+            f"{VENV}/bin/python -c 'import weasyprint'",
         )
     )
     steps.append(
