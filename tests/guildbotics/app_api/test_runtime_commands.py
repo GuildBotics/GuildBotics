@@ -570,6 +570,16 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
         "scripted": met,
     }
 
+    # A slot this member does not have names no tool; the turn says why.
+    _write(
+        config_dir / "intelligences/brain_mapping.yml",
+        "agent:\n"
+        "  class: guildbotics.intelligences.brains.cli_agent.CliAgentBrain\n"
+        "  args:\n"
+        "    cli_agent: missing\n",
+    )
+    assert requirements() == {"first": met, "second": met, "scripted": met}
+
     agent_environment.refuse("no hypervisor")
     refused = (False, "no hypervisor")
     assert requirements() == {"first": refused, "second": refused, "scripted": refused}

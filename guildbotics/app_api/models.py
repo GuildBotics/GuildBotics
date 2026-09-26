@@ -403,6 +403,13 @@ class CommandArgumentOption(BaseModel):
 
 
 class CommandRequirement(BaseModel):
+    """What a command needs, and whether this device has it.
+
+    ``message`` is why it is not met when the backend knows a reason more
+    specific than the kind (for ``cli_agent``, the agent environment's
+    refusal), and "" otherwise.
+    """
+
     kind: Literal["github", "slack", "cli_agent", "llm"]
     satisfied: bool
     message: str = ""
