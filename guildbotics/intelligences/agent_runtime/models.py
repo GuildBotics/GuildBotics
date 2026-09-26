@@ -6,10 +6,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, get_args
+from typing import Any, Protocol
 
-from guildbotics.commands.metadata import InspectionScope
-from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
 
@@ -118,28 +116,13 @@ class AgentExecutionContext:
     #: broker runs record into it, so what the agent read or changed shows up on
     #: the execution that asked for it.
     trace_id: str = ""
-    #: The workspace's own state the turn's command declares it inspects,
-    #: mounted read-only beside the contract's grants. What a turn needs to read is
-    #: its work's business and independent of whether its contract lets it
-    #: change anything.
-    inspects: frozenset[InspectionScope] = frozenset()
-    #: What the turn may reach beyond ``cwd``. A read-only contract is what
-    #: lets a turn hold no execution lease and run while the member is busy:
-    #: the environment, not the provider, keeps it from changing anything.
-    contract: AccessContract = field(default_factory=AccessContract)
     login: TurnLogin = field(default_factory=TurnLogin)
-    #: Every AI CLI tool the member is configured with. The environment a
-    #: command's turns share is started able to run each of them, since
-    #: which one a later turn uses is decided while the command runs.
-    tools: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.person_id != self.conversation_key.person_id:
             raise ValueError("Execution and conversation person_id must match.")
         if not self.run_id.strip():
             raise ValueError("run_id must not be empty.")
-        if unknown := self.inspects - set(get_args(InspectionScope)):
-            raise ValueError(f"Unknown inspection scopes: {sorted(unknown)}.")
 
     @property
     def lease_id(self) -> str:

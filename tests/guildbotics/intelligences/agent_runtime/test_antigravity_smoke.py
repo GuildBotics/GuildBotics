@@ -8,13 +8,13 @@ stay in the run output only.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import shutil
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
     NetworkPolicy,
@@ -25,12 +25,16 @@ from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.antigravity import (
     AntigravityStreamJsonAdapter,
 )
+from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentExecutionContext,
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
+)
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    settle_contract,
 )
 
 pytestmark = [
@@ -158,7 +162,7 @@ async def test_real_antigravity_reaches_the_working_directory(tmp_path) -> None:
 
 
 async def test_real_antigravity_read_only_turn_cannot_write_or_reach_out(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
     """`agy` has no read-only mode of its own; its environment holds the turn.
 
@@ -169,36 +173,39 @@ async def test_real_antigravity_read_only_turn_cannot_write_or_reach_out(
     """
     granted = tmp_path / "granted"
     granted.mkdir()
-    adapter = AntigravityStreamJsonAdapter()
-    context = dataclasses.replace(
-        _context(tmp_path),
-        contract=AccessContract(
+    settle_contract(
+        monkeypatch,
+        AccessContract(
             network=NetworkPolicy(mode="allowlist", allowed_domains=["example.com"]),
             access=ResolvedAccess(
                 documents=(ResolvedGrant(granted, "read_write", "granted"),)
             ),
-            read_only=True,
         ),
     )
+    adapter = AntigravityStreamJsonAdapter()
+    context = _context(tmp_path)
     conversation = ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
 
-    try:
-        result = await adapter.run_turn(
-            "Run these two shell commands and do not work around a failure: "
-            f"`touch {guest_path(granted)}/smoke.txt` and "
-            "`curl -sS -o /dev/null -w '%{http_code}' https://example.com`. "
-            "Reply with exactly two lines: `WRITE=<ok or failed>` and "
-            "`HTTP=<the status code curl printed, or failed>`.",
-            context,
-            conversation,
-            events.append,
-        )
-        _report("read-only turn", events)
-        assert not (granted / "smoke.txt").exists(), result.output
-        assert "HTTP=200" not in result.output, result.output
-    finally:
-        await adapter.close()
+    async with command_environment(
+        CommandAccess(read_only=True), frozenset({"antigravity"})
+    ):
+        try:
+            result = await adapter.run_turn(
+                "Run these two shell commands and do not work around a failure: "
+                f"`touch {guest_path(granted)}/smoke.txt` and "
+                "`curl -sS -o /dev/null -w '%{http_code}' https://example.com`. "
+                "Reply with exactly two lines: `WRITE=<ok or failed>` and "
+                "`HTTP=<the status code curl printed, or failed>`.",
+                context,
+                conversation,
+                events.append,
+            )
+            _report("read-only turn", events)
+            assert not (granted / "smoke.txt").exists(), result.output
+            assert "HTTP=200" not in result.output, result.output
+        finally:
+            await adapter.close()
 
 
 async def test_real_antigravity_usage_probe_is_read_only(tmp_path) -> None:

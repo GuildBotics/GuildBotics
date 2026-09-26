@@ -96,6 +96,7 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args):
+            self.context = context
             ran.append((context, command, args))
 
         async def run(self):
@@ -471,6 +472,7 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args):
+            self.context = context
             pass
 
         async def run(self):
@@ -510,6 +512,7 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args):
+            self.context = context
             pass
 
         async def run(self):

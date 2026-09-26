@@ -22,6 +22,19 @@ from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
 
 
+@pytest.fixture
+def in_a_command(monkeypatch):
+    """The brain's turns run inside a command, as every turn does; the
+    adapter they speak through is the test's own."""
+    from types import SimpleNamespace
+
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_runtime import environment
+
+    running = SimpleNamespace(contract=AccessContract())
+    monkeypatch.setattr(environment, "running_command", lambda: running)
+
+
 class _Logger:
     debug = info = warning = error = lambda *args, **kwargs: None
 
@@ -71,6 +84,7 @@ class _Adapter:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     monkeypatch, tmp_path
 ) -> None:
@@ -152,6 +166,7 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_releases_run_binding_between_calls(
     monkeypatch, tmp_path
 ) -> None:
@@ -197,6 +212,7 @@ async def test_native_brain_releases_run_binding_between_calls(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
     monkeypatch, tmp_path
 ) -> None:
@@ -330,6 +346,7 @@ class _TrackedAdapter(_Adapter):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_persists_cursor_only_after_terminal_success(
     monkeypatch, tmp_path
 ) -> None:
@@ -379,6 +396,7 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_remembers_the_sessions_effective_settings(
     monkeypatch, tmp_path
 ) -> None:
@@ -432,6 +450,7 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     monkeypatch, tmp_path
 ) -> None:
@@ -547,6 +566,7 @@ class _CrashedAdapter(_Adapter):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_failure_carries_what_the_tool_said_last(
     monkeypatch, tmp_path
 ) -> None:
@@ -591,6 +611,7 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -632,6 +653,7 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_authentication_notification_identifies_member_and_cli(
     monkeypatch, tmp_path
 ) -> None:
@@ -683,6 +705,7 @@ async def test_native_authentication_notification_identifies_member_and_cli(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_rebuilds_chat_after_context_compaction(
     monkeypatch, tmp_path
 ) -> None:
@@ -753,7 +776,7 @@ async def test_a_command_keeps_one_native_process_per_member(monkeypatch) -> Non
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
 
-    async with command_environment(CommandAccess()):
+    async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
         first = await registry.get_native_adapter("aiko", "codex", "run-1")
         assert await registry.get_native_adapter("aiko", "codex", "run-1") is first
         second = await registry.get_native_adapter("aiko", "claude", "run-2")
@@ -779,7 +802,7 @@ async def test_commands_of_one_member_never_close_each_others_adapters(
     reading_done = asyncio.Event()
 
     async def writing() -> _TrackedAdapter:
-        async with command_environment(CommandAccess()):
+        async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
             adapter = await registry.get_native_adapter("aiko", "codex", "write")
             writing_started.set()
             await reading_done.wait()
@@ -788,7 +811,9 @@ async def test_commands_of_one_member_never_close_each_others_adapters(
 
     async def reading() -> _TrackedAdapter:
         await writing_started.wait()
-        async with command_environment(CommandAccess(read_only=True)):
+        async with command_environment(
+            CommandAccess(read_only=True), frozenset({"codex"})
+        ):
             adapter = await registry.get_native_adapter("aiko", "codex", "read")
         reading_done.set()
         return adapter
@@ -922,7 +947,7 @@ async def test_native_registry_serializes_replacement_for_same_execution(
         return adapter
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
-    async with command_environment(CommandAccess()):
+    async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
         first = await registry.get_native_adapter("aiko", "codex", "run-1")
 
         replacements = await asyncio.gather(
@@ -989,6 +1014,7 @@ async def _run_chat_turn(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
     monkeypatch, tmp_path, native_aiko
 ) -> None:
@@ -1038,6 +1064,7 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_same_cursor_same_run_event_uses_continuation(
     monkeypatch, tmp_path, native_aiko
 ) -> None:
@@ -1065,6 +1092,7 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_same_cursor_different_run_is_not_continuation(
     monkeypatch, tmp_path, native_aiko
 ) -> None:
@@ -1094,6 +1122,7 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_legacy_record_without_identity_rotates_to_full_context(
     monkeypatch, tmp_path, native_aiko
 ) -> None:
@@ -1120,6 +1149,7 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("in_a_command")
 async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     monkeypatch,
     tmp_path,

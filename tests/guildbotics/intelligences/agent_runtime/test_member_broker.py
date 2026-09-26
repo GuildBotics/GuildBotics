@@ -16,7 +16,6 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import member_broker
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
@@ -48,7 +47,6 @@ def _context(tmp_path: Path, *, work_kind: str = "ticket") -> AgentExecutionCont
         lease=PersonExecutionLease("aiko", tmp_path),
         participant_labels='{"U1":"aiko"}',
         trace_id="trace-parent",
-        contract=AccessContract(),
     )
 
 

@@ -29,6 +29,8 @@ def recorded_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         calls.append(kwargs)
 
     monkeypatch.setattr(diagnostics, "record_correlated_event", capture)
+    # The turns recorded here run in a command whose contract is the default.
+    monkeypatch.setattr(diagnostics, "current_command_contract", AccessContract)
     return calls
 
 
@@ -46,9 +48,11 @@ def _record(
         workspace_root=Path("."),
         workspace_data_root=Path("."),
         conversation_key=key,
-        contract=contract or AccessContract(),
     )
-    diagnostics.record_agent_event(event, context, ConversationRecord(key=key))
+    with pytest.MonkeyPatch.context() as patch:
+        if contract is not None:
+            patch.setattr(diagnostics, "current_command_contract", lambda: contract)
+        diagnostics.record_agent_event(event, context, ConversationRecord(key=key))
     return recorded[-1]["payload"]
 
 
@@ -245,6 +249,23 @@ def test_unrestricted_turn_does_not_record_network_candidates(
         ),
         recorded,
         contract=AccessContract(network=NetworkPolicy(mode="unrestricted")),
+    )
+
+    assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]
+
+
+def test_no_candidates_are_recorded_outside_a_command(
+    recorded: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a running command there is no contract to hold evidence to."""
+    monkeypatch.setattr(diagnostics, "current_command_contract", lambda: None)
+    _record(
+        AgentEvent(
+            AgentEventKind.FAILED,
+            "provider",
+            message="https://blocked.example failed",
+        ),
+        recorded,
     )
 
     assert [call["event_type"] for call in recorded] == ["agent_runtime.failed"]

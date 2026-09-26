@@ -7,6 +7,9 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
+from guildbotics.intelligences.agent_runtime.environment import (
+    current_command_contract,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentEventKind,
@@ -91,9 +94,10 @@ def record_network_egress_candidates(
     evidence: str,
 ) -> None:
     """Record destination-shaped clues from evidence a restricted turn emitted."""
-    policy = context.contract.network
-    if policy.mode == "unrestricted" or not text:
+    contract = current_command_contract()
+    if contract is None or contract.network.mode == "unrestricted" or not text:
         return
+    policy = contract.network
     try:
         provider_domains = cli_agent_info(adapter_name).provision.turn_domains
     except ValueError:

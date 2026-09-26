@@ -15,7 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
@@ -468,24 +467,6 @@ async def test_the_terminal_result_carries_the_confirmed_session_settings(
     )
 
     assert (result.model, result.effort) == ("gpt-5-mini", "low")
-
-
-@pytest.mark.asyncio
-async def test_a_read_only_turn_runs_copilot_as_any_other_turn(
-    monkeypatch, tmp_path
-) -> None:
-    """What a read-only turn may change is its environment's to hold."""
-    peer = _Peer()
-    install(monkeypatch, peer)
-
-    _result, events = await _run(
-        CopilotAcpAdapter(), tmp_path, contract=AccessContract(read_only=True)
-    )
-
-    assert peer.current["allow_all"] == "on"
-    policy = _named(events, AgentEventKind.APPROVAL, "policy")
-    assert policy.approval == "never"
-    assert policy.details == {"allowed_paths": "workspace", "allow_all": "on"}
 
 
 @pytest.mark.asyncio
