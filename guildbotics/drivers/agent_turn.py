@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from guildbotics.capabilities.completion_retry import (
-    CompletionRetryExhausted,
-    find_cli_agent_execution_error,
-)
+from guildbotics.capabilities.command_failures import find_cli_agent_execution_error
 from guildbotics.capabilities.task_runs import RunStatus, RunStore
 from guildbotics.capabilities.workflow_completion_events import (
     record_workflow_completed,
@@ -19,6 +16,17 @@ from guildbotics.capabilities.workflow_completion_events import (
 )
 from guildbotics.utils.fileio import get_workspace_state_path
 from guildbotics.utils.i18n_tool import t
+
+
+class CompletionRetryExhausted(Exception):
+    """Raised when the agent never recorded a terminal completion in the budget."""
+
+    def __init__(self, attempts: int, last_error: Exception) -> None:
+        super().__init__(
+            f"Agent did not complete after {attempts} attempt(s): {last_error}"
+        )
+        self.attempts = attempts
+        self.last_error = last_error
 
 
 @dataclass(frozen=True, slots=True)

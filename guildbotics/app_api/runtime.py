@@ -95,7 +95,7 @@ from guildbotics.app_api.models import (
 from guildbotics.app_api.system_alerts import SystemAlertService
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.app_api.workspace_sync import WorkspaceSyncService
-from guildbotics.capabilities.completion_retry import (
+from guildbotics.capabilities.command_failures import (
     command_failure_payload,
 )
 from guildbotics.capabilities.github_activity_events import (

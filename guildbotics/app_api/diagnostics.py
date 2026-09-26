@@ -10,7 +10,7 @@ from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsRespo
 from guildbotics.app_api.verify import (
     resolve_default_model_provider,
 )
-from guildbotics.capabilities.completion_retry import find_cli_agent_execution_error
+from guildbotics.capabilities.command_failures import find_cli_agent_execution_error
 from guildbotics.capabilities.member_chat import probe_slack_app_token
 from guildbotics.commands.errors import CommandError
 from guildbotics.drivers.command_runner import run_command

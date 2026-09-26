@@ -7,7 +7,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
-from guildbotics.capabilities.completion_retry import command_failure_payload
+from guildbotics.capabilities.command_failures import command_failure_payload
 from guildbotics.drivers.command_runner import CommandRunner, run_main_command
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
