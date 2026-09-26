@@ -88,11 +88,13 @@ workflow (orchestration)
 
 - **Workflow** (`guildbotics/templates/commands/workflows/*`): builds the prompt
   payload for the selected work item and asks for one CLI agent turn with the member
-  workspace as cwd. The host that runs the turn (`drivers/agent_turn.py`, reached
-  through `CommandRunner` when the execution context names `max_completion_attempts`)
-  reads the run record, retries the turn with a continuation prompt until the member
-  records its completion, and returns that completion and its evidence; workflows
-  never read or write the run record themselves. It never produces work products
+  workspace as cwd. `CommandRunner` drives the turn (`commands/agent_turn.py`) when
+  the execution context names `max_completion_attempts`: it retries the turn with a
+  continuation prompt until the member records its completion and returns the
+  response. It reaches the run record only through the run ledger the host passes to
+  `CommandRunner` (`HostRunLedger` in `drivers/command_runner.py`, which locates the
+  record from the host's own workspace). The workflow never reads or writes the
+  run record itself, and it never produces work products
   (code changes, PRs, replies, review comments) and makes no writes of its own: the
   host selection around the turn — the ticket selector (`drivers/ticket_selector.py`)
   and chat selection (`capabilities/chat_selection.py`) — moves the Project lane and
@@ -245,7 +247,7 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   `continuation_rejected`, and re-feed historical context with the unread batch.
 - Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
   handled by shared logic (`capabilities/workflow_rate_limits.py`,
-  `drivers/agent_turn.py`), surfaced as a `workflow.rate_limited`
+  `commands/agent_turn.py`), surfaced as a `workflow.rate_limited`
   diagnostics event, and never amplified by in-process retries. Ticket selection and
   the chat pending queue defer re-entry until the provider's exact reset timestamp
   when one is available.

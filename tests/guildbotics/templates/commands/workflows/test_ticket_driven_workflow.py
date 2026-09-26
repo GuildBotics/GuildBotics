@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.agent_turn import AgentTurnResult
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
@@ -63,7 +62,7 @@ class _Context:
 
     async def invoke(self, command_name: str, **kwargs):
         self.invocations.append((command_name, kwargs))
-        return AgentTurnResult(response=self.response, completion=None, evidence=[])  # type: ignore[arg-type]
+        return self.response
 
 
 @pytest.mark.asyncio

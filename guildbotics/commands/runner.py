@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from guildbotics.commands.agent_turn import RunLedger, run_agent_turn
 from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import command_access
@@ -28,8 +29,13 @@ class CommandRunner:
         command_name: str,
         command_args: Sequence[str],
         cwd: Path | None = None,
+        *,
+        ledger: RunLedger | None = None,
     ) -> None:
         context.set_invoker(self._invoke)
+        #: The host's run record, which an invocation driven until its run
+        #: records completion reads and reports to; without one it is refused.
+        self._ledger = ledger
         self.context = context
         self.command_name = command_name
         self._command_args = list(command_args)
@@ -104,7 +110,10 @@ class CommandRunner:
         if isinstance(execution_context, dict) and execution_context.get(
             "max_completion_attempts"
         ):
-            from guildbotics.drivers.agent_turn import run_agent_turn
+            if self._ledger is None:
+                raise CommandError(
+                    f"'{name}' must record completion, but this run has no run ledger."
+                )
 
             async def _invoke_turn(
                 turn_context: dict[str, Any], parameters: dict[str, str]
@@ -123,6 +132,7 @@ class CommandRunner:
             return await run_agent_turn(
                 invoke=_invoke_turn,
                 execution_context=execution_context,
+                ledger=self._ledger,
             )
         return await self._invoke_once(name, args, kwargs, cwd)
 

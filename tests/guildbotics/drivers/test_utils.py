@@ -5,6 +5,7 @@ from typing import List
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
+from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.drivers.utils import run_command
 
 
@@ -33,14 +34,16 @@ class FakeContext:
 @pytest.mark.asyncio
 async def test_run_command_success_logs_and_returns_true(monkeypatch):
     events = []
+    ledgers = []
 
     class FakeCommandRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd=None):
+        def __init__(self, context, command, args, cwd=None, *, ledger):
             self.context = context
             self.command_name = command
             self.args = args
+            ledgers.append(ledger)
 
         async def run(self):
             # Simulate successful command execution
@@ -55,6 +58,8 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     ctx = FakeContext()
     ok = await run_command(ctx, "test", task_type="scheduled")
     assert ok is True
+    # Completion-managed turns of a scheduled run report to the host's record.
+    assert [type(ledger) for ledger in ledgers] == [HostRunLedger]
     # Validate logs contain start and finish messages
     start_logs = [
         m for m in ctx.logger.infos if "Running scheduled command 'test'" in m
@@ -83,6 +88,8 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
             command,
             args,
             cwd=None,
+            *,
+            ledger,
         ):
             self.context = context
             self.command_name = command

@@ -507,3 +507,31 @@ class ImprovementRecommendations(BaseModel):
 
     def __str__(self):
         return "\n".join(str(suggestion) for suggestion in self.suggestions)
+
+
+def find_cli_agent_execution_error(
+    exc: BaseException, *, category: str = ""
+) -> BaseException | None:
+    """Find a CliAgentExecutionError through common wrapper exception chains."""
+    from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
+
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        obj_id = id(current)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        if isinstance(current, CliAgentExecutionError) and (
+            not category or current.category == category
+        ):
+            return current
+        last_error = getattr(current, "last_error", None)
+        if isinstance(last_error, BaseException):
+            stack.append(last_error)
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if current.__context__ is not None:
+            stack.append(current.__context__)
+    return None

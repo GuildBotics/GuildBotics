@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from guildbotics.capabilities.command_failures import find_cli_agent_execution_error
+from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.utils.i18n_tool import t
 

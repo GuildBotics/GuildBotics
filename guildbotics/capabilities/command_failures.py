@@ -4,39 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
+from guildbotics.intelligences.common import find_cli_agent_execution_error
+
 #: What ends a command run without the run being defective: stopping the
 #: service cancels the work it is draining, and Ctrl-C ends an interactive
 #: member command. Both are ``BaseException``, so a boundary that only catches
 #: ``Exception`` never records the end of the run it started.
 CANCELLATION_ERRORS = (asyncio.CancelledError, KeyboardInterrupt)
-
-
-def find_cli_agent_execution_error(
-    exc: BaseException, *, category: str = ""
-) -> BaseException | None:
-    """Find a CliAgentExecutionError through common wrapper exception chains."""
-    from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
-
-    seen: set[int] = set()
-    stack: list[BaseException] = [exc]
-    while stack:
-        current = stack.pop()
-        obj_id = id(current)
-        if obj_id in seen:
-            continue
-        seen.add(obj_id)
-        if isinstance(current, CliAgentExecutionError) and (
-            not category or current.category == category
-        ):
-            return current
-        last_error = getattr(current, "last_error", None)
-        if isinstance(last_error, BaseException):
-            stack.append(last_error)
-        if current.__cause__ is not None:
-            stack.append(current.__cause__)
-        if current.__context__ is not None:
-            stack.append(current.__context__)
-    return None
 
 
 def command_failure_payload(exc: BaseException) -> dict[str, str]:
