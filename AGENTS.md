@@ -460,15 +460,14 @@ Markdown の内部リンク・見出しアンカー検査（リポジトリル�
 をインストールする。Rust toolchain がある場合は
 `cargo install lychee --version 0.24.2 --locked` で導入できる）:
 
-```bash
-lychee --no-progress --scheme file --include-fragments \
-  --exclude-path 'desktop[\\/]node_modules' \
-  --exclude-path 'desktop[\\/]src-tauri[\\/]binaries' \
-  './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+```shell
+lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills
 ```
 
 `--scheme file` により外部 URL は検査せず、CI の `markdown-links` job と同じく
 相対パスと GitHub 形式の見出しアンカーだけを検査する。
+ディレクトリを入力にすることで `.gitignore` に従って走査し、`--extensions md` で
+Markdown だけを検査する。PowerShell では実行後に `$LASTEXITCODE` が 0 であることを確認する。
 
 必要に応じて:
 
