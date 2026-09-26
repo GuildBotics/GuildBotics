@@ -890,8 +890,11 @@ async def test_no_turn_runs_outside_a_command(tmp_path, monkeypatch):
     assert _Booted.booted == []
 
 
-def _call_sites(matches: Callable[[ast.Call], bool]) -> set[tuple[str, str]]:
-    """The package module and enclosing function of every call ``matches``."""
+def _call_sites(
+    matches: Callable[[ast.Call], bool], *, awaited: bool = False
+) -> set[tuple[str, str]]:
+    """The package module and enclosing function of every call ``matches``;
+    only of the awaited ones when ``awaited``."""
     import guildbotics
 
     package = Path(guildbotics.__file__).parent
@@ -904,7 +907,12 @@ def _call_sites(matches: Callable[[ast.Call], bool]) -> set[tuple[str, str]]:
             if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
             for node in ast.walk(function)
         }
-        for node in ast.walk(tree):
+        calls = (
+            [node.value for node in ast.walk(tree) if isinstance(node, ast.Await)]
+            if awaited
+            else ast.walk(tree)
+        )
+        for node in calls:
             if isinstance(node, ast.Call) and matches(node):
                 module = path.relative_to(package.parent).as_posix()
                 sites.add((module, enclosing.get(id(node), "<module>")))
@@ -934,8 +942,8 @@ def test_every_host_entry_runs_its_command_in_an_environment() -> None:
 
     The execution machinery opens none, so a host entry that ran a command
     by itself would have every turn of it refused. The machinery runs the
-    commands it holds with ``run()`` too, so outside it the population of
-    places a command starts is every call of an argumentless ``run()``.
+    commands it holds with ``await ....run()`` too, so outside it the
+    population of places a command starts is every such call.
     """
     starters = {
         site
@@ -944,7 +952,8 @@ def test_every_host_entry_runs_its_command_in_an_environment() -> None:
                 getattr(call.func, "attr", None) == "run"
                 and not call.args
                 and not call.keywords
-            )
+            ),
+            awaited=True,
         )
         if not site[0].startswith("guildbotics/commands/")
     }
