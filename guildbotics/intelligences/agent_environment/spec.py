@@ -11,14 +11,16 @@ the guest's home directory is the host's home path, so a path means the same
 thing on both sides: what the user typed, what the Desktop shows, and what the
 provider's session state records all agree. The working directory is
 read-write; a grant is read-only when it says so. A read-only contract makes
-every grant read-only and the working directory an empty read-only mount, so
-what the turn may not change holds whatever provider runs it; only what
+every grant read-only and the working directory an empty directory of the
+microVM's own, so what the turn may not change holds whatever provider runs it; only what
 GuildBotics binds itself (``mounts``) keeps its own access. Nothing else of the host is
 mounted except what GuildBotics binds itself (``mounts``), so credentials, the
 workspace configuration, and other members' clones are unreachable rather than
 forbidden -- unless a caller lets its turn inspect the workspace's own state. A deny inside an opened tree is
-covered with an empty read-only mount; a deny outside one closes nothing that
-was open. The trees a device's PATH derives are not mounted at all: the
+covered with an empty directory of the microVM's own; a deny outside one
+closes nothing that was open. Such a directory holds nothing of the host and is
+discarded with the microVM, so it is writable: what is mounted under it needs a
+mount point made there. The trees a device's PATH derives are not mounted at all: the
 agent's tools live inside the environment.
 
 Network: the microVM's gateway enforces the one rule the contract states.
@@ -66,7 +68,10 @@ class EnvironmentMount:
     """One mount inside the microVM.
 
     ``host`` is the host directory bound at ``guest``, or None for an empty
-    mount that covers a denied corner of an opened tree.
+    directory of the microVM's own: a read-only turn's working directory, a
+    cover over a denied corner of an opened tree, a login's state. It holds
+    nothing of the host and is discarded with the microVM, so it is writable:
+    a mount nested under it needs a mount point made there.
     """
 
     guest: str
@@ -236,11 +241,11 @@ def _mounts(
     """The host-backed mounts, outermost first, then the denies they cover.
 
     A read-only turn has nothing of its own to read, so its working directory
-    is an empty read-only mount rather than the host directory.
+    is an empty directory of the microVM's own rather than the host directory.
     """
     opened: dict[str, EnvironmentMount] = {
         guest_path(cwd): EnvironmentMount(
-            guest_path(cwd), None if read_only else cwd, readonly=read_only
+            guest_path(cwd), None if read_only else cwd, readonly=False
         )
     }
     for grant in (*access.documents, *access.paths):
@@ -263,7 +268,7 @@ def _mounts(
         and denied.path != mount.host
         and denied.path.is_relative_to(mount.host)
     }
-    mounts = [*opened.values(), *(EnvironmentMount(g, None, True) for g in covers)]
+    mounts = [*opened.values(), *(EnvironmentMount(g, None, False) for g in covers)]
     return tuple(
         sorted(mounts, key=lambda m: (len(PurePosixPath(m.guest).parts), m.guest))
     )

@@ -50,9 +50,9 @@ from guildbotics.utils.i18n_tool import t
 _NAME_PREFIX = "guildbotics-"
 #: The one sandbox a snapshot is built in; a device builds one at a time.
 _BUILD_NAME = _NAME_PREFIX + "build"
-#: Size of the empty mount that covers a denied directory.
-_COVER_MIB = 1
-#: Size of a writable in-memory directory: a login's state, never a workspace.
+#: Size of an empty directory of the microVM's own: a login's state, a
+#: read-only turn's working directory, a cover over a denied directory; never
+#: a workspace.
 _SCRATCH_MIB = 64
 #: The exit code reported when the guest process ended without one: the
 #: runtime killed it, or its exec session broke.
@@ -878,10 +878,7 @@ def _volumes(spec: AgentEnvironmentSpec) -> dict[str, Any]:
 
     return {
         mount.guest: (
-            Volume.tmpfs(
-                size_mib=_COVER_MIB if mount.readonly else _SCRATCH_MIB,
-                readonly=mount.readonly,
-            )
+            Volume.tmpfs(size_mib=_SCRATCH_MIB, readonly=mount.readonly)
             if mount.host is None
             else Volume.bind(str(mount.host.resolve()), readonly=mount.readonly)
         )

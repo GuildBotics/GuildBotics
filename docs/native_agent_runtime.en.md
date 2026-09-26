@@ -154,7 +154,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 - **Working directory**: the turn's `cwd` (the member's clone for ticket work,
   `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
   read/write at the same path it has on the host (a read-only turn gets an
-  empty read-only mount there instead). The workspace's
+  empty directory of the microVM's own there instead). The workspace's
   `.guildbotics/config` and `state` are not part of it.
 - **Inspected workspace state**: only for the turns of a command that
   declares it (`inspects`), parts of the workspace's own state are bound
@@ -263,7 +263,9 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   The contract (`AccessContract.read_only`) states it, and the environment
   confines it the same way whatever provider runs it. Every directory bound from the host is
   read-only, the exchange directory and `read_write` grants included, and the
-  working directory is an empty read-only mount. The workspace's `network:`
+  working directory is an empty directory of the microVM's own: writable,
+  holding nothing of the host, and discarded with the microVM, like the empty
+  directory that covers a denied corner. The workspace's `network:`
   does not apply: only the provider's API domains and the member broker are
   reachable. Its sessions are bound from a store of its own
   (`agent_environment/<provider>/read-only/`), so the conversation resumes,

@@ -189,7 +189,7 @@ def _spec(**overrides: Any) -> AgentEnvironmentSpec:
             EnvironmentMount(
                 "/home/u/Documents", Path("/home/u/Documents"), readonly=True
             ),
-            EnvironmentMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/work/repo/private", None, readonly=False),
         ),
         "network": network,
         "env": {"GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"},
@@ -357,7 +357,7 @@ async def test_start_boots_an_ephemeral_sandbox_from_the_snapshot_with_the_spec(
     assert volumes["/work/repo"].readonly is False
     assert volumes["/home/u/Documents"].readonly is True
     cover = volumes["/work/repo/private"]
-    assert (cover.kind, cover.readonly) == (MountKind.TMPFS, True)
+    assert (cover.kind, cover.readonly) == (MountKind.TMPFS, False)
     assert boundary.spec is not None
     # The guest's network is IPv4 only, from before anything else runs.
     (switch,) = sandbox.instance.execs  # type: ignore[union-attr]

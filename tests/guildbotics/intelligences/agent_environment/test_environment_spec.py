@@ -149,7 +149,7 @@ def test_a_deny_inside_an_opened_tree_is_covered_once_at_its_path(
 
     covers = [m for m in spec.mounts if m.host is None]
     assert covers == [
-        EnvironmentMount(f"{guest_path(cwd)}/private", None, readonly=True)
+        EnvironmentMount(f"{guest_path(cwd)}/private", None, readonly=False)
     ]
     guests = [m.guest for m in spec.mounts]
     assert guests.index(f"{guest_path(cwd)}/private") > guests.index(guest_path(cwd))
@@ -201,7 +201,8 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
     """Whatever provider runs a read-only turn, nothing it sees of the host
     can be changed: the exchange directory and a `read_write` grant
     included. Its working directory has nothing to show, so no host
-    directory backs it; a deny inside a grant is still covered."""
+    directory backs it: it is the microVM's own; a deny inside a grant is
+    still covered."""
     home = tmp_path / "home"
     cwd = home / "work"
     secret = home / "out" / "private"
@@ -222,7 +223,7 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
 
     exchange = home / "Documents" / "GuildBotics"
     assert set(spec.mounts) == {
-        EnvironmentMount(guest_path(cwd), None, readonly=True),
+        EnvironmentMount(guest_path(cwd), None, readonly=False),
         EnvironmentMount(guest_path(exchange), exchange, readonly=True),
         EnvironmentMount(guest_path(home / "out"), home / "out", readonly=True),
         EnvironmentMount(
@@ -230,8 +231,44 @@ def test_a_read_only_contract_mounts_every_grant_read_only_over_an_empty_cwd(
             home / "Documents" / "notes",
             readonly=True,
         ),
-        EnvironmentMount(guest_path(secret), None, readonly=True),
+        EnvironmentMount(guest_path(secret), None, readonly=False),
     }
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_nothing_of_the_microvms_own_is_read_only(
+    tmp_path: Path, read_only: bool
+) -> None:
+    """A mount nested under an empty directory of the microVM's own needs a
+    mount point made there, which a read-only one refuses: the microVM does
+    not start. Such a directory holds nothing of the host and is discarded
+    with the microVM, so it is writable, whatever the turn is; what is bound
+    under it keeps its own access."""
+    home = tmp_path / "home"
+    cwd = home
+    granted = home / "Documents" / "notes"
+    secret = home / "Documents" / "notes" / "private"
+    for directory in (secret, home / ".ssh" / "keys"):
+        directory.mkdir(parents=True)
+    access = resolve_access(
+        SharedGrants(
+            documents=[DocumentGrant(path="Documents/notes", access="read_write")]
+        ),
+        LocalGrants(deny=[str(secret), str(home / ".ssh")]),
+        home=home,
+    )
+
+    spec = build_environment_spec(
+        _contract(access, read_only=read_only), cwd, home=home
+    )
+
+    own = [mount for mount in spec.mounts if mount.host is None]
+    assert own
+    assert not [mount for mount in own if mount.readonly]
+    assert (
+        EnvironmentMount(guest_path(granted), granted, readonly=read_only)
+        in spec.mounts
+    )
 
 
 def test_what_guildbotics_binds_itself_keeps_its_access_on_a_read_only_turn(
@@ -460,7 +497,7 @@ def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
     )
 
     state = guest_path((workspace / ".guildbotics").resolve())
-    assert EnvironmentMount(state, None, readonly=True) in spec.mounts
+    assert EnvironmentMount(state, None, readonly=False) in spec.mounts
     # A turn in a member's clone below it is not affected: the deny is
     # outside the opened tree.
     below = build_environment_spec(

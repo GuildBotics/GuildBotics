@@ -1124,7 +1124,7 @@ def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() 
                 "/home/u/Documents/GuildBotics", Path("/x"), readonly=False
             ),
             EnvironmentMount("/home/u/notes", Path("/y"), readonly=True),
-            EnvironmentMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/work/repo/private", None, readonly=False),
             EnvironmentMount("/home/u/.codex/auth.json", Path("/z"), readonly=False),
             EnvironmentMount("/home/u/.codex/sessions", Path("/w"), readonly=False),
         ),
@@ -1141,7 +1141,7 @@ def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() 
         "/work/repo": "write",
         "/home/u/Documents/GuildBotics": "write",
         "/home/u/notes": "read",
-        "/work/repo/private": "read",
+        "/work/repo/private": "write",
         ":workspace_roots": {".": "write", ".git": "write"},
         ":tmpdir": "write",
         ":slash_tmp": "write",
@@ -1152,11 +1152,12 @@ def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() 
 def test_a_read_only_working_directory_is_not_a_workspace_root() -> None:
     """Codex makes directories inside every workspace root and cannot start a
     session on one mounted read-only (measured on 0.153.4: bwrap cannot
-    mkdir `.codex`), so the profile mirrors that mount as read, and no more."""
+    mkdir `.codex`), so a turn working in a `read` grant has the profile
+    mirror that mount as read, and no more."""
     spec = AgentEnvironmentSpec(
         cwd="/work/assist",
         home="/home/u",
-        mounts=(EnvironmentMount("/work/assist", None, readonly=True),),
+        mounts=(EnvironmentMount("/work/assist", Path("/x"), readonly=True),),
         network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
         env={},
     )
@@ -1188,7 +1189,7 @@ def test_a_turn_working_deeper_than_its_mount_is_judged_by_that_mount(
         home="/home/u",
         mounts=(
             EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
-            EnvironmentMount("/work/repo/private", None, readonly=True),
+            EnvironmentMount("/work/repo/private", Path("/x"), readonly=True),
         ),
         network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
         env={},

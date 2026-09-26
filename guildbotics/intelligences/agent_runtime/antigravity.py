@@ -350,10 +350,11 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
             await environment.close()
         if process.returncode != 0:
             return self._model_catalog
+        # Each line is a model id, then a tab and the model's label.
         self._model_catalog = frozenset(
             identifier
             for line in stdout.decode(errors="replace").splitlines()
-            if (identifier := line.strip())
+            if (identifier := line.split("\t", 1)[0].strip())
         )
         return self._model_catalog
 
