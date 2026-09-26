@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import locale
+import subprocess
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
@@ -30,6 +33,7 @@ from guildbotics.intelligences.agent_environment.spec import (
 from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec as _build_environment_spec,
 )
+from guildbotics.utils import os_language
 
 _NAMESERVERS = ("10.0.0.53",)
 
@@ -57,7 +61,7 @@ def _contract(
 
 
 def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
-    tmp_path: Path, host_time_zone: str
+    tmp_path: Path, host_facts: dict[str, str]
 ) -> None:
     cwd = tmp_path / "repo"
     cwd.mkdir()
@@ -67,7 +71,7 @@ def test_the_working_directory_is_the_only_mount_of_an_empty_contract(
     assert spec.cwd == guest_path(cwd)
     assert spec.home == guest_path(tmp_path.resolve())
     assert spec.mounts == (EnvironmentMount(guest_path(cwd), cwd, readonly=False),)
-    assert spec.env == {"TZ": host_time_zone}
+    assert spec.env == host_facts
 
 
 def test_every_grant_mounts_at_its_host_path(tmp_path: Path) -> None:
@@ -359,7 +363,7 @@ def test_a_read_only_contract_reaches_only_the_provider_and_the_host_ports(
 
 
 def test_the_environment_is_what_the_caller_states_and_the_host_facts(
-    tmp_path: Path, monkeypatch, host_time_zone: str
+    tmp_path: Path, monkeypatch, host_facts: dict[str, str]
 ) -> None:
     """The boundary is another machine: the host environment is not inherited,
     only what the guest is told of the host."""
@@ -372,7 +376,7 @@ def test_the_environment_is_what_the_caller_states_and_the_host_facts(
         home=tmp_path,
     )
 
-    assert spec.env == {"TZ": host_time_zone, "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
+    assert spec.env == {**host_facts, "GUILDBOTICS_MEMBER_BROKER_TOKEN": "t"}
 
 
 # --- host facts -----------------------------------------------------------------
@@ -387,8 +391,8 @@ def test_the_host_time_zone_is_read_afresh_for_every_environment(
     monkeypatch.setattr(spec_module, "reload_localzone", lambda: None)
     monkeypatch.setattr(spec_module, "get_localzone_name", lambda: next(zones))
 
-    assert host_environment() == {"TZ": "Asia/Tokyo"}
-    assert host_environment() == {"TZ": "America/Los_Angeles"}
+    assert host_environment()["TZ"] == "Asia/Tokyo"
+    assert host_environment()["TZ"] == "America/Los_Angeles"
 
 
 @pytest.mark.parametrize(
@@ -399,7 +403,7 @@ def test_a_zone_without_an_iana_name_leaves_the_guest_on_utc(
 ) -> None:
     monkeypatch.setattr(spec_module, "get_localzone_name", lambda: zone)
 
-    assert host_environment() == {}
+    assert "TZ" not in host_environment()
 
 
 @pytest.mark.parametrize(
@@ -415,7 +419,7 @@ def test_a_zone_the_host_cannot_name_leaves_the_guest_on_utc(
 
     monkeypatch.setattr(spec_module, "reload_localzone", fail)
 
-    assert host_environment() == {}
+    assert "TZ" not in host_environment()
 
 
 # The zone set here is not the one the test process started in.
@@ -427,7 +431,7 @@ def test_the_host_time_zone_is_found_through_tzlocal(monkeypatch) -> None:
     monkeypatch.setattr(spec_module, "get_localzone_name", tzlocal.get_localzone_name)
     monkeypatch.setenv("TZ", "America/New_York")
 
-    assert host_environment() == {"TZ": "America/New_York"}
+    assert host_environment()["TZ"] == "America/New_York"
 
 
 def test_windows_zone_names_map_to_iana_names() -> None:
@@ -466,3 +470,72 @@ def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
         home=home,
     )
     assert all(mount.host is not None for mount in below.mounts)
+
+
+def _ui_language_on(platform: str, setting: str, monkeypatch, fake_platform) -> None:
+    """Make the host an operating system of ``platform`` whose UI language is
+    ``setting``, kept where that operating system keeps it."""
+    fake_platform(os_language, platform)
+    monkeypatch.setattr(spec_module, "os_ui_language", os_language.os_ui_language)
+    for name in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    if platform == "darwin":
+        listed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f'(\n    "{setting}",\n    "en-US"\n)\n'
+        )
+        monkeypatch.setattr(os_language.subprocess, "run", lambda *_a, **_k: listed)
+    elif platform == "win32":
+        lcid = {v: k for k, v in locale.windows_locale.items()}[setting]
+
+        class GetUserDefaultUILanguage:
+            restype = None
+
+            def __call__(self) -> int:
+                return lcid
+
+        kernel32 = SimpleNamespace(GetUserDefaultUILanguage=GetUserDefaultUILanguage())
+        monkeypatch.setattr(
+            os_language.ctypes,
+            "windll",
+            SimpleNamespace(kernel32=kernel32),
+            raising=False,
+        )
+    else:
+        monkeypatch.setenv("LANG", setting)
+
+
+@pytest.mark.parametrize(
+    ("platform", "setting", "language"),
+    [
+        ("darwin", "fr-FR", "fr_FR"),
+        ("darwin", "zh-Hans-CN", "zh_CN"),
+        ("darwin", "en", "en"),
+        ("win32", "ja_JP", "ja_JP"),
+        ("linux", "pt_BR.UTF-8", "pt_BR"),
+    ],
+)
+def test_the_host_ui_language_is_told_as_language(
+    monkeypatch, fake_platform, platform: str, setting: str, language: str
+) -> None:
+    """Each operating system keeps its UI language its own way; the guest is
+    told it as gettext names it, beside the zone."""
+    _ui_language_on(platform, setting, monkeypatch, fake_platform)
+
+    told = host_environment()
+
+    assert told == {"TZ": "Asia/Tokyo", "LANGUAGE": language}
+    # A command in the guest, which is Linux, reads back what it was told.
+    fake_platform(os_language, "linux")
+    monkeypatch.setenv("LANGUAGE", told["LANGUAGE"])
+    guest = os_language.os_ui_language()
+    assert guest is not None
+    assert "_".join(filter(None, (guest.language, guest.territory))) == language
+
+
+@pytest.mark.parametrize("setting", ["C.UTF-8", "POSIX"])
+def test_a_host_that_names_no_ui_language_tells_the_guest_none(
+    monkeypatch, fake_platform, setting: str
+) -> None:
+    _ui_language_on("linux", setting, monkeypatch, fake_platform)
+
+    assert host_environment() == {"TZ": "Asia/Tokyo"}
