@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import importlib.util
 import inspect
@@ -91,8 +92,19 @@ class _NoBytecodeLoader(importlib.machinery.SourceFileLoader):
 
 
 def _load_python_module(path: Path) -> Any:
+    """Execute a command file as a module registered under a path-derived name.
+
+    The module stays in ``sys.modules`` because ``dataclasses`` resolves string
+    annotations (``from __future__ import annotations``) through it. The name
+    comes from the resolved path instead of the file stem: a command named
+    ``inspect.py`` must not replace the standard library module for the rest of
+    the process, and commands sharing a stem in different directories must not
+    replace each other.
+    """
+    digest = hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:16]
+    name = f"guildbotics_command_{digest}"
     spec = importlib.util.spec_from_file_location(
-        path.stem, path, loader=_NoBytecodeLoader(path.stem, str(path))
+        name, path, loader=_NoBytecodeLoader(name, str(path))
     )
     if spec is None or spec.loader is None:
         raise CommandError(f"Unable to load python command module from '{path}'.")

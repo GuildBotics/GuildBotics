@@ -1,4 +1,5 @@
 import textwrap
+import inspect
 import json
 import os
 import sys
@@ -627,3 +628,76 @@ async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
     assert result == "done"
     assert not (tmp_path / "commands/functions/__pycache__").exists()
     assert list((tmp_path / "commands").rglob("*.pyc")) == []
+
+
+@pytest.mark.asyncio
+async def test_python_command_named_like_stdlib_keeps_stdlib_import(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    # Restores the real module at teardown, so a regression fails only here
+    # instead of breaking every later test in the same worker.
+    monkeypatch.setitem(sys.modules, "inspect", inspect)
+    _write(
+        tmp_path / "commands/inspect.py",
+        """
+        def main():
+            return __name__
+        """,
+    )
+
+    executor = CommandRunner(_get_context(), "inspect", [])
+    outcome = await executor.run()
+
+    assert outcome.result != "inspect"
+    assert sys.modules["inspect"] is inspect
+
+
+@pytest.mark.asyncio
+async def test_python_commands_sharing_a_stem_get_distinct_modules(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    for directory in ("alpha", "beta"):
+        _write(
+            tmp_path / f"commands/{directory}/tool.py",
+            """
+            def main():
+                return __name__
+            """,
+        )
+
+    names = [
+        (await CommandRunner(_get_context(), f"{directory}/tool", []).run()).result
+        for directory in ("alpha", "beta")
+    ]
+
+    assert names[0] != names[1]
+
+
+@pytest.mark.asyncio
+async def test_python_command_supports_dataclass_with_postponed_annotations(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    # dataclasses resolves string annotations through sys.modules, so this
+    # pins that the command module stays registered there.
+    _write(
+        tmp_path / "commands/record.py",
+        """
+        from __future__ import annotations
+
+        from dataclasses import dataclass
+
+        @dataclass
+        class Item:
+            name: str
+
+        def main():
+            return Item("ok").name
+        """,
+    )
+
+    executor = CommandRunner(_get_context(), "record", [])
+
+    assert (await executor.run()).text_output == "ok"
