@@ -1,9 +1,8 @@
-"""AI-assisted custom-command answers and reviewed change proposals."""
+"""What the command-authoring assistant returns, and how a proposal is checked."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -12,8 +11,6 @@ from guildbotics.commands.validation import (
     CommandValidationError,
     validate_generated_command_source,
 )
-from guildbotics.intelligences.assistants import open_assistant_session
-from guildbotics.runtime import Context
 
 CommandAuthoringMode = Literal["create", "edit"]
 CommandAuthoringFormat = CommandFormat
@@ -51,100 +48,26 @@ class CommandAuthoringResult(BaseModel):
         return self
 
 
-async def author_command_turn(
-    context: Context,
-    *,
-    mode: CommandAuthoringMode,
-    conversation_id: str,
-    trace_id: str,
-    command: str,
-    command_format: CommandAuthoringFormat | None,
-    content: str,
-    instruction: str,
-    available_commands: list[dict[str, Any]],
-    workspace_data_root: Path,
-) -> CommandAuthoringResult:
-    """Run one resumable AI command-authoring turn.
-
-    Args:
-        context: Context resolved to the member acting as the authoring agent.
-        mode: Whether this is a new-command request or an existing command.
-        conversation_id: Stable identity shared by every turn in this conversation.
-        trace_id: Unique correlation identity for this turn.
-        command: Current logical shared command name, or empty on initial create.
-        command_format: Current command format, or ``None`` on initial create.
-        content: Complete current editor buffer, including unsaved changes.
-        instruction: Latest user instruction.
-        available_commands: Effective shared command sources available for
-            read-only inspection and composition.
-        workspace_data_root: Runtime-owned writable data directory.
-
-    Returns:
-        The assistant answer or complete source-change proposal.
-
-    Raises:
-        CommandError: If the configured agent does not return the required
-            structured response.
-    """
-    session = open_assistant_session(
-        context,
-        prompt="functions/author_command",
-        work_kind="command_authoring",
-        conversation_id=conversation_id,
-        trace_id=trace_id,
-        result_type=CommandAuthoringResult,
-        workspace_data_root=workspace_data_root,
-        cwd_name="command-authoring",
-        read_only=True,
-    )
-    output = await session.send(
-        {
-            "mode": mode,
-            "command": command,
-            "format": command_format,
-            "current_content": content,
-            "instruction": instruction,
-            "available_commands": available_commands,
-            "allowed_operations": {
-                "update_current_command": mode == "edit",
-                "create_shared_commands": True,
-                "delete_commands": False,
-                "change_current_command_format": False,
-                "modify_platform_code": False,
-            },
-        }
-    )
-    if output.action == "answer":
-        return output
-    try:
-        _validate_proposal(output, mode, command, command_format, content)
-    except CommandValidationError as exc:
-        output = await session.send(
-            {
-                "instruction": (
-                    "Correct the change proposal without expanding the user's request. "
-                    "Return an answer instead if no source change was requested."
-                ),
-                "original_instruction": instruction,
-                "validation_error": str(exc),
-                "validation_context": exc.context,
-                "invalid_result": output.model_dump(),
-            }
-        )
-        if output.action == "answer":
-            return output
-        _validate_proposal(output, mode, command, command_format, content)
-    return output
-
-
-def _validate_proposal(
+def validate_proposal(
     result: CommandAuthoringResult,
     mode: CommandAuthoringMode,
     command: str,
     command_format: CommandAuthoringFormat | None,
     current_content: str,
 ) -> None:
-    """Validate proposal scope and every generated command source."""
+    """Validate proposal scope and every generated command source.
+
+    Args:
+        result: The agent's change proposal.
+        mode: Whether the request was a new command or an existing one.
+        command: Current logical shared command name, or empty on creation.
+        command_format: Current command format, or ``None`` on creation.
+        current_content: Complete current editor buffer.
+
+    Raises:
+        CommandValidationError: If the proposal leaves its permitted scope,
+            changes nothing, or holds an invalid command source.
+    """
     seen: set[str] = set()
     has_effective_change = False
     for change in result.changes:

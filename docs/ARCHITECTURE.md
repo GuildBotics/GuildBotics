@@ -858,10 +858,9 @@ person secrets (`GITHUB_ACCESS_TOKEN` / `GITHUB_PRIVATE_KEY` / `SLACK_BOT_TOKEN`
   (`inspect`) declares the target too but, like a memory read, never becomes an
   activity link. Manual desktop command runs (`source: manual`)
   are excluded from the session timeline because they fire constantly; anything they
-  changed still appears as an activity event. Desktop AI assistant turns record under
-  that same source for the same reason — the agent work kind scopes the provider
-  conversation, not the trace — so they are filterable in diagnostics and absent from
-  the timeline. Diagnostics keeps every source.
+  changed still appears as an activity event. The Desktop AI assistants are such runs
+  too — the agent work kind scopes the provider conversation, not the trace — so they
+  are filterable in diagnostics and absent from the timeline. Diagnostics keeps every source.
 - **System health alerts**: successful and failed verify/scenario-diagnostics runs are
   recorded as structured diagnostics events. `app_api/system_alerts.py` folds those
   events together with command outcomes, rate-limit events, and current runtime state
@@ -973,26 +972,34 @@ a monorepo on purpose.
   that wait is comes from the backend (`TEARDOWN_BUDGET_SECONDS`, returned with the
   accepted shutdown), so the host never cuts short a teardown still within its limits.
 - **AI assistants**: the command editor and the diagnostics screen each host a
-  conversational assistant. Both share one substrate:
-  `guildbotics/intelligences/assistants.py` opens a resumable, structured turn (one JSON
-  payload in, one typed model out, keyed by a stable `work_identity` so the provider
-  resumes its own session), and `AppRuntime._assistant_turn` resolves the acting member,
-  tracks the turn as cancellable manual work and correlates it under a fresh trace.
-  A turn that is declared read-only is confined by its isolated environment, not by its
-  prompt or its provider: `cli_agent` puts `read_only` into the turn's access contract, the
-  environment spec mounts every host directory read-only with an empty working directory
-  and lets the network reach only the provider's API and the member broker, and
-  `cli_agent` takes no member execution lease. Only such a turn is tracked non-exclusively, so it stays usable while
-  that member runs scheduled work — which is exactly when its logs are worth asking
-  about. Command authoring is also read-only: it can inspect the effective shared
-  command sources and return structured proposals, but only the separate explicit
-  apply endpoint writes them. On the frontend,
+  conversational assistant. Each is a bundled command (`assistants/author_command`,
+  `assistants/troubleshoot`) that runs through the same path as any command the Desktop
+  runs (`AppRuntime._execute_command` → `prepare_command` → `run_main_command`): once
+  the run is accepted for the workspace, the API resolves the command exactly once,
+  decides its slot and tracking on that runner, builds the command's JSON input from
+  what it declares, and runs that same runner under a fresh trace labelled
+  `author:<command>` / `troubleshoot:<trace_id|view>`, and reads the typed model the
+  command returns. The command invokes its prompt with a stable `work_identity` so the
+  provider resumes its own session. Both declare themselves read-only (`read_only:
+  true`), and a read-only command is confined by its isolated environment, not by its
+  prompt or its provider: every turn of the run inherits the declaration, the
+  environment spec mounts every host directory read-only with an empty working
+  directory and lets the network reach only the provider's API and the member broker,
+  and the run takes no member execution lease, no manual-command slot and is tracked
+  non-exclusively, though it still keeps the workspace from switching until it ends.
+  Its native adapters belong to its own run, so it never closes another run's turn.
+  So it stays usable while another command or that member's scheduled
+  work runs — which is exactly when its logs are worth asking about. Command authoring
+  can inspect the effective shared command sources and return structured proposals,
+  which the command validates and sends back once for correction; only the separate
+  explicit apply endpoint writes them. On the frontend,
   `desktop/src/assistant/` owns the shared chat panel and conversation state; each screen
   keeps its own mutation. Conversations are never persisted on this side.
 - **Troubleshooting assistant**: opened from the diagnostics screen, it answers questions
   about recorded executions. It is given only the question, the focused view and where to
   look; it gathers its own evidence by reading the recorded runs and the workspace
-  configuration, which its environment mounts read-only for it (`inspects`). This keeps
+  configuration, which its command declares it inspects (`inspects`) and its environment
+  mounts read-only. This keeps
   prompts small and lets it follow leads into other executions and into the commands and
   settings they ran with. What it reads
   is untrusted — logs carry GitHub issue bodies, chat messages and external tool output —

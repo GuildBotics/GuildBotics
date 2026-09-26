@@ -5,18 +5,21 @@ from guildbotics.integrations.chat_workflow_status import (
     is_suppressed_chat_event,
     is_suppressed_workflow_status_metadata,
     is_workflow_status_metadata,
+    workflow_status_fields,
     workflow_status_metadata,
 )
 
 
 def test_workflow_status_metadata_builds_suppressed_payload():
     metadata = workflow_status_metadata(
-        reason="rate_limited",
-        person_id="alice",
-        source_event_id="C1:100.1",
-        run_id="run-1",
-        retry_after_at="2026-07-04T11:44:00+09:00",
-        retry_after_text="11:44 AM",
+        workflow_status_fields(
+            reason="rate_limited",
+            person_id="alice",
+            source_event_id="C1:100.1",
+            run_id="run-1",
+            retry_after_at="2026-07-04T11:44:00+09:00",
+            retry_after_text="11:44 AM",
+        )
     )
 
     assert is_workflow_status_metadata(metadata) is True
@@ -24,6 +27,8 @@ def test_workflow_status_metadata_builds_suppressed_payload():
     assert metadata["event_type"] == "guildbotics.workflow_status"
     assert metadata["event_payload"]["reason"] == "rate_limited"
     assert metadata["event_payload"]["routing"] == "suppress"
+    assert metadata["event_payload"]["source_event_id"] == "C1:100.1"
+    assert "subject_id" not in metadata["event_payload"]
 
 
 def test_other_or_malformed_metadata_is_not_suppressed():
@@ -57,10 +62,12 @@ def test_suppressed_chat_event_uses_event_metadata():
         author_id="U1",
         text="notice",
         metadata=workflow_status_metadata(
-            reason="failed",
-            person_id="alice",
-            source_event_id="C1:99.9",
-            run_id="run-1",
+            workflow_status_fields(
+                reason="failed",
+                person_id="alice",
+                source_event_id="C1:99.9",
+                run_id="run-1",
+            )
         ),
     )
 

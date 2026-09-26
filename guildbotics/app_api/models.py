@@ -35,6 +35,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     EnvironmentResources,
     ToolchainDeclaration,
 )
+from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageSnapshot
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -659,17 +660,14 @@ class CommandAuthoringChange(BaseModel):
 
 
 class CommandAuthoringResponse(AssistantTurnResponse):
+    """An authoring turn's result, with each change placed as a shared file.
+
+    It is built from the turn's ``CommandAuthoringResult``, which already keeps
+    an answer apart from a change proposal.
+    """
+
     action: Literal["answer", "propose_changes"]
     changes: list[CommandAuthoringChange] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_action(self) -> CommandAuthoringResponse:
-        """Keep conversational answers separate from source proposals."""
-        if self.action == "answer" and self.changes:
-            raise ValueError("An answer cannot include command changes.")
-        if self.action == "propose_changes" and not self.changes:
-            raise ValueError("A change proposal must include at least one change.")
-        return self
 
 
 class CommandAuthoringApplyRequest(BaseModel):
@@ -1077,23 +1075,6 @@ class SystemAlertDismissRequest(BaseModel):
     alert_id: str = Field(min_length=1)
 
 
-class CliAgentUsageWindow(BaseModel):
-    window: str
-    used_percent: float
-    resets_at: str = ""
-    window_minutes: int | None = None
-    # Human-readable qualifier beyond the duration (e.g. a per-model budget's
-    # model name).
-    label: str = ""
-
-
-class CliAgentUsage(BaseModel):
-    agent: str
-    windows: list[CliAgentUsageWindow] = Field(default_factory=list)
-    limit_reached: bool = False
-    checked_at: str = ""
-
-
 class CliAgentUsageCheck(BaseModel):
     """Latest completed usage probe, shared by settings and notifications."""
 
@@ -1111,7 +1092,7 @@ class CliAgentUsageResponse(BaseModel):
     """
 
     agent: str
-    usage: CliAgentUsage | None = None
+    usage: CliAgentUsageSnapshot | None = None
     check: CliAgentUsageCheck | None = None
     refreshing: bool = False
 

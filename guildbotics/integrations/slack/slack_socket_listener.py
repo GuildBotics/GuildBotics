@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import queue
-import re
 import threading
 import time
 from collections.abc import Callable
@@ -12,18 +11,12 @@ from typing import Any
 
 import httpx
 
-from guildbotics.integrations.chat_service import ChatEvent
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
+from guildbotics.integrations.slack.auth_errors import (
+    is_slack_auth_error,
+    slack_api_error,
 )
-from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
-from guildbotics.integrations.slack.message_events import (
-    is_bot_message,
-    is_conversational_message,
-)
+from guildbotics.integrations.slack.message_events import chat_event
 from guildbotics.runtime.event_listener import EventListener, IncomingChatEvent
-
-_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 
 
 # Slack error codes that will not recover by reconnecting with the same token.
@@ -185,14 +178,9 @@ class SlackSocketEventListener(EventListener):
         response = client.post(f"{self._base_url}/apps.connections.open")
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, dict) or not payload.get("ok", False):
-            error = (
-                payload.get("error", "unknown_error")
-                if isinstance(payload, dict)
-                else "invalid_json"
-            )
+        if error := slack_api_error(payload):
             message = f"Slack API 'apps.connections.open' failed: {error}"
-            if is_slack_auth_error(str(error)):
+            if is_slack_auth_error(error):
                 raise SlackSocketAuthError(message)
             raise RuntimeError(message)
         url = str(payload.get("url", "") or "")
@@ -246,28 +234,11 @@ class SlackSocketEventListener(EventListener):
         channel_id = str(event.get("channel", "") or "")
         if not channel_id:
             return None
-        ts = str(event.get("ts", "") or "")
-        if not ts:
+        message = chat_event(channel_id, event)
+        if message is None:
             return None
-        thread_ts = _str_or_none(event.get("thread_ts")) or ts
-        if not is_conversational_message(event):
-            return None
-        text = str(event.get("text", "") or "")
-        author_id = _str_or_none(event.get("user"))
-        chat_event = ChatEvent(
-            event_id=f"{channel_id}:{ts}",
-            channel_id=channel_id,
-            message_ts=ts,
-            thread_ts=thread_ts,
-            author_id=author_id,
-            text=text,
-            mentions=_extract_mentions(text),
-            is_bot_message=is_bot_message(event),
-            is_thread_reply=(thread_ts != ts),
-            metadata=normalize_workflow_status_metadata(event.get("metadata")),
-        )
         return IncomingChatEvent(
-            service_name="slack", channel_id=channel_id, event=chat_event
+            service_name="slack", channel_id=channel_id, event=message
         )
 
     def _parse_json(self, raw: Any) -> dict[str, Any] | None:
@@ -308,17 +279,6 @@ class SlackSocketEventListener(EventListener):
     def _log_warning(self, message: str, *args: Any) -> None:
         with suppress(Exception):
             self._logger.warning(message, *args)
-
-
-def _extract_mentions(text: str) -> list[str]:
-    return _MENTION_RE.findall(text or "")
-
-
-def _str_or_none(value: Any) -> str | None:
-    if value is None:
-        return None
-    s = str(value)
-    return s if s else None
 
 
 def _close_sync(obj: Any) -> None:

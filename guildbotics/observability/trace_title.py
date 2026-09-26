@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.text_utils import first_line
 
 #: Memory reads and signals (``recall`` / ``get`` / ``touch``) change no
 #: document: their payload title is what was read, not what was done.
@@ -104,7 +105,7 @@ def resolve_trace_title(
     records = list(records)
     candidates: tuple[Callable[[], object], ...] = (
         lambda: attributes.get("github.title"),
-        lambda: _first_line(
+        lambda: first_line(
             completion_summary(attributes, person_id) if completion_summary else ""
         ),
         lambda: attributes.get("memory.title"),
@@ -141,14 +142,6 @@ def _trigger_label(attributes: Mapping[str, Any]) -> str:
     if not provider:
         return ""
     return t("observability.trace_title.chat_trigger", provider=provider.title())
-
-
-def _first_line(text: str) -> str:
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    return ""
 
 
 def _first_payload_text(records: list[Mapping[str, Any]], key: str) -> str:

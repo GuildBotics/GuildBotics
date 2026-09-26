@@ -24,10 +24,10 @@ from guildbotics.capabilities.workflow_rate_limits import (
     workflow_rate_limit_notice_text,
 )
 from guildbotics.entities import Person, Task
+from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
-    workflow_status_comment_payload,
 )
 from guildbotics.observability import current_trace, set_attributes
 from guildbotics.runtime.context import Context
@@ -162,7 +162,7 @@ class TicketSelector:
         ticket_url = str(invocation.payload["ticket_url"])
         if rate_limit is None:
             body = await _task_error_message(context)
-            payload = workflow_status_comment_payload(
+            payload = workflow_status_fields(
                 reason="failed",
                 person_id=person_id,
                 run_id=run_id,
@@ -170,7 +170,7 @@ class TicketSelector:
             )
         else:
             body = workflow_rate_limit_notice_text(rate_limit)
-            payload = workflow_status_comment_payload(
+            payload = workflow_status_fields(
                 reason="rate_limited",
                 person_id=person_id,
                 run_id=run_id,

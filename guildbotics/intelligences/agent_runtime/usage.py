@@ -40,8 +40,13 @@ from guildbotics.intelligences.agent_environment.runtime import (
 from guildbotics.intelligences.agent_runtime.environment import (
     start_probe_environment,
 )
+from guildbotics.intelligences.agent_runtime.jsonrpc import CLIENT_INFO
 from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
-from guildbotics.intelligences.cli_agents import cli_agent_info
+from guildbotics.intelligences.cli_agents import (
+    ANTIGRAVITY_USAGE_COMMAND,
+    CLAUDE_USAGE_COMMAND,
+    cli_agent_info,
+)
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 LIMIT_REACHED_PERCENT = 100.0
@@ -617,18 +622,7 @@ async def read_codex_usage(timeout: float = 20.0) -> CliAgentUsageSnapshot:
     environment, process = await _probe("codex", "codex", "app-server")
     try:
         async with asyncio.timeout(timeout):
-            await _probe_request(
-                process,
-                1,
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "guildbotics",
-                        "title": "GuildBotics",
-                        "version": "1",
-                    }
-                },
-            )
+            await _probe_request(process, 1, "initialize", {"clientInfo": CLIENT_INFO})
             await _probe_send(
                 process, {"jsonrpc": "2.0", "method": "initialized", "params": {}}
             )
@@ -662,13 +656,7 @@ async def read_grok_usage(timeout: float = 20.0) -> CliAgentUsageSnapshot:
                 {
                     "protocolVersion": 1,
                     "clientCapabilities": {},
-                    # ACP requires clientInfo.version; Grok rejects the
-                    # request when it is absent.
-                    "clientInfo": {
-                        "name": "guildbotics",
-                        "title": "GuildBotics",
-                        "version": "1",
-                    },
+                    "clientInfo": CLIENT_INFO,
                 },
                 label="Grok",
             )
@@ -698,16 +686,7 @@ async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
     lines (e.g. API-key auth, where the plan panel does not exist).
     """
     stdout, _returncode = await _print_output(
-        "claude",
-        "claude",
-        "-p",
-        "/usage",
-        "--output-format",
-        "json",
-        # The probe must not pile a resumable session onto disk per poll.
-        "--no-session-persistence",
-        timeout=timeout,
-        label="Claude Code",
+        "claude", *CLAUDE_USAGE_COMMAND, timeout=timeout, label="Claude Code"
     )
     try:
         payload = json.loads(stdout)
@@ -733,11 +712,7 @@ async def read_antigravity_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot
     """
     stdout, returncode = await _print_output(
         "antigravity",
-        "agy",
-        "-p",
-        "/usage",
-        "--output-format",
-        "json",
+        *ANTIGRAVITY_USAGE_COMMAND,
         timeout=timeout,
         label="Antigravity",
     )

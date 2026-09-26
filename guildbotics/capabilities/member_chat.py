@@ -17,6 +17,7 @@ from guildbotics.integrations.chat_service import (
     ChatService,
     SemanticReaction,
 )
+from guildbotics.integrations.slack.auth_errors import slack_api_error
 from guildbotics.runtime.member_invocation import current_member_invocation
 
 SLACK_BOT_TOKEN_KEY = "SLACK_BOT_TOKEN"
@@ -334,13 +335,8 @@ async def probe_slack_app_token(
         response = await client.post(url)
         response.raise_for_status()
         payload = response.json()
-    if not isinstance(payload, dict) or not payload.get("ok", False):
-        error = (
-            payload.get("error", "unknown_error")
-            if isinstance(payload, dict)
-            else "invalid_json"
-        )
-        raise MemberCapabilityError(str(error))
+    if error := slack_api_error(payload):
+        raise MemberCapabilityError(error)
 
 
 def _safe_chat_error(exc: Exception) -> str:

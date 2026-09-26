@@ -18,14 +18,11 @@ from typing import Any
 
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import (
-    TurnEnvironment,
-    start_turn_environment,
-)
+from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
+    CLIENT_INFO,
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
-    LineJsonRpcTransport,
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
@@ -41,12 +38,16 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentTerminalResult,
     ConversationRecord,
     EventSink,
+    command_line,
+    context_compaction_event,
+)
+from guildbotics.intelligences.agent_runtime.provider_process import (
+    JsonRpcAdapter,
+    turn_deadline,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 ACP_PROTOCOL_VERSION = 1
-#: Version of the GuildBotics client contract, matching the Codex adapter's.
-CLIENT_VERSION = "1"
 
 _APPROVAL_NOTIFICATION = "guildbotics/approval"
 #: Standard ACP updates GuildBotics deliberately ignores; they describe the
@@ -103,7 +104,7 @@ _MAX_FIELDS = 20
 _MAX_FIELD_NAME = 64
 
 
-class AcpAdapterBase:
+class AcpAdapterBase(JsonRpcAdapter):
     """The ACP v1 half of a native adapter, minus everything provider-specific.
 
     Subclasses set the class attributes below and implement the hooks at the
@@ -137,15 +138,12 @@ class AcpAdapterBase:
         executable: str,
         timeout: float = 3600.0,
     ) -> None:
-        self._executable = executable
-        self._timeout = timeout
-        self._transport = LineJsonRpcTransport(
+        super().__init__(
+            executable=executable,
+            timeout=timeout,
             label=f"{self.product_label} ACP",
             include_version=True,
-            request_timeout=min(timeout, 30.0),
-            on_reverse_request=self._handle_agent_request,
         )
-        self._environment: TurnEnvironment | None = None
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""
         #: The running process's full `initialize` response. Some providers
@@ -203,7 +201,7 @@ class AcpAdapterBase:
         finally:
             # The provider process is the turn's: the next turn starts its
             # own and reloads the session.
-            await self._close_provider()
+            await self.close()
 
     async def _run_active_turn(
         self,
@@ -271,16 +269,6 @@ class AcpAdapterBase:
                 )
         except RpcError as exc:
             raise self._agent_error_from_rpc(exc) from exc
-        except TimeoutError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                f"{self.agent_label} turn timed out.",
-                rotate_session=True,
-            ) from exc
-        except asyncio.CancelledError:
-            await self.interrupt()
-            raise
         finally:
             prompt_task.cancel()
             with suppress(asyncio.CancelledError, Exception):
@@ -315,48 +303,25 @@ class AcpAdapterBase:
             effort=effective_effort,
         )
 
-    async def interrupt(self) -> None:
-        if self._environment is not None:
-            await self._environment.broker.deactivate()
+    async def _cancel_turn(self) -> None:
         if self._active_session_id:
             with suppress(asyncio.CancelledError, Exception):
                 await self._transport.notify(
                     "session/cancel", {"sessionId": self._active_session_id}
                 )
-        process = self._transport.process
-        if process is not None and process.returncode is None:
-            await process.kill()
-
-    async def close(self) -> None:
-        await self._close_provider()
-
-    async def _close_provider(self) -> None:
-        """Stop the ACP provider and end its turn in the environment."""
-        process = self._transport.process
-        if process is not None and process.returncode is None:
-            with suppress(BrokenPipeError, ConnectionError, OSError):
-                process.stdin.close()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=2.0)
-            except TimeoutError:
-                await process.kill()
-        await self._transport.aclose()
-        environment, self._environment = self._environment, None
-        if environment is not None:
-            await environment.close()
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> None:
         if self._transport.process is not None:
-            await self._close_provider()
+            await self.close()
         self._environment = await start_turn_environment(context, self.tool_name)
         try:
             process = await self._environment.run(
                 *self._launch_argv(context), limit=STREAM_READ_LIMIT
             )
         except AgentEnvironmentError as exc:
-            await self._close_provider()
+            await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start {self.product_label}: {exc}",
@@ -401,13 +366,7 @@ class AcpAdapterBase:
                     # declared; an undeclared capability would let the agent
                     # call back into a client service that does not exist.
                     "clientCapabilities": {},
-                    # ACP requires clientInfo.version; Grok rejects the request
-                    # with "missing field `version`" when it is absent.
-                    "clientInfo": {
-                        "name": "guildbotics",
-                        "title": "GuildBotics",
-                        "version": CLIENT_VERSION,
-                    },
+                    "clientInfo": CLIENT_INFO,
                 },
             )
         )
@@ -547,7 +506,7 @@ class AcpAdapterBase:
 
         next_message = asyncio.create_task(self._transport.next_notification())
         try:
-            async with asyncio.timeout(self._timeout):
+            async with turn_deadline(self.agent_label, self._timeout, self.interrupt):
                 while True:
                     await asyncio.wait(
                         {next_message, prompt_task},
@@ -671,7 +630,7 @@ class AcpAdapterBase:
             message=str(update.get("title", "") or ""),
             provider_session_id=session_id,
             item_id=call_id,
-            command=_tool_command(update),
+            command=command_line(as_dict(update.get("rawInput")).get("command")),
             path=locations[0] if locations else "",
             details=details,
         )
@@ -709,12 +668,7 @@ class AcpAdapterBase:
             # A drop in absolute session context means history was compacted.
             # This works even if the agent renames or drops its own notification.
             events.append(
-                AgentEvent(
-                    AgentEventKind.TURN,
-                    "context_compaction",
-                    provider_session_id=session_id,
-                    details={"detected_by": "usage_decrease"},
-                )
+                context_compaction_event(session_id, {"detected_by": "usage_decrease"})
             )
         return events
 
@@ -775,7 +729,7 @@ class AcpAdapterBase:
         )
         self._unhandled = {}
 
-    async def _handle_agent_request(
+    async def _handle_reverse_request(
         self, method: str, request_id: Any, params: dict[str, Any]
     ) -> None:
         if method == "session/request_permission":
@@ -804,13 +758,7 @@ class AcpAdapterBase:
             return
         # No client capability was declared, so any other reverse request is a
         # capability GuildBotics does not implement and must not fake.
-        await self._transport.respond(
-            request_id,
-            error={
-                "code": METHOD_NOT_FOUND,
-                "message": f"Unsupported request: {method}",
-            },
-        )
+        await super()._handle_reverse_request(method, request_id, params)
 
     def _warn_unusable_settings(self, context: AgentExecutionContext) -> None:
         """Report requested settings this adapter cannot act on."""
@@ -849,18 +797,14 @@ class AcpAdapterBase:
             )
             if value is not None
         }
-        details: dict[str, Any] = {
-            "provider_code": error.get("code"),
-            "provider_type": data.get("type") or error.get("type"),
-        }
-        for source, target in (
-            ("resetAt", "retry_after_at"),
-            ("reset_at", "retry_after_at"),
-            ("retryAfterSeconds", "retry_after_seconds"),
-            ("retry_after_seconds", "retry_after_seconds"),
-        ):
-            if source in data:
-                details[target] = data[source]
+        details = exc.provider_details(
+            {
+                "resetAt": "retry_after_at",
+                "reset_at": "retry_after_at",
+                "retryAfterSeconds": "retry_after_seconds",
+                "retry_after_seconds": "retry_after_seconds",
+            }
+        )
         if identifiers & (_AUTH_CODES | self.auth_codes):
             return AgentRuntimeError(
                 AgentRuntimeErrorCategory.AUTHENTICATION,
@@ -995,16 +939,6 @@ def _event_kind_for_tool(tool_kind: str) -> AgentEventKind:
     if tool_kind in _FILE_CHANGE_KINDS:
         return AgentEventKind.FILE_CHANGE
     return AgentEventKind.TOOL
-
-
-def _tool_command(update: dict[str, Any]) -> str:
-    raw = as_dict(update.get("rawInput"))
-    command = raw.get("command")
-    if isinstance(command, str):
-        return command
-    if isinstance(command, list):
-        return " ".join(str(part) for part in command)
-    return ""
 
 
 def _content_text(value: Any) -> str:

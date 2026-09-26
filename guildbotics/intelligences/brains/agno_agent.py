@@ -1,6 +1,5 @@
 import time
 from copy import deepcopy
-from logging import Logger
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,7 +13,7 @@ from guildbotics.intelligences.brains.brain import (
     public_parameters,
 )
 from guildbotics.intelligences.brains.util import (
-    summary_log_line,
+    record_summary,
     to_plain_text,
     to_response_class,
 )
@@ -27,7 +26,6 @@ from guildbotics.intelligences.effort import (
 from guildbotics.observability import span_scope
 from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
-    record_span_summary,
 )
 from guildbotics.utils.fileio import (
     get_person_config_path,
@@ -151,27 +149,10 @@ def get_model_mapping(person_id: str) -> dict[str, ModelConfig]:
 
 
 class AgnoAgentDefaultBrain(Brain):
-    def __init__(
-        self,
-        person_id: str,
-        name: str,
-        logger: Logger,
-        description: str = "",
-        template_engine: str = "default",
-        response_class: type[BaseModel] | None = None,
-        model: str = "default",
-        effort: str = "",
-    ):
-        super().__init__(
-            person_id=person_id,
-            name=name,
-            logger=logger,
-            description=description,
-            template_engine=template_engine,
-            response_class=response_class,
-            effort=effort,
-        )
-        self.model_config = get_model_mapping(person_id)[model]
+    def __init__(self, *args: Any, model: str = "default", **kwargs: Any):
+        """Take the :class:`Brain` arguments, and the model slot to run."""
+        super().__init__(*args, **kwargs)
+        self.model_config = get_model_mapping(self.person_id)[model]
         self.model_slot = model
 
     @property
@@ -283,24 +264,16 @@ class AgnoAgentDefaultBrain(Brain):
         empty — the request ran on the provider's default, which is unknown —
         while ``model.slot`` still names the slot so traces stay searchable.
         """
-        duration_ms = (time.monotonic() - started) * 1000
-        record_span_summary(
-            status=status,
+        record_summary(
+            self.logger,
+            "llm",
+            self.model_config.name,
+            status,
+            started=started,
+            attributes={"model.slot": self.model_config.name},
             model=model,
             effort=effort,
-            duration_ms=duration_ms,
             usage=usage,
-            attributes={"model.slot": self.model_config.name},
-        )
-        self.logger.info(
-            summary_log_line(
-                "llm",
-                self.model_config.name,
-                status,
-                duration_ms=duration_ms,
-                model=model,
-                effort=effort,
-            )
         )
 
     def patch_message(self, message: str) -> str:

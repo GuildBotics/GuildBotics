@@ -12,6 +12,7 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
+from guildbotics.commands.metadata import command_access
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.intelligences.agent_runtime.environment import command_environment
@@ -29,6 +30,7 @@ __all__ = [
     "PersonExecutionNotAllowedError",
     "PersonNotFoundError",
     "PersonSelectionRequiredError",
+    "prepare_command",
     "run_command",
     "run_main_command",
 ]
@@ -45,25 +47,38 @@ class CommandRunner:
         cwd: Path | None = None,
     ) -> None:
         context.set_invoker(self._invoke)
-        self._context = context
-        self._command_name = command_name
+        self.context = context
+        self.command_name = command_name
         self._command_args = list(command_args)
         self._registry: dict[str, CommandSpec] = {}
         self._call_stack: list[str] = []
         self._cwd = cwd if cwd is not None else Path.cwd()
         self._spec_factory = CommandSpecFactory(context)
         self._main_spec = self._prepare_main_spec()
+        assert self._main_spec.path is not None
+        #: What the main command declares of its turns' access; every turn of
+        #: the run, its subcommands' included, is held to it.
+        self.access = command_access(self._main_spec.path)
 
-    async def run(self) -> str:
+    async def run(self) -> CommandOutcome:
+        """Run the command and return the main command's result.
+
+        Returns:
+            The main command's own result (``None`` when it produced none) and
+            the run's text output, ``Context.pipe``.
+        """
         # The command's AI CLI turns share one microVM, discarded with the run.
-        async with command_environment():
-            await self._run_with_children(self._main_spec)
-        return self._context.pipe
+        async with command_environment(self.access):
+            outcome = await self._run_with_children(self._main_spec)
+        return CommandOutcome(
+            result=outcome.result if outcome is not None else None,
+            text_output=self.context.pipe,
+        )
 
     def _prepare_main_spec(self) -> CommandSpec:
-        path = resolve_named_command(self._context, self._command_name)
+        path = resolve_named_command(self.context, self.command_name)
         spec = self._spec_factory.prepare_main_spec(
-            path, self._command_name, self._command_args, self._cwd
+            path, self.command_name, self._command_args, self._cwd
         )
         return spec
 
@@ -92,10 +107,10 @@ class CommandRunner:
         self._call_stack.append(name)
 
         try:
-            command = spec.command_class(self._context, spec, spec.cwd)
+            command = spec.command_class(self.context, spec, spec.cwd)
             outcome = await command.run()
             if outcome is not None:
-                self._context.update(
+                self.context.update(
                     command.options.output_key, outcome.result, outcome.text_output
                 )
             return outcome
@@ -158,81 +173,112 @@ class CommandRunner:
         return self._main_spec
 
 
+def prepare_command(
+    base_context: Context,
+    command_name: str,
+    command_args: Sequence[str],
+    person_identifier: str | None = None,
+    cwd: Path | None = None,
+) -> CommandRunner:
+    """Resolve a command for the member it runs as, once.
+
+    The runner is the single read of the command: its file and what it
+    declares. Whatever a host decides about the run (the lease, a slot) is
+    decided on the runner it then starts, never on another reading.
+
+    Args:
+        base_context: Base runtime context.
+        command_name: Command to run.
+        command_args: Positional arguments for the command.
+        person_identifier: Member to run as, or ``None`` for the default.
+        cwd: Working directory for the command.
+
+    Raises:
+        CommandError: If the member cannot run commands or the command cannot
+            be resolved.
+    """
+    person = ensure_execution_subject(
+        resolve_person(base_context.team, person_identifier, allow_default=True)
+    )
+    return CommandRunner(
+        base_context.clone_for(person), command_name, command_args, cwd
+    )
+
+
 async def run_command(
     base_context: Context,
     command_name: str,
     command_args: Sequence[str],
     person_identifier: str | None = None,
     cwd: Path | None = None,
-) -> str:
-    """Execute a command within the given context."""
-    person = ensure_execution_subject(
-        resolve_person(base_context.team, person_identifier, allow_default=True)
-    )
+) -> CommandOutcome:
+    """Execute a command within the given context.
+
+    A command that declares itself read-only takes no execution lease: its
+    turns can change nothing, so it runs while the member is busy.
+    """
     from guildbotics.runtime.person_lease import (
         PersonExecutionLease,
         PersonLeaseUnavailableError,
         current_person_lease,
     )
 
-    inherited_lease = current_person_lease()
-    if inherited_lease is not None and inherited_lease.person_id != person.person_id:
-        raise RuntimeError("The active execution lease belongs to another person.")
+    runner = prepare_command(
+        base_context, command_name, command_args, person_identifier, cwd
+    )
+    person_id = runner.context.person.person_id
     owned_lease = None
-    if inherited_lease is None:
-        owned_lease = PersonExecutionLease(person.person_id)
-        try:
-            owned_lease.acquire(
-                source="manual",
-                command=command_name,
-                work_id=uuid4().hex,
-            )
-        except PersonLeaseUnavailableError as exc:
-            raise CommandError(str(exc)) from exc
-    context = base_context.clone_for(person)
     try:
-        return await run_main_command(
-            context, command_name, command_args, cwd, source="manual"
-        )
+        inherited_lease = current_person_lease()
+        if inherited_lease is not None and inherited_lease.person_id != person_id:
+            raise RuntimeError("The active execution lease belongs to another person.")
+        if inherited_lease is None and not runner.access.read_only:
+            lease = PersonExecutionLease(person_id)
+            try:
+                lease.acquire(
+                    source="manual", command=command_name, work_id=uuid4().hex
+                )
+            except PersonLeaseUnavailableError as exc:
+                raise CommandError(str(exc)) from exc
+            owned_lease = lease
+        return await run_main_command(runner, source="manual")
     finally:
         try:
-            await context.aclose()
+            await runner.context.aclose()
         finally:
             if owned_lease is not None:
                 owned_lease.release()
 
 
 async def run_main_command(
-    context: Context,
-    command_name: str,
-    command_args: Sequence[str],
-    cwd: Path | None,
-    *,
-    source: WorkflowSource,
-) -> str:
+    runner: CommandRunner, *, source: WorkflowSource
+) -> CommandOutcome:
     """Run a top-level command from a host entry.
 
     The ticket workflow runs only for a ticket the host selected, so it goes
     through the ticket selector, which settles the ticket around the run.
 
     Args:
-        context: Context of the member the command runs as.
-        command_name: Command to run.
-        command_args: Positional arguments for the command.
-        cwd: Working directory for the command.
+        runner: The command to run, resolved for the member it runs as.
         source: Route that started the command.
 
     Returns:
-        The command's output; empty when there was no ticket to work on.
+        The command's outcome; for the ticket workflow, the rate-limit notice
+        posted on the ticket instead, or nothing when there was no ticket.
     """
-    runner = CommandRunner(context, command_name, command_args, cwd)
-    if command_name != TICKET_WORKFLOW_COMMAND:
+    if runner.command_name != TICKET_WORKFLOW_COMMAND:
         return await runner.run()
     from guildbotics.drivers.ticket_selector import TicketSelector
 
-    async def _run(invocation: WorkflowInvocation) -> str:
+    context = runner.context
+
+    async def _run(invocation: WorkflowInvocation) -> CommandOutcome:
         context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
         return await runner.run()
 
     selector = TicketSelector(context, source=source)
-    return await selector.run_next(context.person, _run) or ""
+    outcome = await selector.run_next(context.person, _run)
+    if isinstance(outcome, CommandOutcome):
+        return outcome
+    # No ticket to work on, or the rate-limit notice posted on it instead.
+    return CommandOutcome(result=outcome, text_output=outcome or "")

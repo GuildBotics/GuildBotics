@@ -36,16 +36,14 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     class FakeCommandRunner:
         def __init__(self, context, command, args, cwd=None):
             self.context = context
-            self.command = command
+            self.command_name = command
             self.args = args
 
         async def run(self):
             # Simulate successful command execution
             await asyncio.sleep(0)
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunner
-    )
+    monkeypatch.setattr("guildbotics.drivers.utils.CommandRunner", FakeCommandRunner)
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",
         lambda **kwargs: events.append(kwargs),
@@ -82,7 +80,7 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
             cwd=None,
         ):
             self.context = context
-            self.command = command
+            self.command_name = command
             self.args = args
 
         async def run(self):
@@ -90,7 +88,7 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunnerError
+        "guildbotics.drivers.utils.CommandRunner", FakeCommandRunnerError
     )
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",

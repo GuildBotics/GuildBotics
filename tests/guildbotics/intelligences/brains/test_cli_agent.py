@@ -2,12 +2,15 @@ import logging
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
 from guildbotics.intelligences.agent_environment.toolchain import (
     DnsSettings,
     ToolchainDeclaration,
 )
+from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.brains import cli_agent
+from guildbotics.intelligences.brains import util as brain_util
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 
@@ -282,7 +285,7 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
     monkeypatch.setattr(
-        cli_agent,
+        brain_util,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -328,7 +331,7 @@ async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, c
         cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
     )
     monkeypatch.setattr(
-        cli_agent,
+        brain_util,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -362,7 +365,7 @@ async def test_a_failed_turn_records_a_failed_span_without_effective_values(
         {"default": cli_agent.ExecutableInfo(adapter="claude")},
     )
     monkeypatch.setattr(
-        cli_agent,
+        brain_util,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -393,7 +396,7 @@ async def test_execution_details_carry_the_effective_model_and_effort(
         ),
     )
     monkeypatch.setattr(
-        cli_agent,
+        brain_util,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -483,23 +486,23 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     # usable anyway: that is exactly when its logs are worth asking about.
     lease = PersonExecutionLease("p1", tmp_path)
     lease.acquire(source="routine", command="ticket", work_id="work-1")
+    declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
     try:
-        result = await brain._execute(
-            input="why did it fail?",
-            cwd=isolated_cwd,
-            kwargs={
-                "session_state": {
-                    "agent_execution_context": {
-                        "run_id": "run-9",
-                        "work_kind": "troubleshooting",
-                        "workspace_data_root": str(tmp_path),
-                        "read_only": True,
-                        "inspects": ["diagnostics"],
+        async with command_environment(declared):
+            result = await brain._execute(
+                input="why did it fail?",
+                cwd=isolated_cwd,
+                kwargs={
+                    "session_state": {
+                        "agent_execution_context": {
+                            "run_id": "run-9",
+                            "work_kind": "troubleshooting",
+                            "workspace_data_root": str(tmp_path),
+                        }
                     }
-                }
-            },
-            effort=cli_agent.EffortDecision(),
-        )
+                },
+                effort=cli_agent.EffortDecision(),
+            )
     finally:
         lease.release()
 
@@ -510,6 +513,47 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert captured["context"].lease is None
     assert captured["context"].cwd == isolated_cwd
     assert captured["context"].workspace_root == workspace_root
+
+
+@pytest.mark.asyncio
+async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> None:
+    """Read-only is what the command declares, not what a turn asks for: a
+    turn of a command that declares nothing takes the lease and may write."""
+    captured: dict = {}
+
+    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
+        captured["context"] = context
+        return cli_agent.CliAgentExecutionResult(
+            stdout="answer", stderr="", returncode=0
+        )
+
+    monkeypatch.setattr(
+        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
+    )
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
+
+    async with command_environment(CommandAccess()):
+        await brain._execute(
+            input="hello",
+            cwd=tmp_path,
+            kwargs={
+                "session_state": {
+                    "agent_execution_context": {
+                        "run_id": "run-9",
+                        "workspace_data_root": str(tmp_path),
+                        "read_only": True,
+                        "inspects": ["diagnostics"],
+                    }
+                }
+            },
+            effort=cli_agent.EffortDecision(),
+        )
+
+    context = captured["context"]
+    assert context.contract.read_only is False
+    assert context.inspects == frozenset()
+    assert context.lease is not None
 
 
 @pytest.mark.asyncio
@@ -537,22 +581,24 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
         effort={"high": {"model": "big-model"}},
     )
 
-    await brain._execute(
-        input="hello",
-        cwd=tmp_path,
-        kwargs={
-            "session_state": {
-                "effort": "default",
-                "agent_execution_context": {
-                    "run_id": "run-9",
-                    "work_kind": "troubleshooting",
-                    "workspace_data_root": str(tmp_path),
-                    "read_only": True,
-                },
-            }
-        },
-        effort=brain._resolve_provider_effort({"session_state": {"effort": "default"}}),
-    )
+    async with command_environment(CommandAccess(read_only=True)):
+        await brain._execute(
+            input="hello",
+            cwd=tmp_path,
+            kwargs={
+                "session_state": {
+                    "effort": "default",
+                    "agent_execution_context": {
+                        "run_id": "run-9",
+                        "work_kind": "troubleshooting",
+                        "workspace_data_root": str(tmp_path),
+                    },
+                }
+            },
+            effort=brain._resolve_provider_effort(
+                {"session_state": {"effort": "default"}}
+            ),
+        )
 
     context = captured["context"]
     assert context.effort == ""

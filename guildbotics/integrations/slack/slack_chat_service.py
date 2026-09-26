@@ -15,17 +15,10 @@ from guildbotics.integrations.chat_service import (
     ChatService,
     SemanticReaction,
 )
-from guildbotics.integrations.chat_workflow_status import (
-    normalize_workflow_status_metadata,
-)
 from guildbotics.integrations.slack.auth_errors import is_slack_auth_error
-from guildbotics.integrations.slack.message_events import (
-    is_bot_message,
-    is_conversational_message,
-)
+from guildbotics.integrations.slack.message_events import MENTION_PATTERN, chat_event
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
-_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 _EPHEMERAL_PARTICIPANT_LABEL_RE = re.compile(r"^(?:user|agent)_\d+$", re.IGNORECASE)
 _PARTICIPANT_LABEL_MENTION_RE = re.compile(r"@([A-Za-z0-9_-]+)")
 _SLACK_REACTION_MAP: dict[SemanticReaction, str] = {
@@ -128,7 +121,7 @@ class SlackChatService(ChatService):
         for item in messages:
             if not isinstance(item, dict):
                 continue
-            event = self._to_event(channel_id, item)
+            event = chat_event(channel_id, item)
             if event is not None:
                 events.append(event)
         metadata = payload.get("response_metadata", {})
@@ -162,7 +155,7 @@ class SlackChatService(ChatService):
         for item in messages:
             if not isinstance(item, dict):
                 continue
-            event = self._to_event(channel_id, item)
+            event = chat_event(channel_id, item)
             if event is not None:
                 events.append(event)
         metadata = payload.get("response_metadata", {})
@@ -273,7 +266,7 @@ class SlackChatService(ChatService):
             label = participant_labels.get(user_id, "participant")
             return f"@{label}"
 
-        return _MENTION_RE.sub(repl, text or "")
+        return MENTION_PATTERN.sub(repl, text or "")
 
     def render_participant_text(
         self, text: str, participant_labels: dict[str, str]
@@ -336,31 +329,6 @@ class SlackChatService(ChatService):
             )
             self._owns_client = True
         return self._client
-
-    def _to_event(self, channel_id: str, raw: dict[str, Any]) -> ChatEvent | None:
-        if not is_conversational_message(raw):
-            return None
-        author_id = _str_or_none(raw.get("user"))
-        text = str(raw.get("text", "") or "")
-        thread_ts = _str_or_none(raw.get("thread_ts")) or str(raw.get("ts", "") or "")
-        message_ts = str(raw.get("ts", "") or "")
-        event_id = f"{channel_id}:{message_ts}"
-        return ChatEvent(
-            event_id=event_id,
-            channel_id=channel_id,
-            message_ts=message_ts,
-            thread_ts=thread_ts,
-            author_id=author_id,
-            text=text,
-            mentions=_extract_mentions(text),
-            is_bot_message=is_bot_message(raw),
-            is_thread_reply=thread_ts != message_ts,
-            metadata=normalize_workflow_status_metadata(raw.get("metadata")),
-        )
-
-
-def _extract_mentions(text: str) -> list[str]:
-    return _MENTION_RE.findall(text or "")
 
 
 def _str_or_none(value: Any) -> str | None:

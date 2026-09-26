@@ -24,12 +24,9 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentUsage,
     CliAgentUsageResponse,
-    CliAgentUsageWindow,
     CommandOption,
     CommandOptionsResponse,
-    CommandRequirement,
     CommandRunRequest,
     ConfigStatus,
     DiagnosticCheck,
@@ -49,6 +46,8 @@ from guildbotics.app_api.models import (
     VerifyResponse,
 )
 from guildbotics.app_api.runtime import AppRuntime
+from guildbotics.commands.metadata import CommandAccess
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.editions.simple.setup_service import (
     GitHubUserReference,
     SetupServiceError,
@@ -60,6 +59,10 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.usage import (
+    CliAgentUsageSnapshot,
+    CliAgentUsageWindow,
+)
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime.relay_runtime import RelayRuntime
@@ -67,6 +70,12 @@ from guildbotics.sync.manager import GitSyncManager
 
 HTTP_OK = 200
 HTTP_ACCEPTED = 202
+from tests.guildbotics.app_api.command_doubles import (
+    PreparedCommand,
+    RunContext,
+    stub_commands,
+)
+
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_UNPROCESSABLE_ENTITY = 422
@@ -390,7 +399,7 @@ class RuntimeStub:
     ) -> CliAgentUsageResponse:
         return CliAgentUsageResponse(
             agent=agent_name,
-            usage=CliAgentUsage(
+            usage=CliAgentUsageSnapshot(
                 agent=agent_name,
                 windows=[
                     CliAgentUsageWindow(
@@ -2249,10 +2258,10 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
         started.set()
         await release.wait()
-        return "done"
+        return CommandOutcome(result="done", text_output="done")
 
     team = Team(
         project=Project(name="demo"),
@@ -2263,9 +2272,7 @@ async def test_app_runtime_rejects_parallel_commands(monkeypatch) -> None:
         "_get_context",
         lambda message="": type("ContextStub", (), {"team": team})(),
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     running = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="first"))
@@ -2303,17 +2310,15 @@ async def test_manual_command_traces_resolved_default_person_without_activity_se
         ],
     )
 
-    async def fake_run_command(*_: Any, **__: Any) -> str:
-        return "done"
+    async def fake_run_command(*_: Any, **__: Any) -> CommandOutcome:
+        return CommandOutcome(result="done", text_output="done")
 
     monkeypatch.setattr(
         runtime,
         "_get_context",
         lambda message="": type("ContextStub", (), {"team": team})(),
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     await runtime.run_command(CommandRunRequest(command="functions/talk_as"))
 
@@ -3234,15 +3239,25 @@ async def test_command_event_preserves_authentication_cause(
             raise CommandError("wrapped") from error
         raise error
 
-    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", fail)
-    request = CommandRunRequest(command="test", cwd=str(tmp_path))
-    with pytest.raises(AppApiError if wrapped else CliAgentExecutionError):
-        await runtime._run_command_traced(request, None, "alice")
+    monkeypatch.setattr(runtime_module, "run_main_command", fail)
+    execution = runtime_module._Execution(
+        command="test",
+        label="test",
+        cwd=lambda: tmp_path,
+        failure_code="command_error",
+    )
+    runner = PreparedCommand(
+        base_context=None,
+        command_name="test",
+        args=[],
+        cwd=tmp_path,
+        access=CommandAccess(),
+        context=RunContext(person=Person(person_id="alice", name="Alice")),
+    )
+    # A failed agent is a failed command, wrapped or not.
+    with pytest.raises(AppApiError):
+        await runtime._run_command_traced(execution, runner)
     assert events[-1][0] == "command.failed"
     assert events[-1][1]["code"] == (
-        "cli_agent_authentication"
-        if category == "authentication"
-        else "command_error"
-        if wrapped
-        else ""
+        "cli_agent_authentication" if category == "authentication" else ""
     )

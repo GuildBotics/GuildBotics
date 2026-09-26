@@ -6,11 +6,11 @@ import pytest
 from guildbotics.entities.message import Message
 from guildbotics.entities.task import Task
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     render_workflow_status_comment,
-    workflow_status_comment_payload,
 )
 from guildbotics.utils.i18n_tool import set_language, t
 
@@ -779,9 +779,7 @@ async def test_sync_agent_field_adds_missing_option_preserving_existing():
 def _status_comment(reason: str) -> str:
     return render_workflow_status_comment(
         body="status",
-        payload=workflow_status_comment_payload(
-            reason=reason, person_id="aiko", run_id="run-1"
-        ),
+        payload=workflow_status_fields(reason=reason, person_id="aiko", run_id="run-1"),
     )
 
 

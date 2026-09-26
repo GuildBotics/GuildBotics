@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Protocol, get_args
+from typing import Any, Protocol, get_args
 
+from guildbotics.commands.metadata import InspectionScope
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
@@ -87,12 +88,6 @@ class TurnLogin:
     refusal: Callable[[], str] = lambda: ""
 
 
-#: The workspace's own state a turn may be let inspect: ``diagnostics`` is the
-#: recorded runs, ``config`` the workspace configuration and the packaged
-#: templates it falls back to.
-InspectionScope = Literal["diagnostics", "config"]
-
-
 @dataclass(frozen=True, slots=True)
 class AgentExecutionContext:
     person_id: str
@@ -123,8 +118,8 @@ class AgentExecutionContext:
     #: broker runs record into it, so what the agent read or changed shows up on
     #: the execution that asked for it.
     trace_id: str = ""
-    #: The workspace's own state the caller lets the turn inspect, mounted
-    #: read-only beside the contract's grants. What a turn needs to read is
+    #: The workspace's own state the turn's command declares it inspects,
+    #: mounted read-only beside the contract's grants. What a turn needs to read is
     #: its work's business and independent of whether its contract lets it
     #: change anything.
     inspects: frozenset[InspectionScope] = frozenset()
@@ -237,6 +232,56 @@ class AgentEvent:
     approval: str = ""
     usage: dict[str, int] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+
+
+#: The turn event every adapter reports when its provider compacted the
+#: session's history, which marks the conversation for rotation.
+CONTEXT_COMPACTION = "context_compaction"
+
+
+def context_compaction_event(
+    provider_session_id: str,
+    details: dict[str, Any],
+    *,
+    provider_turn_id: str = "",
+    item_id: str = "",
+) -> AgentEvent:
+    """The event reporting that the provider compacted the session's history."""
+    return AgentEvent(
+        AgentEventKind.TURN,
+        CONTEXT_COMPACTION,
+        provider_session_id=provider_session_id,
+        provider_turn_id=provider_turn_id,
+        item_id=item_id,
+        details=details,
+    )
+
+
+def model_and_effort(
+    context: AgentExecutionContext, efforts: frozenset[str]
+) -> dict[str, Any]:
+    """The model and effort a turn's provider options name, as a CLI takes them.
+
+    The model is kept as named; the effort only when it is one of the
+    ``efforts`` the CLI accepts. Silent by design: callers warn about what is
+    dropped where it is dropped.
+    """
+    settings: dict[str, Any] = {}
+    if model := str(context.provider_options.get("model", "") or "").strip():
+        settings["model"] = model
+    effort = str(context.provider_options.get("effort", "") or "").strip().lower()
+    if effort in efforts:
+        settings["effort"] = effort
+    return settings
+
+
+def command_line(command: Any) -> str:
+    """A provider's command, given as one string or as argv, as one line."""
+    if isinstance(command, str):
+        return command
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return ""
 
 
 @dataclass(frozen=True, slots=True)
