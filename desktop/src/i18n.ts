@@ -2040,6 +2040,7 @@ const resources = {
           cli_agent: "AI CLI tool",
           llm: "LLM",
         },
+        requirementUnmet: "{{requirement}}: {{reason}}",
         status: {
           running: "Running",
           success: "Success",
@@ -2084,7 +2085,7 @@ const resources = {
         run: "Run",
         running: "Running",
         noOutput: "No output.",
-        requirementsMissing: "Needs configuration: {{requirements}}",
+        requirementsMissing: "Needs configuration:",
         copy: "Copy the output",
         copied: "Copied",
         failed: "Run failed",
@@ -4138,6 +4139,7 @@ const resources = {
           cli_agent: "AI CLIツール",
           llm: "LLM",
         },
+        requirementUnmet: "{{requirement}}：{{reason}}",
         status: {
           running: "実行中",
           success: "成功",
@@ -4182,7 +4184,7 @@ const resources = {
         run: "実行",
         running: "実行中",
         noOutput: "出力はありません。",
-        requirementsMissing: "設定が不足しています: {{requirements}}",
+        requirementsMissing: "設定が不足しています:",
         copy: "出力をコピー",
         copied: "コピーしました",
         failed: "実行に失敗しました",

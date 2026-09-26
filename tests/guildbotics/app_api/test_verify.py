@@ -1,9 +1,7 @@
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from guildbotics.app_api import verify as verify_module
 from guildbotics.app_api.models import ConfigStatus
 from guildbotics.app_api.verify import VerifyService
 from guildbotics.entities.team import Person, Project, Team
@@ -245,7 +243,7 @@ def test_verify_cli_agent_reports_the_environments_refusal(
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
-    agent_environment("no hypervisor")
+    agent_environment.refuse("no hypervisor")
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="alice", name="Alice", is_active=True)],
@@ -261,26 +259,14 @@ def test_verify_cli_agent_reports_the_environments_refusal(
 
 
 def test_verify_cli_agent_reports_the_tools_own_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
 ) -> None:
     """A device that can start turns still refuses a tool without its login."""
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
-    device = verify_module.device_status()
-    codex = device.tool("codex")
-    monkeypatch.setattr(
-        verify_module,
-        "device_status",
-        lambda: replace(
-            device,
-            tools=tuple(
-                replace(tool, credentials="missing") if tool is codex else tool
-                for tool in device.tools
-            ),
-        ),
-    )
+    agent_environment.log_out("codex")
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="alice", name="Alice", is_active=True)],
@@ -290,7 +276,7 @@ def test_verify_cli_agent_reports_the_tools_own_refusal(
 
     check = _checks_by_code(response)["cli_agent_environment"]
     assert check.status == "error"
-    assert check.message == replace(codex, credentials="missing").refusal != ""
+    assert check.message == agent_environment().tool("codex").refusal != ""
 
 
 def test_verify_cli_agent_mapping_missing_warns(

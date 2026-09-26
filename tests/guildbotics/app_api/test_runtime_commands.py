@@ -488,7 +488,7 @@ def test_command_options_detect_github_and_slack_requirements(
     assert set(requirements) == {"github", "slack"}
     # github_enabled context -> github requirement is satisfied.
     assert requirements["github"].satisfied is True
-    assert requirements["github"].message == "GitHub integration is required."
+    assert requirements["github"].message == ""
     # Slack tokens missing -> unsatisfied.
     assert requirements["slack"].satisfied is False
 
@@ -519,12 +519,13 @@ def test_command_options_detect_llm_and_cli_requirements(
     assert options["static"].requirements == []
 
 
-def test_cli_requirement_follows_the_agent_environment_not_the_host_path(
+def test_cli_requirement_asks_the_environment_about_the_commands_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
 ) -> None:
     """The tool runs inside the isolated environment: a host PATH without it
-    satisfies the requirement, and a device that refuses turns does not. The
-    device is read once per listing, however many commands need it."""
+    meets the requirement, and when the environment cannot start the tool the
+    command's brain runs, its refusal is the reason. The device is read once
+    per listing, however many commands need it."""
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     monkeypatch.setenv("PATH", "")
     for name in ("first", "second"):
@@ -532,30 +533,46 @@ def test_cli_requirement_follows_the_agent_environment_not_the_host_path(
             config_dir / f"commands/{name}.md",
             "\n".join(["---", "brain: agent", "---", "Edit ${file}."]),
         )
-    device = runtime_module.device_status
+    _write(
+        config_dir / "commands/scripted.py",
+        "from guildbotics.intelligences.brains.cli_agent import CliAgentBrain\n",
+    )
     reads: list[None] = []
 
     def counted(**kwargs: Any) -> Any:
         reads.append(None)
-        return device(**kwargs)
+        return agent_environment(**kwargs)
 
     monkeypatch.setattr(runtime_module, "device_status", counted)
     runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
 
-    def satisfied() -> list[bool]:
-        options = {item.command: item for item in runtime.get_command_options().options}
-        return [
-            requirement.satisfied
-            for name in ("first", "second")
-            for requirement in options[name].requirements
-        ]
+    def requirements() -> dict[str, tuple[bool, str]]:
+        return {
+            option.command: (
+                option.requirements[0].satisfied,
+                option.requirements[0].message,
+            )
+            for option in runtime.get_command_options().options
+            if option.command in {"first", "second", "scripted"}
+        }
 
-    assert satisfied() == [True, True]
+    met = (True, "")
+    assert requirements() == {"first": met, "second": met, "scripted": met}
     assert len(reads) == 1
 
-    agent_environment("no hypervisor")
+    # The template maps the `agent` brain to codex; a Python command names no
+    # tool, so only the device can refuse it here.
+    agent_environment.log_out("codex")
+    logged_out = (False, agent_environment().tool("codex").refusal)
+    assert requirements() == {
+        "first": logged_out,
+        "second": logged_out,
+        "scripted": met,
+    }
 
-    assert satisfied() == [False, False]
+    agent_environment.refuse("no hypervisor")
+    refused = (False, "no hypervisor")
+    assert requirements() == {"first": refused, "second": refused, "scripted": refused}
 
 
 def test_command_options_ignore_invalid_metadata_without_crashing(

@@ -185,11 +185,6 @@ class DeviceStatus:
         """Why a turn of this tool cannot start here, or "" when it can."""
         return self.refusal or self.tool(tool_name).refusal
 
-    @property
-    def any_turn_can_start(self) -> bool:
-        """Whether a turn of at least one catalog tool can start here."""
-        return any(not self.turn_refusal(tool.name) for tool in self.tools)
-
 
 def device_status(*, building_here: bool = False) -> DeviceStatus:
     """Read the device once.

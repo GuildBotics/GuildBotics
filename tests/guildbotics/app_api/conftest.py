@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -26,20 +25,25 @@ def isolate_machine_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
 
-@pytest.fixture(autouse=True)
-def agent_environment(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
-    """Stand in for this device's agent environment, ready unless told why not.
+class AgentEnvironmentStandIn:
+    """This device's agent environment: ready, every tool logged in, until a
+    test says otherwise."""
 
-    Reading the real one places the bundled runtime under the test's home and
-    asks the keychain for every tool's login. Returns a function that makes
-    the device refuse every turn with the given reason.
-    """
-    health = [AgentEnvironmentHealth(True, "", "0.6.17")]
+    def __init__(self) -> None:
+        self.health = AgentEnvironmentHealth(True, "", "0.6.17")
+        self.logged_out: set[str] = set()
 
-    def device(*, building_here: bool = False) -> DeviceStatus:
+    def refuse(self, reason: str) -> None:
+        """Make the device refuse every turn with ``reason``."""
+        self.health = AgentEnvironmentHealth(False, reason)
+
+    def log_out(self, tool: str) -> None:
+        self.logged_out.add(tool)
+
+    def __call__(self, *, building_here: bool = False) -> DeviceStatus:
         del building_here
         return DeviceStatus(
-            runtime=health[0],
+            runtime=self.health,
             declaration=None,
             declaration_problem="",
             snapshot=SnapshotStatus("ready", "guildbotics-test", Path("/snap")),
@@ -50,16 +54,23 @@ def agent_environment(monkeypatch: pytest.MonkeyPatch) -> Callable[[str], None]:
                     name=agent.name,
                     label=agent.label,
                     provisioned=agent.provision.provisioned,
-                    credentials="saved",
+                    credentials=(
+                        "missing" if agent.name in self.logged_out else "saved"
+                    ),
                 )
                 for agent in CLI_AGENTS
             ),
         )
 
+
+@pytest.fixture(autouse=True)
+def agent_environment(monkeypatch: pytest.MonkeyPatch) -> AgentEnvironmentStandIn:
+    """Stand in for this device's agent environment.
+
+    Reading the real one places the bundled runtime under the test's home and
+    asks the keychain for every tool's login.
+    """
+    device = AgentEnvironmentStandIn()
     for module in (runtime_module, verify_module):
         monkeypatch.setattr(module, "device_status", device)
-
-    def refuse(reason: str) -> None:
-        health[0] = AgentEnvironmentHealth(False, reason)
-
-    return refuse
+    return device

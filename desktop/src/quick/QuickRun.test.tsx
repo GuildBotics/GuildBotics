@@ -1063,11 +1063,7 @@ describe("QuickRun", () => {
 
     await fire({ command: "review", text: "hello" });
 
-    expect(
-      await screen.findByText(
-        t("quickRun.requirementsMissing", { requirements: t("commands.requirements.github") }),
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(t("quickRun.requirementsMissing"))).toBeInTheDocument();
     expect(runCommand).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: t("quickRun.run") })).toBeDisabled();
   });
