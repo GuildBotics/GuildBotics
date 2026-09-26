@@ -117,6 +117,11 @@ from guildbotics.commands.discovery import (
     resolve_command_path,
     resolve_command_reference,
 )
+from guildbotics.commands.errors import (
+    CommandError,
+    PersonNotFoundError,
+    PersonSelectionRequiredError,
+)
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
     CommandAccess,
@@ -126,20 +131,12 @@ from guildbotics.commands.metadata import (
     parse_command_input_policy,
 )
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
 )
-from guildbotics.drivers import (
-    CommandError,
-    PersonNotFoundError,
-    PersonSelectionRequiredError,
-)
-from guildbotics.drivers.command_runner import (
-    CommandRunner,
-    prepare_command,
-    run_main_command,
-)
+from guildbotics.drivers.command_runner import prepare_command, run_main_command
 from guildbotics.drivers.execution import (
     ExecutionStatusPublisher,
     TaskRunCoordinator,

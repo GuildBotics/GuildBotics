@@ -248,7 +248,7 @@ async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
     the CommandRunner boundary (the real agent is an external process), so the
     test verifies the wiring and the evidence-driven state update.
     """
-    import guildbotics.drivers.command_runner as command_runner_module
+    import guildbotics.commands.runner as command_runner_module
     from guildbotics.drivers.pending_chat_dispatcher import PendingChatDispatcher
     from guildbotics.integrations.file_chat_state_store import (
         FileConversationStateStore,

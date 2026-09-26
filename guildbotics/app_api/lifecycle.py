@@ -14,12 +14,13 @@ from guildbotics.app_api.models import (
     RuntimeUnitStatus,
     SchedulerStartRequest,
 )
-from guildbotics.drivers import EventListenerRunner, TaskScheduler
+from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import (
     ActiveWork,
     ExecutionCoordinator,
     TaskRunCoordinator,
 )
+from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.observability import new_id
 from guildbotics.runtime import Context
 from guildbotics.runtime.service_lock import ServiceLock

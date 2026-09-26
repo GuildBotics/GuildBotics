@@ -11,7 +11,7 @@ import click
 
 from guildbotics.cli._options import selected_workspace
 from guildbotics.cli.desktop_commands import run_on_desktop
-from guildbotics.drivers import (
+from guildbotics.commands.errors import (
     CommandError,
     PersonExecutionNotAllowedError,
     PersonNotFoundError,

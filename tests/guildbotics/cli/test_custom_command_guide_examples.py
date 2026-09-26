@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.drivers.command_runner import CommandRunner, run_command
+from guildbotics.commands.runner import CommandRunner
+from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.conftest import coverage_suspended

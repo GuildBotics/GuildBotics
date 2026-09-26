@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
 import re
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
@@ -951,20 +953,15 @@ async def test_no_turn_runs_outside_a_command(tmp_path, monkeypatch):
     assert _Booted.booted == []
 
 
-def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
-    """No caller runs an AI CLI turn outside a command.
-
-    A turn refuses to start outside a command's environment, so the places
-    that open one are the population of places a turn can run from. Each must
-    be where a command runs; a caller that opened one of its own would run
-    its turns outside any command.
-    """
-    import ast
-
+def _call_sites(
+    matches: Callable[[ast.Call], bool], *, awaited: bool = False
+) -> set[tuple[str, str]]:
+    """The package module and enclosing function of every call ``matches``;
+    only of the awaited ones when ``awaited``."""
     import guildbotics
 
     package = Path(guildbotics.__file__).parent
-    openers: set[tuple[str, str]] = set()
+    sites: set[tuple[str, str]] = set()
     for path in sorted(package.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         enclosing = {
@@ -973,16 +970,58 @@ def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
             if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
             for node in ast.walk(function)
         }
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and (getattr(node.func, "id", None) or getattr(node.func, "attr", None))
-                == "command_environment"
-            ):
+        calls = (
+            [node.value for node in ast.walk(tree) if isinstance(node, ast.Await)]
+            if awaited
+            else ast.walk(tree)
+        )
+        for node in calls:
+            if isinstance(node, ast.Call) and matches(node):
                 module = path.relative_to(package.parent).as_posix()
-                openers.add((module, enclosing.get(id(node), "<module>")))
+                sites.add((module, enclosing.get(id(node), "<module>")))
+    return sites
 
-    assert openers == {("guildbotics/drivers/command_runner.py", "run")}
+
+def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
+    """No caller runs an AI CLI turn outside a command.
+
+    A turn refuses to start outside a command's environment, so the places
+    that open one are the population of places a turn can run from. Each must
+    be where a command runs; a caller that opened one of its own would run
+    its turns outside any command.
+    """
+    openers = _call_sites(
+        lambda call: (
+            (getattr(call.func, "id", None) or getattr(call.func, "attr", None))
+            == "command_environment"
+        )
+    )
+
+    assert openers == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+
+
+def test_every_host_entry_runs_its_command_in_an_environment() -> None:
+    """The host starts every command inside the environment its turns share.
+
+    The execution machinery opens none, so a host entry that ran a command
+    by itself would have every turn of it refused. The machinery runs the
+    commands it holds with ``await ....run()`` too, so outside it the
+    population of places a command starts is every such call.
+    """
+    starters = {
+        site
+        for site in _call_sites(
+            lambda call: (
+                getattr(call.func, "attr", None) == "run"
+                and not call.args
+                and not call.keywords
+            ),
+            awaited=True,
+        )
+        if not site[0].startswith("guildbotics/commands/")
+    }
+
+    assert starters == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
 
 
 @pytest.mark.asyncio

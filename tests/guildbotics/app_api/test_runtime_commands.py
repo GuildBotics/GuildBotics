@@ -45,7 +45,8 @@ from guildbotics.commands.errors import (
 )
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.drivers.command_runner import CommandRunner, run_main_command
+from guildbotics.commands.runner import CommandRunner
+from guildbotics.drivers.command_runner import run_main_command
 from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
 from guildbotics.intelligences.agent_environment.spec import guest_path
