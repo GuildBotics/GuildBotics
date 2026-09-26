@@ -727,10 +727,17 @@ def test_a_worker_that_outlives_its_stop_blocks_a_second_one(
     timeout, and starting a second worker beside it would put two threads on
     one repository."""
     release = threading.Event()
-    first.repository.fetch = lambda: release.wait(10)  # type: ignore[method-assign]
+    blocked = threading.Event()
+
+    def fetch() -> None:
+        blocked.set()
+        release.wait(10)
+
+    first.repository.fetch = fetch  # type: ignore[method-assign]
     first.write(CONFIG, "language: ja\n")
     first.manager.start()
     try:
+        assert blocked.wait(10)
         assert first.manager.stop(timeout=0.2) is False
         assert first.manager.start() is False
     finally:

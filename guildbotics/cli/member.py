@@ -1891,14 +1891,32 @@ def pr_create(
 @click.option("--url", "pr_url", required=True, help="Pull request URL.")
 @_optional_content_stdin_option
 @click.option("--title", default=None, help="Replace the pull request title.")
+@click.option(
+    "--drop-issue-links",
+    is_flag=True,
+    help=(
+        "Do not carry existing standalone Closes/Fixes/Resolves/Refs #<n> lines "
+        "in paragraphs or list items into the "
+        "replacement body. Requires --content-stdin/--content-file. By default, "
+        "these lines are preserved, even with empty content; new standalone "
+        "links to the same issue take precedence. Code, quotes, HTML blocks, "
+        "prose, colon-separated and cross-repository links are excluded. "
+        "Inline HTML and multiline reference labels are outside this convention."
+    ),
+)
 @_json_format_option
 def pr_update(
     person: str,
     pr_url: str,
     content_stdin: bool,
     title: str | None,
+    drop_issue_links: bool,
     output_format: str,
 ) -> None:
+    if drop_issue_links and not content_stdin:
+        raise click.UsageError(
+            "--drop-issue-links requires --content-stdin/--content-file."
+        )
     if not (content_stdin or title is not None):
         raise click.UsageError(
             "pr update needs --content-stdin/--content-file or --title."
@@ -1908,7 +1926,9 @@ def pr_update(
     _run(
         _github(
             person,
-            lambda service: service.pr_update(pr_url, body=body, title=new_title),
+            lambda service: service.pr_update(
+                pr_url, body=body, title=new_title, drop_issue_links=drop_issue_links
+            ),
             evidence="pr_update",
         ),
         output_format=output_format,

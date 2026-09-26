@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import stat
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
@@ -12,6 +12,7 @@ from urllib.parse import quote, urlparse
 from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
+from markdown_it import MarkdownIt
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_memory import MemberMemoryService
@@ -858,11 +859,21 @@ class MemberGitHubCapabilityService:
         }
 
     async def pr_update(
-        self, url: str, body: str | None = None, title: str | None = None
+        self,
+        url: str,
+        body: str | None = None,
+        title: str | None = None,
+        *,
+        drop_issue_links: bool = False,
     ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        if drop_issue_links and body is None:
+            raise MemberCapabilityError("--drop-issue-links requires a body.")
         payload: dict[str, Any] = {}
         if body is not None:
+            if not drop_issue_links:
+                pr = await self._pull_request(resource)
+                body = _preserve_issue_links(body, pr.get("body") or "")
             payload["body"] = body
         if title is not None:
             payload["title"] = title
@@ -2014,6 +2025,103 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
+_ISSUE_LINK = re.compile(
+    rf"((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})[ \t]+#(\d+))",
+    re.I,
+)
+_ISSUE_SOURCE_LINK = re.compile(
+    rf"(?:[ \t]*(?:[-+*]|\d+[.)])[ \t]+)*[ \t]*{_ISSUE_LINK.pattern}[ \t]*", re.I
+)
+
+
+@dataclass(frozen=True)
+class _IssueLink:
+    start: int
+    end: int
+    trailer: str
+    number: str
+
+
+def _issue_links(body: str) -> Iterator[_IssueLink]:
+    """Select standalone paragraph or list links, excluding quoted examples."""
+    source = body.splitlines(keepends=True)
+    offsets = [0]
+    for line in source:
+        offsets.append(offsets[-1] + len(line))
+    tokens = MarkdownIt("commonmark").parse(body)
+    quoted = 0
+    for index, token in enumerate(tokens):
+        if token.type == "blockquote_open":
+            quoted += 1
+        elif token.type == "blockquote_close":
+            quoted -= 1
+        if (
+            token.type != "inline"
+            or tokens[index - 1].type != "paragraph_open"
+            or token.map is None
+            or quoted
+        ):
+            continue
+        code_rows: set[int] = set()
+        code_contents = {
+            child.content
+            for child in token.children or []
+            if child.type == "code_inline"
+        }
+        for code in re.finditer(
+            r"(?=(?<![\\`])(?:\\\\)*(`+)(?!`)(.*?)(?<!`)\1(?!`))", token.content, re.S
+        ):
+            content = code.group(2).replace("\n", " ")
+            if content.startswith(" ") and content.endswith(" ") and content.strip():
+                content = content[1:-1]
+            if content not in code_contents:
+                continue
+            code_rows.update(
+                range(
+                    token.content.count("\n", 0, code.start()),
+                    token.content.count("\n", 0, code.end(2)) + 1,
+                )
+            )
+        for row, line in enumerate(token.content.splitlines()):
+            candidate = _ISSUE_LINK.fullmatch(line.strip())
+            if candidate is None or row in code_rows:
+                continue
+            source_row = token.map[0] + row
+            match = _ISSUE_SOURCE_LINK.fullmatch(source[source_row].rstrip("\r\n"))
+            if match is not None and match.group(1) == candidate.group(1):
+                offset = offsets[source_row]
+                yield _IssueLink(
+                    offset + match.start(1),
+                    offset + match.end(1),
+                    match.group(1),
+                    match.group(2),
+                )
+
+
+def _append_trailer(body: str, trailer: str) -> str:
+    result = f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+    if not any(
+        link.trailer == trailer and link.start == len(result) - len(trailer)
+        for link in _issue_links(result)
+    ):
+        raise MemberCapabilityError(
+            "Cannot append an issue link outside Markdown code or HTML. "
+            "Close the open code or HTML block in the body first."
+        )
+    return result
+
+
+def _preserve_issue_links(body: str, previous_body: str) -> str:
+    """Append missing issue links while keeping the replacement body's wording."""
+    mentioned = {match.number for match in _issue_links(body)}
+    inherited: set[str] = set()
+    for match in _issue_links(previous_body):
+        number = match.number
+        trailer = match.trailer
+        if number not in mentioned and trailer.casefold() not in inherited:
+            body = _append_trailer(body, trailer)
+            inherited.add(trailer.casefold())
+    return body
 
 
 def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
@@ -2023,16 +2131,18 @@ def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not match:
         return body
     issue_number = match.group(1)
-    closing_ref = rf"\b{_ISSUE_CLOSING_KEYWORD}\s+#{issue_number}\b"
-    refs_ref = rf"\b{_ISSUE_REFS_KEYWORD}\s+#{issue_number}\b"
-    if re.search(closing_ref, body, re.I):
+    links = [link for link in _issue_links(body) if link.number == issue_number]
+    refs = [link for link in links if re.match(_ISSUE_REFS_KEYWORD, link.trailer, re.I)]
+    if len(links) > len(refs):
         return body
-    if re.search(refs_ref, body, re.I):
+    if refs:
         if not closes:
             return body
-        return re.sub(refs_ref, f"Closes #{issue_number}", body, flags=re.I)
+        for link in reversed(refs):
+            body = f"{body[: link.start]}Closes #{issue_number}{body[link.end :]}"
+        return body
     trailer = f"Closes #{issue_number}" if closes else f"Refs #{issue_number}"
-    return f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+    return _append_trailer(body, trailer)
 
 
 def _remote_web_url(remote_url: str) -> str:
