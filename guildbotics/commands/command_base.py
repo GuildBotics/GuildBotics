@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import shlex
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -116,7 +115,7 @@ class CommandBase(ABC):
         elif text in self._context.shared_state:
             return self._context.shared_state[text]
         else:
-            return self._spec.params.get(text, os.getenv(text, text))
+            return self._spec.params.get(text, text)
 
     def parse_inline_args(self, value: str) -> tuple[list[str], dict[str, Any]]:
         """Parse inline arguments from a string and return as args list and params dict."""

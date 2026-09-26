@@ -374,6 +374,36 @@ async def test_shell_receives_params_as_env(config_dir: Path):
 
 
 @pytest.mark.asyncio
+async def test_unresolved_placeholder_never_reads_host_environment(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A ``$NAME`` absent from shared_state and params stays the text ``NAME``."""
+    monkeypatch.setenv("HOST_ONLY_VALUE", "from-host")
+    commands = config_dir / "commands"
+    (commands / "show.md").write_text(
+        "---\nbrain: none\n---\nparam=${value}\n", encoding="utf-8"
+    )
+    (commands / "echo_arg.sh").write_text(
+        '#!/usr/bin/env bash\necho "arg=$1"\n', encoding="utf-8"
+    )
+    (commands / "leak.yml").write_text(
+        "commands:\n"
+        "  - name: show\n"
+        "    params:\n"
+        "      value: $HOST_ONLY_VALUE\n"
+        "  - name: echo_arg\n"
+        "    args:\n"
+        "      - ${HOST_ONLY_VALUE}\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, "leak")
+
+    assert ctx.shared_state["show"] == "param=HOST_ONLY_VALUE"
+    assert ctx.shared_state["echo_arg"].strip() == "arg=HOST_ONLY_VALUE"
+
+
+@pytest.mark.asyncio
 async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "fail.sh").write_text(
