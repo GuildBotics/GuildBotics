@@ -6,6 +6,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from guildbotics.runtime import service_control
 from guildbotics.runtime.service_control import (
     ServiceControlWatcher,
@@ -14,6 +16,7 @@ from guildbotics.runtime.service_control import (
     read_stop_request,
     write_stop_request,
 )
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 
 
 def test_write_stop_request_is_atomic(monkeypatch, tmp_path) -> None:
@@ -43,22 +46,15 @@ def test_read_holds_control_lock_until_file_is_closed(monkeypatch, tmp_path) -> 
     write_stop_request("service-1", "graceful", path)
     read_started = threading.Event()
     release_read = threading.Event()
-    replace_started = threading.Event()
     reader_result: list[StopRequest | None] = []
-    writer_result: list[StopRequest] = []
     failures: list[BaseException] = []
     real_read_text = Path.read_text
-    real_replace = os.replace
 
     def blocking_read_text(target: Path, *args, **kwargs) -> str:
         if threading.current_thread().name == "service-control-reader":
             read_started.set()
-            assert release_read.wait(timeout=1)
+            release_read.wait()
         return real_read_text(target, *args, **kwargs)
-
-    def observed_replace(source, target) -> None:
-        replace_started.set()
-        real_replace(source, target)
 
     def read() -> None:
         try:
@@ -66,32 +62,27 @@ def test_read_holds_control_lock_until_file_is_closed(monkeypatch, tmp_path) -> 
         except BaseException as exc:
             failures.append(exc)
 
-    def write() -> None:
-        try:
-            writer_result.append(write_stop_request("service-1", "cancel", path))
-        except BaseException as exc:
-            failures.append(exc)
-
     monkeypatch.setattr(Path, "read_text", blocking_read_text)
-    monkeypatch.setattr(service_control.os, "replace", observed_replace)
     reader = threading.Thread(target=read, name="service-control-reader")
-    writer = threading.Thread(target=write, name="service-control-writer")
 
     reader.start()
-    assert read_started.wait(timeout=1)
-    writer.start()
     try:
-        assert not replace_started.wait(timeout=0.1)
+        assert read_started.wait(timeout=10)
+        with (
+            pytest.raises(LockTimeoutError),
+            held_lock(path.with_name(f"{path.name}.lock"), timeout=0),
+        ):
+            pass
     finally:
         release_read.set()
-        reader.join(timeout=1)
-        writer.join(timeout=1)
+        reader.join(timeout=10)
 
     assert not reader.is_alive()
-    assert not writer.is_alive()
     assert failures == []
     assert reader_result == [StopRequest("service-1", "graceful")]
-    assert writer_result == [StopRequest("service-1", "cancel")]
+    assert write_stop_request("service-1", "cancel", path) == StopRequest(
+        "service-1", "cancel"
+    )
 
 
 def test_stop_request_stage_never_downgrades(tmp_path) -> None:
@@ -115,18 +106,17 @@ def test_new_service_instance_replaces_stale_request(tmp_path) -> None:
     assert not path.exists()
 
 
-def test_clear_stop_request_waits_for_writer(monkeypatch, tmp_path) -> None:
+def test_write_holds_control_lock_until_file_is_replaced(monkeypatch, tmp_path) -> None:
     path = tmp_path / "stop-request.json"
     write_stop_request("service-1", "graceful", path)
     replace_started = threading.Event()
-    clear_finished = threading.Event()
     release_writer = threading.Event()
     failures: list[BaseException] = []
     real_replace = os.replace
 
     def blocking_replace(source, target) -> None:
         replace_started.set()
-        assert release_writer.wait(timeout=1)
+        release_writer.wait()
         real_replace(source, target)
 
     def write() -> None:
@@ -135,32 +125,29 @@ def test_clear_stop_request_waits_for_writer(monkeypatch, tmp_path) -> None:
         except BaseException as exc:
             failures.append(exc)
 
-    def clear() -> None:
-        try:
-            clear_stop_request(path)
-        except BaseException as exc:
-            failures.append(exc)
-        finally:
-            clear_finished.set()
-
     monkeypatch.setattr(service_control.os, "replace", blocking_replace)
     writer = threading.Thread(target=write)
-    clearer = threading.Thread(target=clear)
 
     writer.start()
-    assert replace_started.wait(timeout=1)
-    clearer.start()
     try:
-        assert not clear_finished.wait(timeout=0.1)
+        assert replace_started.wait(timeout=10)
+        with (
+            pytest.raises(LockTimeoutError),
+            held_lock(path.with_name(f"{path.name}.lock"), timeout=0),
+        ):
+            pass
+        with monkeypatch.context() as patch:
+            patch.setattr(service_control, "_LOCK_TIMEOUT_SECONDS", 0)
+            clear_stop_request(path)
+        assert path.exists()
     finally:
         release_writer.set()
-        writer.join(timeout=1)
-        clearer.join(timeout=1)
+        writer.join(timeout=10)
 
     assert not writer.is_alive()
-    assert not clearer.is_alive()
     assert failures == []
-    assert clear_finished.is_set()
+    assert read_stop_request(path) == StopRequest("service-1", "cancel")
+    clear_stop_request(path)
     assert not path.exists()
 
 
@@ -212,7 +199,7 @@ def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
         calls: list[bool] = []
         watcher = ServiceControlWatcher(
             f"service-{attempt}",
-            lambda *, cancel: calls.append(cancel),
+            lambda *, cancel, calls=calls: calls.append(cancel),
             path=path,
             poll_seconds=0.0005,
         )
