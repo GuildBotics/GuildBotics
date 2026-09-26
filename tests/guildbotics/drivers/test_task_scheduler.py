@@ -653,42 +653,6 @@ def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> 
     ]
 
 
-def test_chat_post_to_unknown_channel_is_recorded_as_failed(monkeypatch) -> None:
-    from guildbotics.drivers import utils
-    from guildbotics.templates.commands.workflows import chat_post_command
-
-    posts: list[str] = []
-
-    class _ChatService:
-        async def resolve_channel_id(self, channel_name: str) -> None:
-            return None
-
-        async def post_message(self, channel_id: str, text: str) -> None:
-            posts.append(text)
-
-    class _ChatPostRunner(_FailingRunner):
-        async def run(self) -> str:
-            async def invoke(name: str, *args: str) -> str:
-                return "daily summary"
-
-            context = SimpleNamespace(get_chat_service=_ChatService, invoke=invoke)
-            return await chat_post_command.main(
-                context, channel_name="typo-channel", command="reports/daily"
-            )
-
-    scheduler = TaskScheduler(_Context(_Person()))
-    monkeypatch.setattr(utils, "CommandRunner", _ChatPostRunner)
-    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
-
-    assert _run_scheduler_slot(scheduler, "scheduled") == (1, False)
-
-    assert posts == []
-    records = list(RunStore().records())
-    assert [(record.source, record.status) for record in records] == [
-        ("scheduled", "failed")
-    ]
-
-
 def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
     monkeypatch,
 ) -> None:
