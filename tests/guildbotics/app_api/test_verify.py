@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -215,24 +216,15 @@ def test_verify_llm_provider_unknown_is_warning(
     assert check.context == {"provider": "unknown"}
 
 
-def test_verify_cli_agent_executable_found(
+def test_verify_cli_agent_can_start_in_the_isolated_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The tool runs inside the isolated environment, so a host PATH without
+    it is no problem."""
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
-    monkeypatch.setenv("PATH", "/custom/bin")
-
-    resolved: dict[str, object] = {}
-
-    def _resolve(executable: str, search_path: str | None) -> str:
-        resolved["executable"] = executable
-        resolved["search_path"] = search_path
-        return "/custom/bin/codex"
-
-    monkeypatch.setattr(verify_module, "resolve_cli_agent_path", _resolve)
-
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="alice", name="Alice", is_active=True)],
@@ -240,23 +232,20 @@ def test_verify_cli_agent_executable_found(
 
     response = VerifyService().verify(config=config, team=team)
 
-    check = _checks_by_code(response)["cli_agent_executable"]
+    check = _checks_by_code(response)["cli_agent_environment"]
     assert check.status == "ok"
     assert check.target == "codex"
-    assert check.context["path"] == "/custom/bin/codex"
-    assert resolved == {"executable": "codex", "search_path": "/custom/bin"}
+    assert check not in response.errors
 
 
-def test_verify_cli_agent_executable_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_verify_cli_agent_reports_the_environments_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
 ) -> None:
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
     _write_cli_agent(tmp_path, "codex")
-
-    monkeypatch.setattr(verify_module, "resolve_cli_agent_path", lambda *_a, **_k: "")
-
+    agent_environment("no hypervisor")
     team = Team(
         project=Project(name="demo"),
         members=[Person(person_id="alice", name="Alice", is_active=True)],
@@ -264,10 +253,44 @@ def test_verify_cli_agent_executable_missing(
 
     response = VerifyService().verify(config=config, team=team)
 
-    check = _checks_by_code(response)["cli_agent_executable"]
+    check = _checks_by_code(response)["cli_agent_environment"]
     assert check.status == "error"
     assert check.target == "codex"
+    assert check.message == "no hypervisor"
     assert check in response.errors
+
+
+def test_verify_cli_agent_reports_the_tools_own_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device that can start turns still refuses a tool without its login."""
+    _isolated_config_env(tmp_path, monkeypatch)
+    config = _config_status(tmp_path)
+    _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
+    _write_cli_agent(tmp_path, "codex")
+    device = verify_module.device_status()
+    codex = device.tool("codex")
+    monkeypatch.setattr(
+        verify_module,
+        "device_status",
+        lambda: replace(
+            device,
+            tools=tuple(
+                replace(tool, credentials="missing") if tool is codex else tool
+                for tool in device.tools
+            ),
+        ),
+    )
+    team = Team(
+        project=Project(name="demo"),
+        members=[Person(person_id="alice", name="Alice", is_active=True)],
+    )
+
+    response = VerifyService().verify(config=config, team=team)
+
+    check = _checks_by_code(response)["cli_agent_environment"]
+    assert check.status == "error"
+    assert check.message == replace(codex, credentials="missing").refusal != ""
 
 
 def test_verify_cli_agent_mapping_missing_warns(
@@ -276,8 +299,7 @@ def test_verify_cli_agent_mapping_missing_warns(
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
-    # Mapping points to an agent that exists in neither config nor template, so
-    # no executable can be inferred.
+    # The mapping names no catalog tool, so there is no tool to ask about.
     cli_mapping = tmp_path / ".guildbotics/config/intelligences/cli_agent_mapping.yml"
     cli_mapping.parent.mkdir(parents=True, exist_ok=True)
     cli_mapping.write_text("default: ghost-cli.yml\n")
@@ -290,7 +312,7 @@ def test_verify_cli_agent_mapping_missing_warns(
     response = VerifyService().verify(config=config, team=team)
 
     checks = _checks_by_code(response)
-    assert "cli_agent_executable" not in checks
+    assert "cli_agent_environment" not in checks
     assert checks["cli_agent_mapping"].status == "warning"
 
 
@@ -523,8 +545,8 @@ def test_verify_checks_env_keys_and_github_credentials(
     response = VerifyService().verify(config=config, team=team)
 
     checks = {check.code: check for check in response.checks}
-    assert response.ok is False
+    assert response.ok is True
     assert checks["llm_api_key"].status == "ok"
     assert checks["github_credential"].status == "ok"
-    assert checks["cli_agent_executable"].status == "error"
-    assert response.errors == [checks["cli_agent_executable"]]
+    assert checks["cli_agent_environment"].status == "ok"
+    assert response.errors == []

@@ -132,6 +132,26 @@ def test_a_ready_device_refuses_nothing_but_a_missing_login(device) -> None:
         status.tool("nope")
 
 
+def test_a_turn_is_refused_by_the_device_first_then_by_its_tool(device) -> None:
+    """What verify and the command requirements ask: can a turn start here."""
+    status = device_status()
+
+    assert status.turn_refusal("codex") == ""
+    assert status.turn_refusal("claude") == status.tool("claude").refusal != ""
+    assert status.any_turn_can_start
+
+    device["credentials_saved"] = set()
+    assert not device_status().any_turn_can_start
+
+    device["credentials_saved"] = {"codex"}
+    device["health"] = AgentEnvironmentHealth(False, "no hypervisor")
+    status = device_status()
+
+    assert status.turn_refusal("codex") == status.turn_refusal("claude")
+    assert status.turn_refusal("codex") == "no hypervisor"
+    assert not status.any_turn_can_start
+
+
 def test_a_tool_the_snapshot_does_not_carry_is_refused_as_such(
     device, monkeypatch: pytest.MonkeyPatch
 ) -> None:

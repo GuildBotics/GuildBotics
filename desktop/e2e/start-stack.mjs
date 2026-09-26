@@ -210,9 +210,8 @@ let backendEnv = withEnvironment(stackEnv, {
   GUILDBOTICS_APP_API_TOKEN: token,
   GUILDBOTICS_APP_API_ALLOWED_ORIGINS: frontendOrigin,
 });
-// `get_cli_agent_search_path` appends the usual install locations after PATH,
-// so the stubs only win by being first. `withEnvironment` also replaces a
-// Windows parent environment's `Path` key instead of leaving two spellings.
+// `withEnvironment` replaces a Windows parent environment's `Path` key instead
+// of leaving two spellings.
 // The backend never derives a workspace from its cwd, so the stack's temp
 // workspace must be selected explicitly; remove any inherited config override.
 backendEnv = withoutEnvironment(backendEnv, ["GUILDBOTICS_CONFIG_DIR"]);

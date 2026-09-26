@@ -33,10 +33,6 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
-from guildbotics.intelligences.cli_agents import (
-    cli_agent_executable,
-    resolve_cli_agent_path,
-)
 from guildbotics.intelligences.functions import talk_as
 from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.runtime import Context
@@ -396,11 +392,16 @@ class ScenarioDiagnosticsService:
     async def _check_cli_agent_brain(
         self, context: Context, member: Person
     ) -> list[DiagnosticCheck]:
+        """Run one read-only turn of the member's AI CLI tool.
+
+        The tool runs inside the isolated agent environment, never on the
+        host, so nothing is looked up on the host PATH: a device that cannot
+        start the turn refuses it in the environment status's own words, and
+        that refusal is what this check reports.
+        """
         c = context.clone_for(member)
         temporary_directory: tempfile.TemporaryDirectory[str] | None = None
-        checks: list[DiagnosticCheck] = []
         target = ""
-        executable = ""
         try:
             c.pipe = (
                 "This is a read-only diagnostics check. "
@@ -420,49 +421,13 @@ class ScenarioDiagnosticsService:
                     )
                 ]
             target = brain.executable_info.adapter
-            executable = cli_agent_executable(target)
-            if not executable:
-                return [
-                    self._check(
-                        "cli_agent",
-                        "cli_agent_mapping",
-                        "error",
-                        "Configured AI CLI tool executable could not be inferred.",
-                        person_id=member.person_id,
-                        target=target,
-                    )
-                ]
-            path = resolve_cli_agent_path(executable)
-            if not path:
-                return [
-                    self._check(
-                        "cli_agent",
-                        "cli_agent_executable",
-                        "error",
-                        f"AI CLI tool executable '{executable}' was not found on PATH.",
-                        person_id=member.person_id,
-                        target=target,
-                        context={"executable": executable},
-                    )
-                ]
-            checks.append(
-                self._check(
-                    "cli_agent",
-                    "cli_agent_executable",
-                    "ok",
-                    f"AI CLI tool executable '{executable}' was found.",
-                    person_id=member.person_id,
-                    target=target,
-                    context={"executable": executable, "path": path},
-                )
-            )
             temporary_directory = tempfile.TemporaryDirectory(
                 prefix="guildbotics-diagnostics-cli-"
             )
             result = await _run_cli_agent_check(c, member, temporary_directory.name)
 
             if result.returncode != 0:
-                checks.append(
+                return [
                     self._check(
                         "cli_agent",
                         "cli_agent_brain",
@@ -476,24 +441,22 @@ class ScenarioDiagnosticsService:
                         person_id=member.person_id,
                         target=target,
                         context={
-                            "executable": executable,
                             "returncode": result.returncode,
                             "stderr": self._truncate(result.stderr),
                             "stdout": self._truncate(result.stdout),
                         },
                     )
-                )
-                return checks
+                ]
 
             if not result.stdout.strip():
                 c.logger.warning(
                     "AI CLI tool diagnostics produced empty stdout for "
-                    "person=%s executable=%s stderr=%s",
+                    "person=%s tool=%s stderr=%s",
                     member.person_id,
-                    executable,
+                    target,
                     self._truncate(result.stderr),
                 )
-                checks.append(
+                return [
                     self._check(
                         "cli_agent",
                         "cli_agent_brain",
@@ -507,14 +470,12 @@ class ScenarioDiagnosticsService:
                         person_id=member.person_id,
                         target=target,
                         context={
-                            "executable": executable,
                             "empty_stdout": True,
                             "stderr": self._truncate(result.stderr),
                         },
                     )
-                )
-                return checks
-            checks.append(
+                ]
+            return [
                 self._check(
                     "cli_agent",
                     "cli_agent_brain",
@@ -522,18 +483,16 @@ class ScenarioDiagnosticsService:
                     "AI CLI tool accepted a minimal read-only request.",
                     person_id=member.person_id,
                     target=target,
-                    context={"executable": executable},
                 )
-            )
-            return checks
+            ]
         except Exception as exc:
             c.logger.warning(
-                "AI CLI tool diagnostics failed for person=%s executable=%s: %s",
+                "AI CLI tool diagnostics failed for person=%s tool=%s: %s",
                 member.person_id,
-                executable,
+                target,
                 exc,
             )
-            checks.append(
+            return [
                 self._check(
                     "cli_agent",
                     "cli_agent_brain",
@@ -541,13 +500,9 @@ class ScenarioDiagnosticsService:
                     self._safe_error("AI CLI tool brain check failed", exc),
                     person_id=member.person_id,
                     target=target,
-                    context={
-                        "error_type": type(exc).__name__,
-                        "executable": executable,
-                    },
+                    context={"error_type": type(exc).__name__},
                 )
-            )
-            return checks
+            ]
         finally:
             try:
                 await c.aclose()

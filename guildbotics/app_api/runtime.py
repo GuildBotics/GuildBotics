@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -161,6 +161,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
 )
 from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
 from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
@@ -168,7 +169,6 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 )
 from guildbotics.intelligences.agent_runtime.environment import inspected_directories
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
-from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
@@ -708,7 +708,7 @@ class AppRuntime:
 
         metadata = load_command_metadata(path, language_code)
         requirements = _command_requirements(
-            path, metadata, self.is_github_integration_enabled(), context
+            path, metadata, self._requirement_facts(), context
         )
         if any(not requirement.satisfied for requirement in requirements):
             return "command_requirement_missing", {}, requirements
@@ -732,7 +732,7 @@ class AppRuntime:
         cannot run, instead of silently dropping it.
         """
         context = self._command_options_context(person)
-        github_enabled = self.is_github_integration_enabled()
+        facts = self._requirement_facts()
         language_code = context.team.project.get_language_code()
 
         options: dict[str, CommandOption] = {}
@@ -747,7 +747,7 @@ class AppRuntime:
             option = _command_option(
                 command=command,
                 path=path,
-                github_enabled=github_enabled,
+                facts=facts,
                 context=context,
                 metadata=metadata,
             )
@@ -792,8 +792,11 @@ class AppRuntime:
             )
         return context.clone_for(member)
 
+    def _requirement_facts(self) -> _RequirementFacts:
+        return _RequirementFacts(github_enabled=self.is_github_integration_enabled())
+
     def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
-        github_enabled = self.is_github_integration_enabled()
+        facts = self._requirement_facts()
         options: dict[str, CommandOption] = {}
         for command, path in iter_effective_commands(
             _command_roots(context.person.person_id),
@@ -805,7 +808,7 @@ class AppRuntime:
             options[command] = _command_option(
                 command=command,
                 path=path,
-                github_enabled=github_enabled,
+                facts=facts,
                 context=context,
             )
         return options
@@ -1954,13 +1957,13 @@ def _command_option(
     *,
     command: str,
     path: Path,
-    github_enabled: bool,
+    facts: _RequirementFacts,
     context: Context,
     metadata: dict[str, Any] | None = None,
 ) -> CommandOption:
     if metadata is None:
         metadata = load_command_metadata(path, context.team.project.get_language_code())
-    requirements = _command_requirements(path, metadata, github_enabled, context)
+    requirements = _command_requirements(path, metadata, facts, context)
     description = str(metadata.get("description", ""))
     try:
         arguments = to_command_arguments(parse_command_arguments(path, metadata))
@@ -2018,14 +2021,14 @@ def _resolved_display(resolved: Path) -> str:
 def _command_requirements(
     path: Path,
     metadata: dict[str, Any],
-    github_enabled: bool,
+    facts: _RequirementFacts,
     context: Context,
 ) -> list[CommandRequirement]:
     kinds = _command_requirement_kinds(path, metadata, context, set())
     return [
         CommandRequirement(
             kind=cast(Any, kind),
-            satisfied=_requirement_satisfied(kind, github_enabled),
+            satisfied=facts.satisfied(kind),
             message=_requirement_message(kind),
         )
         for kind in sorted(kinds)
@@ -2230,23 +2233,38 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[str]:
     return kinds
 
 
-def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
-    from guildbotics.utils.fileio import get_config_path
+@dataclass
+class _RequirementFacts:
+    """What this device has for the requirement kinds, read once per listing.
 
-    if kind == "github":
-        return github_enabled
-    if kind == "slack":
-        return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
-    if kind == "llm":
-        from guildbotics.intelligences.llm_providers import provider_env_keys
+    An AI CLI tool never runs on the host, so ``cli_agent`` is satisfied when
+    the isolated agent environment can start a turn, as its status says; that
+    reading is taken only when a command needs it.
+    """
 
-        return any(
-            os.getenv(env_var)
-            for env_var in provider_env_keys(get_config_path("")).values()
-        )
-    if kind == "cli_agent":
-        return any(resolve_cli_agent_path(agent.executable) for agent in CLI_AGENTS)
-    return True
+    github_enabled: bool
+
+    @cached_property
+    def cli_agent_ready(self) -> bool:
+        return device_status().any_turn_can_start
+
+    def satisfied(self, kind: str) -> bool:
+        from guildbotics.utils.fileio import get_config_path
+
+        if kind == "github":
+            return self.github_enabled
+        if kind == "slack":
+            return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
+        if kind == "llm":
+            from guildbotics.intelligences.llm_providers import provider_env_keys
+
+            return any(
+                os.getenv(env_var)
+                for env_var in provider_env_keys(get_config_path("")).values()
+            )
+        if kind == "cli_agent":
+            return self.cli_agent_ready
+        return True
 
 
 def _requirement_message(kind: str) -> str:
@@ -2254,7 +2272,7 @@ def _requirement_message(kind: str) -> str:
         "github": "GitHub integration is required.",
         "slack": "Slack bot and app tokens are required.",
         "llm": "An LLM API key is required.",
-        "cli_agent": "A configured AI CLI tool executable is required.",
+        "cli_agent": "The isolated agent environment must be able to start an AI CLI tool.",
     }.get(kind, "")
 
 

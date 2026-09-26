@@ -519,6 +519,45 @@ def test_command_options_detect_llm_and_cli_requirements(
     assert options["static"].requirements == []
 
 
+def test_cli_requirement_follows_the_agent_environment_not_the_host_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
+) -> None:
+    """The tool runs inside the isolated environment: a host PATH without it
+    satisfies the requirement, and a device that refuses turns does not. The
+    device is read once per listing, however many commands need it."""
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", "")
+    for name in ("first", "second"):
+        _write(
+            config_dir / f"commands/{name}.md",
+            "\n".join(["---", "brain: agent", "---", "Edit ${file}."]),
+        )
+    device = runtime_module.device_status
+    reads: list[None] = []
+
+    def counted(**kwargs: Any) -> Any:
+        reads.append(None)
+        return device(**kwargs)
+
+    monkeypatch.setattr(runtime_module, "device_status", counted)
+    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+
+    def satisfied() -> list[bool]:
+        options = {item.command: item for item in runtime.get_command_options().options}
+        return [
+            requirement.satisfied
+            for name in ("first", "second")
+            for requirement in options[name].requirements
+        ]
+
+    assert satisfied() == [True, True]
+    assert len(reads) == 1
+
+    agent_environment("no hypervisor")
+
+    assert satisfied() == [False, False]
+
+
 def test_command_options_ignore_invalid_metadata_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
