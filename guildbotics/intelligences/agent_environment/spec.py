@@ -47,6 +47,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     ResolvedAccess,
 )
+from guildbotics.utils.os_language import os_ui_language
 
 #: How the guest names the host: the address at which a host port the policy
 #: opens (the member broker's) is reached from inside. The broker accepts it
@@ -165,17 +166,23 @@ def host_environment() -> dict[str, str]:
     """What the guest is told of the host it stands in for, as variables.
 
     The microVM is another machine, but what runs in it works for the person
-    at this one: a time it writes or a date it decides by must be theirs.
-    Every environment starts with these, whatever runs in it, so they are
-    facts of the host rather than settings of a provider.
+    at this one: a time it writes, a date it decides by, and the language it
+    speaks must be theirs. Every environment starts with these, whatever runs
+    in it, so they are facts of the host rather than settings of a provider.
+    Each is read afresh, since the Desktop outlives a change of either, and a
+    fact the host cannot name is left out rather than guessed.
 
     Returns:
         ``TZ``: the host's time zone by its IANA name, which the guest's
-        zoneinfo reads (Windows' own names are mapped to it). It is read
-        afresh each time, since the Desktop outlives a change of zone. A host
-        whose zone has no such name leaves the guest on UTC rather than on a
-        guess.
+        zoneinfo reads (Windows' own names are mapped to it); without it the
+        guest runs on UTC. ``LANGUAGE``: the host operating system's UI
+        language as gettext names it (``ja_JP``), whatever the host keeps it
+        in; gettext needs no locale installed in the guest to read it.
     """
+    return {**_time_zone(), **_ui_language()}
+
+
+def _time_zone() -> dict[str, str]:
     try:
         reload_localzone()
         zone = get_localzone_name()
@@ -185,6 +192,13 @@ def host_environment() -> dict[str, str]:
         _LOGGER.warning("The agent environment runs on UTC: %s", exc)
         return {}
     return {"TZ": zone} if zone else {}
+
+
+def _ui_language() -> dict[str, str]:
+    language = os_ui_language()
+    if language is None:
+        return {}
+    return {"LANGUAGE": "_".join(filter(None, (language.language, language.territory)))}
 
 
 def guest_home(home: Path | None = None) -> str:
