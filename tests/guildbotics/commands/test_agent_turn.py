@@ -6,9 +6,10 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.agent_turn import CompletionRetryExhausted, run_agent_turn
 from guildbotics.commands.errors import CommandError
-from guildbotics.drivers import agent_turn
-from guildbotics.drivers.agent_turn import CompletionRetryExhausted, run_agent_turn
+from guildbotics.drivers import command_runner
+from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -16,6 +17,8 @@ from guildbotics.intelligences.brains.cli_agent import (
 
 
 def _store(tmp_path) -> RunStore:
+    # The host ledger locates the record from the workspace, which the suite
+    # points at ``tmp_path``.
     return RunStore(tmp_path / ".guildbotics" / "state" / "task-runs")
 
 
@@ -42,7 +45,9 @@ def _ticket_completion(store: RunStore, run_id: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_host_retries_with_continuation_and_returns_completion(tmp_path):
+async def test_turn_retries_with_continuation_and_returns_the_completed_response(
+    tmp_path,
+):
     contexts: list[dict[str, Any]] = []
     store = _store(tmp_path)
 
@@ -54,9 +59,9 @@ async def test_host_retries_with_continuation_and_returns_completion(tmp_path):
 
     result = await run_agent_turn(
         invoke=invoke,
+        ledger=HostRunLedger(),
         execution_context={
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "ticket",
             "work_identity": "https://example.test/1",
             "resume_policy": "fresh",
@@ -65,16 +70,14 @@ async def test_host_retries_with_continuation_and_returns_completion(tmp_path):
         },
     )
 
-    assert result.response == "response-2"
-    assert result.completion.status == "done"
-    assert [item["evidence_type"] for item in result.evidence] == ["issue_comment"]
+    assert result == "response-2"
     assert [context["attempt"] for context in contexts] == [1, 2]
     assert [context["resume_policy"] for context in contexts] == ["fresh", "auto"]
     assert "run-1" in contexts[1]["continuation_input"]
 
 
 @pytest.mark.asyncio
-async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_path):
+async def test_turn_accepts_a_chat_completion_on_the_same_boundary(tmp_path):
     store = _store(tmp_path)
     _chat_run(store, "run-chat")
     contexts: list[dict[str, Any]] = []
@@ -94,9 +97,9 @@ async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_
 
     result = await run_agent_turn(
         invoke=invoke,
+        ledger=HostRunLedger(),
         execution_context={
             "run_id": "run-chat",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "chat",
             "work_identity": "slack:C1:T1",
             "event_id": "E1",
@@ -104,17 +107,14 @@ async def test_host_returns_chat_evidence_from_the_same_completion_boundary(tmp_
         },
     )
 
-    assert result.completion.subject_type == "chat"
-    assert [item["evidence_type"] for item in result.evidence] == [
-        "chat_batch",
-        "chat_reply",
-    ]
+    assert result == "response"
+    assert len(contexts) == 1
     assert "run-chat" in contexts[0]["continuation_input"]
     assert "E1" in contexts[0]["continuation_input"]
 
 
 @pytest.mark.asyncio
-async def test_host_exhausts_the_configured_attempt_budget(tmp_path):
+async def test_turn_exhausts_the_configured_attempt_budget(tmp_path):
     attempts: list[int] = []
 
     async def invoke(context: dict[str, Any], _parameters: dict[str, str]) -> str:
@@ -124,9 +124,9 @@ async def test_host_exhausts_the_configured_attempt_budget(tmp_path):
     with pytest.raises(CompletionRetryExhausted) as excinfo:
         await run_agent_turn(
             invoke=invoke,
+            ledger=HostRunLedger(),
             execution_context={
                 "run_id": "run-1",
-                "workspace_data_root": str(tmp_path),
                 "work_kind": "ticket",
                 "max_completion_attempts": 2,
             },
@@ -138,7 +138,7 @@ async def test_host_exhausts_the_configured_attempt_budget(tmp_path):
 
 @pytest.mark.parametrize("failure_stage", ["invoke", "completion"])
 @pytest.mark.asyncio
-async def test_host_reraises_rate_limits_without_retrying(
+async def test_turn_reraises_rate_limits_without_retrying(
     tmp_path, monkeypatch, failure_stage
 ):
     calls = 0
@@ -164,14 +164,14 @@ async def test_host_reraises_rate_limits_without_retrying(
         return "response"
 
     if failure_stage == "completion":
-        monkeypatch.setattr(agent_turn.RunStore, "status", raise_wrapped_rate_limit)
+        monkeypatch.setattr(RunStore, "status", raise_wrapped_rate_limit)
 
     with pytest.raises(CliAgentExecutionError) as excinfo:
         await run_agent_turn(
             invoke=invoke,
+            ledger=HostRunLedger(),
             execution_context={
                 "run_id": "run-1",
-                "workspace_data_root": str(tmp_path),
                 "work_kind": "ticket",
                 "max_completion_attempts": 3,
             },
@@ -182,19 +182,19 @@ async def test_host_reraises_rate_limits_without_retrying(
 
 
 @pytest.mark.asyncio
-async def test_host_records_completion_missing_then_completed_events(
+async def test_turn_records_completion_missing_then_completed_events(
     tmp_path, monkeypatch
 ):
     completion_call = 2
     max_attempts = 3
     recorded: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
-        agent_turn,
+        command_runner,
         "record_workflow_completed",
         lambda **kwargs: recorded.append(("completed", kwargs)),
     )
     monkeypatch.setattr(
-        agent_turn,
+        command_runner,
         "record_workflow_completion_missing",
         lambda **kwargs: recorded.append(("missing", kwargs)),
     )
@@ -210,9 +210,9 @@ async def test_host_records_completion_missing_then_completed_events(
 
     await run_agent_turn(
         invoke=invoke,
+        ledger=HostRunLedger(),
         execution_context={
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "ticket",
             "attempt": 4,
             "max_completion_attempts": max_attempts,
@@ -229,12 +229,12 @@ async def test_host_records_completion_missing_then_completed_events(
 
 
 @pytest.mark.asyncio
-async def test_host_does_not_record_completion_missing_for_invoke_failures(
+async def test_turn_does_not_record_completion_missing_for_invoke_failures(
     tmp_path, monkeypatch
 ):
     recorded: list[str] = []
     monkeypatch.setattr(
-        agent_turn,
+        command_runner,
         "record_workflow_completion_missing",
         lambda **kwargs: recorded.append("missing"),
     )
@@ -245,9 +245,9 @@ async def test_host_does_not_record_completion_missing_for_invoke_failures(
     with pytest.raises(CompletionRetryExhausted):
         await run_agent_turn(
             invoke=invoke,
+            ledger=HostRunLedger(),
             execution_context={
                 "run_id": "run-1",
-                "workspace_data_root": str(tmp_path),
                 "work_kind": "ticket",
                 "max_completion_attempts": 2,
             },
@@ -257,7 +257,7 @@ async def test_host_does_not_record_completion_missing_for_invoke_failures(
 
 
 @pytest.mark.asyncio
-async def test_host_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path):
+async def test_turn_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path):
     _chat_run(_store(tmp_path), "run-chat")
     calls = 0
 
@@ -269,9 +269,9 @@ async def test_host_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path)
     with pytest.raises(RuntimeError, match="provider failed"):
         await run_agent_turn(
             invoke=invoke,
+            ledger=HostRunLedger(),
             execution_context={
                 "run_id": "run-chat",
-                "workspace_data_root": str(tmp_path),
                 "work_kind": "chat",
                 "max_completion_attempts": 3,
                 "retry_invoke_exceptions": False,
@@ -282,9 +282,9 @@ async def test_host_can_leave_provider_failures_to_the_chat_dispatcher(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_host_rereads_chat_evidence_for_every_attempt(tmp_path):
+async def test_turn_rereads_chat_evidence_for_every_attempt(tmp_path):
     # A session recreated for the second attempt must see what the first one
-    # already did, so the host reads the run's evidence before each attempt.
+    # already did, so the run's evidence is re-read before each attempt.
     store = _store(tmp_path)
     _chat_run(store, "run-chat")
     seen: list[list[dict[str, Any]]] = []
@@ -306,9 +306,9 @@ async def test_host_rereads_chat_evidence_for_every_attempt(tmp_path):
 
     await run_agent_turn(
         invoke=invoke,
+        ledger=HostRunLedger(),
         execution_context={
             "run_id": "run-chat",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "chat",
             "event_id": "E1",
             "max_completion_attempts": 2,
@@ -323,7 +323,7 @@ async def test_host_rereads_chat_evidence_for_every_attempt(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_host_gives_ticket_turns_no_extra_parameters(tmp_path):
+async def test_turn_gives_ticket_turns_no_extra_parameters(tmp_path):
     store = _store(tmp_path)
     parameters: list[dict[str, str]] = []
 
@@ -334,9 +334,9 @@ async def test_host_gives_ticket_turns_no_extra_parameters(tmp_path):
 
     await run_agent_turn(
         invoke=invoke,
+        ledger=HostRunLedger(),
         execution_context={
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "ticket",
             "max_completion_attempts": 1,
         },

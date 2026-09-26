@@ -57,7 +57,7 @@ async def main(context: Context) -> Any:
     trigger_reason = turn["trigger_reason"]
     member_workspace = get_member_clone_path(person_id)
     member_workspace.mkdir(parents=True, exist_ok=True)
-    result = await context.invoke(
+    return await context.invoke(
         "functions/handle_github_ticket",
         person_id=person_id,
         workflow_contract=t(
@@ -86,4 +86,3 @@ async def main(context: Context) -> Any:
         },
         cwd=member_workspace,
     )
-    return result.response

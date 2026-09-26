@@ -8,9 +8,16 @@ around the run: the command execution machinery
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import cached_property
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.capabilities.workflow_completion_events import (
+    record_workflow_completed,
+    record_workflow_completion_missing,
+)
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.runner import CommandRunner
@@ -25,11 +32,45 @@ from guildbotics.runtime.workflow_invocation import (
 )
 
 __all__ = [
+    "HostRunLedger",
     "prepare_command",
     "run_command",
     "run_in_environment",
     "run_main_command",
 ]
+
+
+class HostRunLedger:
+    """The host's run record, read and reported to by completion-managed turns.
+
+    Where the record lives is settled once, from this host's own workspace, so
+    nothing a turn passes decides which record the host reads. It is settled
+    on first use: a command that never drives such a turn needs no workspace.
+    """
+
+    @cached_property
+    def _store(self) -> RunStore:
+        return RunStore()
+
+    def require_completion(self, run_id: str) -> None:
+        """Raise unless the run has recorded a terminal completion."""
+        self._store.status(run_id)
+
+    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """Return the evidence the run has recorded so far."""
+        return self._store.evidence(run_id)
+
+    def record_completed(self, run_id: str, attempt: int) -> None:
+        """Record that the run's completion was found after an attempt."""
+        record_workflow_completed(run_id=run_id, attempt=attempt)
+
+    def record_completion_missing(
+        self, run_id: str, attempt: int, max_attempts: int, error: str
+    ) -> None:
+        """Record an attempt that ended without the run's completion."""
+        record_workflow_completion_missing(
+            run_id=run_id, attempt=attempt, max_attempts=max_attempts, error=error
+        )
 
 
 def prepare_command(
@@ -60,7 +101,11 @@ def prepare_command(
         resolve_person(base_context.team, person_identifier, allow_default=True)
     )
     return CommandRunner(
-        base_context.clone_for(person), command_name, command_args, cwd
+        base_context.clone_for(person),
+        command_name,
+        command_args,
+        cwd,
+        ledger=HostRunLedger(),
     )
 
 

@@ -1,21 +1,35 @@
-"""Host-side completion handling for workflow agent turns."""
+"""Drive a workflow agent turn until its run records completion."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from guildbotics.capabilities.command_failures import find_cli_agent_execution_error
-from guildbotics.capabilities.task_runs import RunStatus, RunStore
-from guildbotics.capabilities.workflow_completion_events import (
-    record_workflow_completed,
-    record_workflow_completion_missing,
-)
-from guildbotics.utils.fileio import get_workspace_state_path
+from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.utils.i18n_tool import t
+
+
+class RunLedger(Protocol):
+    """The run record a completion-managed turn reads and reports to.
+
+    The implementation belongs to the host, which alone decides where the run
+    record lives: the turn names a run, never a location.
+    """
+
+    def require_completion(self, run_id: str) -> None:
+        """Raise unless the run has recorded a terminal completion."""
+
+    def evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """Return the evidence the run has recorded so far."""
+
+    def record_completed(self, run_id: str, attempt: int) -> None:
+        """Record that the run's completion was found after an attempt."""
+
+    def record_completion_missing(
+        self, run_id: str, attempt: int, max_attempts: int, error: str
+    ) -> None:
+        """Record an attempt that ended without the run's completion."""
 
 
 class CompletionRetryExhausted(Exception):
@@ -29,33 +43,26 @@ class CompletionRetryExhausted(Exception):
         self.last_error = last_error
 
 
-@dataclass(frozen=True, slots=True)
-class AgentTurnResult:
-    """An agent response paired with its durable completion and evidence."""
-
-    response: Any
-    completion: RunStatus
-    evidence: list[dict[str, Any]]
-
-
 async def run_agent_turn(
     *,
     invoke: Callable[[dict[str, Any], dict[str, str]], Awaitable[Any]],
     execution_context: Mapping[str, Any],
-) -> AgentTurnResult:
+    ledger: RunLedger,
+) -> Any:
     """Drive one logical workflow turn until it records completion.
 
-    The host derives the completion record from the execution context rather
-    than accepting a workflow-owned callback. This keeps both ticket and chat
-    turns on the same boundary while letting each workflow choose its attempt
-    budget through ``max_completion_attempts``.
+    Both ticket and chat turns share this boundary; each workflow chooses its
+    attempt budget through ``max_completion_attempts``.
 
     ``invoke`` receives the attempt's execution context and the prompt
-    parameters the host derives from the run record for that attempt: a chat
-    turn gets ``previous_attempt_evidence``, the actions its run has already
-    taken, re-read before every attempt so a session that had to be recreated
-    does not repeat them. These parameters replace any the workflow passed
-    under the same name.
+    parameters derived from the run record for that attempt: a chat turn gets
+    ``previous_attempt_evidence``, the actions its run has already taken,
+    re-read before every attempt so a session that had to be recreated does
+    not repeat them. These parameters replace any the workflow passed under
+    the same name.
+
+    Returns:
+        The response of the attempt after which the run was complete.
 
     Raises:
         CompletionRetryExhausted: When the attempt budget is exhausted. The
@@ -64,11 +71,8 @@ async def run_agent_turn(
     context = dict(execution_context)
     run_id = str(context.get("run_id") or "").strip()
     work_kind = str(context.get("work_kind") or "").strip()
-    workspace_data_root = str(context.get("workspace_data_root") or "").strip()
     if not run_id:
         raise ValueError("Agent execution context requires a run_id.")
-    if not workspace_data_root:
-        raise ValueError("Agent execution context requires a workspace_data_root.")
     if work_kind not in {"ticket", "chat"}:
         raise ValueError(
             "Completion-managed agent turns require work_kind 'ticket' or 'chat'."
@@ -77,12 +81,6 @@ async def run_agent_turn(
     attempts = _positive_int(context.get("max_completion_attempts"), 1)
     first_attempt = _positive_int(context.get("attempt"), 1)
     retry_invoke_exceptions = bool(context.get("retry_invoke_exceptions", True))
-    store = RunStore(
-        get_workspace_state_path(
-            "task-runs",
-            workspace_root=Path(workspace_data_root),
-        )
-    )
     last_error: Exception = RuntimeError("no attempts were made")
 
     for offset in range(attempts):
@@ -98,7 +96,7 @@ async def run_agent_turn(
             "continuation_input": _continuation_input(context),
         }
         try:
-            response = await invoke(turn_context, _turn_parameters(store, context))
+            response = await invoke(turn_context, _turn_parameters(ledger, context))
         except Exception as exc:
             _raise_rate_limit(exc)
             if retry_invoke_exceptions:
@@ -107,35 +105,27 @@ async def run_agent_turn(
             raise
 
         try:
-            completion = store.status(run_id)
-            evidence = store.evidence(run_id)
+            ledger.require_completion(run_id)
         except Exception as exc:
             _raise_rate_limit(exc)
-            record_workflow_completion_missing(
-                run_id=run_id,
-                attempt=dispatch_attempt,
-                max_attempts=attempts,
-                error=str(exc),
+            ledger.record_completion_missing(
+                run_id, dispatch_attempt, attempts, str(exc)
             )
             last_error = exc
             continue
 
-        record_workflow_completed(run_id=run_id, attempt=dispatch_attempt)
-        return AgentTurnResult(
-            response=response,
-            completion=completion,
-            evidence=evidence,
-        )
+        ledger.record_completed(run_id, dispatch_attempt)
+        return response
 
     raise CompletionRetryExhausted(attempts, last_error)
 
 
-def _turn_parameters(store: RunStore, context: Mapping[str, Any]) -> dict[str, str]:
+def _turn_parameters(ledger: RunLedger, context: Mapping[str, Any]) -> dict[str, str]:
     if context.get("work_kind") != "chat":
         return {}
     evidence = [
         item
-        for item in store.evidence(str(context["run_id"]))
+        for item in ledger.evidence(str(context["run_id"]))
         if item["evidence_type"] != "chat_batch"
     ]
     return {

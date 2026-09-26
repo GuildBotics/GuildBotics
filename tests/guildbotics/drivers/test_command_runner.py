@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.intelligences.brains.cli_agent import PromptInfo
@@ -77,16 +78,18 @@ async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch):
-    from guildbotics.drivers import agent_turn
+async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monkeypatch):
+    from guildbotics.commands import runner as runner_module
 
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
     ctx = DummyContext()
-    runner = CommandRunner(ctx, "main", [])
+    ledger = object()
+    runner = CommandRunner(ctx, "main", [], ledger=ledger)
     captured = {}
 
-    async def fake_run_agent_turn(*, invoke, execution_context):
+    async def fake_run_agent_turn(*, invoke, execution_context, ledger):
         captured["execution_context"] = execution_context
+        captured["ledger"] = ledger
         return await invoke(
             {**execution_context, "attempt": 2}, {"previous_attempt_evidence": "[]"}
         )
@@ -98,7 +101,7 @@ async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch
     async def fake_run_with_children(spec):
         return CommandOutcome(result="completed", text_output="completed")
 
-    monkeypatch.setattr(agent_turn, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(runner_module, "run_agent_turn", fake_run_agent_turn)
     runner._spec_factory.build_from_entry = fake_build
     runner._run_with_children = fake_run_with_children
 
@@ -114,10 +117,32 @@ async def test_invoke_delegates_completion_managed_turns_to_the_host(monkeypatch
 
     assert result == "completed"
     assert captured["execution_context"]["run_id"] == "run-1"
+    assert captured["ledger"] is ledger
     assert captured["entry"]["params"]["agent_execution_context"]["attempt"] == 2
     # The host's per-attempt prompt parameters reach the command.
     assert captured["entry"]["params"]["previous_attempt_evidence"] == "[]"
     assert captured["entry"]["cwd"] == Path("/memory")
+
+
+@pytest.mark.asyncio
+async def test_invoke_refuses_completion_managed_turns_without_a_ledger(monkeypatch):
+    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
+    runner = CommandRunner(DummyContext(), "main", [])
+
+    async def fail_run_with_children(spec):
+        raise AssertionError("the turn must not start")
+
+    runner._run_with_children = fail_run_with_children
+
+    with pytest.raises(CommandError, match="run ledger"):
+        await runner._invoke(
+            "child",
+            agent_execution_context={
+                "run_id": "run-1",
+                "work_kind": "ticket",
+                "max_completion_attempts": 3,
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -401,3 +426,18 @@ async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
     )
 
     assert outcome.text_output == output
+
+
+def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):
+    # Every command gets a ledger, so building one must not require the
+    # workspace that only a completion-managed turn reads.
+    from guildbotics.drivers.command_runner import HostRunLedger
+    from guildbotics.utils.fileio import WorkspaceNotConfiguredError
+
+    monkeypatch.delenv("GUILDBOTICS_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("GUILDBOTICS_CONFIG_DIR", raising=False)
+
+    ledger = HostRunLedger()
+
+    with pytest.raises(WorkspaceNotConfiguredError):
+        ledger.require_completion("run-1")

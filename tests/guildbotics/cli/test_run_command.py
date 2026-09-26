@@ -601,6 +601,53 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_command_drives_a_turn_until_the_host_record_completes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
+    _write(
+        tmp_path / "commands/driver.py",
+        """
+        from guildbotics.runtime import Context
+
+        async def main(context: Context):
+            return await context.invoke(
+                "functions/answer",
+                agent_execution_context={
+                    "run_id": "run-1",
+                    "work_kind": "ticket",
+                    "max_completion_attempts": 3,
+                },
+            )
+        """,
+    )
+    # The member completes the run on its second attempt, in the workspace's
+    # own run record, which the host ledger reads.
+    _write(
+        tmp_path / "commands/functions/answer.py",
+        """
+        from guildbotics.capabilities.task_runs import RunStore
+
+        async def main(context, agent_execution_context):
+            attempt = agent_execution_context["attempt"]
+            if attempt == 2:
+                store = RunStore()
+                store.append_evidence(
+                    "run-1", "issue_comment", {"url": "https://example.test/1"}
+                )
+                store.complete(
+                    "run-1", "done", "done", "https://example.test/1", "alice"
+                )
+            return f"attempt-{attempt}"
+        """,
+    )
+
+    outcome = await run_command(_get_context(), "driver", [])
+
+    assert outcome.result == "attempt-2"
+
+
+@pytest.mark.asyncio
 async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     # A process started with PYTHONDONTWRITEBYTECODE would hide a regression.
