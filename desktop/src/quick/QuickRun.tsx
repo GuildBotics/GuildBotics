@@ -7,6 +7,7 @@ import {
   Group,
   Loader,
   Select,
+  Stack,
   Text,
   TextInput,
   Tooltip,
@@ -27,6 +28,7 @@ import {
 } from "../api/client";
 import { buildFileRunArgs } from "../commands/commandEditorState";
 import { CommandInput } from "../commands/CommandInput";
+import { UnmetRequirements } from "../commands/UnmetRequirements";
 import {
   clipboardImageFile,
   clipboardWatchSupported,
@@ -503,15 +505,12 @@ export function QuickRun(props: QuickRunProps) {
       </Group>
 
       {/* Nothing about a disabled run button explains itself, so name the
-          integrations the command is still missing. */}
+          integrations the command is still missing, and why when known. */}
       {missingRequirements.length > 0 ? (
-        <Text size="xs" c="dimmed">
-          {t("quickRun.requirementsMissing", {
-            requirements: missingRequirements
-              .map((kind) => t(`commands.requirements.${kind}`))
-              .join(", "),
-          })}
-        </Text>
+        <Stack gap={2} c="dimmed">
+          <Text size="xs">{t("quickRun.requirementsMissing")}</Text>
+          <UnmetRequirements requirements={missingRequirements} size="xs" />
+        </Stack>
       ) : null}
 
       {/* A hotkey can outlive the command it was bound to; say so rather than

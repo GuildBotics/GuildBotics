@@ -181,6 +181,10 @@ class DeviceStatus:
                 return tool
         raise ValueError(f"'{name}' is not a supported AI CLI tool")
 
+    def turn_refusal(self, tool_name: str) -> str:
+        """Why a turn of this tool cannot start here, or "" when it can."""
+        return self.refusal or self.tool(tool_name).refusal
+
 
 def device_status(*, building_here: bool = False) -> DeviceStatus:
     """Read the device once.

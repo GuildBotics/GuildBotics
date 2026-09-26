@@ -5280,6 +5280,7 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
             key={requirement.kind}
             color={requirement.satisfied ? "success" : "warning"}
             variant="light"
+            title={requirement.message || undefined}
           >
             {t(`commands.requirements.${requirement.kind}`)}
           </Badge>

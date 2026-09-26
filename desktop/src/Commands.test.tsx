@@ -846,6 +846,37 @@ describe("Command editor screen", () => {
     expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
   });
 
+  it("names each missing requirement and the environment's reason when blocked", async () => {
+    const reason = "The agent environment snapshot is being built.";
+    executionStatusMock.mockResolvedValue(
+      status({
+        blocking_code: "command_requirement_missing",
+        requirements: [
+          { kind: "cli_agent", satisfied: false, message: reason },
+          { kind: "slack", satisfied: false, message: "" },
+          { kind: "llm", satisfied: true, message: "" },
+        ],
+      }),
+    );
+    await renderPage();
+    await screen.findByLabelText("editor");
+
+    expect(
+      await screen.findByText(t("commands.errors.command_requirement_missing")),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        t("commands.requirementUnmet", {
+          requirement: t("commands.requirements.cli_agent"),
+          reason,
+        }),
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(t("commands.requirements.slack"))).toBeInTheDocument();
+    expect(screen.queryByText(t("commands.requirements.llm"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("commands.saveAndRun") })).toBeDisabled();
+  });
+
   it("saves before running and builds the payload from the saved response", async () => {
     // The pre-save file accepts a message; the saved response changes inputs to
     // hidden. The run payload must follow the saved definition, not the stale

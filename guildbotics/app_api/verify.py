@@ -9,10 +9,8 @@ from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
     get_github_account_type,
 )
-from guildbotics.intelligences.cli_agents import (
-    resolve_cli_agent_path,
-    resolve_default_cli_executable,
-)
+from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
 from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.utils.env_loader import workspace_secret_store
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
@@ -55,7 +53,7 @@ class VerifyService:
         ]
         if team is not None:
             checks.extend(self._check_llm_provider(team, env))
-            checks.extend(self._check_cli_agent(env))
+            checks.extend(self._check_cli_agent())
             checks.extend(self._check_github_credentials(team, env))
 
         errors = [check for check in checks if check.status == "error"]
@@ -171,27 +169,27 @@ class VerifyService:
             )
         ]
 
-    def _check_cli_agent(self, env: dict[str, str | None]) -> list[VerifyCheck]:
-        executable = self._resolve_default_cli_executable()
-        if not executable:
+    def _check_cli_agent(self) -> list[VerifyCheck]:
+        tool = resolve_default_cli_agent()
+        if not tool:
             return [
                 VerifyCheck(
                     code="cli_agent_mapping",
                     status="warning",
-                    message="Default AI CLI tool executable could not be inferred.",
+                    message="Default AI CLI tool could not be inferred.",
                 )
             ]
 
-        search_path = env.get("PATH")
-        path = resolve_cli_agent_path(executable, search_path)
+        # The tool runs inside the isolated agent environment, so what decides
+        # is whether a turn of it can start there, not the host PATH.
+        refusal = device_status().turn_refusal(tool)
         return [
             self._check(
-                "cli_agent_executable",
-                bool(path),
-                f"AI CLI tool executable '{executable}' was found.",
-                f"AI CLI tool executable '{executable}' was not found on PATH.",
-                target=executable,
-                context={"path": path or ""},
+                "cli_agent_environment",
+                not refusal,
+                f"AI CLI tool '{tool}' can start in the isolated agent environment.",
+                refusal,
+                target=tool,
             )
         ]
 
@@ -252,9 +250,6 @@ class VerifyService:
         # only depends on the workspace intelligence mapping.
         del team
         return resolve_default_model_provider()
-
-    def _resolve_default_cli_executable(self) -> str:
-        return resolve_default_cli_executable()
 
     def _has_env(self, key: str, env: dict[str, str | None]) -> bool:
         return bool(env.get(key))
