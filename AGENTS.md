@@ -464,7 +464,20 @@ Markdown の内部リンク・見出しアンカー検査（リポジトリル�
 lychee --no-progress --scheme file --include-fragments \
   --exclude-path 'desktop[\\/]node_modules' \
   --exclude-path 'desktop[\\/]src-tauri[\\/]binaries' \
+  --exclude-path 'desktop[\\/]src-tauri[\\/]target' \
   './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+```
+
+Windows では PowerShell で実行する。Git Bash では MSYS が除外パターンの引数を
+書き換えるため、除外が効かなくなる:
+
+```powershell
+lychee --no-progress --scheme file --include-fragments `
+  --exclude-path 'desktop[\\/]node_modules' `
+  --exclude-path 'desktop[\\/]src-tauri[\\/]binaries' `
+  --exclude-path 'desktop[\\/]src-tauri[\\/]target' `
+  './*.md' './docs/**/*.md' './desktop/**/*.md' './skills/**/*.md'
+if ($LASTEXITCODE -ne 0) { throw "Markdown link check failed ($LASTEXITCODE)" }
 ```
 
 `--scheme file` により外部 URL は検査せず、CI の `markdown-links` job と同じく
