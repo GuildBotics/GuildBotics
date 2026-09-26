@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import re
 import stat
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
-from hashlib import sha256
-from html.parser import HTMLParser
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
@@ -15,7 +13,6 @@ from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
 from markdown_it import MarkdownIt
-from markdown_it.rules_inline import StateInline, image, link
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_memory import MemberMemoryService
@@ -2029,120 +2026,82 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
 _ISSUE_LINK = re.compile(
-    rf"(?:^|(?<=[\r\n]))[ \t]*((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})"
-    r"[ \t]+#(\d+))[ \t]*(?=$|[\r\n])",
+    rf"((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})[ \t]+#(\d+))",
     re.I,
+)
+_ISSUE_SOURCE_LINK = re.compile(
+    rf"(?:[ \t]*(?:[-+*]|\d+[.)])[ \t]+)*[ \t]*{_ISSUE_LINK.pattern}[ \t]*", re.I
 )
 
 
-class _ParagraphMarkers(HTMLParser):
-    """Find source markers rendered directly inside a plain paragraph."""
-
-    def __init__(self, prefix: str) -> None:
-        super().__init__()
-        self.pattern = re.compile(rf"{prefix}(\d+)z")
-        self.found: set[int] = set()
-        self.tags: dict[str, int] = {}
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag not in {
-            "area",
-            "base",
-            "br",
-            "col",
-            "embed",
-            "hr",
-            "img",
-            "input",
-            "link",
-            "meta",
-            "param",
-            "source",
-            "track",
-            "wbr",
-        }:
-            self.tags[tag] = self.tags.get(tag, 0) + 1
-
-    def handle_endtag(self, tag: str) -> None:
-        count = self.tags.get(tag, 0)
-        if count > 1:
-            self.tags[tag] = count - 1
-        else:
-            self.tags.pop(tag, None)
-
-    def handle_data(self, data: str) -> None:
-        if self.tags == {"p": 1}:
-            self.found.update(
-                int(match.group(1)) for match in self.pattern.finditer(data)
-            )
+@dataclass(frozen=True)
+class _IssueLink:
+    start: int
+    end: int
+    trailer: str
+    number: str
 
 
-def _linked_lines(content: str, env: dict[str, Any]) -> set[int]:
-    """Keep source markers from changing Markdown link identifiers."""
-    excluded: set[int] = set()
-    parser = MarkdownIt("commonmark")
-
-    def record(
-        rule: Callable[[StateInline, bool], bool],
-    ) -> Callable[[StateInline, bool], bool]:
-        def wrapped(state: StateInline, silent: bool) -> bool:
-            start = state.pos
-            matched = rule(state, silent)
-            if matched and not silent and state.src == content:
-                excluded.update(
-                    range(
-                        content.count("\n", 0, start),
-                        content.count("\n", 0, state.pos) + 1,
-                    )
-                )
-            return matched
-
-        return wrapped
-
-    parser.inline.ruler.at("link", record(link))
-    parser.inline.ruler.at("image", record(image))
-    parser.parseInline(content, env)
-    return excluded
-
-
-def _issue_links(body: str) -> Iterator[re.Match[str]]:
-    """Select standalone plain-text source lines in top-level paragraphs."""
-    plain_lines: set[int] = set()
-    parser = MarkdownIt("commonmark")
-    env: dict[str, Any] = {}
-    tokens = parser.parse(body, env)
-    for previous, token in zip(tokens, tokens[1:], strict=False):
+def _issue_links(body: str) -> Iterator[_IssueLink]:
+    """Select standalone paragraph or list links, excluding quoted examples."""
+    source = body.splitlines(keepends=True)
+    offsets = [0]
+    for line in source:
+        offsets.append(offsets[-1] + len(line))
+    tokens = MarkdownIt("commonmark").parse(body)
+    quoted = 0
+    for index, token in enumerate(tokens):
+        if token.type == "blockquote_open":
+            quoted += 1
+        elif token.type == "blockquote_close":
+            quoted -= 1
         if (
-            previous.type == "paragraph_open"
-            and previous.level == 0
-            and token.type == "inline"
-            and token.map is not None
+            token.type != "inline"
+            or tokens[index - 1].type != "paragraph_open"
+            or token.map is None
+            or quoted
         ):
-            linked = _linked_lines(token.content, env)
-            plain_lines.update(
-                line for line in range(*token.map) if line - token.map[0] not in linked
+            continue
+        code_rows: set[int] = set()
+        code_contents = {
+            child.content
+            for child in token.children or []
+            if child.type == "code_inline"
+        }
+        for code in re.finditer(
+            r"(?=(?<![\\`])(?:\\\\)*(`+)(?!`)(.*?)(?<!`)\1(?!`))", token.content, re.S
+        ):
+            content = code.group(2).replace("\n", " ")
+            if content.startswith(" ") and content.endswith(" ") and content.strip():
+                content = content[1:-1]
+            if content not in code_contents:
+                continue
+            code_rows.update(
+                range(
+                    token.content.count("\n", 0, code.start()),
+                    token.content.count("\n", 0, code.end(2)) + 1,
+                )
             )
-    matches = [
-        match
-        for match in _ISSUE_LINK.finditer(body)
-        if len(re.findall(r"\r\n?|\n", body[: match.start()])) in plain_lines
-    ]
-    if not matches:
-        return
-    # Mark original source spans, so decoding entities cannot invent a link.
-    prefix = f"guildboticslink{sha256(body.encode()).hexdigest()}x"
-    marked = body
-    for index, match in reversed(list(enumerate(matches))):
-        marked = f"{marked[: match.start(1)]}{prefix}{index}z{marked[match.end(1) :]}"
-    rendered = _ParagraphMarkers(prefix)
-    rendered.feed(parser.render(marked))
-    yield from (match for index, match in enumerate(matches) if index in rendered.found)
+        for row, line in enumerate(token.content.splitlines()):
+            candidate = _ISSUE_LINK.fullmatch(line.strip())
+            if candidate is None or row in code_rows:
+                continue
+            source_row = token.map[0] + row
+            match = _ISSUE_SOURCE_LINK.fullmatch(source[source_row].rstrip("\r\n"))
+            if match is not None and match.group(1) == candidate.group(1):
+                offset = offsets[source_row]
+                yield _IssueLink(
+                    offset + match.start(1),
+                    offset + match.end(1),
+                    match.group(1),
+                    match.group(2),
+                )
 
 
 def _append_trailer(body: str, trailer: str) -> str:
     result = f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
     if not any(
-        link.group(1) == trailer and link.start(1) == len(result) - len(trailer)
+        link.trailer == trailer and link.start == len(result) - len(trailer)
         for link in _issue_links(result)
     ):
         raise MemberCapabilityError(
@@ -2154,11 +2113,11 @@ def _append_trailer(body: str, trailer: str) -> str:
 
 def _preserve_issue_links(body: str, previous_body: str) -> str:
     """Append missing issue links while keeping the replacement body's wording."""
-    mentioned = {match.group(2) for match in _issue_links(body)}
+    mentioned = {match.number for match in _issue_links(body)}
     inherited: set[str] = set()
     for match in _issue_links(previous_body):
-        number = match.group(2)
-        trailer = match.group(1)
+        number = match.number
+        trailer = match.trailer
         if number not in mentioned and trailer.casefold() not in inherited:
             body = _append_trailer(body, trailer)
             inherited.add(trailer.casefold())
@@ -2172,17 +2131,15 @@ def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not match:
         return body
     issue_number = match.group(1)
-    links = [link for link in _issue_links(body) if link.group(2) == issue_number]
-    refs = [
-        link for link in links if re.match(_ISSUE_REFS_KEYWORD, link.group(1), re.I)
-    ]
+    links = [link for link in _issue_links(body) if link.number == issue_number]
+    refs = [link for link in links if re.match(_ISSUE_REFS_KEYWORD, link.trailer, re.I)]
     if len(links) > len(refs):
         return body
     if refs:
         if not closes:
             return body
         for link in reversed(refs):
-            body = f"{body[: link.start(1)]}Closes #{issue_number}{body[link.end(1) :]}"
+            body = f"{body[: link.start]}Closes #{issue_number}{body[link.end :]}"
         return body
     trailer = f"Closes #{issue_number}" if closes else f"Refs #{issue_number}"
     return _append_trailer(body, trailer)

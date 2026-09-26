@@ -1896,11 +1896,12 @@ def pr_create(
     is_flag=True,
     help=(
         "Do not carry existing standalone Closes/Fixes/Resolves/Refs #<n> lines "
-        "in plain-text paragraphs into the "
+        "in paragraphs or list items into the "
         "replacement body. Requires --content-stdin/--content-file. By default, "
         "these lines are preserved, even with empty content; new standalone "
-        "links to the same issue take precedence. Code, quotes, HTML, prose, "
-        "colon-separated and cross-repository links are excluded."
+        "links to the same issue take precedence. Code, quotes, HTML blocks, "
+        "prose, colon-separated and cross-repository links are excluded. "
+        "Inline HTML and multiline reference labels are outside this convention."
     ),
 )
 @_json_format_option

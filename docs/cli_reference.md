@@ -1317,7 +1317,7 @@ guildbotics member github pr review-comment [OPTIONS]
 
 ## `guildbotics member github pr update`
 
-Change a PR's body or title. Body replacement preserves existing standalone Closes/Fixes/Resolves/Refs #<n> lines in plain-text paragraphs; new standalone links to the same issue take precedence. Code, quotes, HTML, prose, colon-separated and cross-repository links are excluded. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
+Change a PR's body or title. Body replacement preserves existing standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or list items; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
 
 ```text
 guildbotics member github pr update [OPTIONS]
@@ -1330,7 +1330,7 @@ guildbotics member github pr update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the pull request title. |
-| `--drop-issue-links` | Do not carry existing standalone Closes/Fixes/Resolves/Refs #\<n\> lines in plain-text paragraphs into the replacement body. Requires --content-stdin/--content-file. By default, these lines are preserved, even with empty content; new standalone links to the same issue take precedence. Code, quotes, HTML, prose, colon-separated and cross-repository links are excluded. |
+| `--drop-issue-links` | Do not carry existing standalone Closes/Fixes/Resolves/Refs #\<n\> lines in paragraphs or list items into the replacement body. Requires --content-stdin/--content-file. By default, these lines are preserved, even with empty content; new standalone links to the same issue take precedence. Code, quotes, HTML blocks, prose, colon-separated and cross-repository links are excluded. Inline HTML and multiline reference labels are outside this convention. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

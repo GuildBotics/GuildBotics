@@ -133,10 +133,11 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics member github pr update --person <person> --url <pr_url> "
                 "[--content-file <file>] [--title <title>] [--drop-issue-links]",
                 "Change a PR's body or title. Body replacement preserves existing "
-                "standalone Closes/Fixes/Resolves/Refs #<n> lines in plain-text "
-                "paragraphs; new standalone links to the same issue take precedence. "
-                "Code, quotes, HTML, prose, colon-separated and cross-repository "
-                "links are excluded. Empty content keeps only the links. "
+                "standalone Closes/Fixes/Resolves/Refs #<n> lines in paragraphs or "
+                "list items; new standalone links to the same issue take precedence. "
+                "Code, quotes, HTML blocks, prose, colon-separated and cross-repository "
+                "links are excluded. Inline HTML and multiline reference labels are "
+                "outside this convention. Empty content keeps only the links. "
                 "--drop-issue-links requires content and disables preservation.",
             ),
             (

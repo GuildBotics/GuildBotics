@@ -2880,11 +2880,6 @@ def test_preserve_issue_links_prefers_replacement_and_deduplicates(
         "> example\nCloses #617",
         "<!--\nCloses #617\n-->",
         "<pre>\nCloses #617\n</pre>",
-        "Text <code>\nCloses #617\n</code>",
-        "Text <code>\n\nCloses #617\n\n</code>",
-        "[Example\nCloses #617\n][sample]\n\n[sample]: https://example.com",
-        "[\nCloses #617\n]\n\n[Closes #617]: https://example.com",
-        "[\nCloses #617\n][]\n\n[Closes #617]: https://example.com",
         "Closes &#35;617",
         "Closes \\#617",
         "Closes\n#617",
@@ -2919,14 +2914,40 @@ def test_nested_image_code_does_not_mask_an_adjacent_link():
     assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
 
 
-@pytest.mark.parametrize(
-    "body", ["```text\nNew", "~~~\nNew", "<!-- New", "<pre>\nNew", "Text <code>"]
-)
+@pytest.mark.parametrize("body", ["```text\nNew", "~~~\nNew", "<!-- New", "<pre>\nNew"])
 def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
     with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
         _preserve_issue_links(body, "Closes #42")
     with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
         _append_issue_link(body, ISSUE_URL, closes=True)
+
+
+@pytest.mark.parametrize(
+    "prefix", ["- ", "+ ", "* ", "1. ", "1) ", "- - ", "- item\n  "]
+)
+def test_list_links_are_preserved_and_replacement_links_take_precedence(prefix):
+    body = f"{prefix}Refs #42\r\n"
+    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
+    assert _preserve_issue_links(body, "Closes #42") == body
+    assert _append_issue_link(body, ISSUE_URL, closes=False) == body
+    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{prefix}Closes #42\r\n"
+
+
+@pytest.mark.parametrize("prefix", ["", "\\\\", "[link](https://example.com/`)\n"])
+def test_code_example_does_not_mask_or_upgrade_a_real_link_with_the_same_text(prefix):
+    example = f"{prefix}`example\nRefs #42\nexample`"
+    body = f"{example}\nRefs #42"
+    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{example}\nCloses #42"
+    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
+
+
+@pytest.mark.parametrize(
+    "url", ["[link](https://example.com/`)", "<https://example.com/`>"]
+)
+def test_backticks_in_urls_do_not_mask_standalone_links(url):
+    body = f"{url}\nRefs #42\n`"
+    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
+    assert _append_issue_link(body, ISSUE_URL, closes=True) == f"{url}\nCloses #42\n`"
 
 
 @pytest.mark.asyncio
