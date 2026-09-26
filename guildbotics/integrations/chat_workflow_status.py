@@ -1,3 +1,10 @@
+"""The workflow status a member's run leaves where its work came from.
+
+This module owns the status payload for both of its carriers: the metadata of
+a chat message, built and read here, and the hidden marker of a GitHub
+comment (:mod:`~guildbotics.integrations.workflow_status_comment`).
+"""
+
 from __future__ import annotations
 
 from typing import Any

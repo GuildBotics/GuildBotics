@@ -394,13 +394,14 @@ def _rate_limit_event_error(raw: dict[str, Any]) -> AgentRuntimeError | None:
 
 
 def _epoch_to_iso(raw: Any) -> str:
+    """The instant ``raw`` names in epoch seconds, or ``""`` for none a clock has."""
     try:
         epoch = int(raw or 0)
-    except (TypeError, ValueError):
+        if epoch <= 0:
+            return ""
+        return datetime.fromtimestamp(epoch, UTC).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
         return ""
-    if epoch <= 0:
-        return ""
-    return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
 def _session_limit_error(message: str) -> AgentRuntimeError | None:
