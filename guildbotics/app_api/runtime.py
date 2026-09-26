@@ -1021,7 +1021,12 @@ class AppRuntime:
             "command.started", {"command": execution.label, "person": person_id}
         )
         try:
-            outcome = await run_main_command(runner, source="manual")
+            # Closing the run's context is part of the run: a close that fails
+            # ends the run as failed rather than leaving it unended.
+            try:
+                outcome = await run_main_command(runner, source="manual")
+            finally:
+                await runner.context.aclose()
             if execution.result_type is not None and not isinstance(
                 outcome.result, execution.result_type
             ):
@@ -1047,8 +1052,6 @@ class AppRuntime:
             if isinstance(exc, CommandError | CliAgentExecutionError):
                 raise execution.failure(exc) from exc
             raise
-        finally:
-            await runner.context.aclose()
         self._event_bus.publish_event(
             "command.finished", {"command": execution.label, "person": person_id}
         )

@@ -2437,3 +2437,55 @@ async def test_a_read_only_run_keeps_its_workspace_from_switching(
     assert refused == ["workspace_switch_blocked_by_active_work"]
     # Released with the run.
     assert runtime._accepted_command_ids == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("closing", "code"),
+    [(RuntimeError("close failed"), ""), (asyncio.CancelledError(), "cancelled")],
+    ids=["failure", "cancellation"],
+)
+async def test_a_run_whose_close_fails_still_ends(
+    monkeypatch: pytest.MonkeyPatch, closing: BaseException, code: str
+) -> None:
+    """Closing the run is part of the run: its failure ends the trace too."""
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
+
+    async def ran(*_: Any) -> CommandOutcome:
+        return CommandOutcome(result="done", text_output="done")
+
+    monkeypatch.setattr(
+        runtime, "_get_context", lambda message="": _make_context([_make_person()])
+    )
+    prepared = stub_commands(monkeypatch, ran)
+    monkeypatch.setattr(
+        runtime_module,
+        "prepare_command",
+        _failing_close(runtime_module.prepare_command, closing),
+    )
+
+    with pytest.raises(type(closing)):
+        await runtime.run_command(CommandRunRequest(command="demo", person="bot"))
+
+    assert prepared
+    events = event_bus.snapshot_events()
+    assert [event["type"] for event in events] == ["command.started", "command.failed"]
+    assert events[-1]["payload"]["code"] == code
+    assert (
+        resolve_trace_status([{"kind": "event", **event} for event in events])
+        == "failed"
+    )
+
+
+def _failing_close(prepare: Any, closing: BaseException) -> Any:
+    def prepare_failing(*args: Any, **kwargs: Any) -> Any:
+        command = prepare(*args, **kwargs)
+
+        async def aclose() -> None:
+            raise closing
+
+        command.context.aclose = aclose
+        return command
+
+    return prepare_failing
