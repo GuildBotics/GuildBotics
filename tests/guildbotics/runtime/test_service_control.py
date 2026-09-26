@@ -4,7 +4,11 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+
+import pytest
 
 from guildbotics.runtime import service_control
 from guildbotics.runtime.service_control import (
@@ -14,6 +18,7 @@ from guildbotics.runtime.service_control import (
     read_stop_request,
     write_stop_request,
 )
+from guildbotics.utils.advisory_lock import LockTimeoutError
 
 
 def test_write_stop_request_is_atomic(monkeypatch, tmp_path) -> None:
@@ -38,27 +43,46 @@ def test_write_stop_request_is_atomic(monkeypatch, tmp_path) -> None:
     }
 
 
-def test_read_holds_control_lock_until_file_is_closed(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("main_delay", [0, 1.1])
+def test_read_holds_control_lock_until_file_is_closed(
+    monkeypatch, tmp_path, main_delay
+) -> None:
     path = tmp_path / "stop-request.json"
     write_stop_request("service-1", "graceful", path)
     read_started = threading.Event()
     release_read = threading.Event()
-    replace_started = threading.Event()
+    lock_attempted = threading.Event()
+    lock_acquired = threading.Event()
     reader_result: list[StopRequest | None] = []
     writer_result: list[StopRequest] = []
     failures: list[BaseException] = []
     real_read_text = Path.read_text
-    real_replace = os.replace
+    real_held_lock = service_control.held_lock
 
     def blocking_read_text(target: Path, *args, **kwargs) -> str:
         if threading.current_thread().name == "service-control-reader":
             read_started.set()
-            assert release_read.wait(timeout=1)
+            release_read.wait()
         return real_read_text(target, *args, **kwargs)
 
-    def observed_replace(source, target) -> None:
-        replace_started.set()
-        real_replace(source, target)
+    @contextmanager
+    def observed_lock(target: Path, **kwargs) -> Iterator[object]:
+        with ExitStack() as stack:
+            if threading.current_thread().name == "service-control-writer":
+                # Observe actual contention, not the absence of progress in a
+                # scheduling window. Retry only after the main thread releases
+                # the reader so its delays cannot exhaust the production timeout.
+                try:
+                    handle = stack.enter_context(real_held_lock(target, timeout=0))
+                except LockTimeoutError:
+                    lock_attempted.set()
+                    release_read.wait()
+                    handle = stack.enter_context(real_held_lock(target, **kwargs))
+                lock_acquired.set()
+                lock_attempted.set()
+            else:
+                handle = stack.enter_context(real_held_lock(target, **kwargs))
+            yield handle
 
     def read() -> None:
         try:
@@ -73,23 +97,28 @@ def test_read_holds_control_lock_until_file_is_closed(monkeypatch, tmp_path) -> 
             failures.append(exc)
 
     monkeypatch.setattr(Path, "read_text", blocking_read_text)
-    monkeypatch.setattr(service_control.os, "replace", observed_replace)
+    monkeypatch.setattr(service_control, "held_lock", observed_lock)
     reader = threading.Thread(target=read, name="service-control-reader")
     writer = threading.Thread(target=write, name="service-control-writer")
 
     reader.start()
-    assert read_started.wait(timeout=1)
-    writer.start()
     try:
-        assert not replace_started.wait(timeout=0.1)
+        assert read_started.wait(timeout=10)
+        time.sleep(main_delay)
+        writer.start()
+        assert lock_attempted.wait(timeout=10)
+        time.sleep(main_delay)
+        assert not lock_acquired.is_set()
     finally:
         release_read.set()
-        reader.join(timeout=1)
-        writer.join(timeout=1)
+        reader.join(timeout=10)
+        if writer.ident is not None:
+            writer.join(timeout=10)
 
     assert not reader.is_alive()
     assert not writer.is_alive()
     assert failures == []
+    assert lock_acquired.is_set()
     assert reader_result == [StopRequest("service-1", "graceful")]
     assert writer_result == [StopRequest("service-1", "cancel")]
 
@@ -212,7 +241,7 @@ def test_watcher_repeatedly_receives_monotonic_stage_updates(tmp_path) -> None:
         calls: list[bool] = []
         watcher = ServiceControlWatcher(
             f"service-{attempt}",
-            lambda *, cancel: calls.append(cancel),
+            lambda *, cancel, calls=calls: calls.append(cancel),
             path=path,
             poll_seconds=0.0005,
         )
