@@ -39,7 +39,8 @@ for _ in $(seq 1 30); do
     # the CLI places it under ~/.guildbotics/data/msb itself. The status is
     # read against an empty workspace, because it is a workspace's question.
     mkdir -p "$SMOKE_HOME/ws/.guildbotics/config"
-    "$CLI_PATH" environment --workspace "$SMOKE_HOME/ws" status | grep -q "^runtime: available" || {
+    # Drain stdout so pipefail cannot mistake an early grep exit for CLI failure.
+    "$CLI_PATH" environment --workspace "$SMOKE_HOME/ws" status | grep "^runtime: available" >/dev/null || {
       echo "the bundled CLI does not carry the agent environment runtime" >&2
       "$CLI_PATH" environment --workspace "$SMOKE_HOME/ws" status >&2 || true
       exit 1
