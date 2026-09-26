@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from guildbotics.commands.errors import CommandError
+from guildbotics.utils import os_language
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 COMMAND_PATH = (
@@ -26,58 +26,18 @@ def command_module() -> ModuleType:
     return module
 
 
-def test_main_uses_first_macos_ui_language(
-    command_module, monkeypatch, fake_platform
+@pytest.fixture
+def linux(monkeypatch, fake_platform) -> None:
+    """The command as it runs in an agent environment, told ``LANGUAGE``."""
+    fake_platform(os_language, "linux")
+    for name in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_main_attaches_the_ui_language_to_the_input(
+    command_module, monkeypatch, linux
 ) -> None:
-    fake_platform(command_module, "darwin")
-    completed = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout='(\n    "fr-FR",\n    "en-US"\n)\n'
-    )
-    monkeypatch.setattr(
-        command_module.subprocess, "run", lambda *args, **kwargs: completed
-    )
-
-    result = command_module.main(SimpleNamespace(pipe="Hello"))
-
-    assert result == {
-        "input": "Hello",
-        "language_code": "fr",
-        "language_name": "français",
-    }
-
-
-def test_main_uses_windows_ui_language(
-    command_module, monkeypatch, fake_platform
-) -> None:
-    class GetUserDefaultUILanguage:
-        restype = None
-
-        def __call__(self) -> int:
-            return 0x0409
-
-    kernel32 = SimpleNamespace(GetUserDefaultUILanguage=GetUserDefaultUILanguage())
-    fake_platform(command_module, "win32")
-    monkeypatch.setattr(
-        command_module.ctypes,
-        "windll",
-        SimpleNamespace(kernel32=kernel32),
-        raising=False,
-    )
-
-    result = command_module.main(SimpleNamespace(pipe="こんにちは"))
-
-    assert result == {
-        "input": "こんにちは",
-        "language_code": "en",
-        "language_name": "English",
-    }
-
-
-def test_main_uses_posix_ui_language_environment(
-    command_module, monkeypatch, fake_platform
-) -> None:
-    fake_platform(command_module, "linux")
-    monkeypatch.setenv("LANGUAGE", "ja_JP:en_US")
+    monkeypatch.setenv("LANGUAGE", "ja_JP")
 
     result = command_module.main(SimpleNamespace(pipe="Hello"))
 
@@ -88,12 +48,6 @@ def test_main_uses_posix_ui_language_environment(
     }
 
 
-def test_main_fails_when_ui_language_is_unavailable(
-    command_module, monkeypatch, fake_platform
-) -> None:
-    fake_platform(command_module, "linux")
-    for name in command_module._POSIX_LANGUAGE_ENV:
-        monkeypatch.delenv(name, raising=False)
-
+def test_main_fails_when_ui_language_is_unavailable(command_module, linux) -> None:
     with pytest.raises(CommandError, match="operating system UI language"):
         command_module.main(SimpleNamespace(pipe="Hello"))

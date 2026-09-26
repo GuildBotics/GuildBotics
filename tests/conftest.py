@@ -184,19 +184,22 @@ def _isolate_machine_home(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def host_time_zone(monkeypatch) -> str:
-    """Give every agent environment the same host time zone, whatever the
-    machine the suite runs on is set to.
+def host_facts(monkeypatch) -> dict[str, str]:
+    """Give every agent environment the same host time zone and UI language,
+    whatever the machine the suite runs on is set to.
 
-    The host's zone is part of every environment's variables, so without this
-    an assertion on them would pass on one developer's machine and fail on
-    another's. Returns the zone, for the tests that state it.
+    The host's facts are part of every environment's variables, so without
+    this an assertion on them would pass on one developer's machine and fail
+    on another's. Returns the variables, for the tests that state them.
     """
+    from langcodes import Language
+
     from guildbotics.intelligences.agent_environment import spec
 
     monkeypatch.setattr(spec, "reload_localzone", lambda: None)
     monkeypatch.setattr(spec, "get_localzone_name", lambda: "Asia/Tokyo")
-    return "Asia/Tokyo"
+    monkeypatch.setattr(spec, "os_ui_language", lambda: Language.get("ja-JP"))
+    return {"TZ": "Asia/Tokyo", "LANGUAGE": "ja_JP"}
 
 
 @pytest.fixture(autouse=True)

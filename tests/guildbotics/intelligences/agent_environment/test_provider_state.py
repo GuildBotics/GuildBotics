@@ -105,7 +105,7 @@ def test_a_read_only_turn_writes_nothing_another_turn_reads(
 
 
 def test_a_login_left_in_the_store_is_neither_counted_nor_bound(
-    machine: Path, tmp_path: Path, host_time_zone: str
+    machine: Path, tmp_path: Path, host_facts: dict[str, str]
 ) -> None:
     """A plain login an earlier GuildBotics kept, where the tool would read
     it, stays out of every turn and of the state."""
@@ -121,7 +121,7 @@ def test_a_login_left_in_the_store_is_neither_counted_nor_bound(
     spec = login_spec(grok, DECLARATION, home)
     assert spec.mounts == (EnvironmentMount(f"{login_guest}/.grok", None, False),)
     assert spec.env == {
-        "TZ": host_time_zone,
+        **host_facts,
         "GROK_HOME": f"{login_guest}/.grok",
         "GROK_AUTH_PATH": f"{login_guest}/.grok/auth/auth.json",
     }
@@ -147,7 +147,7 @@ def test_a_bound_entry_a_link_stands_for_is_left_where_it_is(
 
 
 def test_the_login_runs_with_its_state_root_in_memory_and_egress_open(
-    machine: Path, tmp_path: Path, host_time_zone: str
+    machine: Path, tmp_path: Path, host_facts: dict[str, str]
 ) -> None:
     home = tmp_path / "home"
 
@@ -158,7 +158,7 @@ def test_the_login_runs_with_its_state_root_in_memory_and_egress_open(
     assert spec.mounts == (EnvironmentMount(f"{guest}/.claude", None, False),)
     assert spec.network.unrestricted
     assert spec.network.nameservers == ("10.0.0.53",)
-    assert spec.env == {"TZ": host_time_zone, "CLAUDE_CONFIG_DIR": f"{guest}/.claude"}
+    assert spec.env == {**host_facts, "CLAUDE_CONFIG_DIR": f"{guest}/.claude"}
 
 
 def test_the_login_environment_forwards_to_the_devices_resolvers_for_host(
