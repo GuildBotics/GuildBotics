@@ -13,6 +13,7 @@ from guildbotics.capabilities.chat_selection import (
     ChatTurn,
 )
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.agent_turn import run_agent_turn
 from guildbotics.entities.team import Person, Role
 from guildbotics.integrations.chat_service import (
@@ -42,7 +43,6 @@ from guildbotics.runtime.workflow_invocation import (
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
 from guildbotics.utils.i18n_tool import t
-
 
 _WORKFLOW = "workflows/chat_conversation_workflow"
 
@@ -1781,6 +1781,8 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
             return ctx
 
     class Runner:
+        access = CommandAccess()
+
         def __init__(self, context, *_args):
             self.context = context
 

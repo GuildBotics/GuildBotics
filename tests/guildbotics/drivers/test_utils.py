@@ -4,6 +4,7 @@ from typing import List
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.utils import run_command
 
 
@@ -34,6 +35,8 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     events = []
 
     class FakeCommandRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args, cwd=None):
             self.context = context
             self.command_name = command
@@ -72,6 +75,8 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
     events = []
 
     class FakeCommandRunnerError:
+        access = CommandAccess()
+
         def __init__(
             self,
             context,
@@ -117,8 +122,8 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
 async def test_command_failure_preserves_structured_authentication_cause(
     monkeypatch, category
 ):
-    from guildbotics.drivers.utils import run_with_logging
     from guildbotics.commands.errors import CommandError
+    from guildbotics.drivers.utils import run_with_logging
     from guildbotics.intelligences.brains.cli_agent import (
         CliAgentExecutionError,
         CliAgentExecutionResult,

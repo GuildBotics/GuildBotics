@@ -1,46 +1,37 @@
-import textwrap
 import inspect
 import json
 import os
 import sys
+import textwrap
 from pathlib import Path
 
 import click
-import pytest
 import httpx
+import pytest
 from click.testing import CliRunner
 
 import guildbotics.cli.run as run_module
-from guildbotics.cli import main
+from guildbotics.cli import desktop_commands, main
 from guildbotics.cli.run import _parse_command_spec
-from guildbotics.commands.errors import CommandError
-from guildbotics.cli import desktop_commands
-from guildbotics.utils import local_api
-from guildbotics.utils.local_api import LocalApiEndpoint
-from guildbotics.drivers.command_runner import (
-    CommandRunner,
+from guildbotics.commands.errors import (
+    CommandError,
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
-    run_command,
 )
+from guildbotics.commands.runner import CommandRunner
+from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.intelligences.functions import to_text
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import resolve_person
+from guildbotics.utils import local_api
+from guildbotics.utils.local_api import LocalApiEndpoint
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
     DummyLoaderFactory,
 )
-
-
-def test_command_runner_public_exports():
-    import guildbotics.drivers.command_runner as command_runner
-
-    assert "PersonNotFoundError" in command_runner.__all__
-    assert "PersonExecutionNotAllowedError" in command_runner.__all__
-    assert "PersonSelectionRequiredError" in command_runner.__all__
 
 
 def test_parse_command_spec_with_person():

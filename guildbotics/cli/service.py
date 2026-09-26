@@ -11,8 +11,9 @@ from pathlib import Path
 import click
 
 from guildbotics.cli._options import selected_workspace
-from guildbotics.drivers import EventListenerRunner, TaskScheduler
+from guildbotics.drivers.event_listener_runner import EventListenerRunner
 from guildbotics.drivers.execution import ExecutionStatusPublisher, TaskRunCoordinator
+from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.editions import get_edition
 from guildbotics.observability import new_id
 from guildbotics.observability.diagnostics_events import (

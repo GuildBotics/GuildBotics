@@ -402,9 +402,14 @@ traces stay searchable whatever model the slot resolved to.
 
 The generic execution substrate used by workflows and custom commands:
 
-- `drivers/command_runner.py` resolves the target member, builds a `CommandSpec`
-  (`commands/models.py`, via `commands/spec_factory.py`), runs child commands
-  (`commands:`) first, then the main command.
+- `drivers/command_runner.py` is the host entry: it resolves the target member,
+  opens the isolated environment the run's AI CLI turns share
+  (`run_in_environment()`), and runs the command there.
+- `commands/runner.py` (`CommandRunner`) is the execution machinery: it builds a
+  `CommandSpec` (`commands/models.py`, via `commands/spec_factory.py`), runs child
+  commands (`commands:`) first, then the main command. It imports nothing only the
+  host may hold (the environment, the member broker, the scheduler), which
+  `tests/guildbotics/commands/test_import_boundary.py` pins.
 - Member resolution lives in `runtime/member_context.py`. A run without an
   explicit member falls back to `Team.get_default_person_id()`: the configured
   `default_person_id` (`team/project.yml`), else the first active non-human

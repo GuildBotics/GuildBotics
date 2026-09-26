@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.entities.task import Task
@@ -608,6 +609,8 @@ def test_scheduled_work_is_tracked_under_its_trace_id(monkeypatch) -> None:
 
 class _FailingRunner:
     """A command that raises, standing in for any failed scheduler command."""
+
+    access = CommandAccess()
 
     def __init__(self, context, name, args, cwd=None) -> None:
         self.command_name = name

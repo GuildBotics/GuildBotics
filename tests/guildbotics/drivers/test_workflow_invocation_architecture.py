@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers import task_scheduler
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
@@ -92,6 +93,8 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
     ran = []
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             ran.append((context, command, args))
 
@@ -465,6 +468,8 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
     seen = {}
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             pass
 
@@ -502,6 +507,8 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
     seen = {}
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             pass
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from guildbotics.commands.models import CommandOutcome, CommandSpec
-from guildbotics.drivers.command_runner import CommandRunner
+from guildbotics.commands.runner import CommandRunner
 from guildbotics.intelligences.brains.cli_agent import PromptInfo
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
 
@@ -42,6 +42,14 @@ def _main_spec():
         path=Path("main.md"),
         cwd=Path("/workspace"),
     )
+
+
+def _runner_for(spec):
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
+        runner = CommandRunner(DummyContext(), "main", [])
+    runner._spec_factory.build_from_entry = lambda anchor, entry: entry
+    return runner
 
 
 @pytest.mark.asyncio
@@ -119,6 +127,7 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
 ):
     """Every AI CLI turn of the run, its subcommands' included, shares one
     environment, and it is discarded when the run ends, however it ends."""
+    from guildbotics.drivers.command_runner import run_in_environment
     from guildbotics.intelligences.agent_runtime import environment
 
     closed: list[object] = []
@@ -157,12 +166,94 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
 
     if fails:
         with pytest.raises(RuntimeError):
-            await runner.run()
+            await run_in_environment(runner)
     else:
-        await runner.run()
+        await run_in_environment(runner)
 
     assert seen and all(isinstance(shared, Shared) for shared in seen)
     assert len(set(map(id, seen))) == 1
+    assert closed == seen[:1]
+    assert environment._COMMAND.get() is None
+
+
+@pytest.mark.asyncio
+async def test_the_machinery_opens_no_environment_of_its_own():
+    """The host that starts a run opens its environment; the runner alone
+    runs the command outside any."""
+    from guildbotics.intelligences.agent_runtime import environment
+
+    seen: list[object] = []
+
+    class Turning(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            seen.append(environment._COMMAND.get())
+            return await super().run()
+
+    spec = _main_spec()
+    spec.command_class = Turning
+    await _runner_for(spec).run()
+
+    assert seen == [None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inner_read_only", [False, True])
+async def test_a_command_started_inside_another_shares_its_environment(
+    monkeypatch, inner_read_only
+):
+    """A host entry that starts a command inside a running one shares the
+    running one's environment when it declares the same access, and is
+    refused when it declares other access."""
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.commands.metadata import CommandAccess
+    from guildbotics.drivers.command_runner import run_in_environment
+    from guildbotics.intelligences.agent_runtime import environment
+
+    closed: list[object] = []
+    seen: list[object] = []
+
+    class Shared:
+        def __init__(self, access) -> None:
+            self.access = access
+
+        async def close(self) -> None:
+            closed.append(self)
+
+    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
+
+    class Inner(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            seen.append(environment._COMMAND.get())
+            return await super().run()
+
+    class Outer(Inner):
+        async def run(self):
+            seen.append(environment._COMMAND.get())
+            inner_spec = _main_spec()
+            inner_spec.command_class = Inner
+            inner = _runner_for(inner_spec)
+            inner.access = CommandAccess(read_only=inner_read_only)
+            await run_in_environment(inner)
+            return await DummyCommand.run(self)
+
+    spec = _main_spec()
+    spec.command_class = Outer
+
+    if inner_read_only:
+        with pytest.raises(CommandError):
+            await run_in_environment(_runner_for(spec))
+        assert len(seen) == 1
+    else:
+        await run_in_environment(_runner_for(spec))
+        assert len(seen) == 2 and seen[0] is seen[1]
     assert closed == seen[:1]
     assert environment._COMMAND.get() is None
 
@@ -231,7 +322,9 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["manual", "scheduled", "routine"])
 async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, source):
+    from guildbotics.commands.metadata import CommandAccess
     from guildbotics.drivers import command_runner, ticket_selector
+    from guildbotics.intelligences.agent_runtime import environment
     from guildbotics.runtime.workflow_invocation import (
         TICKET_WORKFLOW_COMMAND,
         WORKFLOW_INVOCATION_KEY,
@@ -242,13 +335,16 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
 
     class FakeRunner:
         command_name = TICKET_WORKFLOW_COMMAND
+        access = CommandAccess()
 
         def __init__(self, context):
             self.context = context
 
         async def run(self):
-            # The workflow finds the ticket the host selected.
+            # The workflow finds the ticket the host selected, and runs in the
+            # environment its turns share.
             assert self.context.shared_state[WORKFLOW_INVOCATION_KEY] is invocation
+            assert environment._COMMAND.get() is not None
             return CommandOutcome(result="worked", text_output="worked")
 
     class FakeSelector:
