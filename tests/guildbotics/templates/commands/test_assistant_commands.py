@@ -20,8 +20,9 @@ from guildbotics.commands.authoring import (
 )
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess
+from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.validation import CommandValidationError
-from guildbotics.drivers.command_runner import CommandRunner
+from guildbotics.drivers.command_runner import run_in_environment
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
@@ -60,7 +61,7 @@ async def _run(
         ["conversation_id=conv-1"],
         cwd=tmp_path / "work",
     )
-    return (await runner.run()).result
+    return (await run_in_environment(runner)).result
 
 
 # ---------------------------------------------------------------------------

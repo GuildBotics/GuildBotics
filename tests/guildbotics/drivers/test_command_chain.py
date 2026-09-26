@@ -38,7 +38,8 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.drivers.command_runner import CommandRunner, run_command
+from guildbotics.commands.runner import CommandRunner
+from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.person_lease import PersonExecutionLease

@@ -7,6 +7,7 @@ import pytest
 
 from guildbotics.capabilities.chat_selection import ChatAttempt, ChatTurn
 from guildbotics.capabilities.task_runs import RunStore
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.execution import (
     ExecutionCoordinator,
     TaskRunCoordinator,
@@ -102,6 +103,8 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
     """CommandRunner stub recording dispatched event ids, failing selected ones."""
 
     class _Runner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             self.event_id = _turn(context).event_id
 
@@ -126,6 +129,8 @@ async def test_dispatcher_runs_workflow_and_clears_pending(
     ran = []
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             ran.append((context, command, args))
 
@@ -167,6 +172,8 @@ async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_
     ran: list[str] = []
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             self.person_id = context.person.person_id
 
@@ -227,6 +234,8 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
     store.upsert_pending_event("slack", "alice", "C1", _event(), "strict")
 
     class _Runner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             self.run_id = _turn(context).run_id
 
@@ -263,6 +272,8 @@ async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
     seen: list[tuple[str | None, list[str]]] = []
 
     class _Runner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             pass
 
@@ -316,6 +327,8 @@ async def test_dispatch_records_the_trace_boundary_around_the_turn(
     mid_turn: list[str] = []
 
     class _Runner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             pass
 
@@ -532,6 +545,8 @@ async def test_cancelled_dispatch_records_a_failed_boundary(monkeypatch, tmp_pat
     recorded = _capture_boundary_events(monkeypatch)
 
     class _Runner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             pass
 
@@ -589,6 +604,8 @@ async def test_dispatcher_uses_env_for_initial_retry_budget(
     ran = []
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, context, command, args):
             ran.append(context)
 
@@ -615,6 +632,8 @@ async def test_dispatcher_skips_already_processed(monkeypatch, tmp_path):
     store.mark_processed_event("slack", "alice", "C1", "E1")
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             raise AssertionError("should not run an already-processed event")
 
@@ -642,6 +661,8 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     store.upsert_pending_event("slack", "alice", "C1", _event())
 
     class _FailingRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             pass
 
@@ -684,6 +705,8 @@ async def test_dispatcher_failure_log_shares_workflow_trace(monkeypatch, tmp_pat
     workflow_traces = []
 
     class _FailingRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             pass
 
@@ -722,6 +745,8 @@ async def test_dispatcher_escalates_final_attempt_failure_to_error(
     store.save_pending_event("slack", "alice", "C1", pending)
 
     class _FailingRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             pass
 
@@ -914,6 +939,8 @@ async def test_dispatcher_uses_provider_exact_rate_limit_reset(monkeypatch, tmp_
     retry_after_at = "2999-01-01T00:00:00+00:00"
 
     class _RateLimitedRunner:
+        access = CommandAccess()
+
         def __init__(self, *args):
             pass
 
@@ -982,6 +1009,8 @@ async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
     store.save_pending_event("slack", "alice", "C1", pending)
 
     class _FakeRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             raise AssertionError("future retry should not run")
 
@@ -1042,6 +1071,8 @@ async def test_thread_context_unavailable_keeps_event_pending_forever(
     store.save_pending_event("slack", "alice", "C1", pending)
 
     class _UnavailableRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             pass
 
@@ -1117,6 +1148,8 @@ async def test_failed_event_runs_again_once_its_retry_time_arrives(
     ran: list[int] = []
 
     class _FailsOnceRunner:
+        access = CommandAccess()
+
         def __init__(self, *a):
             pass
 
@@ -1204,6 +1237,8 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
     )
 
     class _NeverRuns:
+        access = CommandAccess()
+
         def __init__(self, *a):
             raise AssertionError("a completed event must not run again")
 
