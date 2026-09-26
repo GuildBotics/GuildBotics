@@ -329,6 +329,8 @@ def test_member_help_prints_capability_reference():
     assert "guildbotics member memory recall" in result.output
     assert "guildbotics member agent conversation reset" in result.output
     assert "### Rules" in result.output
+    assert "#### Handling review feedback" in result.output
+    assert "#### レビュー指摘への対応" in result.output
 
 
 def test_member_command_lease_classification_uses_callback_metadata() -> None:

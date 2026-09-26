@@ -16,6 +16,7 @@ import re
 from itertools import combinations
 from pathlib import Path
 
+import pytest
 import yaml
 
 from guildbotics.capabilities.member_reference import capability_reference_text
@@ -25,6 +26,10 @@ FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 SKILL_PATH = Path("skills/guildbotics/SKILL.md")
 WORKFLOW_PROMPTS = ("handle_github_ticket", "handle_chat_event")
 ASK_PATH = Path("guildbotics/templates/commands/ask")
+REVIEW_SKILL_PATHS = tuple(
+    Path(root) / "skills/handle-review-feedback/SKILL.md"
+    for root in (".agents", ".claude")
+)
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 _MEMBER_COMMAND_RE = re.compile(r"guildbotics member ([a-z]+(?: [a-z]+)*)")
@@ -163,6 +168,125 @@ def test_prompts_do_not_restate_member_reference_contracts():
     for key, body in bodies.items():
         for sentinel in sentinels:
             assert sentinel not in body, (key, sentinel)
+
+
+@pytest.mark.parametrize(
+    ("heading", "step_contracts"),
+    [
+        (
+            "Handling review feedback",
+            (
+                ("earlier advice and reviews",),
+                ("mechanism or state", "second finding", "searches", "count"),
+                ("exit, check, or exception", "state cannot exist"),
+                ("implicit guarantees", "moved code", "exclusion", "reordered calls"),
+                (
+                    "after step 2",
+                    "before committing",
+                    "fresh delegate",
+                    "without the author's conversation context",
+                    "higher-capability model if the CLI supports",
+                    "decided matters with their reasons",
+                    "file:line",
+                    "failing scenario",
+                    "author verifies each finding",
+                    "reasons for rejected findings",
+                ),
+                ("whole population", "Deliberately break", "tests fail"),
+                ("each thread", "cause's shape", "repair's shape", "tests"),
+            ),
+        ),
+        (
+            "レビュー指摘への対応",
+            (
+                ("先行する助言やレビュー",),
+                ("仕組みや状態", "2 件目", "検索で数える"),
+                ("出口・検査・例外", "状態が存在しなくて済む"),
+                ("暗黙の保証", "移した処理", "外した排他", "呼び出し順"),
+                (
+                    "手順 2 のあと",
+                    "コミットの前",
+                    "作者の会話の文脈を持たない新しい委任先",
+                    "CLI がモデルを選べるなら上位のモデル",
+                    "決定済み事項を理由と一緒に",
+                    "file:line",
+                    "壊れるシナリオ",
+                    "作者は指摘を 1 件ずつ確かめて採否を決め",
+                    "採らなかったものは理由を残す",
+                ),
+                ("母集団", "わざと壊し", "テストが落ちる"),
+                ("スレッドごと", "原因の形", "直した形", "固定したテスト"),
+            ),
+        ),
+    ],
+)
+def test_review_feedback_procedure_is_complete_in_both_languages(
+    heading, step_contracts
+):
+    reference = capability_reference_text()
+    procedure = reference.split("### Standard work procedure\n")[1].split(
+        "### Rules\n"
+    )[0]
+    section = procedure.split(f"#### {heading}\n")[1].split("\n#### ")[0]
+    steps = re.findall(r"^(\d+)\. (.+)$", section, flags=re.MULTILINE)
+    assert [number for number, _ in steps] == [str(n) for n in range(1, 8)]
+    for (_, step), required in zip(steps, step_contracts, strict=True):
+        for phrase in required:
+            assert phrase in step, (heading, phrase)
+
+
+def test_review_feedback_entrypoints_reference_the_shared_procedure():
+    reference_path = "guildbotics/capabilities/member_reference.py"
+    for language, heading in (
+        ("en", "Handling review feedback"),
+        ("ja", "レビュー指摘への対応"),
+    ):
+        body = _prompt_body("handle_github_ticket", language)
+        feedback = next(
+            line
+            for line in body.splitlines()
+            if "Work type `pull_request_feedback`" in line
+            or "作業種別 `pull_request_feedback`" in line
+        )
+        assert heading in feedback
+        assert "standard work procedure" in feedback or "標準作業手順" in feedback
+
+    skills = [load_markdown_with_frontmatter(path) for path in REVIEW_SKILL_PATHS]
+    assert REVIEW_SKILL_PATHS[0].read_bytes() == REVIEW_SKILL_PATHS[1].read_bytes()
+    for path, skill in zip(REVIEW_SKILL_PATHS, skills, strict=True):
+        assert not path.is_symlink()
+        assert skill["name"] == "handle-review-feedback"
+        assert "PR review feedback" in skill["description"]
+        assert reference_path in skill["body"]
+        assert "Handling review feedback / レビュー指摘への対応" in skill["body"]
+
+    agents = Path("AGENTS.md").read_text(encoding="utf-8")
+    section = agents.split("## レビュー指摘への対応\n")[1].split("\n## ")[0]
+    assert reference_path in section
+    assert "Handling review feedback / レビュー指摘への対応" in section
+    assert all(str(path) in section for path in REVIEW_SKILL_PATHS)
+
+
+def test_review_feedback_steps_are_not_copied_into_entrypoints():
+    bodies = [
+        *(
+            _prompt_body(name, language)
+            for name in WORKFLOW_PROMPTS
+            for language in ("en", "ja")
+        ),
+        *(_ask(language)["body"] for language in ("en", "ja")),
+        load_markdown_with_frontmatter(SKILL_PATH)["body"],
+        *(load_markdown_with_frontmatter(path)["body"] for path in REVIEW_SKILL_PATHS),
+        Path("AGENTS.md").read_text(encoding="utf-8"),
+    ]
+    reference = capability_reference_text()
+    review = reference.split("#### Handling review feedback\n")[1].split("### Rules\n")[
+        0
+    ]
+    steps = re.findall(r"^\d+\. (.+)$", review, flags=re.MULTILINE)
+    assert len(steps) == 14
+    for body in bodies:
+        assert all(step not in body for step in steps)
 
 
 def test_skill_excludes_workflow_run_contract():
