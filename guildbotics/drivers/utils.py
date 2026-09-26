@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
 from guildbotics.capabilities.completion_retry import command_failure_payload
-from guildbotics.drivers.command_runner import run_main_command
+from guildbotics.drivers.command_runner import CommandRunner, run_main_command
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 from guildbotics.runtime.workflow_invocation import WorkflowSource
@@ -114,6 +114,8 @@ async def run_command(
         words = shlex.split(command)
         if not words:
             raise ValueError(f"Empty or whitespace command string: {command!r}")
-        await run_main_command(context, words[0], words[1:], None, source=task_type)
+        await run_main_command(
+            CommandRunner(context, words[0], words[1:]), source=task_type
+        )
 
     return await run_with_logging(context, command, task_type, _action)

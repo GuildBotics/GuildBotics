@@ -39,6 +39,7 @@ def _main_spec():
         name="main",
         base_dir=Path("."),
         command_class=DummyCommand,
+        path=Path("main.md"),
         cwd=Path("/workspace"),
     )
 
@@ -124,6 +125,9 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
     seen: list[object] = []
 
     class Shared:
+        def __init__(self, access) -> None:
+            self.access = access
+
         async def close(self) -> None:
             closed.append(self)
 
@@ -216,9 +220,10 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
         return SimpleNamespace(run=run, response_class=None)
 
     ctx.get_brain = get_brain
-    result = await CommandRunner(ctx, "ask", [], cwd=working_tree).run()
+    outcome = await CommandRunner(ctx, "ask", [], cwd=working_tree).run()
 
-    assert result == "Review completed: local edit inspected."
+    result = "Review completed: local edit inspected."
+    assert outcome.result == outcome.text_output == result
     assert ctx.shared_state["ask"] == result
     assert edited_file.read_text(encoding="utf-8") == "local edit"
 
@@ -236,13 +241,15 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
     selected: list[str] = []
 
     class FakeRunner:
-        def __init__(self, context, name, args, cwd=None):
+        command_name = TICKET_WORKFLOW_COMMAND
+
+        def __init__(self, context):
             self.context = context
 
         async def run(self):
             # The workflow finds the ticket the host selected.
             assert self.context.shared_state[WORKFLOW_INVOCATION_KEY] is invocation
-            return "worked"
+            return CommandOutcome(result="worked", text_output="worked")
 
     class FakeSelector:
         def __init__(self, context, *, source):
@@ -251,27 +258,33 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
         async def run_next(self, person, run_workflow):
             return await run_workflow(invocation)
 
-    monkeypatch.setattr(command_runner, "CommandRunner", FakeRunner)
     monkeypatch.setattr(ticket_selector, "TicketSelector", FakeSelector)
     context = DummyContext()
     context.person = SimpleNamespace(person_id="aiko")
 
-    output = await command_runner.run_main_command(
-        context, TICKET_WORKFLOW_COMMAND, [], None, source=source
-    )
+    outcome = await command_runner.run_main_command(FakeRunner(context), source=source)
 
-    assert output == "worked"
+    assert outcome.text_output == "worked"
     assert selected == [source]
 
 
 @pytest.mark.asyncio
-async def test_ticket_workflow_without_a_ticket_outputs_nothing(monkeypatch):
+@pytest.mark.parametrize(
+    ("reply", "output"),
+    [(None, ""), ("Rate limited until 10:00.", "Rate limited until 10:00.")],
+    ids=["no-ticket", "rate-limited"],
+)
+async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
+    monkeypatch, reply, output
+):
     from guildbotics.drivers import command_runner, ticket_selector
     from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
 
     class FakeRunner:
-        def __init__(self, context, name, args, cwd=None):
-            pass
+        command_name = TICKET_WORKFLOW_COMMAND
+
+        def __init__(self, context):
+            self.context = context
 
         async def run(self):
             raise AssertionError("no ticket, no workflow")
@@ -281,15 +294,14 @@ async def test_ticket_workflow_without_a_ticket_outputs_nothing(monkeypatch):
             pass
 
         async def run_next(self, person, run_workflow):
-            return None
+            return reply
 
-    monkeypatch.setattr(command_runner, "CommandRunner", FakeRunner)
     monkeypatch.setattr(ticket_selector, "TicketSelector", IdleSelector)
     context = DummyContext()
     context.person = SimpleNamespace(person_id="aiko")
 
-    output = await command_runner.run_main_command(
-        context, TICKET_WORKFLOW_COMMAND, [], None, source="manual"
+    outcome = await command_runner.run_main_command(
+        FakeRunner(context), source="manual"
     )
 
-    assert output == ""
+    assert outcome.text_output == output

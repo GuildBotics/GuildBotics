@@ -10,7 +10,10 @@ from guildbotics.app_api.models import DiagnosticCheck, ScenarioDiagnosticsRespo
 from guildbotics.app_api.verify import (
     resolve_default_model_provider,
 )
+from guildbotics.capabilities.completion_retry import find_cli_agent_execution_error
 from guildbotics.capabilities.member_chat import probe_slack_app_token
+from guildbotics.commands.errors import CommandError
+from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Person, Service
 from guildbotics.integrations.chat_profile import (
@@ -25,7 +28,11 @@ from guildbotics.integrations.github.github_utils import (
     get_github_username,
 )
 from guildbotics.integrations.slack.slack_chat_service import SlackApiError
-from guildbotics.intelligences.brains.cli_agent import CliAgentBrain
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentBrain,
+    CliAgentExecutionError,
+    CliAgentExecutionResult,
+)
 from guildbotics.intelligences.cli_agents import (
     cli_agent_executable,
     resolve_cli_agent_path,
@@ -39,6 +46,35 @@ DiagnosticSection = Literal[
 ]
 DiagnosticStatus = Literal["ok", "warning", "error"]
 SLACK_USER_ID_PATTERN = re.compile(r"^[UW][A-Z0-9]{8,}$")
+
+
+#: The bundled read-only command whose one AI CLI turn is the check: every turn
+#: runs inside a command, whose environment holds it.
+_CLI_AGENT_CHECK_COMMAND = "diagnostics/cli_agent"
+
+
+async def _run_cli_agent_check(
+    context: Context, member: Person, cwd: str
+) -> CliAgentExecutionResult:
+    """Run the check command and return what the AI CLI tool did.
+
+    A tool that fails or answers nothing fails the command; its result still
+    says how, which is what the check reports.
+    """
+    try:
+        outcome = await run_command(
+            context,
+            _CLI_AGENT_CHECK_COMMAND,
+            [],
+            person_identifier=member.person_id,
+            cwd=Path(cwd),
+        )
+    except CommandError as exc:
+        failure = find_cli_agent_execution_error(exc)
+        if failure is None:
+            raise
+        return cast(CliAgentExecutionError, failure).result
+    return CliAgentExecutionResult(stdout=outcome.text_output, stderr="", returncode=0)
 
 
 class ScenarioDiagnosticsService:
@@ -366,20 +402,12 @@ class ScenarioDiagnosticsService:
         target = ""
         executable = ""
         try:
-            config = {
-                "brain": "agent",
-                "body": (
-                    "You are validating that the configured AI CLI tool can run. "
-                    "Reply with exactly OK and perform no file changes."
-                ),
-                "template_engine": "default",
-            }
-            message = (
+            c.pipe = (
                 "This is a read-only diagnostics check. "
                 "Reply with exactly OK. Do not create, modify, delete, "
                 "or inspect unrelated files."
             )
-            brain = c.get_brain("diagnostics/cli_agent", config, None)
+            brain = c.get_brain(_CLI_AGENT_CHECK_COMMAND, None, None)
             if not isinstance(brain, CliAgentBrain):
                 return [
                     self._check(
@@ -431,9 +459,7 @@ class ScenarioDiagnosticsService:
             temporary_directory = tempfile.TemporaryDirectory(
                 prefix="guildbotics-diagnostics-cli-"
             )
-            result = await brain.run_with_execution_details(
-                message, cwd=Path(temporary_directory.name)
-            )
+            result = await _run_cli_agent_check(c, member, temporary_directory.name)
 
             if result.returncode != 0:
                 checks.append(

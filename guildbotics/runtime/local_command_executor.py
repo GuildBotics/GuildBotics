@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from guildbotics.commands.models import CommandOutcome
 from guildbotics.drivers.command_runner import run_command
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.execution import (
@@ -25,7 +26,7 @@ class LocalCommandExecutor:
         cwd: Path | None = None,
         *,
         target_device: str | None = None,
-    ) -> str:
+    ) -> CommandOutcome:
         """Execute locally after resolving placement.
 
         Args:
@@ -36,6 +37,9 @@ class LocalCommandExecutor:
             cwd: Working directory for the command process.
             target_device: Optional remote device id. This executor only
                 accepts a local placement.
+
+        Returns:
+            The main command's result and the run's text output.
         """
         placement = resolve_execution_placement(target_device)
         if placement.kind != "local":

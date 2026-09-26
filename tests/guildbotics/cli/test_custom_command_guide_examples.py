@@ -93,7 +93,7 @@ async def test_quickstart_os_ui_language_without_args(
         """,
     )
     ctx = _make_context("こんにちは", language=project_language)
-    out = await run_command(ctx, "translate", [])
+    out = (await run_command(ctx, "translate", [])).text_output
     assert f"テキストが{expected}であれば英語に" in out
     assert "こんにちは" in out
 
@@ -121,7 +121,7 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
         """,
     )
     ex2 = CommandRunner(ctx, "translate2", ["source=英語", "target=日本語"])
-    out = asyncio.run(ex2.run())
+    out = asyncio.run(ex2.run()).text_output
     assert "英語から日本語に翻訳してください" in out
 
 
@@ -145,11 +145,11 @@ async def test_jinja2_conditional_rendering(tmp_path, monkeypatch):
 
     ctx = _make_context("")
     ex1 = CommandRunner(ctx, "cond", [])
-    out1 = await ex1.run()
+    out1 = (await ex1.run()).text_output
     assert "以下のテキストを英訳してください:" in out1
 
     ex2 = CommandRunner(ctx, "cond", ["target=中国語"])
-    out2 = await ex2.run()
+    out2 = (await ex2.run()).text_output
     assert "以下のテキストを中国語に翻訳してください:" in out2
 
 
@@ -183,7 +183,7 @@ async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
     ctx = _make_context("", members)
     ex = CommandRunner(ctx, "context-info", [])
     with coverage_suspended():
-        out = await ex.run()
+        out = (await ex.run()).text_output
     assert "言語コード: en" in out
     assert "言語名: English" in out
     assert "ID: alice" in out and "名前: Alice" in out
@@ -211,7 +211,7 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
     ctx = _make_context("")
     ex = CommandRunner(ctx, "summarize", ["file=README.md"], cwd=Path("."))
     await ex.run()
-    result = ex._context.shared_state.get("summarize")
+    result = ex.context.shared_state.get("summarize")
     # DummyBrain returns kwargs; ensure cwd and session_state are provided
     assert isinstance(result, dict)
     assert str(result.get("cwd", "")).endswith("")  # cwd present
@@ -239,7 +239,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
     ctx = _make_context("")
     ex = CommandRunner(ctx, "get-time-of-day", [])
     await ex.run()
-    shared = ex._context.shared_state
+    shared = ex.context.shared_state
     assert "current_time" in shared
     assert "time_of_day" in shared
     # DummyBrain echoes session_state; confirm parameters flowed through
@@ -275,7 +275,7 @@ async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "greet-time", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     # With DummyBrain, no label; template should fall back to else branch
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
@@ -320,7 +320,7 @@ async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "echo-args", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "arg1: a" in out
     assert "arg2: b" in out
     assert "key1: c" in out
@@ -340,7 +340,7 @@ async def test_python_command_hello_world(tmp_path, monkeypatch):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "hello", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert out.strip() == "Hello, world!"
 
 
@@ -364,7 +364,7 @@ def main(context: Context, arg1, arg2, key1=None, key2=None):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "hello", ["a", "b", "key1=c", "key2=d"])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "arg1: a" in out
     assert "arg2: b" in out
     assert "key1: c" in out
@@ -391,7 +391,7 @@ def main(context: Context, *args, **kwargs):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "hello", ["a", "b", "key1=c", "key2=d"])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "arg[0]: a" in out
     assert "arg[1]: b" in out
     assert "kwarg[key1]: c" in out
@@ -430,7 +430,7 @@ async def main(context: Context):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "hello", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
 
@@ -449,7 +449,7 @@ async def test_print_command_basic(tmp_path, monkeypatch):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "greet", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "こんにちは。" in out
 
 
@@ -480,7 +480,7 @@ async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "greet-time-print", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     # With DummyBrain, label is absent; falls to else branch
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
@@ -531,7 +531,7 @@ async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatc
 
     ctx = _make_context("")
     ex = CommandRunner(ctx, "greet-ext", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
 
@@ -556,7 +556,8 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
         Person(person_id="yuki", name="Yuki", is_active=True),
     ]
     base_ctx = _make_context("", members)
-    out = await run_command(base_ctx, "whoami", [], person_identifier="yuki")
+    outcome = await run_command(base_ctx, "whoami", [], person_identifier="yuki")
+    out = outcome.text_output
     assert "ID: yuki" in out
 
 
@@ -657,11 +658,11 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
 
     ctx.brain_factory = _StubBrainFactory()  # type: ignore[assignment]
     ex = CommandRunner(ctx, "coverage", [])
-    out = await ex.run()
+    out = (await ex.run()).text_output
     # Verify template expanded schema-defined variables into the final output.
     assert "- [ ] Implement coverage-driven tests (priority: 1)" in out
     assert "- [ ] Refactor flaky tests (priority: 2)" in out
-    shared = ex._context.shared_state
+    shared = ex.context.shared_state
     # Auto-generated name for the second command (the first inline prompt)
     assert any(key.startswith("coverage__") for key in shared)
     # Named result from the third command should exist

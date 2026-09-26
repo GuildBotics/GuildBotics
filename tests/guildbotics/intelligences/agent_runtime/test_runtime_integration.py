@@ -5,7 +5,9 @@ import json
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_runtime import diagnostics, registry
+from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
     AgentEvent,
@@ -741,7 +743,7 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
 
 
 @pytest.mark.asyncio
-async def test_registry_keeps_only_one_native_process_per_person(monkeypatch) -> None:
+async def test_a_command_keeps_one_native_process_per_member(monkeypatch) -> None:
     created: list[_TrackedAdapter] = []
 
     def create_adapter(name: str):
@@ -751,18 +753,59 @@ async def test_registry_keeps_only_one_native_process_per_person(monkeypatch) ->
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
 
-    first = await registry.get_native_adapter("aiko", "codex", "run-1")
-    assert await registry.get_native_adapter("aiko", "codex", "run-1") is first
-    second = await registry.get_native_adapter("aiko", "claude", "run-2")
+    async with command_environment(CommandAccess()):
+        first = await registry.get_native_adapter("aiko", "codex", "run-1")
+        assert await registry.get_native_adapter("aiko", "codex", "run-1") is first
+        second = await registry.get_native_adapter("aiko", "claude", "run-2")
 
-    assert first.closed is True
-    assert second.closed is False
-    other_person = await registry.get_native_adapter("yuki", "codex", "run-3")
-    assert second.closed is False
-    assert other_person.closed is False
-    await registry.close_native_adapters()
+        assert first.closed is True
+        assert second.closed is False
+        other_person = await registry.get_native_adapter("yuki", "codex", "run-3")
+        assert second.closed is False
+        assert other_person.closed is False
+
+    # The command's adapters end with it.
     assert second.closed is True
     assert other_person.closed is True
+
+
+@pytest.mark.asyncio
+async def test_commands_of_one_member_never_close_each_others_adapters(
+    monkeypatch,
+) -> None:
+    """A read-only command beside one that writes: each keeps its own turn."""
+    monkeypatch.setattr(registry, "create_native_adapter", _TrackedAdapter)
+    writing_started = asyncio.Event()
+    reading_done = asyncio.Event()
+
+    async def writing() -> _TrackedAdapter:
+        async with command_environment(CommandAccess()):
+            adapter = await registry.get_native_adapter("aiko", "codex", "write")
+            writing_started.set()
+            await reading_done.wait()
+            assert adapter.closed is False
+            return adapter
+
+    async def reading() -> _TrackedAdapter:
+        await writing_started.wait()
+        async with command_environment(CommandAccess(read_only=True)):
+            adapter = await registry.get_native_adapter("aiko", "codex", "read")
+        reading_done.set()
+        return adapter
+
+    written, read = await asyncio.gather(writing(), reading())
+
+    assert written is not read
+    assert written.closed is True
+    assert read.closed is True
+
+
+@pytest.mark.asyncio
+async def test_no_native_adapter_outside_a_command() -> None:
+    with pytest.raises(AgentRuntimeError) as refused:
+        await registry.get_native_adapter("aiko", "codex", "run-1")
+
+    assert refused.value.category is AgentRuntimeErrorCategory.CONFIGURATION
 
 
 def test_agent_diagnostics_redact_credentials_and_keep_correlation(
@@ -879,17 +922,17 @@ async def test_native_registry_serializes_replacement_for_same_execution(
         return adapter
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
-    first = await registry.get_native_adapter("aiko", "codex", "run-1")
+    async with command_environment(CommandAccess()):
+        first = await registry.get_native_adapter("aiko", "codex", "run-1")
 
-    replacements = await asyncio.gather(
-        registry.get_native_adapter("aiko", "codex", "run-2"),
-        registry.get_native_adapter("aiko", "codex", "run-2"),
-    )
+        replacements = await asyncio.gather(
+            registry.get_native_adapter("aiko", "codex", "run-2"),
+            registry.get_native_adapter("aiko", "codex", "run-2"),
+        )
 
-    assert replacements[0] is replacements[1]
-    assert len(created) == 2
-    assert first.closed is True
-    await registry.close_native_adapters()
+        assert replacements[0] is replacements[1]
+        assert len(created) == 2
+        assert first.closed is True
 
 
 @pytest.fixture

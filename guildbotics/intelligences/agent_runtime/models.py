@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Protocol, get_args
+from typing import Any, Protocol, get_args
 
+from guildbotics.commands.metadata import InspectionScope
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.runtime.person_lease import PersonExecutionLease
 
@@ -87,12 +88,6 @@ class TurnLogin:
     refusal: Callable[[], str] = lambda: ""
 
 
-#: The workspace's own state a turn may be let inspect: ``diagnostics`` is the
-#: recorded runs, ``config`` the workspace configuration and the packaged
-#: templates it falls back to.
-InspectionScope = Literal["diagnostics", "config"]
-
-
 @dataclass(frozen=True, slots=True)
 class AgentExecutionContext:
     person_id: str
@@ -123,8 +118,8 @@ class AgentExecutionContext:
     #: broker runs record into it, so what the agent read or changed shows up on
     #: the execution that asked for it.
     trace_id: str = ""
-    #: The workspace's own state the caller lets the turn inspect, mounted
-    #: read-only beside the contract's grants. What a turn needs to read is
+    #: The workspace's own state the turn's command declares it inspects,
+    #: mounted read-only beside the contract's grants. What a turn needs to read is
     #: its work's business and independent of whether its contract lets it
     #: change anything.
     inspects: frozenset[InspectionScope] = frozenset()
