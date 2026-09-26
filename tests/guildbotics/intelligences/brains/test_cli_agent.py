@@ -3,12 +3,10 @@ import logging
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
-from guildbotics.intelligences.agent_environment.toolchain import (
-    DnsSettings,
-    ToolchainDeclaration,
+from guildbotics.intelligences.agent_runtime.environment import (
+    command_environment,
+    running_command,
 )
-from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.brains import cli_agent
 from guildbotics.intelligences.brains import util as brain_util
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
@@ -44,11 +42,6 @@ def _native_brain(monkeypatch, result: cli_agent.CliAgentExecutionResult, **kwar
 
     monkeypatch.setattr(
         cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
-    )
-    monkeypatch.setattr(
-        cli_agent,
-        "load_toolchain",
-        lambda: ToolchainDeclaration(dns=DnsSettings(nameservers=["1.1.1.1"])),
     )
     monkeypatch.setitem(
         cli_agent.person_cli_agent_mapping,
@@ -469,6 +462,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
 
     async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
         captured["context"] = context
+        captured["command"] = running_command()
         return cli_agent.CliAgentExecutionResult(
             stdout="answer", stderr="", returncode=0
         )
@@ -488,7 +482,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     lease.acquire(source="routine", command="ticket", work_id="work-1")
     declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
     try:
-        async with command_environment(declared):
+        async with command_environment(declared, frozenset({"claude"})):
             result = await brain._execute(
                 input="why did it fail?",
                 cwd=isolated_cwd,
@@ -508,8 +502,8 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
 
     assert not result.error_category
     assert result.stdout == "answer"
-    assert captured["context"].contract.read_only is True
-    assert captured["context"].inspects == frozenset({"diagnostics"})
+    assert captured["command"].contract.read_only is True
+    assert captured["command"].access.inspects == frozenset({"diagnostics"})
     assert captured["context"].lease is None
     assert captured["context"].cwd == isolated_cwd
     assert captured["context"].workspace_root == workspace_root
@@ -523,6 +517,7 @@ async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> 
 
     async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
         captured["context"] = context
+        captured["command"] = running_command()
         return cli_agent.CliAgentExecutionResult(
             stdout="answer", stderr="", returncode=0
         )
@@ -533,7 +528,7 @@ async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
 
-    async with command_environment(CommandAccess()):
+    async with command_environment(CommandAccess(), frozenset({"claude"})):
         await brain._execute(
             input="hello",
             cwd=tmp_path,
@@ -550,10 +545,9 @@ async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> 
             effort=cli_agent.EffortDecision(),
         )
 
-    context = captured["context"]
-    assert context.contract.read_only is False
-    assert context.inspects == frozenset()
-    assert context.lease is not None
+    assert captured["command"].contract.read_only is False
+    assert captured["command"].access.inspects == frozenset()
+    assert captured["context"].lease is not None
 
 
 @pytest.mark.asyncio
@@ -581,7 +575,9 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
         effort={"high": {"model": "big-model"}},
     )
 
-    async with command_environment(CommandAccess(read_only=True)):
+    async with command_environment(
+        CommandAccess(read_only=True), frozenset({"claude"})
+    ):
         await brain._execute(
             input="hello",
             cwd=tmp_path,
@@ -931,44 +927,6 @@ def test_a_tool_definition_network_block_is_ignored(monkeypatch, tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_every_slot_uses_the_workspace_network_declaration(
-    monkeypatch, tmp_path
-) -> None:
-    captured: dict = {}
-
-    async def fake_execute_native_turn(self, *, context, **_kwargs):
-        captured["contract"] = context.contract
-        return cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0)
-
-    _native_brain(
-        monkeypatch,
-        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
-    )
-    monkeypatch.setattr(
-        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
-    )
-    network = NetworkPolicy(
-        mode="allowlist",
-        allowed_domains=["registry.npmjs.org"],
-        allow_local_network=False,
-    )
-    monkeypatch.setattr(
-        cli_agent,
-        "load_toolchain",
-        lambda: ToolchainDeclaration(
-            network=network, dns=DnsSettings(nameservers=["1.1.1.1"])
-        ),
-    )
-
-    brain = cli_agent.CliAgentBrain(
-        "p1", "x", logger=_test_logger(), cli_agent="default"
-    )
-    await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
-
-    assert captured["contract"].network == network
-
-
-@pytest.mark.asyncio
 async def test_a_turn_the_provider_answered_records_the_credential_as_verified(
     monkeypatch, tmp_path
 ):
@@ -1088,8 +1046,9 @@ async def test_structured_outcomes_are_shared_across_members(
 async def test_a_turn_records_what_its_environment_confines_it_to(
     tmp_path, monkeypatch
 ):
-    """Whatever provider runs it, the turn's start names its contract, so a
-    read-only turn is recorded as one without asking the adapter."""
+    """Whatever provider runs it, the turn's start names its command's
+    contract, so a read-only turn is recorded as one without asking the
+    adapter."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from guildbotics.intelligences.agent_runtime import diagnostics, registry
@@ -1097,7 +1056,6 @@ async def test_a_turn_records_what_its_environment_confines_it_to(
         AgentTerminalResult,
         ConversationKey,
     )
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
 
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     adapter = SimpleNamespace(
@@ -1125,12 +1083,16 @@ async def test_a_turn_records_what_its_environment_confines_it_to(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "grok", "troubleshooting", "c1"),
-        contract=AccessContract(read_only=True),
     )
 
-    await brain._execute_native_turn(
-        input="why?", configured={}, context=context, adapter_name="grok", run_id="t"
-    )
+    async with command_environment(CommandAccess(read_only=True), frozenset({"grok"})):
+        await brain._execute_native_turn(
+            input="why?",
+            configured={},
+            context=context,
+            adapter_name="grok",
+            run_id="t",
+        )
 
     started = next(event for event in recorded if event.name == "started")
     policy = started.details["requested_policy"]
@@ -1158,7 +1120,6 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         AgentTerminalResult,
         ConversationKey,
     )
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
 
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     monkeypatch.setitem(
@@ -1195,17 +1156,21 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
-        contract=AccessContract(),
     )
 
-    turn = brain._execute_native_turn(
-        input="work", configured={}, context=context, adapter_name="copilot", run_id="t"
-    )
-    if tool_says == "crash" and not refused:
-        with pytest.raises(TimeoutError):
-            await turn
-        return
-    result = await turn
+    async with command_environment(CommandAccess(), frozenset({"copilot"})):
+        turn = brain._execute_native_turn(
+            input="work",
+            configured={},
+            context=context,
+            adapter_name="copilot",
+            run_id="t",
+        )
+        if tool_says == "crash" and not refused:
+            with pytest.raises(TimeoutError):
+                await turn
+            return
+        result = await turn
 
     said = {
         "answer": "Error: Execution failed",

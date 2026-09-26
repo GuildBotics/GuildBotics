@@ -26,6 +26,7 @@ class DummyContext:
         self.shared_state = {}
         self.pipe = ""
         self.invoker = None
+        self.person = SimpleNamespace(person_id="aiko")
 
     def set_invoker(self, invoker):
         self.invoker = invoker
@@ -159,8 +160,9 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
     seen: list[object] = []
 
     class Shared:
-        def __init__(self, access) -> None:
+        def __init__(self, access, contract, tools) -> None:
             self.access = access
+            self.tools = tools
 
         async def close(self) -> None:
             closed.append(self)
@@ -242,8 +244,9 @@ async def test_a_command_started_inside_another_shares_its_environment(
     seen: list[object] = []
 
     class Shared:
-        def __init__(self, access) -> None:
+        def __init__(self, access, contract, tools) -> None:
             self.access = access
+            self.tools = tools
 
         async def close(self) -> None:
             closed.append(self)
@@ -426,6 +429,145 @@ async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
     )
 
     assert outcome.text_output == output
+
+
+@pytest.mark.asyncio
+async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured_with(
+    monkeypatch,
+):
+    """Which tool a turn uses is decided while the command runs, so the
+    environment is started able to run each of the member's slots."""
+    from guildbotics.drivers.command_runner import run_in_environment
+    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.intelligences.brains import cli_agent
+
+    monkeypatch.setitem(
+        cli_agent.person_cli_agent_mapping,
+        "aiko",
+        {
+            "default": cli_agent.ExecutableInfo(adapter="claude"),
+            "review": cli_agent.ExecutableInfo(adapter="codex"),
+            "again": cli_agent.ExecutableInfo(adapter="claude"),
+        },
+    )
+    seen: list[frozenset[str]] = []
+
+    class Turning(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            seen.append(environment.running_command().tools)
+            return await super().run()
+
+    spec = _main_spec()
+    spec.command_class = Turning
+    await run_in_environment(_runner_for(spec))
+
+    assert seen == [frozenset({"claude", "codex"})]
+
+
+def _unreadable(name: str):
+    def fail(*_):
+        raise PermissionError(13, "Permission denied", name)
+
+    return fail
+
+
+def _invalid(error: type[Exception]):
+    def fail(*_):
+        raise error("the setting is invalid")
+
+    return fail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("loader", "failure", "message"),
+    [
+        ("load_toolchain", "toolchain", "the setting is invalid"),
+        ("load_shared_grants", "grants", "the setting is invalid"),
+        ("resolve_access", "permission", None),
+    ],
+)
+async def test_invalid_contract_settings_fail_the_command_when_it_starts(
+    monkeypatch, tmp_path, loader, failure, message
+):
+    """The settings the contract is read from are read once, when the command
+    starts: an error in them fails every command, one that runs no AI CLI
+    turn included, before anything of it runs."""
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.drivers.command_runner import run_in_environment
+    from guildbotics.intelligences.agent_environment.contract import (
+        AccessContractError,
+    )
+    from guildbotics.intelligences.agent_environment.status import (
+        filesystem_permission_problem,
+    )
+    from guildbotics.intelligences.agent_environment.toolchain import ToolchainError
+    from guildbotics.intelligences.agent_runtime import environment
+
+    unreadable = tmp_path / "Documents" / "shared"
+    monkeypatch.setattr(
+        environment,
+        loader,
+        {
+            "toolchain": _invalid(ToolchainError),
+            "grants": _invalid(AccessContractError),
+            "permission": _unreadable(str(unreadable)),
+        }[failure],
+    )
+    ran: list[str] = []
+
+    class Plain(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            ran.append("ran")
+            return await super().run()
+
+    spec = _main_spec()
+    spec.command_class = Plain
+
+    with pytest.raises(CommandError) as refused:
+        await run_in_environment(_runner_for(spec))
+
+    assert str(refused.value) == (message or filesystem_permission_problem(unreadable))
+    assert ran == []
+    assert environment._COMMAND.get() is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_ai_cli_tool_settings_fail_the_command_when_it_starts(
+    monkeypatch,
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.drivers import command_runner
+
+    def invalid(person_id):
+        raise ValueError(f"AI CLI tool slot 'default' of {person_id} is invalid")
+
+    monkeypatch.setattr(command_runner, "get_cli_agent_mapping", invalid)
+    ran: list[str] = []
+
+    class Plain(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+        async def run(self):
+            ran.append("ran")
+            return await super().run()
+
+    spec = _main_spec()
+    spec.command_class = Plain
+
+    with pytest.raises(CommandError, match="slot 'default' of aiko is invalid"):
+        await command_runner.run_in_environment(_runner_for(spec))
+    assert ran == []
 
 
 def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):

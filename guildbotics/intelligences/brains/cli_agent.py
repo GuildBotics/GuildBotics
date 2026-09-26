@@ -13,22 +13,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
-from guildbotics.intelligences.agent_environment.contract import (
-    AccessContract,
-    AccessContractError,
-    load_local_grants,
-    load_shared_grants,
-    resolve_access,
-)
 from guildbotics.intelligences.agent_environment.provider_state import (
     record_authentication_outcome,
-)
-from guildbotics.intelligences.agent_environment.status import (
-    filesystem_permission_problem,
-)
-from guildbotics.intelligences.agent_environment.toolchain import (
-    ToolchainError,
-    load_toolchain,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     CONTEXT_COMPACTION,
@@ -781,8 +767,7 @@ class CliAgentBrain(Brain):
         # the member's workspace, chat or tickets, and holding the lease would
         # make it unusable exactly when it is most needed: while that member
         # is busy.
-        access = current_command_access()
-        read_only = access.read_only
+        read_only = current_command_access().read_only
         lease = None if read_only else current_person_lease()
         owned_lease: PersonExecutionLease | None = None
         if lease is None and not read_only:
@@ -803,24 +788,6 @@ class CliAgentBrain(Brain):
                 )
             lease = owned_lease
         try:
-            try:
-                contract = AccessContract(
-                    network=load_toolchain().network,
-                    access=resolve_access(load_shared_grants(), load_local_grants()),
-                    read_only=read_only,
-                )
-            except (AccessContractError, ToolchainError, PermissionError) as exc:
-                return CliAgentExecutionResult(
-                    stdout="",
-                    stderr=(
-                        filesystem_permission_problem(Path(exc.filename or cwd))
-                        if isinstance(exc, PermissionError)
-                        else str(exc)
-                    ),
-                    returncode=1,
-                    error_category="configuration",
-                    error_details={"cli_agent": adapter_name},
-                )
             if lease is not None:
                 lease.bind_run_id(run_id)
             context = AgentExecutionContext(
@@ -852,12 +819,6 @@ class CliAgentBrain(Brain):
                 attempt=_attempt(configured),
                 continuation_input=str(configured.get("continuation_input") or ""),
                 participant_labels=str(configured.get("participant_labels") or ""),
-                inspects=access.inspects,
-                contract=contract,
-                tools=frozenset(
-                    info.adapter
-                    for info in get_cli_agent_mapping(self.person_id).values()
-                ),
             )
             return await self._execute_native_turn(
                 input=input,
@@ -883,6 +844,9 @@ class CliAgentBrain(Brain):
     ) -> CliAgentExecutionResult:
         from guildbotics.intelligences.agent_runtime.diagnostics import (
             record_agent_event,
+        )
+        from guildbotics.intelligences.agent_runtime.environment import (
+            running_command,
         )
         from guildbotics.intelligences.agent_runtime.models import (
             AgentEvent,
@@ -947,7 +911,7 @@ class CliAgentBrain(Brain):
                         "work_kind": context.conversation_key.work_kind,
                         # What the environment confines the turn to, whatever
                         # provider runs it.
-                        "requested_policy": context.contract.requested_policy(
+                        "requested_policy": running_command().contract.requested_policy(
                             context.cwd, workspace_root=context.workspace_data_root
                         ),
                     },

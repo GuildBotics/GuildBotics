@@ -98,6 +98,7 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             ran.append((context, command, args))
             ledgers.append(ledger)
 
@@ -476,7 +477,7 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
-            pass
+            self.context = context
 
         async def run(self):
             t = current_trace()
@@ -515,7 +516,7 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
-            pass
+            self.context = context
 
         async def run(self):
             seen["trace"] = current_trace()

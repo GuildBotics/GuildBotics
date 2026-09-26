@@ -22,6 +22,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.intelligences.agent_runtime.environment import command_environment
+from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 from guildbotics.runtime.workflow_invocation import (
@@ -191,14 +192,24 @@ async def run_main_command(
 async def run_in_environment(runner: CommandRunner) -> CommandOutcome:
     """Run a command in the isolated environment its AI CLI turns share.
 
-    The environment is discarded when the run ends, however it ends. A
-    command run inside another one shares that one's.
+    It is shaped for every AI CLI tool the member is configured with, and
+    discarded when the run ends, however it ends. A command run inside
+    another one shares that one's.
 
     Args:
         runner: The command to run, resolved for the member it runs as.
 
     Returns:
         The command's outcome.
+
+    Raises:
+        CommandError: If the member's AI CLI tool settings or the settings the
+            environment's access contract is read from are invalid.
     """
-    async with command_environment(runner.access):
+    try:
+        mapping = get_cli_agent_mapping(runner.context.person.person_id)
+    except ValueError as exc:
+        raise CommandError(str(exc)) from exc
+    tools = frozenset(info.adapter for info in mapping.values())
+    async with command_environment(runner.access, tools):
         return await runner.run()

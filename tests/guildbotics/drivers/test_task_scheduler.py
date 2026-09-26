@@ -613,6 +613,7 @@ class _FailingRunner:
     access = CommandAccess()
 
     def __init__(self, context, name, args, cwd=None, *, ledger) -> None:
+        self.context = context
         self.command_name = name
 
     async def run(self) -> str:
