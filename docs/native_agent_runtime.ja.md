@@ -64,8 +64,8 @@ runtimeがlistenするsocketに対してWindows Defender Firewallが確認を出
 ように、ドライブ文字を最上位ディレクトリにした形で見えます（作業ディレクトリもこの規約で
 bindします）。
 
-環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLI）はsnapshotとして
-端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
+環境の中身（ベースイメージと、GuildBoticsが版を固定して導入するプロバイダCLIと、GuildBotics自身の
+Python環境）はsnapshotとして端末ごとにビルドし、宣言と一致しなければ再ビルドします。追加の開発ツールはpackage listではなく
 ベースイメージに入れます。Desktopの **エージェント実行環境** 画面がruntime、ベースイメージ、
 snapshotの状態（ビルドボタンつき）、
 割り当てリソース、network policy、DNSリゾルバ、ツールごとのログインを示し、CLIでは`guildbotics environment status` / `build` /
@@ -74,6 +74,24 @@ snapshotの状態（ビルドボタンつき）、
 microVM起動時に適用します。imageのビルド中と環境が使えない間はticket patrolとchat dispatchを失敗ではなく
 見送りにします。turnが起動できない理由（runtime無し、宣言不正、ベースイメージ未読み込み、
 snapshot未ビルド、未ログイン）は、同じ文言で画面上部の状態異常にも出ます。
+
+GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコードを動かすためのものです。
+`/opt/guildbotics/venv`にPython 3.12（imageが持っていればそれを使い、無ければuvが`/opt/uv/python`へ
+入れます）と固定した依存を入れ、`to_pdf`が使うWeasyPrintのネイティブライブラリ（Pango）と、欧文・
+日本語のフォント（`fonts-dejavu-core`、`fonts-noto-cjk`）を`apt-get`で入れます。依存の一覧は
+`guildbotics/intelligences/agent_environment/requirements.txt`で、`uv.lock`からhostでしか使わない
+`microsandbox`を除いて書き出したものです（`uv.lock`を変えたら書き出し直します。書き出しの
+コマンドは、ずれを検出するテスト`test_requirements.py`が失敗時に表示します）。snapshotの名前は
+各ビルド手順の中身から作るので、依存の一覧を変えるとsnapshotは古い扱いになり、再ビルドされます。
+再ビルドの間（数十秒〜数分）はturnを起動できません。コードそのものはsnapshotに入れず、動いている
+プロセス自身の`guildbotics`パッケージ（ソースから動かしているときはチェックアウト、配布版では自分の
+build）を、どのturnのmicroVMにも`/opt/guildbotics/code/guildbotics`へ読み取り専用でbindします。hostと
+同じパスにしないのは、GuildBoticsのチェックアウト自身を作業ディレクトリにしたturnで、その中の
+`guildbotics/`が読み取り専用で覆われないようにするためです。
+
+既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルド時間と大きさ（macOS、
+ベースイメージ取得済み、書き込み層`upper.ext4`の使用量）は、GuildBotics自身のPython環境を入れる
+前が約25秒・1.3 GB、入れた後が約35秒・1.8 GBです。
 
 ベースイメージは既定でGuildBoticsのもの（Debian + Node.js + npm + git + uv）です。別の
 ツールチェーン（Pythonのinterpreter、Rust、ブラウザなど）が要る
@@ -89,7 +107,7 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Node.jsと`npm`、`curl`と`tar`）を備えていれば
+するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`）を備えていれば
 何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
@@ -103,7 +121,8 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
 - **調べるための読み取り専用mount**: コマンドが宣言したとき（`inspects`）にだけ、そのコマンドの
   turnに、ワークスペース自身の状態の一部をhostと同じパスに読み取り専用でbindします。`diagnostics`は
   記録済みの実行（`.guildbotics/local/run`）、`config`はワークスペースの設定
-  （`.guildbotics/config`）と、それが無いときに使われるパッケージ同梱のテンプレートです。現在宣言して
+  （`.guildbotics/config`）と、それが無いときに使われるパッケージ同梱のテンプレート（上記の
+  GuildBoticsのコードのmountの中の`templates`）です。現在宣言して
   いるのは同梱のトラブルシューティングのコマンド（`assistants/troubleshoot`）だけで、記録を、実行時の
   コマンドや設定と突き合わせて読みます。この宣言は`read_only`とは独立しています。turnが何を変更してよいかと、何を読む必要が
   あるかは別の問いだからです

@@ -49,6 +49,10 @@ def _declaration() -> ToolchainDeclaration:
 _DIGEST = "sha256:" + "c" * 64
 
 
+def _labels() -> list[str]:
+    return ["home", "uv", "pdf", "python", "npm", *snapshot.provisioned_installs()]
+
+
 def _with_image(reference: str = "local/agent:1", digest: str = _DIGEST):
     return parse_toolchain(
         {
@@ -158,6 +162,36 @@ def test_the_name_changes_with_the_pinned_provider_versions(
     assert snapshot_name(ImageStatus()) != changed
 
 
+def test_the_name_changes_with_the_pinned_python_dependencies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dependency bumped in ``uv.lock`` reaches the microVM only by a
+    rebuild, so the exported list is what the name follows."""
+    before = snapshot_name(ImageStatus())
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        snapshot.REQUIREMENTS.read_text(encoding="utf-8").replace(
+            "weasyprint==", "weasyprint==0", 1
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(snapshot, "REQUIREMENTS", requirements)
+
+    assert snapshot_name(ImageStatus()) != before
+
+
+def test_the_name_changes_with_the_python_and_its_native_libraries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = snapshot_name(ImageStatus())
+    monkeypatch.setattr(snapshot, "PYTHON_VERSION", "3.13")
+    changed = snapshot_name(ImageStatus())
+    assert changed != before
+
+    monkeypatch.setattr(snapshot, "PDF_PACKAGES", ("libpango-1.0-0",))
+    assert snapshot_name(ImageStatus()) != changed
+
+
 # --- recipe ----------------------------------------------------------------------
 
 
@@ -165,12 +199,7 @@ def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
     steps = build_steps()
 
     installs = list(snapshot.provisioned_installs())
-    assert [step.label for step in steps] == [
-        "home",
-        "uv",
-        "npm",
-        *installs,
-    ]
+    assert [step.label for step in steps] == _labels()
     scripts = {step.label: step.script for step in steps}
     # A tool that is not on npm is put in by its own pinned script.
     for name in installs:
@@ -178,15 +207,18 @@ def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
     assert 'install -d -m 0700 "$HOME"' in scripts["home"]
     assert f"astral-sh/uv/releases/download/{snapshot.UV_VERSION}/" in scripts["uv"]
     assert "npm install -g @openai/codex@" in scripts["npm"]
+    for package in snapshot.PDF_PACKAGES:
+        assert package in scripts["pdf"]
+    # GuildBotics' own Python: the pinned list verbatim, installed into its
+    # own environment, and WeasyPrint proven loadable before the snapshot is.
+    assert f"uv venv --no-cache --python 3.12 {snapshot.VENV}" in scripts["python"]
+    assert snapshot.REQUIREMENTS.read_text(encoding="utf-8") in scripts["python"]
+    assert f"-r {snapshot.VENV}/requirements.txt" in scripts["python"]
+    assert scripts["python"].endswith("-c 'import weasyprint'")
 
 
 def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:
-    assert [s.label for s in build_steps()] == [
-        "home",
-        "uv",
-        "npm",
-        *snapshot.provisioned_installs(),
-    ]
+    assert [s.label for s in build_steps()] == _labels()
 
 
 # --- status ----------------------------------------------------------------------
@@ -260,12 +292,7 @@ def test_a_build_runs_the_recipe_and_replaces_older_snapshots(
     assert call["home"] == guest_path(home.resolve())
     assert call["nameservers"] == ("10.0.0.53",)
     assert (call["memory_mib"], call["cpus"]) == (4096, 2)
-    assert [s.label for s in call["steps"]] == [
-        "home",
-        "uv",
-        "npm",
-        *snapshot.provisioned_installs(),
-    ]
+    assert [s.label for s in call["steps"]] == _labels()
     assert status.state == "ready"
     assert status.path.is_dir()
     assert fake.removed == [old]

@@ -409,23 +409,86 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
     expected = {
         EnvironmentMount(guest_path(run), run, True),
         EnvironmentMount(guest_path(state / "config"), state / "config", True),
-        EnvironmentMount(guest_path(get_template_path()), get_template_path(), True),
     }
     if inspects:
         assert expected <= mounts
+        # The packaged defaults are named inside the code every microVM has.
+        named = environment.inspected_directories(inspects, tmp_path)
+        assert named == {
+            "diagnostics": guest_path(run),
+            "config": guest_path(state / "config"),
+            "templates": "/opt/guildbotics/code/guildbotics/templates",
+        }
+        assert any(
+            mount.readonly
+            and mount.host is not None
+            and (mount.host / "templates") == get_template_path()
+            and f"{mount.guest}/templates" == named["templates"]
+            for mount in mounts
+        )
     else:
         assert not expected & mounts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
+    tmp_path, monkeypatch, read_only
+):
+    """GuildBotics' own code -- the package this process runs -- is in every
+    microVM at a place of its own, read-only, so a turn working in the
+    checkout it runs from still writes the package there."""
+    import guildbotics
+    from guildbotics.intelligences.agent_environment.contract import AccessContract
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentExecutionContext,
+        ConversationKey,
+    )
+
+    package = Path(guildbotics.__file__).resolve().parent
+    checkout = package.parent
+    context = AgentExecutionContext(
+        person_id="aiko",
+        run_id="r1",
+        cwd=checkout,
+        workspace_root=tmp_path,
+        workspace_data_root=tmp_path,
+        conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
+        contract=AccessContract(read_only=read_only),
+    )
+    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+
+    code = EnvironmentMount("/opt/guildbotics/code/guildbotics", package, True)
+    assert code in spec.mounts
+    assert environment.code_path(package / "cli") == f"{code.guest}/cli"
+    assert not any(
+        mount.guest.startswith(guest_path(package))
+        for mount in spec.mounts
+        if mount != code
+    )
+    assert (
+        EnvironmentMount(
+            guest_path(checkout), None if read_only else checkout, read_only
+        )
+        in spec.mounts
+    )
 
 
 def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
     """Before the first run there is no run directory: the turn is not told to
     look in a place its environment does not have."""
+    from guildbotics.intelligences.agent_environment.spec import guest_path
+
     (tmp_path / ".guildbotics" / "config").mkdir(parents=True)
 
     directories = environment.inspected_directories({"diagnostics", "config"}, tmp_path)
 
     assert "diagnostics" not in directories
-    assert directories["config"] == tmp_path / ".guildbotics" / "config"
+    assert directories["config"] == guest_path(tmp_path / ".guildbotics" / "config")
 
 
 def test_inspecting_is_limited_to_known_scopes(tmp_path):

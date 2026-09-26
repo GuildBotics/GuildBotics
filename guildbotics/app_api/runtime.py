@@ -160,7 +160,6 @@ from guildbotics.intelligences.agent_environment.runtime import (
     doctor,
 )
 from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
-from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
@@ -1443,9 +1442,7 @@ class AppRuntime:
                 {
                     "question": request.message,
                     "focus": focus.model_dump(),
-                    "directories": {
-                        name: guest_path(path) for name, path in directories.items()
-                    },
+                    "directories": directories,
                 },
                 ensure_ascii=False,
             )

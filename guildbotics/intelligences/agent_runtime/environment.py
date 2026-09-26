@@ -6,8 +6,9 @@ snapshot. The turns of one command execution (:func:`command_environment`)
 share one, and no turn runs outside a command. It boots before the first of
 them and is shaped once for all, since a running microVM cannot be reshaped:
 the turn's access contract, the persisted state of every AI CLI tool the
-member is configured with, whatever of the workspace's own state the command
-declares its turns inspect mounted read-only, and the ports of the member
+member is configured with, the running process's own GuildBotics code and
+whatever of the workspace's own state the command declares its turns inspect
+mounted read-only, and the ports of the member
 broker and of each tool's credential gateway opened. It is discarded when the
 command ends, however it ends. What changes from turn to turn is only what
 can be given to a running microVM: the working directory, the environment,
@@ -33,6 +34,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import guildbotics
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess, InspectionScope
 from guildbotics.intelligences.agent_environment.auth_gateway import (
@@ -108,17 +110,32 @@ _RELAY = (
 )
 #: How long the relay has to start, and to stop.
 _RELAY_SECONDS = 10.0
+#: Where every turn's microVM has the running process's own ``guildbotics`` package
+#: (the checkout run from, or this build's own bundle), read-only; its parent
+#: is what Python inside is pointed at. A place of GuildBotics' own rather
+#: than the host's path, so it never lands inside a directory of the user's
+#: that a turn works in.
+CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
+_PACKAGE = Path(guildbotics.__file__).resolve().parent
+CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / _PACKAGE.name), _PACKAGE, readonly=True)
+
+
+def code_path(path: Path) -> str:
+    """Where a file of the running process's own package is inside a microVM."""
+    return str(PurePosixPath(CODE_MOUNT.guest, path.relative_to(_PACKAGE).as_posix()))
 
 
 def inspected_directories(
     scopes: Iterable[InspectionScope], workspace_root: Path
-) -> dict[str, Path]:
-    """The host directories a turn inspecting ``scopes`` reads, by name.
+) -> dict[str, str]:
+    """The directories a turn inspecting ``scopes`` reads, by name, as the
+    guest spells them: what the turn is told to look in.
 
-    Each is mounted read-only at its own path, the way the guest spells it,
-    so this one table decides both what the turn sees and what it is told to
-    look in; a directory that does not exist yet (no run recorded) is in
-    neither. The workspace's ``.guildbotics`` stays closed otherwise.
+    The workspace's own state is mounted read-only at its own path
+    (:func:`_inspected_mounts`), so the two cannot disagree; a directory that
+    does not exist yet (no run recorded) is in neither. The workspace's
+    ``.guildbotics`` stays closed otherwise. The packaged defaults are inside
+    the code every microVM mounts.
 
     Args:
         scopes: What the turn's command declares it inspects.
@@ -129,19 +146,29 @@ def inspected_directories(
         for the workspace configuration and the packaged defaults commands
         and settings fall back to.
     """
+    directories = {
+        name: mount.guest
+        for name, mount in _inspected_mounts(scopes, workspace_root).items()
+    }
+    if "config" in scopes:
+        directories["templates"] = code_path(get_template_path())
+    return directories
+
+
+def _inspected_mounts(
+    scopes: Iterable[InspectionScope], workspace_root: Path
+) -> dict[str, EnvironmentMount]:
+    """The workspace's own directories a turn inspecting ``scopes`` mounts."""
     directories: dict[InspectionScope, dict[str, Path]] = {
         "diagnostics": {
             "diagnostics": get_workspace_local_path(
                 "run", workspace_root=workspace_root
             )
         },
-        "config": {
-            "config": get_workspace_config_dir(workspace_root),
-            "templates": get_template_path(),
-        },
+        "config": {"config": get_workspace_config_dir(workspace_root)},
     }
     return {
-        name: path
+        name: EnvironmentMount(guest_path(path), path, readonly=True)
         for scope in sorted(scopes)
         for name, path in directories[scope].items()
         if path.is_dir()
@@ -417,12 +444,8 @@ class _SharedEnvironment:
                 for each in tools
                 for mount in bind_state(each, read_only=context.contract.read_only)
             ),
-            *(
-                EnvironmentMount(guest_path(path), path, readonly=True)
-                for path in inspected_directories(
-                    context.inspects, context.workspace_root
-                ).values()
-            ),
+            CODE_MOUNT,
+            *_inspected_mounts(context.inspects, context.workspace_root).values(),
         )
         spec = build_environment_spec(
             context.contract,

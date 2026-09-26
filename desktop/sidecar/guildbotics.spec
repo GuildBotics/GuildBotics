@@ -22,10 +22,16 @@
 #   descends into regular packages, so every directory of `guildbotics` holding
 #   modules needs an `__init__.py`; `tests/guildbotics/test_package_module_discovery.py`
 #   fails when a module is not reachable that way.
+# - The package's `.py` sources are bundled as data under `_internal/guildbotics/`
+#   beside its templates, besides being compiled into the PYZ: every agent
+#   environment microVM mounts this directory read-only and runs GuildBotics'
+#   own code from it with the Python the snapshot installs
+#   (`agent_runtime/environment.py`). The dependencies it runs with,
+#   `agent_environment/requirements.txt`, are package data too.
 # - `weasyprint` is intentionally NOT bundled. `ToPdfCommand` imports it lazily
 #   and raises a friendly `CommandError` when its native libraries are missing,
-#   so the sidecar stays buildable without GTK/Pango/Cairo. PDF conversion in
-#   the packaged GUI is a known v1 limitation; the CLI remains the fallback.
+#   so the sidecar stays buildable without GTK/Pango/Cairo. The agent
+#   environment's snapshot has it and its native libraries.
 
 import os
 
@@ -45,14 +51,9 @@ datas = []
 binaries = []
 hiddenimports = []
 
-# Collect the whole guildbotics package (code + templates/locales/assets).
+# Collect the whole guildbotics package (code + sources + templates/locales/assets).
 hiddenimports += collect_submodules("guildbotics")
-datas += collect_data_files("guildbotics")
-datas += collect_data_files(
-    "guildbotics",
-    include_py_files=True,
-    includes=["templates/commands/**/*.py"],
-)
+datas += collect_data_files("guildbotics", include_py_files=True)
 
 # Third-party packages that rely on dynamic imports / bundled data files.
 for pkg in (
