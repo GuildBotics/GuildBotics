@@ -177,8 +177,14 @@ def test_prompts_do_not_restate_member_reference_contracts():
             "Handling review feedback",
             (
                 ("earlier advice and reviews",),
-                ("mechanism or state", "second finding", "searches", "count"),
-                ("exit, check, or exception", "state cannot exist"),
+                (
+                    "mechanism or state",
+                    "second finding; if it has",
+                    "question whether that mechanism is needed at all before repairing it",
+                    "searches",
+                    "count",
+                ),
+                ("exit, check, exception, or fallback", "state cannot exist"),
                 ("implicit guarantees", "moved code", "exclusion", "reordered calls"),
                 (
                     "after step 2",
@@ -190,7 +196,9 @@ def test_prompts_do_not_restate_member_reference_contracts():
                     "file:line",
                     "failing scenario",
                     "author verifies each finding",
-                    "reasons for rejected findings",
+                    "reasons for rejected findings on the PR",
+                    "relevant thread when one exists",
+                    "otherwise leave a PR conversation comment",
                 ),
                 ("whole population", "Deliberately break", "tests fail"),
                 ("each thread", "cause's shape", "repair's shape", "tests"),
@@ -200,8 +208,13 @@ def test_prompts_do_not_restate_member_reference_contracts():
             "レビュー指摘への対応",
             (
                 ("先行する助言やレビュー",),
-                ("仕組みや状態", "2 件目", "検索で数える"),
-                ("出口・検査・例外", "状態が存在しなくて済む"),
+                (
+                    "仕組みや状態",
+                    "2 件目",
+                    "来ていたら直す前にその仕組み自体が要るのかを問う",
+                    "検索で数える",
+                ),
+                ("出口・検査・例外・フォールバック", "状態が存在しなくて済む"),
                 ("暗黙の保証", "移した処理", "外した排他", "呼び出し順"),
                 (
                     "手順 2 のあと",
@@ -211,8 +224,10 @@ def test_prompts_do_not_restate_member_reference_contracts():
                     "決定済み事項を理由と一緒に",
                     "file:line",
                     "壊れるシナリオ",
-                    "作者は指摘を 1 件ずつ確かめて採否を決め",
-                    "採らなかったものは理由を残す",
+                    "作者は指摘を 1 件ずつ確かめて採否を決める",
+                    "採らなかったものは理由を PR に残す",
+                    "該当スレッドがあれば返信",
+                    "なければ PR の会話コメント",
                 ),
                 ("母集団", "わざと壊し", "テストが落ちる"),
                 ("スレッドごと", "原因の形", "直した形", "固定したテスト"),
@@ -264,7 +279,7 @@ def test_review_feedback_entrypoints_reference_the_shared_procedure():
     section = agents.split("## レビュー指摘への対応\n")[1].split("\n## ")[0]
     assert reference_path in section
     assert "Handling review feedback / レビュー指摘への対応" in section
-    assert all(str(path) in section for path in REVIEW_SKILL_PATHS)
+    assert all(path.as_posix() in section for path in REVIEW_SKILL_PATHS)
 
 
 def test_review_feedback_steps_are_not_copied_into_entrypoints():

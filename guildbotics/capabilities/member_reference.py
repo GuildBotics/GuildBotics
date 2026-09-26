@@ -297,8 +297,8 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "origin/<default-branch>:<file>` instead of trusting possibly stale "
     "working-tree files; without one, create a checkout first with `member git "
     "prepare` (its output reports the default branch).",
-    "When addressing PR review feedback, follow the Handling review feedback / "
-    "レビュー指摘への対応 procedure below before editing.",
+    "When addressing PR review feedback, follow the Handling review feedback "
+    "procedure below before editing.",
     "Edit, then run the relevant tests, linters, and checks before publishing any "
     'code change. When one fails, never stop at "unrelated to this change": '
     "identify the cause, write the issue draft it deserves, and hand that draft to "
@@ -341,9 +341,10 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
     "Handling review feedback": [
         "List every finding, including earlier advice and reviews, not only the latest review.",
         "Group findings by mechanism or state rather than location. Check whether the same "
-        "mechanism or state has received a second finding, and use repository searches to "
-        "count all locations with the same shape.",
-        "Choose the repair before editing. If it adds an exit, check, or exception, first "
+        "mechanism or state has received a second finding; if it has, question whether that "
+        "mechanism is needed at all before repairing it. Use repository searches to count "
+        "all locations with the same shape.",
+        "Choose the repair before editing. If it adds an exit, check, exception, or fallback, first "
         "consider a design in which the problematic state cannot exist.",
         "Write down the implicit guarantees the change could remove: other roles played by "
         "moved code, removed mutual exclusion, or reordered calls.",
@@ -353,7 +354,9 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
         "context; select a higher-capability model if the CLI supports model selection. "
         "Include decided matters with their reasons, and ask for file:line and a failing "
         "scenario for each finding. The delegate finds omissions; the author verifies each "
-        "finding and decides whether to accept it, recording reasons for rejected findings.",
+        "finding and decides whether to accept it. Record reasons for rejected findings "
+        "on the PR: reply in the relevant thread when one exists, otherwise leave a "
+        "PR conversation comment.",
         "Pin the whole population with tests, not just the reported locations. Deliberately "
         "break the repaired behavior and confirm that the tests fail.",
         "Reply to each thread with the cause's shape, the repair's shape, and the tests "
@@ -362,8 +365,8 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
     "レビュー指摘への対応": [
         "指摘を全部並べる。今回のレビューだけでなく、先行する助言やレビューが名指ししたものも含める。",
         "場所ではなく仕組みや状態で分ける。同じ仕組みや同じ状態に 2 件目の指摘が来ていないかを確かめ、"
-        "同じ形の箇所がほかにないかを検索で数える。",
-        "直す形を編集前に決める。修正が「出口・検査・例外を足す」形なら、"
+        "来ていたら直す前にその仕組み自体が要るのかを問う。同じ形の箇所がほかにないかを検索で数える。",
+        "直す形を編集前に決める。修正が「出口・検査・例外・フォールバックを足す」形なら、"
         "先にその状態が存在しなくて済む設計を検討する。",
         "変更で外れる暗黙の保証を書き出す。移した処理、外した排他、"
         "組み替えた呼び出し順が兼ねていた役割を見る。",
@@ -371,7 +374,8 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
         "保証を探す。それぞれ作者の会話の文脈を持たない新しい委任先 (サブエージェントなど) へ依頼し、"
         "CLI がモデルを選べるなら上位のモデルを指定する。依頼には決定済み事項を理由と一緒に含め、"
         "各指摘に file:line と壊れるシナリオを求める。委任先は見落としを探し、作者は指摘を 1 件ずつ"
-        "確かめて採否を決め、採らなかったものは理由を残す。",
+        "確かめて採否を決める。採らなかったものは理由を PR に残す。該当スレッドがあれば返信し、"
+        "なければ PR の会話コメントに書く。",
         "個別の箇所ではなく母集団をテストで固定する。直した振る舞いをわざと壊し、テストが落ちることを確かめる。",
         "スレッドごとに「原因の形」「直した形」「固定したテスト」を書いて返信する。",
     ],
