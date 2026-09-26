@@ -30,6 +30,7 @@ __all__ = [
     "PersonExecutionNotAllowedError",
     "PersonNotFoundError",
     "PersonSelectionRequiredError",
+    "prepare_command",
     "run_command",
     "run_main_command",
 ]
@@ -172,6 +173,38 @@ class CommandRunner:
         return self._main_spec
 
 
+def prepare_command(
+    base_context: Context,
+    command_name: str,
+    command_args: Sequence[str],
+    person_identifier: str | None = None,
+    cwd: Path | None = None,
+) -> CommandRunner:
+    """Resolve a command for the member it runs as, once.
+
+    The runner is the single read of the command: its file and what it
+    declares. Whatever a host decides about the run (the lease, a slot) is
+    decided on the runner it then starts, never on another reading.
+
+    Args:
+        base_context: Base runtime context.
+        command_name: Command to run.
+        command_args: Positional arguments for the command.
+        person_identifier: Member to run as, or ``None`` for the default.
+        cwd: Working directory for the command.
+
+    Raises:
+        CommandError: If the member cannot run commands or the command cannot
+            be resolved.
+    """
+    person = ensure_execution_subject(
+        resolve_person(base_context.team, person_identifier, allow_default=True)
+    )
+    return CommandRunner(
+        base_context.clone_for(person), command_name, command_args, cwd
+    )
+
+
 async def run_command(
     base_context: Context,
     command_name: str,
@@ -184,26 +217,23 @@ async def run_command(
     A command that declares itself read-only takes no execution lease: its
     turns can change nothing, so it runs while the member is busy.
     """
-    person = ensure_execution_subject(
-        resolve_person(base_context.team, person_identifier, allow_default=True)
-    )
     from guildbotics.runtime.person_lease import (
         PersonExecutionLease,
         PersonLeaseUnavailableError,
         current_person_lease,
     )
 
-    inherited_lease = current_person_lease()
-    if inherited_lease is not None and inherited_lease.person_id != person.person_id:
-        raise RuntimeError("The active execution lease belongs to another person.")
-    context = base_context.clone_for(person)
+    runner = prepare_command(
+        base_context, command_name, command_args, person_identifier, cwd
+    )
+    person_id = runner.context.person.person_id
     owned_lease = None
     try:
-        # The declaration is read once: the lease is decided on the very
-        # command that runs.
-        runner = CommandRunner(context, command_name, command_args, cwd)
+        inherited_lease = current_person_lease()
+        if inherited_lease is not None and inherited_lease.person_id != person_id:
+            raise RuntimeError("The active execution lease belongs to another person.")
         if inherited_lease is None and not runner.access.read_only:
-            lease = PersonExecutionLease(person.person_id)
+            lease = PersonExecutionLease(person_id)
             try:
                 lease.acquire(
                     source="manual", command=command_name, work_id=uuid4().hex
@@ -214,7 +244,7 @@ async def run_command(
         return await run_main_command(runner, source="manual")
     finally:
         try:
-            await context.aclose()
+            await runner.context.aclose()
         finally:
             if owned_lease is not None:
                 owned_lease.release()

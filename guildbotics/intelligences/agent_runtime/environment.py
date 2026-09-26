@@ -68,6 +68,7 @@ from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBrokerError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    AgentAdapter,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
@@ -186,6 +187,21 @@ async def command_environment(access: CommandAccess) -> AsyncIterator[None]:
         await shared.close()
 
 
+def running_command() -> _SharedEnvironment:
+    """The environment of the command running now.
+
+    Raises:
+        AgentRuntimeError: ``configuration`` when no command is running.
+    """
+    shared = _COMMAND.get()
+    if shared is None:
+        raise AgentRuntimeError(
+            AgentRuntimeErrorCategory.CONFIGURATION,
+            "An AI CLI turn runs only inside a command.",
+        )
+    return shared
+
+
 def current_command_access() -> CommandAccess:
     """The access the running command declared; none outside a command.
 
@@ -224,13 +240,7 @@ async def start_turn_environment(
             or the broker does not start. Nothing is widened: a turn that
             cannot be confined does not run.
     """
-    shared = _COMMAND.get()
-    if shared is None:
-        raise AgentRuntimeError(
-            AgentRuntimeErrorCategory.CONFIGURATION,
-            "An AI CLI turn runs only inside a command.",
-        )
-    return await shared.turn(context, tool_name, env or {})
+    return await running_command().turn(context, tool_name, env or {})
 
 
 class TurnEnvironment:
@@ -299,6 +309,10 @@ class _SharedEnvironment:
         self._gateways: dict[str, CredentialGateway] = {}
         #: The relays running, each started by its tool's first turn.
         self._relays: dict[str, EnvironmentProcess] = {}
+        #: The native adapters the command's turns speak through, by member and
+        #: adapter; they end with the command, and no other command's touch them.
+        self.adapters: dict[tuple[str, str], AgentAdapter] = {}
+        self.adapters_lock = asyncio.Lock()
 
     async def turn(
         self,
@@ -513,18 +527,24 @@ class _SharedEnvironment:
                 await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
 
     async def close(self) -> None:
-        """Discard the microVM, then stop the gateways and the broker; the
-        stand-ins open nothing once the microVM is gone. Idempotent."""
+        """Close the command's adapters, discard the microVM, then stop the
+        gateways and the broker; the stand-ins open nothing once the microVM
+        is gone. Idempotent."""
+        adapters, self.adapters = list(self.adapters.values()), {}
         environment, self._environment = self._environment, None
         try:
-            if environment is not None:
-                await environment.close()
+            for adapter in adapters:
+                await adapter.close()
         finally:
             try:
-                for gateway in self._gateways.values():
-                    await gateway.close()
+                if environment is not None:
+                    await environment.close()
             finally:
-                await self._broker.close()
+                try:
+                    for gateway in self._gateways.values():
+                        await gateway.close()
+                finally:
+                    await self._broker.close()
 
 
 async def _trust(environment: AgentEnvironment, ca_pem: bytes) -> None:

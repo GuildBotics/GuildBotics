@@ -42,19 +42,19 @@ from guildbotics.commands.authoring import (
 )
 from guildbotics.commands.errors import (
     CommandError,
-    PersonNotFoundError,
-    PersonSelectionRequiredError,
 )
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
+from guildbotics.drivers.command_runner import CommandRunner, run_main_command
 from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
 from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.environment import current_command_access
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
-from guildbotics.observability import correlation_fields
 from guildbotics.observability.trace_status import resolve_trace_status
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.runtime.service_lock import (
@@ -62,6 +62,7 @@ from guildbotics.runtime.service_lock import (
     ServiceLockUnavailableError,
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT, get_template_path
+from tests.guildbotics.app_api.command_doubles import stub_commands
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
     ScriptedAgent,
@@ -962,9 +963,7 @@ async def test_run_command_publishes_started_and_finished_events(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     response = await runtime.run_command(
         CommandRunRequest(command="demo", person="bot")
@@ -987,21 +986,13 @@ async def test_run_command_passes_cwd_and_args_into_execution(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     runtime = AppRuntime(EventBus())
-    captured: dict[str, Any] = {}
     sentinel_context = _make_context([_make_person()])
 
-    async def fake_run_command(
-        self: object, context: object, **kwargs: Any
-    ) -> CommandOutcome:
-        del self
-        captured["context"] = context
-        captured.update(kwargs)
+    async def fake_run_command(*_: Any) -> CommandOutcome:
         return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(runtime, "_get_context", lambda message="": sentinel_context)
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    prepared = stub_commands(monkeypatch, fake_run_command)
 
     await runtime.run_command(
         CommandRunRequest(
@@ -1009,14 +1000,19 @@ async def test_run_command_passes_cwd_and_args_into_execution(
             args=["one", "two"],
             person="bot",
             cwd=tmp_path,
+            message="input text",
         )
     )
 
-    assert captured["context"] is sentinel_context
-    assert captured["command_name"] == "demo"
-    assert captured["command_args"] == ["one", "two"]
-    assert captured["person_identifier"] == "bot"
-    assert captured["cwd"] == tmp_path
+    (command,) = prepared
+    assert command.base_context is sentinel_context
+    assert command.command_name == "demo"
+    assert command.args == ["one", "two"]
+    assert command.context.person.person_id == "bot"
+    assert command.cwd == tmp_path
+    assert command.context.pipe == "input text"
+    # The run's context is closed with the run.
+    assert command.context.closed is True
 
 
 @pytest.mark.asyncio
@@ -1027,28 +1023,22 @@ async def test_run_command_without_cwd_runs_in_the_exchange_directory(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     runtime = AppRuntime(EventBus())
-    captured: dict[str, Any] = {}
 
-    async def fake_run_command(
-        self: object, context: object, **kwargs: Any
-    ) -> CommandOutcome:
-        del self, context
-        captured.update(kwargs)
+    async def fake_run_command(*_: Any) -> CommandOutcome:
         return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    prepared = stub_commands(monkeypatch, fake_run_command)
 
     await runtime.run_command(CommandRunRequest(command="demo", person="bot"))
 
     # What the command produces lands where the user looks for it, and the
     # directory exists before a shell or Python command needs it as cwd.
-    assert captured["cwd"] == home / "Documents/GuildBotics"
-    assert captured["cwd"].is_dir()
+    (command,) = prepared
+    assert command.cwd == home / "Documents/GuildBotics"
+    assert command.cwd.is_dir()
 
 
 @pytest.mark.asyncio
@@ -1059,27 +1049,21 @@ async def test_run_command_expands_the_home_in_the_working_directory(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     runtime = AppRuntime(EventBus())
-    captured: dict[str, Any] = {}
 
-    async def fake_run_command(
-        self: object, context: object, **kwargs: Any
-    ) -> CommandOutcome:
-        del self, context
-        captured.update(kwargs)
+    async def fake_run_command(*_: Any) -> CommandOutcome:
         return CommandOutcome(result="ok", text_output="ok")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    prepared = stub_commands(monkeypatch, fake_run_command)
 
     await runtime.run_command(
         CommandRunRequest(command="demo", person="bot", cwd=Path("~/work/clone"))
     )
 
-    assert captured["cwd"] == home / "work/clone"
+    (command,) = prepared
+    assert command.cwd == home / "work/clone"
 
 
 @pytest.mark.asyncio
@@ -1105,9 +1089,7 @@ async def test_logs_during_run_command_carry_the_trace_id(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     try:
         response = await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1144,9 +1126,7 @@ async def test_run_command_publishes_failed_event_for_person_selection(
         raise AssertionError("The run must not start without a member.")
 
     monkeypatch.setattr(runtime, "_get_context", lambda message="": context)
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1179,9 +1159,7 @@ async def test_run_command_publishes_failed_event_for_person_not_found(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo", person="ghost"))
@@ -1214,9 +1192,7 @@ async def test_run_command_publishes_failed_event_for_command_error(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1251,9 +1227,7 @@ async def test_run_command_publishes_failed_event_for_unexpected_error(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(ValueError, match="unexpected"):
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1288,9 +1262,7 @@ async def test_run_command_releases_reservation_after_failure(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(AppApiError):
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1318,9 +1290,7 @@ async def test_run_command_releases_reservation_after_unexpected_error(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     with pytest.raises(RuntimeError, match="crash"):
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1334,13 +1304,18 @@ async def test_run_command_releases_reservation_after_unexpected_error(
 async def test_run_command_rejects_concurrent_run_with_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = AppRuntime(EventBus())
+    event_bus = EventBus()
+    runtime = AppRuntime(event_bus)
     # Simulate an in-flight command by holding the reservation.
     runtime._reserve_command("inflight-id")
+
+    async def unreachable(*_: Any) -> CommandOutcome:
+        raise AssertionError("a rejected run does not start")
 
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
+    stub_commands(monkeypatch, unreachable)
 
     with pytest.raises(AppApiError) as exc_info:
         await runtime.run_command(CommandRunRequest(command="demo"))
@@ -1348,6 +1323,8 @@ async def test_run_command_rejects_concurrent_run_with_conflict(
     assert exc_info.value.code == "command_already_running"
     assert exc_info.value.status_code == HTTP_CONFLICT
     assert exc_info.value.context == {"trace_id": "inflight-id"}
+    # A run that never started leaves no trace.
+    assert event_bus.snapshot_events() == []
 
 
 @pytest.mark.asyncio
@@ -1403,9 +1380,7 @@ async def test_run_command_rejects_person_lease_conflict_with_http_409(
         calls.append("called")
         return CommandOutcome(result="ok", text_output="ok")
 
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
     holder = PersonExecutionLease("bot")
     holder.acquire(source="routine", command="ticket", work_id="existing-work")
     try:
@@ -1440,9 +1415,7 @@ async def test_run_command_appears_in_runtime_active_work(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
@@ -1476,9 +1449,7 @@ async def test_stop_scheduler_waits_for_manual_command_to_finish(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     command_task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
@@ -1516,9 +1487,7 @@ async def test_force_stop_scheduler_cancels_manual_command(
     monkeypatch.setattr(
         runtime, "_get_context", lambda message="": _make_context([_make_person()])
     )
-    monkeypatch.setattr(
-        "guildbotics.app_api.runtime.LocalCommandExecutor.run", fake_run_command
-    )
+    stub_commands(monkeypatch, fake_run_command)
 
     command_task = asyncio.create_task(
         runtime.run_command(CommandRunRequest(command="demo", person="bot"))
@@ -2300,10 +2269,23 @@ async def test_a_defect_running_an_assistant_stays_an_internal_error(
     async def defect(*_: Any, **__: Any) -> Any:
         raise TypeError("'NoneType' object is not subscriptable")
 
-    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", defect)
+    monkeypatch.setattr(runtime_module, "run_main_command", defect)
 
     with pytest.raises(TypeError):
         await _troubleshoot(runtime)
+
+
+def _declared_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, read_only: bool
+) -> AppRuntime:
+    """A runtime whose workspace holds ``look``, declaring ``read_only``; the
+    command is resolved for real."""
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/look.md",
+        f"---\nbrain: none\nread_only: {str(read_only).lower()}\n---\nlooked\n",
+    )
+    return _runtime_with_context(monkeypatch, AgentContext(ScriptedAgent(None)))
 
 
 @pytest.mark.asyncio
@@ -2313,12 +2295,7 @@ async def test_only_a_writing_command_takes_the_manual_command_slot(
 ) -> None:
     """Any command the Desktop runs is held to what it declares, not only the
     assistants: a read-only one runs beside another command, non-exclusively."""
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(
-        config_dir / "commands/look.md",
-        f"---\nbrain: none\nread_only: {str(read_only).lower()}\n---\nlooked\n",
-    )
-    runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
+    runtime = _declared_runtime(tmp_path, monkeypatch, read_only=read_only)
     exclusivity: list[bool] = []
     track_work = runtime._execution.track_work
 
@@ -2326,11 +2303,7 @@ async def test_only_a_writing_command_takes_the_manual_command_slot(
         exclusivity.append(kwargs["exclusive"])
         return track_work(**kwargs)
 
-    async def ran(*_: Any, **__: Any) -> CommandOutcome:
-        return CommandOutcome(result="looked", text_output="looked")
-
     monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
-    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", ran)
     runtime._reserve_command("manual-command")
     try:
         if read_only:
@@ -2346,36 +2319,118 @@ async def test_only_a_writing_command_takes_the_manual_command_slot(
 
 
 @pytest.mark.asyncio
+async def test_the_run_is_the_command_its_slot_was_decided_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declaration is read once: an edit after the run was decided on
+    changes neither the access its turns get nor how it is tracked."""
+    runtime = _declared_runtime(tmp_path, monkeypatch, read_only=True)
+    exclusivity: list[bool] = []
+    track_work = runtime._execution.track_work
+
+    def record_exclusive(**kwargs: Any) -> Any:
+        exclusivity.append(kwargs["exclusive"])
+        return track_work(**kwargs)
+
+    async def edited_meanwhile(runner: Any, *, source: str) -> CommandOutcome:
+        _write(
+            tmp_path / ".guildbotics/config/commands/look.md",
+            "---\nbrain: none\nread_only: false\n---\nchanged\n",
+        )
+        return await run_main_command(runner, source=source)
+
+    monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
+    monkeypatch.setattr(runtime_module, "run_main_command", edited_meanwhile)
+    seen: list[CommandAccess] = []
+    original = CommandRunner._run_with_children
+
+    async def run_with_children(self: CommandRunner, *args: Any) -> Any:
+        # What every turn of the run would be held to.
+        seen.append(current_command_access())
+        return await original(self, *args)
+
+    monkeypatch.setattr(CommandRunner, "_run_with_children", run_with_children)
+
+    await runtime.run_command(CommandRunRequest(command="look"))
+
+    # What the run declared -- the access its turns are held to -- is what its
+    # slot and its tracking were decided on. (The body is read when it runs.)
+    assert seen == [CommandAccess(read_only=True)]
+    assert exclusivity == [False]
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_cannot_be_resolved_never_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing started, so nothing is traced and nothing stays accepted."""
+    _isolate_workspace(tmp_path, monkeypatch)
+    runtime = _runtime_with_context(monkeypatch, AgentContext(ScriptedAgent(None)))
+
+    with pytest.raises(AppApiError) as caught:
+        await runtime.run_command(CommandRunRequest(command="missing"))
+
+    assert (caught.value.code, caught.value.status_code) == ("command_error", 400)
+    assert "missing" in caught.value.message
+    assert runtime._event_bus.snapshot_events() == []
+    assert runtime._accepted_command_ids == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("assistant", sorted(_ASSISTANTS))
+async def test_where_an_assistant_works_is_derived_once_it_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, assistant: str
+) -> None:
+    """Everything derived from the workspace is derived inside the region the
+    workspace cannot switch under."""
+    ask, result_type, answer, _ = _ASSISTANTS[assistant]
+    runtime = _assistant_runtime(
+        tmp_path, monkeypatch, ScriptedAgent(result_type, answer)
+    )
+    accepted_when_derived: list[bool] = []
+    assistant_cwd = runtime_module._assistant_cwd
+
+    def derive(name: str) -> Path:
+        accepted_when_derived.append(bool(runtime._accepted_command_ids))
+        return assistant_cwd(name)
+
+    monkeypatch.setattr(runtime_module, "_assistant_cwd", derive)
+
+    await ask(runtime)
+
+    assert accepted_when_derived == [True]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["preparing", "running"])
 async def test_a_read_only_run_keeps_its_workspace_from_switching(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
 ) -> None:
     """Taking no slot is not taking no workspace: the run is resolved and runs
     in the workspace it was accepted for."""
-    config_dir = _isolate_workspace(tmp_path, monkeypatch)
-    _write(config_dir / "commands/look.md", "---\nbrain: none\nread_only: true\n---\n")
-    runtime = AppRuntime(EventBus())
+    runtime = _declared_runtime(tmp_path, monkeypatch, read_only=True)
     other = tmp_path / "other"
     other.mkdir()
     refused: list[str] = []
+    resolve_context = runtime._get_context
 
     def try_to_switch() -> None:
         with pytest.raises(AppApiError) as caught:
             runtime.set_workspace(other)
         refused.append(caught.value.code)
 
-    def resolve_context(message: str = "") -> object:
+    def preparing(message: str = "") -> Any:
         if phase == "preparing":
             try_to_switch()
-        return _make_context([_make_person()])
+        return resolve_context()
 
-    async def ran(*_: Any, **__: Any) -> CommandOutcome:
+    async def running(runner: Any, *, source: str) -> CommandOutcome:
         if phase == "running":
             try_to_switch()
-        return CommandOutcome(result="looked", text_output="looked")
+        return await run_main_command(runner, source=source)
 
-    monkeypatch.setattr(runtime, "_get_context", resolve_context)
-    monkeypatch.setattr(runtime_module.LocalCommandExecutor, "run", ran)
+    monkeypatch.setattr(runtime, "_get_context", preparing)
+    monkeypatch.setattr(runtime_module, "run_main_command", running)
 
     await runtime.run_command(CommandRunRequest(command="look"))
 

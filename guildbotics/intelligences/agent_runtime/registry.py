@@ -1,52 +1,41 @@
-"""Event-loop-local native adapter registry and shutdown hook."""
+"""The native adapters of the running command.
+
+A command's turns speak to their provider through native adapters, and the
+adapters belong to that command: they live in its environment and end with
+it. A command never closes another's, so two commands of one member -- a
+read-only one beside one that writes -- run side by side.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import weakref
-
+from guildbotics.intelligences.agent_runtime.environment import running_command
 from guildbotics.intelligences.agent_runtime.factory import create_native_adapter
 from guildbotics.intelligences.agent_runtime.models import AgentAdapter
-
-_registries: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, dict[tuple[str, str], AgentAdapter]
-] = weakref.WeakKeyDictionary()
-_registry_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
-    weakref.WeakKeyDictionary()
-)
 
 
 async def get_native_adapter(
     person_id: str, adapter_name: str, execution_id: str
 ) -> AgentAdapter:
-    loop = asyncio.get_running_loop()
-    lock = _registry_locks.setdefault(loop, asyncio.Lock())
-    async with lock:
-        registry = _registries.setdefault(loop, {})
+    """Return the running command's adapter for one execution of a member.
+
+    Within a command a member keeps one native process: an adapter for
+    another execution of the same member replaces the one it had.
+
+    Raises:
+        AgentRuntimeError: ``configuration`` when no command is running.
+    """
+    command = running_command()
+    async with command.adapters_lock:
         key = (person_id, f"{adapter_name}:{execution_id}")
-        adapter = registry.get(key)
+        adapter = command.adapters.get(key)
         if adapter is None:
             stale = [
                 existing
-                for existing in registry
+                for existing in command.adapters
                 if existing[0] == person_id and existing != key
             ]
             for existing in stale:
-                await registry.pop(existing).close()
+                await command.adapters.pop(existing).close()
             adapter = create_native_adapter(adapter_name)
-            registry[key] = adapter
+            command.adapters[key] = adapter
         return adapter
-
-
-async def close_native_adapters(person_id: str | None = None) -> None:
-    loop = asyncio.get_running_loop()
-    lock = _registry_locks.setdefault(loop, asyncio.Lock())
-    async with lock:
-        registry = _registries.get(loop, {})
-        keys = [key for key in registry if person_id is None or key[0] == person_id]
-        for key in keys:
-            adapter = registry.pop(key)
-            await adapter.close()
-        if not registry:
-            _registries.pop(loop, None)
-            _registry_locks.pop(loop, None)

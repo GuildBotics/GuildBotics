@@ -120,7 +120,6 @@ from guildbotics.commands.discovery import (
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
     CommandAccess,
-    command_access,
     default_command_label,
     load_command_metadata,
     parse_command_arguments,
@@ -135,6 +134,11 @@ from guildbotics.drivers import (
     CommandError,
     PersonNotFoundError,
     PersonSelectionRequiredError,
+)
+from guildbotics.drivers.command_runner import (
+    CommandRunner,
+    prepare_command,
+    run_main_command,
 )
 from guildbotics.drivers.execution import (
     ExecutionStatusPublisher,
@@ -181,7 +185,6 @@ from guildbotics.observability.session_transcripts import (
 from guildbotics.observability.trace_title import CompletionSummary
 from guildbotics.runtime import Context
 from guildbotics.runtime.live_state import LiveStatePort
-from guildbotics.runtime.local_command_executor import LocalCommandExecutor
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.runtime.service_lock import ServiceLockUnavailableError
 from guildbotics.runtime.trace_presentations import normalize_trace_presentation
@@ -263,7 +266,8 @@ class _Execution:
     command: str
     #: What the run is called in the runtime status, its trace and its events.
     label: str
-    cwd: Path
+    #: Where it runs; derived only once the run is accepted for the workspace.
+    cwd: Callable[[], Path]
     #: The App API error code a failed run becomes.
     failure_code: str
     failure_status: int = 400
@@ -558,7 +562,7 @@ class AppRuntime:
                 command="assistants/author_command",
                 label=f"author:{request.command or 'new-command'}",
                 args=[f"conversation_id={request.conversation_id}"],
-                cwd=_assistant_cwd("command-authoring"),
+                cwd=partial(_assistant_cwd, "command-authoring"),
                 failure_code="command_authoring_failed",
                 failure_status=502,
                 attributes={
@@ -842,7 +846,7 @@ class AppRuntime:
                 command=request.command,
                 label=request.command,
                 args=request.args,
-                cwd=command_cwd(request.cwd) or _default_command_cwd(),
+                cwd=lambda: command_cwd(request.cwd) or _default_command_cwd(),
                 failure_code="command_error",
             ),
             person=request.person,
@@ -888,9 +892,8 @@ class AppRuntime:
                 the work, or the command fails.
         """
         trace_id = new_id()
-        # The run is accepted for the workspace before anything is resolved in
-        # it, and the workspace cannot switch until the run is released. Only
-        # the resolved command says whether it also takes the one slot.
+        # The run is accepted for the workspace before anything is derived from
+        # it, and the workspace cannot switch until the run is released.
         self._reserve_command(trace_id, expected_workspace, exclusive=False)
         try:
             context = self._get_context()
@@ -901,18 +904,22 @@ class AppRuntime:
             acting = self._resolve_execution_person(context, person, execution.label)
             if guard is not None:
                 guard(context.clone_for(acting))
-            path = resolve_command_path(
-                execution.command,
-                context.team.project.get_language_code(),
-                acting.person_id,
-            )
+            # The one reading of the command: its slot, its tracking, its input
+            # and the run itself all go by this runner. A command that cannot be
+            # resolved never ran, so it leaves no trace.
             try:
-                access = command_access(path) if path is not None else CommandAccess()
-            except CommandError:
-                # What cannot be resolved declares nothing; the run reports why.
-                access = CommandAccess()
-            context.pipe = message(access)
-            if not access.read_only:
+                runner = prepare_command(
+                    context,
+                    execution.command,
+                    execution.args,
+                    acting.person_id,
+                    execution.cwd(),
+                )
+            except CommandError as exc:
+                raise execution.failure(exc) from exc
+            runner.context.pipe = message(runner.access)
+            read_only = runner.access.read_only
+            if not read_only:
                 self._reserve_command(trace_id)
             loop = asyncio.get_running_loop()
             task = asyncio.current_task()
@@ -928,7 +935,7 @@ class AppRuntime:
                     command=execution.label,
                     work_id=trace_id,
                     cancel=_cancel,
-                    exclusive=not access.read_only,
+                    exclusive=not read_only,
                 ),
                 trace_scope(
                     "manual",
@@ -938,9 +945,7 @@ class AppRuntime:
                     attributes=execution.attributes,
                 ),
             ):
-                outcome = await self._run_command_traced(
-                    execution, context, acting.person_id
-                )
+                outcome = await self._run_command_traced(execution, runner)
         except WorkRejectedError as exc:
             raise AppApiError(
                 "work_rejected", reason=str(exc), status_code=409
@@ -1006,22 +1011,17 @@ class AppRuntime:
             ) from exc
 
     async def _run_command_traced(
-        self, execution: _Execution, context: Context, person_id: str
+        self, execution: _Execution, runner: CommandRunner
     ) -> CommandOutcome:
         # This opens the run's trace, so it is the only layer that can say the
         # whole run started and ended. Events carry the resolved person so an
         # omitted request person still shows the member the run belongs to.
+        person_id = runner.context.person.person_id
         self._event_bus.publish_event(
             "command.started", {"command": execution.label, "person": person_id}
         )
         try:
-            outcome = await LocalCommandExecutor().run(
-                context,
-                command_name=execution.command,
-                command_args=execution.args,
-                person_identifier=person_id,
-                cwd=execution.cwd,
-            )
+            outcome = await run_main_command(runner, source="manual")
             if execution.result_type is not None and not isinstance(
                 outcome.result, execution.result_type
             ):
@@ -1047,6 +1047,8 @@ class AppRuntime:
             if isinstance(exc, CommandError | CliAgentExecutionError):
                 raise execution.failure(exc) from exc
             raise
+        finally:
+            await runner.context.aclose()
         self._event_bus.publish_event(
             "command.finished", {"command": execution.label, "person": person_id}
         )
@@ -1450,7 +1452,7 @@ class AppRuntime:
                 command="assistants/troubleshoot",
                 label=f"troubleshoot:{focus.trace_id or focus.view}",
                 args=[f"conversation_id={request.conversation_id}"],
-                cwd=_assistant_cwd("troubleshooting"),
+                cwd=partial(_assistant_cwd, "troubleshooting"),
                 failure_code="troubleshooting_failed",
                 failure_status=502,
                 attributes={"troubleshooting.conversation_id": request.conversation_id},

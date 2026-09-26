@@ -974,8 +974,10 @@ a monorepo on purpose.
 - **AI assistants**: the command editor and the diagnostics screen each host a
   conversational assistant. Each is a bundled command (`assistants/author_command`,
   `assistants/troubleshoot`) that runs through the same path as any command the Desktop
-  runs (`AppRuntime._execute_command` → `LocalCommandExecutor` → `CommandRunner`): the
-  API builds the command's JSON input, runs it under a fresh trace labelled
+  runs (`AppRuntime._execute_command` → `prepare_command` → `run_main_command`): once
+  the run is accepted for the workspace, the API resolves the command exactly once,
+  decides its slot and tracking on that runner, builds the command's JSON input from
+  what it declares, and runs that same runner under a fresh trace labelled
   `author:<command>` / `troubleshoot:<trace_id|view>`, and reads the typed model the
   command returns. The command invokes its prompt with a stable `work_identity` so the
   provider resumes its own session. Both declare themselves read-only (`read_only:
@@ -984,7 +986,9 @@ a monorepo on purpose.
   environment spec mounts every host directory read-only with an empty working
   directory and lets the network reach only the provider's API and the member broker,
   and the run takes no member execution lease, no manual-command slot and is tracked
-  non-exclusively. So it stays usable while another command or that member's scheduled
+  non-exclusively, though it still keeps the workspace from switching until it ends.
+  Its native adapters belong to its own run, so it never closes another run's turn.
+  So it stays usable while another command or that member's scheduled
   work runs — which is exactly when its logs are worth asking about. Command authoring
   can inspect the effective shared command sources and return structured proposals,
   which the command validates and sends back once for correction; only the separate
