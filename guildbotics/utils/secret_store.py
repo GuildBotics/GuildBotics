@@ -61,9 +61,9 @@ _PLAIN_ENV_VALUE = re.compile(r"[^\s#'\"\\]*")
 _SECRET_KEY = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_]{0,127}$")
 
 # Secrets that must never be published to process environment variables:
-# child processes (AI CLI tools in particular) inherit the full environment,
-# so high-value material like a GitHub App private key would leak into every
-# agent subprocess. Consumers read these from the store at the point of use.
+# whatever reads the process environment (a Python command runs in-process)
+# would see high-value material like a GitHub App private key. Consumers read
+# these from the store at the point of use.
 ENVIRONMENT_EXCLUDED_SECRET_SUFFIXES = ("_GITHUB_PRIVATE_KEY",)
 
 # Name fragments that mark an environment variable as carrying a credential
@@ -107,8 +107,9 @@ def is_secret_env_key(key: str) -> bool:
 
     A key qualifies by name pattern or by provenance: keys seen in the
     workspace SecretStore are secret whatever they are called. Used both to
-    keep such values out of AI CLI subprocess environments and to redact them
-    from anything a member writes down, so the two answers cannot drift apart.
+    keep such values out of shell script command environments and to redact
+    them from anything a member writes down, so the two answers cannot drift
+    apart.
     """
     if key in _KNOWN_SECRET_ENV_KEYS:
         return True
