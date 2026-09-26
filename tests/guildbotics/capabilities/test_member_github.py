@@ -454,6 +454,8 @@ async def test_context_includes_capability_reference():
     assert "guildbotics member chat reply" in result["capabilities"]
     assert "guildbotics member github pr create" in result["capabilities"]
     assert "guildbotics member github pr review-comment" in result["capabilities"]
+    assert "#### Handling review feedback" in result["capabilities"]
+    assert "#### レビュー指摘への対応" in result["capabilities"]
     assert "available_member_commands" not in result
     assert "safety_note" not in result
 
