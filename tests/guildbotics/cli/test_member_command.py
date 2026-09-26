@@ -2335,7 +2335,33 @@ def test_member_github_pr_update_rejects_update_without_any_change():
     assert "pr update needs --content-stdin/--content-file or --title." in result.output
 
 
-def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypatch):
+def test_member_github_pr_update_drop_issue_links_requires_content():
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "pr",
+            "update",
+            "--person",
+            "aiko",
+            "--url",
+            "https://github.com/owner/repo/pull/7",
+            "--title",
+            "New",
+            "--drop-issue-links",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert (
+        "--drop-issue-links requires --content-stdin/--content-file." in result.output
+    )
+
+
+@pytest.mark.parametrize("drop_issue_links", [False, True])
+def test_member_github_pr_update_reads_entire_stdin_and_closes_service(
+    monkeypatch, drop_issue_links
+):
     person = Person(person_id="aiko", name="Aiko", person_type="agent")
     calls = {}
 
@@ -2347,8 +2373,15 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title):
-            calls.update({"pr_url": pr_url, "body": body, "title": title})
+        async def pr_update(self, pr_url, body, title, *, drop_issue_links):
+            calls.update(
+                {
+                    "pr_url": pr_url,
+                    "body": body,
+                    "title": title,
+                    "drop_issue_links": drop_issue_links,
+                }
+            )
             return {"pr_number": 7, "pr_url": pr_url, "body": body}
 
         async def aclose(self):
@@ -2370,6 +2403,7 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
             "--url",
             "https://github.com/owner/repo/pull/7",
             "--content-stdin",
+            *(["--drop-issue-links"] if drop_issue_links else []),
         ],
         input="## Summary\n\nUpdated body\n",
     )
@@ -2379,6 +2413,7 @@ def test_member_github_pr_update_reads_entire_stdin_and_closes_service(monkeypat
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "## Summary\n\nUpdated body\n",
         "title": None,
+        "drop_issue_links": drop_issue_links,
         "closed": True,
     }
 
@@ -2399,8 +2434,15 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
         def __init__(self, *_args):
             pass
 
-        async def pr_update(self, pr_url, body, title):
-            calls.update({"pr_url": pr_url, "body": body, "title": title})
+        async def pr_update(self, pr_url, body, title, *, drop_issue_links):
+            calls.update(
+                {
+                    "pr_url": pr_url,
+                    "body": body,
+                    "title": title,
+                    "drop_issue_links": drop_issue_links,
+                }
+            )
             return {
                 "pr_number": 7,
                 "pr_url": pr_url,
@@ -2436,6 +2478,7 @@ def test_member_github_pr_update_normalizes_blank_stdin_and_records_evidence(
         "pr_url": "https://github.com/owner/repo/pull/7",
         "body": "",
         "title": None,
+        "drop_issue_links": False,
         "closed": True,
     }
     assert json.loads(result.output)["body"] == ""

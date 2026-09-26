@@ -85,7 +85,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; empty content removes the body. |
+| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
 | [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
@@ -1181,7 +1181,7 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
-| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title; empty content removes the body. |
+| [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
 
 ## `guildbotics member github pr checks`
 
@@ -1317,7 +1317,7 @@ guildbotics member github pr review-comment [OPTIONS]
 
 ## `guildbotics member github pr update`
 
-Change a PR's body or title; empty content removes the body.
+Change a PR's body or title. Body replacement preserves existing Closes/Fixes/Resolves/Refs issue links; new links to the same issue take precedence. Empty content keeps only the links. --drop-issue-links requires content and disables preservation.
 
 ```text
 guildbotics member github pr update [OPTIONS]
@@ -1330,6 +1330,7 @@ guildbotics member github pr update [OPTIONS]
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--title TEXT` | Replace the pull request title. |
+| `--drop-issue-links` | Do not carry existing Closes/Fixes/Resolves/Refs issue links into the replacement body. Requires --content-stdin/--content-file. By default, links are preserved, even with empty content; new links to the same issue take precedence. |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

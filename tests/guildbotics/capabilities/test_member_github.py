@@ -12,6 +12,7 @@ from guildbotics.capabilities.member_github import (
     MemberGitHubCapabilityService,
     PR_INSPECT_FEEDBACK_SOURCES,
     _append_issue_link,
+    _preserve_issue_links,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -2581,6 +2582,7 @@ async def test_pr_update_replaces_the_title_without_touching_the_body():
     assert fake.patches == [("/repos/owner/repo/pulls/7", {"title": "New title"}, None)]
     assert result["title"] == "New title"
     assert result["body"] == "Untouched body"
+    assert fake.gets == []
 
 
 @pytest.mark.asyncio
@@ -2817,6 +2819,49 @@ def test_append_issue_link_chooses_trailer_and_skips_existing_keywords(
     assert _append_issue_link(body, issue_url, closes=closes) == expected
 
 
+@pytest.mark.parametrize(
+    "keyword",
+    [
+        "close",
+        "closes",
+        "closed",
+        "fix",
+        "fixes",
+        "fixed",
+        "resolve",
+        "resolves",
+        "resolved",
+        "ref",
+        "refs",
+    ],
+)
+def test_preserve_issue_links_keeps_keyword_variants(keyword):
+    trailer = f"{keyword.upper()} #42"
+    assert _preserve_issue_links("New", f"Old\n{trailer}") == f"New\n\n{trailer}"
+
+
+@pytest.mark.parametrize(
+    ("body", "previous", "expected"),
+    [
+        ("Refs #42", "Closes #42", "Refs #42"),
+        ("Fixes #42", "Refs #42", "Fixes #42"),
+        ("Closes #42", "Fixes #42", "Closes #42"),
+        ("", "Old\nCloses #42\nRefs #43", "Closes #42\n\nRefs #43"),
+        ("New", "Refs #42\nRefs #42", "New\n\nRefs #42"),
+        ("New", "Refs #42\nCloses #42", "New\n\nRefs #42\n\nCloses #42"),
+        ("New\n", "Old without links", "New\n"),
+        ("New", "See #42; prefixedRefs #43; Closes #44suffix", "New"),
+        ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
+        ("See #42", "Closes #42", "See #42\n\nCloses #42"),
+        ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
+    ],
+)
+def test_preserve_issue_links_prefers_replacement_and_deduplicates(
+    body, previous, expected
+):
+    assert _preserve_issue_links(body, previous) == expected
+
+
 @pytest.mark.asyncio
 async def test_pr_create_appends_refs_when_issue_url_is_set():
     service = _service(person_type="agent")
@@ -2868,10 +2913,47 @@ async def test_pr_create_appends_closes_when_closes_issue_is_true():
     assert fake.posts[0][1]["body"] == "Body\n\nCloses #42"
 
 
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("Updated body", "Updated body\n\nCloses #42\n\nRefs #43"),
+        ("", "Closes #42\n\nRefs #43"),
+        ("Refs #42", "Refs #42\n\nRefs #43"),
+        ("Closes #43", "Closes #43\n\nCloses #42"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pr_update_preserves_existing_issue_links(body, expected):
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
+        "body": "Old body\n\nCloses #42\nRefs #43"
+    }
+    service._client = fake
+
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", body, title="New title"
+    )
+
+    assert result["body"] == expected
+    assert fake.patches == [
+        (
+            "/repos/owner/repo/pulls/7",
+            {"body": expected, "title": "New title"},
+            None,
+        )
+    ]
+    assert fake.history == [
+        ("get", "/repos/owner/repo/pulls/7"),
+        ("patch", "/repos/owner/repo/pulls/7"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_pr_update_patches_only_body_and_returns_updated_pr():
     service = _service(person_type="agent")
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Old body"}
     fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
         "number": 7,
         "html_url": "https://github.com/owner/repo/pull/7",
@@ -2904,6 +2986,7 @@ async def test_pr_update_patches_only_body_and_returns_updated_pr():
 async def test_pr_update_normalizes_null_response_body(requested_body):
     service = _service(person_type="agent")
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": None}
     fake.patch_payloads["/repos/owner/repo/pulls/7"] = {
         "number": 7,
         "html_url": "https://github.com/owner/repo/pull/7",
@@ -2944,6 +3027,7 @@ async def test_pr_update_rejects_invalid_or_non_pull_request_url(url, error):
 async def test_pr_update_propagates_github_api_error():
     service = _service(person_type="agent")
     fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Old body"}
     fake.patch_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
     service._client = fake
 
@@ -2953,6 +3037,50 @@ async def test_pr_update_propagates_github_api_error():
         await service.pr_update("https://github.com/owner/repo/pull/7", "Body")
 
     assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": "Body"}, None)]
+
+
+@pytest.mark.parametrize("body", ["", "New\n\nRefs #43"])
+@pytest.mark.asyncio
+async def test_pr_update_drop_issue_links_replaces_body_verbatim(body):
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = {"body": "Closes #42"}
+    service._client = fake
+
+    result = await service.pr_update(
+        "https://github.com/owner/repo/pull/7", body, drop_issue_links=True
+    )
+
+    assert result["body"] == body
+    assert fake.patches == [("/repos/owner/repo/pulls/7", {"body": body}, None)]
+    assert fake.gets == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_refuses_to_patch_when_existing_body_cannot_be_read():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    fake.get_status_codes["/repos/owner/repo/pulls/7"] = HTTP_BAD_REQUEST
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="GitHub API request failed"):
+        await service.pr_update("https://github.com/owner/repo/pull/7", "New")
+
+    assert fake.patches == []
+
+
+@pytest.mark.asyncio
+async def test_pr_update_drop_issue_links_requires_replacement_body():
+    service = _service(person_type="agent")
+    fake = FakeClient()
+    service._client = fake
+
+    with pytest.raises(MemberCapabilityError, match="requires a body"):
+        await service.pr_update(
+            "https://github.com/owner/repo/pull/7", title="New", drop_issue_links=True
+        )
+
+    assert fake.gets == fake.patches == []
 
 
 @pytest.mark.asyncio

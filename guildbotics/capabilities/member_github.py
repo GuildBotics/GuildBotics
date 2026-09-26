@@ -858,11 +858,21 @@ class MemberGitHubCapabilityService:
         }
 
     async def pr_update(
-        self, url: str, body: str | None = None, title: str | None = None
+        self,
+        url: str,
+        body: str | None = None,
+        title: str | None = None,
+        *,
+        drop_issue_links: bool = False,
     ) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="pull")
+        if drop_issue_links and body is None:
+            raise MemberCapabilityError("--drop-issue-links requires a body.")
         payload: dict[str, Any] = {}
         if body is not None:
+            if not drop_issue_links:
+                pr = await self._pull_request(resource)
+                body = _preserve_issue_links(body, pr.get("body") or "")
             payload["body"] = body
         if title is not None:
             payload["title"] = title
@@ -2014,6 +2024,22 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
+_ISSUE_LINK = re.compile(
+    rf"\b(?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})\s+#(\d+)\b", re.I
+)
+
+
+def _preserve_issue_links(body: str, previous_body: str) -> str:
+    """Append missing issue links while keeping the replacement body's wording."""
+    mentioned = {match.group(1) for match in _ISSUE_LINK.finditer(body)}
+    inherited: set[str] = set()
+    for match in _ISSUE_LINK.finditer(previous_body):
+        number = match.group(1)
+        trailer = match.group(0)
+        if number not in mentioned and trailer.casefold() not in inherited:
+            body = f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+            inherited.add(trailer.casefold())
+    return body
 
 
 def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
