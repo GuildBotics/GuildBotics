@@ -5,20 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironmentError,
-    EnvironmentProcess,
-)
-from guildbotics.intelligences.agent_runtime.environment import (
-    TurnEnvironment,
-    start_turn_environment,
-)
+from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
+from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MEMBER_BROKER_TOKEN_ENV,
     MemberCapabilityBroker,
@@ -33,9 +26,17 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentTerminalResult,
     ConversationRecord,
     EventSink,
+    context_compaction_event,
+    model_and_effort,
+)
+from guildbotics.intelligences.agent_runtime.provider_process import (
+    StreamJsonAdapter,
+    StreamJsonProcess,
+    turn_deadline,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
+_LABEL = "Claude Code"
 _PERMISSION_MODE = "bypassPermissions"
 _SESSION_SETTINGS = json.dumps({"sandbox": {"enabled": False}}, separators=(",", ":"))
 # Claude Code refuses bypassPermissions as root unless told it is inside a
@@ -48,8 +49,6 @@ _EFFORT_SETTING_KEYS = frozenset({"model", "effort"})
 #: The levels `claude --help` advertises for `--effort`.
 _EFFORT_VALUES = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LOGGER = getLogger(__name__)
-_PROCESS_EXIT_GRACE_SECONDS = 2.0
-_PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 # Before this release, ``--strict-mcp-config`` could still wait for approval
 # of project-scoped servers it was explicitly told not to load. That makes a
 # headless turn unsafe only when the working tree actually has ``.mcp.json``.
@@ -61,7 +60,7 @@ _SESSION_LIMIT_PATTERN = re.compile(
 )
 
 
-class ClaudeStreamJsonAdapter:
+class ClaudeStreamJsonAdapter(StreamJsonAdapter):
     name = "claude-stream-json"
     # Claude Code fixes its model and effort when the session starts; a resumed
     # session cannot be reconfigured, so a settings change rotates the
@@ -77,23 +76,7 @@ class ClaudeStreamJsonAdapter:
         executable: str = "claude",
         timeout: float = 3600.0,
     ) -> None:
-        self._executable = executable
-        self._timeout = timeout
-        self._process: EnvironmentProcess | None = None
-        self._environment: TurnEnvironment | None = None
-
-    async def run_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        try:
-            return await self._run_active_turn(prompt, context, conversation, emit)
-        finally:
-            # Nothing of the turn keeps running in the environment it shares.
-            await self.close()
+        super().__init__(executable=executable, timeout=timeout)
 
     async def _run_active_turn(
         self,
@@ -137,7 +120,7 @@ class ClaudeStreamJsonAdapter:
                 f"Could not start Claude Code: {exc}",
             ) from exc
         process = self._process
-        stderr_task = asyncio.create_task(process.stderr.read())
+        output = StreamJsonProcess(process, _LABEL)
         events: list[AgentEvent] = []
         session_id = conversation.provider_session_id
         reported_model = ""
@@ -168,20 +151,9 @@ class ClaudeStreamJsonAdapter:
             await emitted
         await process.stdin.drain()
         process.stdin.close()
-        observed_returncode: int | None = None
         try:
-            async with asyncio.timeout(self._timeout):
-                while line := await process.stdout.readline():
-                    try:
-                        raw = json.loads(line)
-                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                        raise AgentRuntimeError(
-                            AgentRuntimeErrorCategory.PROTOCOL,
-                            f"Malformed Claude stream-json event: {exc}",
-                            rotate_session=True,
-                        ) from exc
-                    if not isinstance(raw, dict):
-                        continue
+            async with turn_deadline(_LABEL, self._timeout, self.interrupt):
+                while (raw := await output.next_event()) is not None:
                     session_id = str(raw.get("session_id", "") or session_id)
                     reported_model = _reported_model(raw) or reported_model
                     error = _structured_error(raw) or _rate_limit_event_error(raw)
@@ -228,61 +200,15 @@ class ClaudeStreamJsonAdapter:
                                 rotate_session=True,
                             )
                         break
-        except TimeoutError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Claude Code turn timed out.",
-                rotate_session=True,
-            ) from exc
-        except asyncio.CancelledError:
-            await self.interrupt()
-            raise
-        except AgentRuntimeError:
-            raise
-        except ValueError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                f"Claude Code stream-json output could not be read: {exc}",
-                rotate_session=True,
-            ) from exc
         finally:
-            stderr = ""
-            if process.returncode is None:
-                with suppress(Exception):
-                    await asyncio.wait_for(
-                        process.wait(), timeout=_PROCESS_EXIT_GRACE_SECONDS
-                    )
-            observed_returncode = process.returncode
-            await process.kill()
-            try:
-                stderr = (
-                    await asyncio.wait_for(
-                        stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
-                    )
-                ).decode(errors="replace")
-            except TimeoutError:
-                stderr_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stderr_task
+            await output.finish()
             await self._close_environment()
             self._process = None
-        # A non-error terminal result is authoritative. Any later negative exit
-        # status can be caused by our cleanup of a CLI that is still waiting for
-        # background descendants, and must not discard the valid response or
-        # rotate its resumable session.
-        returncode = 0
-        if not terminal_seen:
-            returncode = (
-                observed_returncode
-                if observed_returncode is not None
-                else (process.returncode or 0)
-            )
+        returncode = output.returncode(terminal_seen=terminal_seen)
         if returncode != 0:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
-                f"Claude Code exited with code {returncode}: {stderr.strip() or 'no output'}",
+                f"Claude Code exited with code {returncode}: {output.stderr or 'no output'}",
                 details={"returncode": returncode},
                 rotate_session=True,
             )
@@ -310,30 +236,13 @@ class ClaudeStreamJsonAdapter:
             provider_session_id=session_id,
             finish_reason="completed",
             usage=usage,
-            stderr=stderr.strip(),
+            stderr=output.stderr,
             returncode=returncode,
             model=reported_model,
             # A turn that imposed nothing left the session on the settings it
             # already ran with, which the conversation remembers.
             effort=_applied_effort(context) or conversation.effective_effort,
         )
-
-    async def interrupt(self) -> None:
-        if self._environment is not None:
-            await self._environment.broker.deactivate()
-        if self._process is not None and self._process.returncode is None:
-            await self._process.kill()
-
-    async def close(self) -> None:
-        try:
-            await self.interrupt()
-        finally:
-            await self._close_environment()
-
-    async def _close_environment(self) -> None:
-        environment, self._environment = self._environment, None
-        if environment is not None:
-            await environment.close()
 
 
 def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:
@@ -362,13 +271,7 @@ def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
     Silent by design: it also backs the session fingerprint, which is computed
     outside the run path and must not emit a second round of warnings.
     """
-    settings: dict[str, Any] = {}
-    if model := str(context.provider_options.get("model", "") or "").strip():
-        settings["model"] = model
-    effort = str(context.provider_options.get("effort", "") or "").strip().lower()
-    if effort in _EFFORT_VALUES:
-        settings["effort"] = effort
-    return settings
+    return model_and_effort(context, _EFFORT_VALUES)
 
 
 def _applied_effort(context: AgentExecutionContext) -> str:
@@ -533,11 +436,9 @@ def _decode_events(raw: dict[str, Any], session_id: str) -> list[AgentEvent]:
         )
     if event_type == "system" and subtype == "compact_boundary":
         events.append(
-            AgentEvent(
-                AgentEventKind.TURN,
-                "context_compaction",
-                provider_session_id=session_id,
-                details={
+            context_compaction_event(
+                session_id,
+                {
                     "provider_event": subtype,
                     "compact_metadata": raw.get("compact_metadata", {}),
                 },

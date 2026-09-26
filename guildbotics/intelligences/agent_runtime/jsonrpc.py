@@ -1,18 +1,18 @@
 """Line-delimited JSON-RPC transport shared by native agent adapters.
 
-The transport owns framing and correlation only: request identifiers, pending
+The transport owns framing and correlation: request identifiers, pending
 futures, line reading and writing, stderr collection, and the dispatch of
-responses, notifications, and reverse requests. Provider method names, error
-categories, session state, and approval decisions stay in the adapters, and the
-process itself is created and terminated by the adapter that owns its sandbox
-and credentials.
+responses, notifications, and reverse requests. It also ends the peer process
+it adopted. Provider method names, error categories, session state, and
+approval decisions stay in the adapters, and the process itself is started by
+the adapter that owns its environment and credentials.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from typing import Any
 
@@ -24,9 +24,13 @@ from guildbotics.intelligences.agent_runtime.models import (
 
 METHOD_NOT_FOUND = -32601
 FATAL_NOTIFICATION = "guildbotics/fatal"
+#: How GuildBotics introduces itself in every peer's ``initialize`` request.
+#: Some peers require ``version``: Grok rejects the request without it.
+CLIENT_INFO = {"name": "guildbotics", "title": "GuildBotics", "version": "1"}
 
 _MAX_STDERR_LINES = 100
 _MAX_STDERR_LINE = 8192
+_EXIT_GRACE_SECONDS = 2.0
 
 #: Called with ``(method, request_id, params)`` when the peer sends a request of
 #: its own. The handler decides the answer and calls :meth:`respond`.
@@ -46,6 +50,29 @@ class RpcError(RuntimeError):
     def __init__(self, error: Any) -> None:
         super().__init__(str(error))
         self.error = error
+
+    def provider_details(self, retry_fields: Mapping[str, str]) -> dict[str, Any]:
+        """What the error says of itself, as an agent error's details.
+
+        Args:
+            retry_fields: The ``data`` fields in which this peer states when
+                to retry, each mapped to the detail it is reported as.
+        """
+        error = self.error if isinstance(self.error, dict) else {}
+        data = error.get("data")
+        data = data if isinstance(data, dict) else {}
+        details: dict[str, Any] = {
+            "provider_code": error.get("code"),
+            "provider_type": data.get("type") or error.get("type"),
+        }
+        details.update(
+            {
+                target: data[source]
+                for source, target in retry_fields.items()
+                if source in data
+            }
+        )
+        return details
 
 
 class LineJsonRpcTransport:
@@ -111,8 +138,26 @@ class LineJsonRpcTransport:
         self._reader_task = asyncio.create_task(self._read_messages())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
 
+    async def kill(self) -> None:
+        """End the peer process now."""
+        process = self._process
+        if process is not None and process.returncode is None:
+            await process.kill()
+
     async def aclose(self) -> None:
-        """Stop the reader tasks. The caller stops the process itself."""
+        """End the peer and stop the reader tasks.
+
+        Closing its stdin asks the peer to exit on its own; one that has not
+        exited within the grace period is ended.
+        """
+        process = self._process
+        if process is not None and process.returncode is None:
+            with suppress(BrokenPipeError, ConnectionError, OSError):
+                process.stdin.close()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=_EXIT_GRACE_SECONDS)
+            except TimeoutError:
+                await process.kill()
         for task in (self._reader_task, self._stderr_task):
             if task is not None and not task.done():
                 task.cancel()
@@ -175,6 +220,16 @@ class LineJsonRpcTransport:
         else:
             message["result"] = result
         await self.write(message)
+
+    async def respond_unsupported(self, request_id: Any, method: str) -> None:
+        """Answer a reverse request for a capability the client does not have."""
+        await self.respond(
+            request_id,
+            error={
+                "code": METHOD_NOT_FOUND,
+                "message": f"Unsupported request: {method}",
+            },
+        )
 
     async def next_notification(self) -> dict[str, Any]:
         return await self._notifications.get()
@@ -283,13 +338,7 @@ class LineJsonRpcTransport:
                 method, request_id, params if isinstance(params, dict) else {}
             )
             return
-        await self.respond(
-            request_id,
-            error={
-                "code": METHOD_NOT_FOUND,
-                "message": f"Unsupported request: {method}",
-            },
-        )
+        await self.respond_unsupported(request_id, method)
 
     async def _drain_stderr(self) -> None:
         process = self._process

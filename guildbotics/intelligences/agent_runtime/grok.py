@@ -27,6 +27,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    context_compaction_event,
 )
 
 #: ``_x.ai/session_notification`` carries xAI's private session updates. The
@@ -150,14 +151,7 @@ class GrokAcpAdapter(AcpAdapterBase):
     ) -> list[AgentEvent]:
         kind = str(update.get("sessionUpdate", "") or "")
         if kind in _COMPACTION_UPDATES:
-            return [
-                AgentEvent(
-                    AgentEventKind.TURN,
-                    "context_compaction",
-                    provider_session_id=session_id,
-                    details={"detected_by": kind},
-                )
-            ]
+            return [context_compaction_event(session_id, {"detected_by": kind})]
         if kind == "retry_state":
             return _retry_state_events(update, session_id)
         if kind == "turn_completed":

@@ -793,7 +793,7 @@ async def test_a_request_copilot_should_never_send_is_refused(
     adapter = CopilotAcpAdapter()
     adapter._transport._process = peer  # type: ignore[assignment]
 
-    await adapter._handle_agent_request("fs/read_text_file", 7, {})
+    await adapter._handle_reverse_request("fs/read_text_file", 7, {})
 
     refusal = next(message for message in peer.messages if message.get("id") == 7)
     assert refusal["error"]["code"] == -32601

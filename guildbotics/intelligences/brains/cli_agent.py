@@ -6,7 +6,6 @@ from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from logging import Logger
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -32,6 +31,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     load_toolchain,
 )
 from guildbotics.intelligences.agent_runtime.models import (
+    CONTEXT_COMPACTION,
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
     AgentExecutionContext,
@@ -46,7 +46,7 @@ from guildbotics.intelligences.brains.brain import (
     public_parameters,
 )
 from guildbotics.intelligences.brains.util import (
-    summary_log_line,
+    record_summary,
     to_plain_text,
     to_response_class,
 )
@@ -63,7 +63,6 @@ from guildbotics.observability import correlation_fields, span_scope
 from guildbotics.observability.diagnostics_events import (
     record_correlated_event,
     record_correlated_io,
-    record_span_summary,
 )
 from guildbotics.observability.session_transcripts import (
     standard_stderr_tail,
@@ -601,35 +600,14 @@ class CliAgentBrain(Brain):
     Intelligence that runs an AI CLI tool.
     """
 
-    def __init__(
-        self,
-        person_id: str,
-        name: str,
-        logger: Logger,
-        description: str = "",
-        template_engine: str = "default",
-        response_class: type[BaseModel] | None = None,
-        cli_agent: str = "default",
-        effort: str = "",
-    ):
-        super().__init__(
-            person_id=person_id,
-            name=name,
-            logger=logger,
-            description=description,
-            template_engine=template_engine,
-            response_class=response_class,
-            effort=effort,
-        )
-
+    def __init__(self, *args: Any, cli_agent: str = "default", **kwargs: Any):
+        """Take the :class:`Brain` arguments, and the AI CLI tool slot to run."""
+        super().__init__(*args, **kwargs)
         self.prompt_info = PromptInfo(
-            response_class=response_class,
-            description=description,
+            response_class=self.response_class,
+            description=self.description,
         )
-
-        cli_agent_mapping = get_cli_agent_mapping(person_id)
-        self.executable_info = cli_agent_mapping[cli_agent]
-        self.logger = logger
+        self.executable_info = get_cli_agent_mapping(self.person_id)[cli_agent]
         self.cli_agent = cli_agent
 
     @property
@@ -727,26 +705,16 @@ class CliAgentBrain(Brain):
         an invented effective value is worse than an absent one. A run that
         never reached the provider has no effective values at all.
         """
-        duration_ms = (time.monotonic() - started) * 1000
-        model = result.model if result else ""
-        effort = result.effort if result else ""
-        record_span_summary(
-            status=status,
-            model=model,
-            effort=effort,
-            duration_ms=duration_ms,
-            usage=result.usage if result else None,
+        record_summary(
+            self.logger,
+            "cli_agent",
+            self.cli_agent,
+            status,
+            started=started,
             attributes={"agent.kind": "cli_agent", "agent.slot": self.cli_agent},
-        )
-        self.logger.info(
-            summary_log_line(
-                "cli_agent",
-                self.cli_agent,
-                status,
-                duration_ms=duration_ms,
-                model=model,
-                effort=effort,
-            )
+            model=result.model if result else "",
+            effort=result.effort if result else "",
+            usage=result.usage if result else None,
         )
 
     def _resolve_provider_effort(self, kwargs: dict[str, Any]) -> EffortDecision:
@@ -1048,12 +1016,12 @@ class CliAgentBrain(Brain):
             )
             conversation.context_size_tokens = terminal.usage["context_size_tokens"]
         compacted = any(
-            event.kind is AgentEventKind.TURN and event.name == "context_compaction"
+            event.kind is AgentEventKind.TURN and event.name == CONTEXT_COMPACTION
             for event in terminal.events
         )
         conversation.healthy = not compacted
         if compacted:
-            conversation.rotation_reason = "context_compaction"
+            conversation.rotation_reason = CONTEXT_COMPACTION
         store.save(conversation)
         return CliAgentExecutionResult(
             stdout=terminal.output.strip(),

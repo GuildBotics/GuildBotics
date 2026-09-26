@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from guildbotics.commands.authoring import (
     CommandAuthoringChange,
@@ -29,6 +30,20 @@ def _proposal(*changes: CommandAuthoringChange) -> CommandAuthoringResult:
         message="Review the proposed changes.",
         changes=list(changes),
     )
+
+
+def test_an_answer_cannot_include_changes() -> None:
+    change = CommandAuthoringChange(
+        operation="create", command="helper", format="python", content=PYTHON_SOURCE
+    )
+
+    with pytest.raises(ValidationError):
+        CommandAuthoringResult(action="answer", message="Answer.", changes=[change])
+
+
+def test_a_change_proposal_must_include_a_change() -> None:
+    with pytest.raises(ValidationError):
+        CommandAuthoringResult(action="propose_changes", message="Review.")
 
 
 class _BrainStub:

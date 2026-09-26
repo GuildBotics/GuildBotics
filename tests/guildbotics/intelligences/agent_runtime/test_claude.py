@@ -765,7 +765,7 @@ async def test_claude_success_result_survives_cleanup_sigterm(
     stream.wait = wait_forever
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.claude._PROCESS_EXIT_GRACE_SECONDS",
+        "guildbotics.intelligences.agent_runtime.provider_process._PROCESS_EXIT_GRACE_SECONDS",
         0.01,
     )
     stream.kill = lambda: terminate(stream)

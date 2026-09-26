@@ -23,6 +23,7 @@ from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
 )
+from guildbotics.utils.text_utils import first_line
 
 DEFINED_ARGS_VALUES = ("auto", "hidden")
 EXTRA_ARGS_VALUES = ("hidden", "optional")
@@ -261,7 +262,7 @@ def load_command_file_metadata(path: Path) -> dict[str, Any]:
             except CommandError:
                 metadata = {}
             if "description" not in metadata:
-                metadata["description"] = _first_line(description or "")
+                metadata["description"] = first_line(description or "")
             return metadata
     except (CommandError, OSError, SyntaxError, ValueError, yaml.YAMLError):
         return {}
@@ -343,11 +344,3 @@ def _safe_read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         return ""
-
-
-def _first_line(text: str) -> str:
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    return ""

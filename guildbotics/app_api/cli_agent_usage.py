@@ -15,12 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.app_api.models import (
-    CliAgentUsage,
-    CliAgentUsageCheck,
-    CliAgentUsageResponse,
-    CliAgentUsageWindow,
-)
+from guildbotics.app_api.models import CliAgentUsageCheck, CliAgentUsageResponse
 from guildbotics.intelligences.agent_environment.provider_state import has_credentials
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
@@ -41,24 +36,6 @@ USAGE_RETRY_SECONDS = 30.0
 MAX_CONCURRENT_PROBES = 2
 
 
-def _usage_model(snapshot: CliAgentUsageSnapshot) -> CliAgentUsage:
-    return CliAgentUsage(
-        agent=snapshot.agent,
-        windows=[
-            CliAgentUsageWindow(
-                window=window.window,
-                used_percent=window.used_percent,
-                resets_at=window.resets_at,
-                window_minutes=window.window_minutes,
-                label=window.label,
-            )
-            for window in snapshot.windows
-        ],
-        limit_reached=snapshot.limit_reached,
-        checked_at=snapshot.checked_at,
-    )
-
-
 @dataclass
 class _ToolUsage:
     """One tool's reading, and the probe fetching the next one.
@@ -69,7 +46,7 @@ class _ToolUsage:
     """
 
     #: The last successful reading; a failed probe leaves it in place.
-    usage: CliAgentUsage | None = None
+    usage: CliAgentUsageSnapshot | None = None
     #: The latest completed probe, whatever its outcome.
     check: CliAgentUsageCheck | None = None
     #: ``time.monotonic()`` when ``check`` completed.
@@ -161,7 +138,7 @@ class CliAgentUsageCache:
         usage = None
         async with self._slots:
             try:
-                usage = _usage_model(await read_cli_agent_usage(name))
+                usage = await read_cli_agent_usage(name)
             except CliAgentUsageError as exc:
                 logging.getLogger("guildbotics.app_api.cli_agent_usage").warning(
                     "Could not read %s usage: %s", name, exc

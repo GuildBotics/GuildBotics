@@ -18,9 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from guildbotics.app_api.models import (
-    CommandAuthoringChange,
     CommandAuthoringRequest,
-    CommandAuthoringResponse,
     CommandOption,
     CommandRunRequest,
     ProjectConfigUpdateRequest,
@@ -57,24 +55,6 @@ def test_command_authoring_create_rejects_existing_draft_fields() -> None:
             conversation_id="conversation",
             message="Create it.",
             content="source",
-        )
-
-
-def test_command_authoring_answer_cannot_contain_changes() -> None:
-    change = CommandAuthoringChange(
-        operation="create",
-        command="helper",
-        format="python",
-        relative_path="helper.py",
-        content="def main(context):\n    return ''\n",
-    )
-
-    with pytest.raises(ValidationError):
-        CommandAuthoringResponse(
-            trace_id="trace",
-            message="Answer.",
-            action="answer",
-            changes=[change],
         )
 
 

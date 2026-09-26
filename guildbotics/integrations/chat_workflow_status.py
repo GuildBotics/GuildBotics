@@ -9,31 +9,47 @@ WORKFLOW_STATUS_KIND = "workflow_error"
 WORKFLOW_STATUS_ROUTING_SUPPRESS = "suppress"
 
 
-def workflow_status_metadata(
+def workflow_status_fields(
     *,
     reason: str,
     person_id: str,
-    source_event_id: str,
     run_id: str,
     retry_after_at: str = "",
     retry_after_text: str = "",
+    source_event_id: str = "",
+    subject_id: str = "",
 ) -> dict[str, object]:
-    payload: dict[str, object] = {
+    """A workflow status, as chat metadata and GitHub comment markers carry it.
+
+    Args:
+        reason: Why the run stopped.
+        person_id: The member whose run it reports on.
+        run_id: The run it reports on.
+        retry_after_at: When a rate-limited run can be retried, if known.
+        retry_after_text: The provider's own words for that, if any.
+        source_event_id: The chat event the run answered, for a chat status.
+        subject_id: The issue or pull request URL, for a GitHub status.
+    """
+    fields: dict[str, object] = {
         "kind": WORKFLOW_STATUS_KIND,
         "routing": WORKFLOW_STATUS_ROUTING_SUPPRESS,
         "reason": reason,
         "person_id": person_id,
-        "source_event_id": source_event_id,
         "run_id": run_id,
     }
-    if retry_after_at:
-        payload["retry_after_at"] = retry_after_at
-    if retry_after_text:
-        payload["retry_after_text"] = retry_after_text
-    return {
-        "event_type": WORKFLOW_STATUS_EVENT_TYPE,
-        "event_payload": payload,
+    optional = {
+        "retry_after_at": retry_after_at,
+        "retry_after_text": retry_after_text,
+        "source_event_id": source_event_id,
+        "subject_id": subject_id,
     }
+    fields.update({key: value for key, value in optional.items() if value})
+    return fields
+
+
+def workflow_status_metadata(fields: dict[str, object]) -> dict[str, object]:
+    """Chat message metadata carrying ``fields`` from :func:`workflow_status_fields`."""
+    return {"event_type": WORKFLOW_STATUS_EVENT_TYPE, "event_payload": fields}
 
 
 def normalize_workflow_status_metadata(metadata: object) -> dict[str, object]:

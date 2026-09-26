@@ -44,32 +44,6 @@ class WorkflowStatusComment:
     retry_after_text: str = ""
 
 
-def workflow_status_comment_payload(
-    *,
-    reason: str,
-    person_id: str,
-    run_id: str,
-    subject_id: str = "",
-    retry_after_at: str = "",
-    retry_after_text: str = "",
-) -> dict[str, object]:
-    """Build the JSON payload for a workflow status marker."""
-    payload: dict[str, object] = {
-        "kind": WORKFLOW_STATUS_KIND,
-        "routing": WORKFLOW_STATUS_ROUTING_SUPPRESS,
-        "reason": reason,
-        "person_id": person_id,
-        "run_id": run_id,
-    }
-    if retry_after_at:
-        payload["retry_after_at"] = retry_after_at
-    if retry_after_text:
-        payload["retry_after_text"] = retry_after_text
-    if subject_id:
-        payload["subject_id"] = subject_id
-    return payload
-
-
 def render_workflow_status_comment(*, body: str, payload: dict[str, object]) -> str:
     """Render a human-readable comment with a hidden status marker."""
     json_line = json.dumps(

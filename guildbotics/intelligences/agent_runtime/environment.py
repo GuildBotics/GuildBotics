@@ -632,13 +632,7 @@ async def _start(
     before_stop: Callable[[AgentEnvironment], Awaitable[None]],
 ) -> AgentEnvironment:
     try:
-        return await AgentEnvironment.start(
-            spec,
-            snapshot=str(where.snapshot),
-            memory_mib=where.memory_mib,
-            cpus=where.cpus,
-            before_stop=before_stop,
-        )
+        return await where.start(spec, before_stop=before_stop)
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
 

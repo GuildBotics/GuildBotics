@@ -11,12 +11,14 @@ from typing import Any
 import pytest
 
 from guildbotics.capabilities.member_github import PR_INSPECT_FEEDBACK_SOURCES
+from guildbotics.integrations.chat_workflow_status import workflow_status_fields
+from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
     FEEDBACK,
     MAX_REVIEW_ROUNDS,
-    PULL_REQUEST_QUERY,
     PULL_REQUEST_FEEDBACK_SOURCE_QUERIES,
     PULL_REQUEST_FEEDBACK_SOURCES,
+    PULL_REQUEST_QUERY,
     REVIEW,
     REVIEW_LIMIT,
     PullRequest,
@@ -24,10 +26,8 @@ from guildbotics.integrations.github.pull_request_patrol import (
     pull_request_work,
     review_rounds,
 )
-from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
-    workflow_status_comment_payload,
 )
 
 ME = "aiko-gh"
@@ -104,7 +104,7 @@ def _thread(
 def _notice(reason: str, **payload: str) -> str:
     return render_workflow_status_comment(
         body="notice",
-        payload=workflow_status_comment_payload(
+        payload=workflow_status_fields(
             reason=reason, person_id="aiko", run_id="r", **payload
         ),
     )

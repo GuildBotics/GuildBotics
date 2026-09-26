@@ -400,6 +400,26 @@ class LoginEnvironment:
     cpus: int
     nameservers: tuple[str, ...]
 
+    async def start(
+        self,
+        spec: AgentEnvironmentSpec,
+        *,
+        before_stop: Callable[[AgentEnvironment], Awaitable[None]] | None = None,
+        on_close: Callable[[], None] | None = None,
+    ) -> AgentEnvironment:
+        """Boot a microVM shaped by ``spec`` from this device's snapshot.
+
+        See :meth:`AgentEnvironment.start` for ``before_stop`` and ``on_close``.
+        """
+        return await AgentEnvironment.start(
+            spec,
+            snapshot=str(self.snapshot),
+            memory_mib=self.memory_mib,
+            cpus=self.cpus,
+            before_stop=before_stop,
+            on_close=on_close,
+        )
+
 
 class LentLogin:
     """A brokered login lent to one turn: the token its gateway sends.
@@ -651,14 +671,7 @@ async def _boot_login_environment(
             nameservers=where.nameservers,
         ),
     )
-    environment = await AgentEnvironment.start(
-        spec,
-        snapshot=str(where.snapshot),
-        memory_mib=where.memory_mib,
-        cpus=where.cpus,
-        before_stop=before_stop,
-        on_close=on_close,
-    )
+    environment = await where.start(spec, before_stop=before_stop, on_close=on_close)
     try:
         root = f"{spec.home}/{tool.provision.state_root}"
         for name, data in files.items():

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_KIND,
     WORKFLOW_STATUS_ROUTING_SUPPRESS,
+    workflow_status_fields,
 )
 from guildbotics.integrations.workflow_status_comment import (
     WORKFLOW_STATUS_MARKER,
@@ -10,12 +11,11 @@ from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     render_workflow_status_comment,
     suppresses_ticket_selection,
-    workflow_status_comment_payload,
 )
 
 
-def test_workflow_status_comment_payload_builds_correct_dict():
-    payload = workflow_status_comment_payload(
+def test_workflow_status_fields_for_github_names_the_subject():
+    payload = workflow_status_fields(
         reason="rate_limited",
         person_id="aiko",
         run_id="run-123",
@@ -36,7 +36,7 @@ def test_workflow_status_comment_payload_builds_correct_dict():
 
 
 def test_render_and_parse_workflow_status_comment_round_trip():
-    payload = workflow_status_comment_payload(
+    payload = workflow_status_fields(
         reason="rate_limited",
         person_id="aiko",
         run_id="run-123",
@@ -87,7 +87,7 @@ def test_parse_workflow_status_comment_rejects_old_fenced_block():
 
 
 def test_parse_workflow_status_comment_returns_none_when_different_kind():
-    payload = workflow_status_comment_payload(
+    payload = workflow_status_fields(
         reason="rate_limited",
         person_id="aiko",
         run_id="run-123",
