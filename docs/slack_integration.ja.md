@@ -171,6 +171,8 @@ guildbotics run examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Ge
 guildbotics run workflows/chat_post_command service=slack channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
 ```
 
+チャネルが指定されていない・`channel_name` が解決できない（チャネル名、Bot のチャネル参加、`channels:read` / `groups:read` スコープを確認してください）・`command` が空または引用符が閉じていない場合は、実行が失敗として記録されます。コマンドの出力が空のときは何も投稿せず、成功として扱います。
+
 ## `person.yml` リファレンス
 
 デスクトップアプリで保存した Slack 設定は、`team/members/<person_id>/person.yml` に次の形で書き出されます。GUI を使わないサーバーでは、このファイルを直接編集します。

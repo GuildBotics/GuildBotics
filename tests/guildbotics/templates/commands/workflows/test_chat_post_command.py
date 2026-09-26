@@ -4,6 +4,7 @@ import types
 
 import pytest
 
+from guildbotics.commands.errors import CommandError
 from guildbotics.integrations.chat_service import ChatPostResult
 from guildbotics.templates.commands.workflows import chat_post_command
 
@@ -25,14 +26,6 @@ class FakeChatService:
         )
 
 
-class StubLogger:
-    def __init__(self) -> None:
-        self.lines: list[tuple] = []
-
-    def info(self, *args):
-        self.lines.append(args)
-
-
 def _context(command_result: object = "hello") -> types.SimpleNamespace:
     svc = FakeChatService()
     calls: list[tuple[str, tuple]] = []
@@ -42,7 +35,6 @@ def _context(command_result: object = "hello") -> types.SimpleNamespace:
         return command_result
 
     ctx = types.SimpleNamespace(
-        logger=StubLogger(),
         invoke=invoke,
         get_chat_service=lambda: svc,
     )
@@ -100,35 +92,43 @@ async def test_skips_when_command_output_is_empty():
     assert ctx._svc.posts == []
 
 
+@pytest.mark.parametrize(
+    ("channel", "command", "message"),
+    [
+        pytest.param(
+            {},
+            "examples/reports/morning_summary",
+            "channel_id or channel_name is required",
+            id="no-channel",
+        ),
+        pytest.param(
+            {"channel_name": "missing"},
+            "examples/reports/morning_summary",
+            "Chat channel was not found: missing",
+            id="unresolved-channel-name",
+        ),
+        pytest.param(
+            {"channel_id": "C1"},
+            'examples/reports/ai_news_digest query="OpenAI',
+            "Invalid command syntax",
+            id="invalid-quotes",
+        ),
+        pytest.param(
+            {"channel_id": "C1"},
+            "  ",
+            "A command to post is required",
+            id="empty-command",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_logs_and_skips_when_channel_name_cannot_be_resolved():
+async def test_fails_without_running_or_posting_when_it_cannot_post(
+    channel: dict[str, str], command: str, message: str
+):
     ctx = _context(command_result="digest")
 
-    out = await chat_post_command.main(
-        ctx,
-        service="slack",
-        channel_name="missing",
-        command="examples/reports/morning_summary",
-    )
+    with pytest.raises(CommandError, match=message):
+        await chat_post_command.main(ctx, service="slack", command=command, **channel)
 
-    assert out == ""
-    assert ctx._svc.posts == []
-    assert ctx._calls == []
-    assert any("could not be resolved" in str(line[0]) for line in ctx.logger.lines)
-
-
-@pytest.mark.asyncio
-async def test_logs_and_skips_when_command_text_has_invalid_quotes():
-    ctx = _context(command_result="digest")
-
-    out = await chat_post_command.main(
-        ctx,
-        service="slack",
-        channel_id="C1",
-        command='examples/reports/ai_news_digest query="OpenAI',
-    )
-
-    assert out == ""
     assert ctx._calls == []
     assert ctx._svc.posts == []
-    assert any("invalid command syntax" in str(line[0]) for line in ctx.logger.lines)
