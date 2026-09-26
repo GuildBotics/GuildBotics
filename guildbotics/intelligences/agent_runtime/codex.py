@@ -19,9 +19,9 @@ from guildbotics.intelligences.agent_runtime.environment import (
     start_turn_environment,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
+    CLIENT_INFO,
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
-    LineJsonRpcTransport,
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
@@ -38,6 +38,12 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentTerminalResult,
     ConversationRecord,
     EventSink,
+    command_line,
+    context_compaction_event,
+)
+from guildbotics.intelligences.agent_runtime.provider_process import (
+    JsonRpcAdapter,
+    turn_deadline,
 )
 from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
 from guildbotics.intelligences.cli_agents import cli_agent_info
@@ -96,7 +102,7 @@ def _default_entry(catalog: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-class CodexAppServerAdapter:
+class CodexAppServerAdapter(JsonRpcAdapter):
     name = "codex-app-server"
     # ``turn/start`` accepts model and effort on every turn, so a change never
     # requires a fresh thread.
@@ -120,15 +126,10 @@ class CodexAppServerAdapter:
         executable: str = "codex",
         timeout: float = 3600.0,
     ) -> None:
-        self._executable = executable
-        self._model_catalog: dict[str, dict[str, Any]] = {}
-        self._timeout = timeout
-        self._transport = LineJsonRpcTransport(
-            label="Codex App Server",
-            request_timeout=min(timeout, 30.0),
-            on_reverse_request=self._handle_server_request,
+        super().__init__(
+            executable=executable, timeout=timeout, label="Codex App Server"
         )
-        self._environment: TurnEnvironment | None = None
+        self._model_catalog: dict[str, dict[str, Any]] = {}
         self._active_thread_id = ""
         self._active_turn_id = ""
 
@@ -142,9 +143,7 @@ class CodexAppServerAdapter:
         try:
             return await self._run_active_turn(prompt, context, conversation, emit)
         finally:
-            # The App Server is the turn's: the next turn starts its own and
-            # resumes the thread by id.
-            await self._close_provider()
+            await self.close()
 
     async def _run_active_turn(
         self,
@@ -204,7 +203,7 @@ class CodexAppServerAdapter:
                 await result
 
         try:
-            async with asyncio.timeout(self._timeout):
+            async with turn_deadline("Codex", self._timeout, self.interrupt):
                 while True:
                     message = await self._transport.next_notification()
                     method = str(message.get("method", ""))
@@ -249,16 +248,6 @@ class CodexAppServerAdapter:
                         if terminal_error is not None:
                             raise terminal_error
                         break
-        except TimeoutError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Codex turn timed out.",
-                rotate_session=True,
-            ) from exc
-        except asyncio.CancelledError:
-            await self.interrupt()
-            raise
         finally:
             self._active_turn_id = ""
 
@@ -294,12 +283,10 @@ class CodexAppServerAdapter:
             effort=effective_effort,
         )
 
-    async def interrupt(self) -> None:
-        if self._environment is not None:
-            await self._environment.broker.deactivate()
+    async def _cancel_turn(self) -> None:
         if self._active_thread_id and self._active_turn_id:
             # A second cancellation while the interrupt RPC is pending must not
-            # skip the process-tree termination below.
+            # skip the process-tree termination after it.
             with suppress(asyncio.CancelledError, Exception):
                 await self._request(
                     "turn/interrupt",
@@ -308,33 +295,12 @@ class CodexAppServerAdapter:
                         "turnId": self._active_turn_id,
                     },
                 )
-        process = self._transport.process
-        if process is not None and process.returncode is None:
-            await process.kill()
-
-    async def close(self) -> None:
-        await self._close_provider()
-
-    async def _close_provider(self) -> None:
-        """Stop Codex App Server and end its turn in the environment."""
-        process = self._transport.process
-        if process is not None and process.returncode is None:
-            with suppress(BrokenPipeError, ConnectionError, OSError):
-                process.stdin.close()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=2.0)
-            except TimeoutError:
-                await process.kill()
-        await self._transport.aclose()
-        environment, self._environment = self._environment, None
-        if environment is not None:
-            await environment.close()
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
     ) -> TurnEnvironment:
         if self._transport.process is not None:
-            await self._close_provider()
+            await self.close()
         environment = await start_turn_environment(context, "codex")
         self._environment = environment
         try:
@@ -351,23 +317,14 @@ class CodexAppServerAdapter:
                 limit=STREAM_READ_LIMIT,
             )
         except AgentEnvironmentError as exc:
-            await self._close_provider()
+            await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Codex App Server: {exc}",
             ) from exc
         self._transport.start(process)
         try:
-            await self._request(
-                "initialize",
-                {
-                    "clientInfo": {
-                        "name": "guildbotics",
-                        "title": "GuildBotics",
-                        "version": "1",
-                    }
-                },
-            )
+            await self._request("initialize", {"clientInfo": CLIENT_INFO})
             await self._notify("initialized", {})
         except RpcError as exc:
             await self.close()
@@ -556,7 +513,7 @@ class CodexAppServerAdapter:
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         await self._transport.notify(method, params)
 
-    async def _handle_server_request(
+    async def _handle_reverse_request(
         self, method: str, request_id: Any, _params: dict[str, Any]
     ) -> None:
         if method in _MODERN_APPROVAL_METHODS | _LEGACY_APPROVAL_METHODS:
@@ -591,13 +548,7 @@ class CodexAppServerAdapter:
                 }
             )
             return
-        await self._transport.respond(
-            request_id,
-            error={
-                "code": METHOD_NOT_FOUND,
-                "message": f"Unsupported request: {method}",
-            },
-        )
+        await super()._handle_reverse_request(method, request_id, _params)
 
 
 def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
@@ -735,13 +686,11 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
     if method == "thread/compacted" or (
         method == "item/completed" and item.get("type") == "contextCompaction"
     ):
-        return AgentEvent(
-            AgentEventKind.TURN,
-            "context_compaction",
-            provider_session_id=session_id,
+        return context_compaction_event(
+            session_id,
+            {"provider_event": method},
             provider_turn_id=turn_id,
             item_id=item_id,
-            details={"provider_event": method},
         )
     if method == "item/agentMessage/delta":
         return AgentEvent(
@@ -781,7 +730,7 @@ def _decode_notification(method: str, params: dict[str, Any]) -> AgentEvent | No
             provider_session_id=session_id,
             provider_turn_id=turn_id,
             item_id=item_id,
-            command=_item_command(item),
+            command=command_line(item.get("command")),
             path=paths[0] if paths else "",
             details=details,
         )
@@ -877,15 +826,6 @@ def _item_text(item: dict[str, Any]) -> str:
     return ""
 
 
-def _item_command(item: dict[str, Any]) -> str:
-    command = item.get("command")
-    if isinstance(command, str):
-        return command
-    if isinstance(command, list):
-        return " ".join(str(part) for part in command)
-    return ""
-
-
 def _item_paths(item: dict[str, Any]) -> list[str]:
     paths: list[str] = []
     direct = item.get("path")
@@ -953,18 +893,14 @@ def _agent_error_from_rpc(exc: RpcError) -> AgentRuntimeError:
         )
         if value is not None
     }
-    details: dict[str, Any] = {
-        "provider_code": error.get("code"),
-        "provider_type": data.get("type") or error.get("type"),
-    }
-    for source, target in (
-        ("retryAfterAt", "retry_after_at"),
-        ("retry_after_at", "retry_after_at"),
-        ("retryAfterSeconds", "retry_after_seconds"),
-        ("retry_after_seconds", "retry_after_seconds"),
-    ):
-        if source in data:
-            details[target] = data[source]
+    details = exc.provider_details(
+        {
+            "retryAfterAt": "retry_after_at",
+            "retry_after_at": "retry_after_at",
+            "retryAfterSeconds": "retry_after_seconds",
+            "retry_after_seconds": "retry_after_seconds",
+        }
+    )
     if identifiers & {
         "authentication",
         "authentication_failed",

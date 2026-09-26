@@ -8,6 +8,7 @@ from agno.agent import Agent
 from pydantic import BaseModel, ValidationError
 
 from guildbotics.intelligences.brains import agno_agent
+from guildbotics.intelligences.brains import util as brain_util
 
 
 @pytest.mark.asyncio
@@ -43,7 +44,7 @@ async def test_agno_agent_records_request_response_and_span(
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
     monkeypatch.setattr(
-        agno_agent,
+        brain_util,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -105,7 +106,7 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
     agno_agent.person_model_mapping.clear()
     agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
     monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
-    monkeypatch.setattr(agno_agent, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(brain_util, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
         agno_agent, "instantiate_class", lambda *args, **kwargs: object()
     )
@@ -159,7 +160,7 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
     agno_agent.person_model_mapping.clear()
     agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
     monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
-    monkeypatch.setattr(agno_agent, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(brain_util, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
         agno_agent, "instantiate_class", lambda *args, **kwargs: object()
     )
@@ -231,7 +232,7 @@ async def _run_with_effort(
     )
     spans = span_records if span_records is not None else []
     monkeypatch.setattr(
-        agno_agent, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+        brain_util, "record_span_summary", lambda **kwargs: spans.append(kwargs)
     )
     monkeypatch.setattr(agno_agent, "instantiate_class", fake_instantiate)
     monkeypatch.setattr(agno_agent, "Agent", FakeAgent)

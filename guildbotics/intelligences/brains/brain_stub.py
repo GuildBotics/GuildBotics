@@ -1,7 +1,3 @@
-from logging import Logger
-
-from pydantic import BaseModel
-
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.intelligences.common import (
     DecisionResponse,
@@ -10,27 +6,6 @@ from guildbotics.intelligences.common import (
 
 
 class BrainStub(Brain):
-    def __init__(
-        self,
-        person_id: str,
-        name: str,
-        logger: Logger,
-        description: str = "",
-        template_engine: str = "default",
-        response_class: type[BaseModel] | None = None,
-        effort: str = "",
-    ):
-        super().__init__(
-            person_id,
-            name,
-            logger,
-            description,
-            template_engine,
-            response_class,
-            effort,
-        )
-        self.logger.info(f"BrainStub initialized: {self.name}")
-
     async def run(self, message: str, **kwargs):
         self.logger.info(f"BrainStub received message: {message}")
         # For E2E testing, we can simply return the message or a predefined response

@@ -19,6 +19,20 @@ CLI_AGENT_ROOT = "cli_agents"
 _CLI_AGENT_PATH_PARTS = 3
 _CLI_AGENT_TOOL_INDEX = 1
 
+#: The usage panels Claude Code and Antigravity print headlessly, without an
+#: agent turn. They read the account, so running one is also what makes the
+#: tool refresh an expired login. Claude Code must not pile a resumable
+#: session onto disk for each one.
+CLAUDE_USAGE_COMMAND = (
+    "claude",
+    "-p",
+    "/usage",
+    "--output-format",
+    "json",
+    "--no-session-persistence",
+)
+ANTIGRAVITY_USAGE_COMMAND = ("agy", "-p", "/usage", "--output-format", "json")
+
 
 def _names_a_place_inside(value: str) -> bool:
     """Whether ``value`` stays inside the directory it is relative to.
@@ -455,14 +469,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 # What else Claude Code sends goes to the account endpoints
                 # with the stand-in, where it can only fail.
                 turn_environment=(("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),),
-                refresh=(
-                    "claude",
-                    "-p",
-                    "/usage",
-                    "--output-format",
-                    "json",
-                    "--no-session-persistence",
-                ),
+                refresh=CLAUDE_USAGE_COMMAND,
             ),
         ),
     ),
@@ -652,7 +659,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 tls=True,
                 relayed_hosts=("www.googleapis.com",),
                 turn_domains=("lh3.googleusercontent.com",),
-                refresh=("agy", "-p", "/usage", "--output-format", "json"),
+                refresh=ANTIGRAVITY_USAGE_COMMAND,
             ),
         ),
     ),

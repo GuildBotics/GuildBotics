@@ -1,6 +1,6 @@
 import pytest
 
-from guildbotics.utils.text_utils import get_json_str
+from guildbotics.utils.text_utils import first_line, get_json_str
 
 
 def test_get_json_str_with_fenced_json_block():
@@ -48,3 +48,16 @@ def test_get_json_str_fenced_non_json_language_falls_back():
     raw = 'before text\n```txt\n{\n  "k": "v"\n}\n```\nafter text\n'
     out = get_json_str(raw)
     assert out == '{\n  "k": "v"\n}'
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("\n  \n  Title line  \nsecond\n", "Title line"),
+        ("only", "only"),
+        ("", ""),
+        (" \n\t\n", ""),
+    ],
+)
+def test_first_line_is_the_first_line_holding_anything(text, expected):
+    assert first_line(text) == expected

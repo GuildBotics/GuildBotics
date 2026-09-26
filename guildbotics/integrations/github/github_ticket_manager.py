@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from guildbotics.entities import Person, Task, Team
 from guildbotics.entities.message import Message
 from guildbotics.entities.team import Service
+from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_utils import (
     create_github_client,
     get_agent_token,
@@ -32,7 +33,6 @@ from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
     render_workflow_status_comment,
     suppresses_ticket_selection,
-    workflow_status_comment_payload,
 )
 from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
@@ -1091,7 +1091,7 @@ class GitHubTicketManager(TicketManager):
                     "integrations.github.github_ticket_manager.review_limit_reached",
                     count=MAX_REVIEW_ROUNDS,
                 ),
-                payload=workflow_status_comment_payload(
+                payload=workflow_status_fields(
                     reason=REVIEW_LIMIT_REASON,
                     person_id=self.person.person_id,
                     run_id="",

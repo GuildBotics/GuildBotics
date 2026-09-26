@@ -1,7 +1,14 @@
 import re
 from typing import Any
 
-import jinja2
+
+def first_line(text: str) -> str:
+    """The first line of ``text`` that holds anything, stripped."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def get_json_str(raw_output: str) -> str:
@@ -40,6 +47,10 @@ def replace_placeholders_by_default(text: str, placeholders: dict[str, Any]) -> 
 
 
 def replace_placeholders_by_jinja2(text: str, placeholders: dict[str, Any]) -> str:
+    # Imported here: it costs a tenth of a second, and most importers of this
+    # module, the CLI's among them, never render a template.
+    import jinja2
+
     env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
     template = env.from_string(text)
     return template.render(**placeholders)

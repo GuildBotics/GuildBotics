@@ -17,11 +17,11 @@ from acp_fake_peer import (
 
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import acp as acp_module
-from guildbotics.intelligences.agent_runtime.acp import CLIENT_VERSION
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
     _launch_argv,
 )
+from guildbotics.intelligences.agent_runtime.jsonrpc import CLIENT_INFO
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
 )
@@ -1149,9 +1149,9 @@ async def test_initialize_declares_no_client_capabilities(
     params = peer.sent("initialize")["params"]
     assert params["clientCapabilities"] == {}
     assert params["protocolVersion"] == 1
-    assert params["clientInfo"]["name"] == "guildbotics"
-    # Required by ACP; Grok rejects initialize without it.
-    assert params["clientInfo"]["version"] == CLIENT_VERSION
+    assert params["clientInfo"] == CLIENT_INFO
+    # ACP requires a version; Grok rejects initialize without it.
+    assert params["clientInfo"]["version"]
 
 
 @pytest.mark.asyncio

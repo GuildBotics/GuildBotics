@@ -54,6 +54,7 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.chat_workflow_status import (
     WORKFLOW_STATUS_KIND,
     is_suppressed_chat_event,
+    workflow_status_fields,
     workflow_status_metadata,
 )
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
@@ -588,12 +589,14 @@ class ChatSelector:
                 message,
                 thread_ts=batch.event.thread_ts,
                 metadata=workflow_status_metadata(
-                    reason=reason,
-                    person_id=self._person_id,
-                    source_event_id=source_event_id,
-                    run_id=run_id,
-                    retry_after_at=retry_after_at,
-                    retry_after_text=retry_after_text,
+                    workflow_status_fields(
+                        reason=reason,
+                        person_id=self._person_id,
+                        run_id=run_id,
+                        retry_after_at=retry_after_at,
+                        retry_after_text=retry_after_text,
+                        source_event_id=source_event_id,
+                    )
                 ),
             )
         except Exception:

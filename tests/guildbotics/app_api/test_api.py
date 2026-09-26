@@ -24,9 +24,7 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
-    CliAgentUsage,
     CliAgentUsageResponse,
-    CliAgentUsageWindow,
     CommandOption,
     CommandOptionsResponse,
     CommandRunRequest,
@@ -61,6 +59,10 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_runtime.usage import (
+    CliAgentUsageSnapshot,
+    CliAgentUsageWindow,
+)
 from guildbotics.observability import trace_scope
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.runtime.relay_runtime import RelayRuntime
@@ -397,7 +399,7 @@ class RuntimeStub:
     ) -> CliAgentUsageResponse:
         return CliAgentUsageResponse(
             agent=agent_name,
-            usage=CliAgentUsage(
+            usage=CliAgentUsageSnapshot(
                 agent=agent_name,
                 windows=[
                     CliAgentUsageWindow(

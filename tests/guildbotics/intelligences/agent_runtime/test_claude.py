@@ -580,6 +580,20 @@ async def test_claude_rejected_rate_limit_event_names_the_exact_reset(
     assert excinfo.value.rotate_session is False
 
 
+@pytest.mark.parametrize("resets_at", ["soon", -1, 10**20])
+def test_claude_rate_limit_event_without_a_usable_reset_names_none(resets_at) -> None:
+    (event,) = _decode_events(
+        {
+            "type": "rate_limit_event",
+            "rate_limit_info": {"status": "rejected", "resetsAt": resets_at},
+        },
+        "session-1",
+    )
+
+    assert event.name == "rate_limit_status"
+    assert "retry_after_at" not in event.details
+
+
 @pytest.mark.asyncio
 async def test_claude_rejected_rate_limit_event_is_harmless_on_success(
     monkeypatch, tmp_path
@@ -765,7 +779,7 @@ async def test_claude_success_result_survives_cleanup_sigterm(
     stream.wait = wait_forever
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
     monkeypatch.setattr(
-        "guildbotics.intelligences.agent_runtime.claude._PROCESS_EXIT_GRACE_SECONDS",
+        "guildbotics.intelligences.agent_runtime.provider_process._PROCESS_EXIT_GRACE_SECONDS",
         0.01,
     )
     stream.kill = lambda: terminate(stream)

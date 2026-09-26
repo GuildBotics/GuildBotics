@@ -49,6 +49,10 @@ PULL_REQUEST_FEEDBACK_SOURCE_QUERIES = {
 }
 PULL_REQUEST_FEEDBACK_SOURCES = frozenset(PULL_REQUEST_FEEDBACK_SOURCE_QUERIES)
 
+# A query names the fields it reads, and a pull request is identified by the
+# same ones an issue is (the ticket manager's project query reads them too).
+# The selection sets of two queries of different types are not shared logic.
+# pylint: disable=duplicate-code
 PULL_REQUEST_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -96,6 +100,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
   }
 }
 """
+# pylint: enable=duplicate-code
 
 
 @dataclass(frozen=True)

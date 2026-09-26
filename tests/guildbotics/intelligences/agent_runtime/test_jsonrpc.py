@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from guildbotics.intelligences.agent_runtime import jsonrpc
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
@@ -330,4 +331,73 @@ async def test_an_unbounded_request_still_fails_when_the_peer_dies() -> None:
     with pytest.raises(AgentRuntimeError) as excinfo:
         await task
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
+    await transport.aclose()
+
+
+class _StubbornProcess(_Process):
+    """A peer that ignores its closed stdin and runs until it is killed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stdin_closed = False
+        self.killed = False
+        self._exited = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._exited.wait()
+        return self.returncode or 0
+
+    async def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self._exited.set()
+
+
+class _StubbornWriter(_Writer):
+    def close(self) -> None:
+        assert isinstance(self.process, _StubbornProcess)
+        self.process.stdin_closed = True
+
+
+def _stubborn_transport() -> tuple[LineJsonRpcTransport, _StubbornProcess]:
+    process = _StubbornProcess()
+    process.stdin = _StubbornWriter(process)
+    transport = LineJsonRpcTransport(label="Test Peer")
+    transport.start(process)  # type: ignore[arg-type]
+    return transport, process
+
+
+@pytest.mark.asyncio
+async def test_aclose_lets_a_peer_exit_on_its_own_when_it_does() -> None:
+    transport, process = _transport()
+
+    await transport.aclose()
+
+    # Closing stdin is what asks the peer to exit; this one does at once.
+    assert process.returncode == 0
+    assert transport.process is None
+
+
+@pytest.mark.asyncio
+async def test_aclose_ends_a_peer_that_does_not_exit_within_the_grace(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(jsonrpc, "_EXIT_GRACE_SECONDS", 0.01)
+    transport, process = _stubborn_transport()
+
+    await transport.aclose()
+
+    assert process.stdin_closed
+    assert process.killed
+    assert transport.process is None
+
+
+@pytest.mark.asyncio
+async def test_kill_ends_the_peer_now() -> None:
+    transport, process = _stubborn_transport()
+
+    await transport.kill()
+
+    assert process.killed
+    assert not process.stdin_closed
     await transport.aclose()

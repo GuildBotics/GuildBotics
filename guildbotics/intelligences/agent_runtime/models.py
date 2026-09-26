@@ -234,6 +234,56 @@ class AgentEvent:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+#: The turn event every adapter reports when its provider compacted the
+#: session's history, which marks the conversation for rotation.
+CONTEXT_COMPACTION = "context_compaction"
+
+
+def context_compaction_event(
+    provider_session_id: str,
+    details: dict[str, Any],
+    *,
+    provider_turn_id: str = "",
+    item_id: str = "",
+) -> AgentEvent:
+    """The event reporting that the provider compacted the session's history."""
+    return AgentEvent(
+        AgentEventKind.TURN,
+        CONTEXT_COMPACTION,
+        provider_session_id=provider_session_id,
+        provider_turn_id=provider_turn_id,
+        item_id=item_id,
+        details=details,
+    )
+
+
+def model_and_effort(
+    context: AgentExecutionContext, efforts: frozenset[str]
+) -> dict[str, Any]:
+    """The model and effort a turn's provider options name, as a CLI takes them.
+
+    The model is kept as named; the effort only when it is one of the
+    ``efforts`` the CLI accepts. Silent by design: callers warn about what is
+    dropped where it is dropped.
+    """
+    settings: dict[str, Any] = {}
+    if model := str(context.provider_options.get("model", "") or "").strip():
+        settings["model"] = model
+    effort = str(context.provider_options.get("effort", "") or "").strip().lower()
+    if effort in efforts:
+        settings["effort"] = effort
+    return settings
+
+
+def command_line(command: Any) -> str:
+    """A provider's command, given as one string or as argv, as one line."""
+    if isinstance(command, str):
+        return command
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return ""
+
+
 @dataclass(frozen=True, slots=True)
 class AgentTerminalResult:
     output: str

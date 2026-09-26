@@ -1,4 +1,4 @@
-"""Slack authentication error codes shared by Web API and Socket Mode."""
+"""Slack Web API error codes, as Web API calls and Socket Mode read them."""
 
 SLACK_AUTH_ERROR_CODES = frozenset(
     {
@@ -15,3 +15,12 @@ SLACK_AUTH_ERROR_CODES = frozenset(
 
 def is_slack_auth_error(code: str) -> bool:
     return code in SLACK_AUTH_ERROR_CODES
+
+
+def slack_api_error(payload: object) -> str:
+    """The error code a Web API response names, or ``""`` when the call succeeded."""
+    if not isinstance(payload, dict):
+        return "invalid_json"
+    if payload.get("ok", False):
+        return ""
+    return str(payload.get("error", "unknown_error"))

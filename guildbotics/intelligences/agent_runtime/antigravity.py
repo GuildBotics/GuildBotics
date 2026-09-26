@@ -11,17 +11,12 @@ import asyncio
 import json
 import re
 import secrets
-from contextlib import suppress
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import (
-    AgentEnvironmentError,
-    EnvironmentProcess,
-)
+from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.environment import (
-    TurnEnvironment,
     start_probe_environment,
     start_turn_environment,
 )
@@ -38,9 +33,16 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentTerminalResult,
     ConversationRecord,
     EventSink,
+    model_and_effort,
+)
+from guildbotics.intelligences.agent_runtime.provider_process import (
+    StreamJsonAdapter,
+    StreamJsonProcess,
+    turn_deadline,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
+_LABEL = "Antigravity"
 _LOGGER = getLogger(__name__)
 
 #: The effort-mapping keys ``agy`` can act on. They are mutually exclusive on
@@ -58,8 +60,6 @@ _WORKSPACE_FLAG = "--add-dir"
 
 _MODELS_TIMEOUT_SECONDS = 10.0
 _HELP_TIMEOUT_SECONDS = 10.0
-_PROCESS_EXIT_GRACE_SECONDS = 2.0
-_PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 #: Time ``agy``'s own ``--print-timeout`` is given beyond the adapter budget, so
 #: the CLI reports a structured timeout result before the outer watchdog fires.
 _TIMEOUT_GRACE_SECONDS = 60.0
@@ -103,7 +103,7 @@ _RETRY_AFTER_PATTERN = re.compile(
 )
 
 
-class AntigravityStreamJsonAdapter:
+class AntigravityStreamJsonAdapter(StreamJsonAdapter):
     name = "antigravity-stream-json"
     # Every turn is its own process and carries `--model` / `--effort` on its
     # own command line, and a resumed conversation honours a changed model, so
@@ -116,10 +116,7 @@ class AntigravityStreamJsonAdapter:
         executable: str = "agy",
         timeout: float = 3600.0,
     ) -> None:
-        self._executable = executable
-        self._timeout = timeout
-        self._process: EnvironmentProcess | None = None
-        self._environment: TurnEnvironment | None = None
+        super().__init__(executable=executable, timeout=timeout)
         self._model_catalog: frozenset[str] = frozenset()
         self._model_catalog_read = False
 
@@ -129,20 +126,7 @@ class AntigravityStreamJsonAdapter:
         Not used for rotation (this adapter is turn-scoped, so a change costs
         nothing), but it keeps the contract uniform across adapters.
         """
-        return _requested_settings(context)
-
-    async def run_turn(
-        self,
-        prompt: str,
-        context: AgentExecutionContext,
-        conversation: ConversationRecord,
-        emit: EventSink,
-    ) -> AgentTerminalResult:
-        try:
-            return await self._run_active_turn(prompt, context, conversation, emit)
-        finally:
-            # Nothing of the turn keeps running in the environment it shares.
-            await self.close()
+        return model_and_effort(context, _EFFORT_VALUES)
 
     async def _run_active_turn(
         self,
@@ -214,17 +198,15 @@ class AntigravityStreamJsonAdapter:
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Antigravity: {exc}",
             ) from exc
-        process = self._process
         # `agy` takes the prompt on its command line and reads nothing.
-        process.stdin.close()
-        stderr_task = asyncio.create_task(process.stderr.read())
+        self._process.stdin.close()
+        output = StreamJsonProcess(self._process, _LABEL)
         events: list[AgentEvent] = []
         conversation_id = conversation.provider_session_id
         terminal_output = ""
         usage: dict[str, int] = {}
         terminal_seen = False
         terminal_error: AgentRuntimeError | None = None
-        observed_returncode: int | None = None
 
         async def _publish(event: AgentEvent) -> None:
             events.append(event)
@@ -235,18 +217,10 @@ class AntigravityStreamJsonAdapter:
         for event in _start_events(settings, rejected):
             await _publish(event)
         try:
-            async with asyncio.timeout(self._timeout + _TIMEOUT_GRACE_SECONDS):
-                while line := await process.stdout.readline():
-                    try:
-                        raw = json.loads(line)
-                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                        raise AgentRuntimeError(
-                            AgentRuntimeErrorCategory.PROTOCOL,
-                            f"Malformed Antigravity stream-json event: {exc}",
-                            rotate_session=True,
-                        ) from exc
-                    if not isinstance(raw, dict):
-                        continue
+            async with turn_deadline(
+                _LABEL, self._timeout + _TIMEOUT_GRACE_SECONDS, self.interrupt
+            ):
+                while (raw := await output.next_event()) is not None:
                     conversation_id = _conversation_id_of(raw) or conversation_id
                     for decoded in _decode_events(raw, conversation_id):
                         await _publish(decoded)
@@ -257,44 +231,8 @@ class AntigravityStreamJsonAdapter:
                         usage = _usage(result.get("usage"))
                         terminal_error = _result_error(result)
                         break
-        except TimeoutError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROCESS,
-                "Antigravity turn timed out.",
-                rotate_session=True,
-            ) from exc
-        except asyncio.CancelledError:
-            await self.interrupt()
-            raise
-        except AgentRuntimeError:
-            raise
-        except ValueError as exc:
-            await self.interrupt()
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.PROTOCOL,
-                f"Antigravity stream-json output could not be read: {exc}",
-                rotate_session=True,
-            ) from exc
         finally:
-            stderr = ""
-            if process.returncode is None:
-                with suppress(Exception):
-                    await asyncio.wait_for(
-                        process.wait(), timeout=_PROCESS_EXIT_GRACE_SECONDS
-                    )
-            observed_returncode = process.returncode
-            await process.kill()
-            try:
-                stderr = (
-                    await asyncio.wait_for(
-                        stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
-                    )
-                ).decode(errors="replace")
-            except TimeoutError:
-                stderr_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stderr_task
+            await output.finish()
             try:
                 log_tail = _log_tail(await environment.read_file(log_file))
             except AgentEnvironmentError:
@@ -303,24 +241,14 @@ class AntigravityStreamJsonAdapter:
             self._process = None
         if terminal_error is not None:
             terminal_error.details["log_tail"] = log_tail
-            terminal_error.details["stderr"] = stderr.strip()
+            terminal_error.details["stderr"] = output.stderr
             raise terminal_error
-        # A non-error terminal result is authoritative. Any later negative exit
-        # status can be caused by our cleanup of a CLI that is still waiting for
-        # background descendants, and must not discard the valid response or
-        # rotate its resumable conversation.
-        returncode = 0
-        if not terminal_seen:
-            returncode = (
-                observed_returncode
-                if observed_returncode is not None
-                else (process.returncode or 0)
-            )
+        returncode = output.returncode(terminal_seen=terminal_seen)
         if returncode != 0:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Antigravity exited with code {returncode}: "
-                f"{stderr.strip() or 'no output'}",
+                f"{output.stderr or 'no output'}",
                 details={"returncode": returncode, "log_tail": log_tail},
                 rotate_session=True,
             )
@@ -342,7 +270,7 @@ class AntigravityStreamJsonAdapter:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROTOCOL,
                 "Antigravity completed without a terminal response.",
-                details={"log_tail": log_tail, "stderr": stderr.strip()},
+                details={"log_tail": log_tail, "stderr": output.stderr},
                 rotate_session=True,
             )
         return AgentTerminalResult(
@@ -351,7 +279,7 @@ class AntigravityStreamJsonAdapter:
             provider_session_id=conversation_id,
             finish_reason="completed",
             usage=usage,
-            stderr=stderr.strip(),
+            stderr=output.stderr,
             returncode=returncode,
             # `agy` never names the model it ran on, so the only effective value
             # is the one this turn put on the command line. A turn that named
@@ -359,23 +287,6 @@ class AntigravityStreamJsonAdapter:
             model=str(settings.get("model", "")),
             effort=str(settings.get("effort", "")),
         )
-
-    async def interrupt(self) -> None:
-        if self._environment is not None:
-            await self._environment.broker.deactivate()
-        if self._process is not None and self._process.returncode is None:
-            await self._process.kill()
-
-    async def close(self) -> None:
-        try:
-            await self.interrupt()
-        finally:
-            await self._close_environment()
-
-    async def _close_environment(self) -> None:
-        environment, self._environment = self._environment, None
-        if environment is not None:
-            await environment.close()
 
     async def _turn_settings(
         self, context: AgentExecutionContext
@@ -386,7 +297,7 @@ class AntigravityStreamJsonAdapter:
         were dropped with the reason. ``--model`` wins over ``--effort`` because
         it is the more specific request and ``agy`` refuses both together.
         """
-        requested = _requested_settings(context)
+        requested = model_and_effort(context, _EFFORT_VALUES)
         rejected: dict[str, str] = {}
         unknown = sorted(set(context.provider_options) - _EFFORT_SETTING_KEYS)
         if unknown:
@@ -394,6 +305,9 @@ class AntigravityStreamJsonAdapter:
                 "Ignoring unsupported Antigravity effort settings: %s",
                 ", ".join(unknown),
             )
+        effort = str(context.provider_options.get("effort", "") or "").strip()
+        if effort and "effort" not in requested:
+            _LOGGER.warning("Ignoring unsupported Antigravity effort '%s'.", effort)
         model = str(requested.get("model", ""))
         if model and (catalog := await self._models()) and model not in catalog:
             _LOGGER.warning(
@@ -442,19 +356,6 @@ class AntigravityStreamJsonAdapter:
             if (identifier := line.strip())
         )
         return self._model_catalog
-
-
-def _requested_settings(context: AgentExecutionContext) -> dict[str, Any]:
-    """The effort-mapping values this adapter recognizes, normalized."""
-    settings: dict[str, Any] = {}
-    if model := str(context.provider_options.get("model", "") or "").strip():
-        settings["model"] = model
-    effort = str(context.provider_options.get("effort", "") or "").strip().lower()
-    if effort in _EFFORT_VALUES:
-        settings["effort"] = effort
-    elif effort:
-        _LOGGER.warning("Ignoring unsupported Antigravity effort '%s'.", effort)
-    return settings
 
 
 def _start_events(
