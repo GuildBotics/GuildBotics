@@ -582,8 +582,6 @@ key1: c
 key2: d
 ```
 
-The script inherits the environment variables of the GuildBotics process, except those that carry credentials: the workspace's secrets and any variable whose name contains `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY`, or `API_KEY`. Pass a value the script needs as a `key=value` parameter.
-
 
 ## 7. Using Python commands
 With Python files, you can call APIs and embed complex logic.

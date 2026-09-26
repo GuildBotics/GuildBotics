@@ -590,8 +590,6 @@ key1: c
 key2: d
 ```
 
-スクリプトは GuildBotics のプロセスの環境変数を引き継ぎますが、認証情報を運ぶもの（ワークスペースの Secret と、名前に `TOKEN` / `SECRET` / `PASSWORD` / `PRIVATE_KEY` / `API_KEY` を含む変数）は除かれます。スクリプトに必要な値は `key=value` の引数で渡してください。
-
 
 ## 7. Python コマンドの利用
 Python ファイルを使うと、API 呼び出しや複雑なロジックを組み込めます。

@@ -11,7 +11,6 @@ from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.utils import find_shell, stringify_output
-from guildbotics.utils.secret_store import is_secret_env_key
 
 _WINDOWS = os.name == "nt"
 
@@ -47,13 +46,7 @@ class ShellScriptCommand(CommandBase):
     inline_key: ClassVar[str] = "script"
 
     async def run(self) -> CommandOutcome:
-        # The host environment holds the workspace secrets loaded from the
-        # keychain; a script receives only what its params pass explicitly.
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if not is_secret_env_key(key)
-        }
+        env = os.environ.copy()
         for key, value in self.options.params.items():
             env[key] = stringify_output(value)
 

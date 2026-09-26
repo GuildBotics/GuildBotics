@@ -404,45 +404,6 @@ async def test_unresolved_placeholder_never_reads_host_environment(
 
 
 @pytest.mark.asyncio
-async def test_shell_environment_excludes_secrets_but_keeps_the_rest(
-    config_dir: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Credential-carrying variables never reach a script; params still do."""
-    from guildbotics.utils.secret_store import register_secret_env_keys
-
-    register_secret_env_keys(["DATABASE_URL"])
-    monkeypatch.setenv("DATABASE_URL", "stored-in-keychain")
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "named-like-a-secret")
-    monkeypatch.setenv("PLAIN_SETTING", "not-a-secret")
-    commands = config_dir / "commands"
-    (commands / "dump_env.sh").write_text(
-        "#!/usr/bin/env bash\nenv\n", encoding="utf-8"
-    )
-    (commands / "env_parent.yml").write_text(
-        "commands:\n"
-        "  - command: dump_env\n"
-        "    params:\n"
-        "      GREETING: from-params\n"
-        "      GITHUB_TOKEN: passed-explicitly\n",
-        encoding="utf-8",
-    )
-
-    ctx = await _run_main(config_dir, "env_parent")
-
-    names = dict(
-        line.split("=", 1)
-        for line in ctx.shared_state["dump_env"].splitlines()
-        if "=" in line
-    )
-    assert "DATABASE_URL" not in names
-    assert "SLACK_BOT_TOKEN" not in names
-    assert names["PLAIN_SETTING"] == "not-a-secret"
-    assert "PATH" in names
-    assert names["GREETING"] == "from-params"
-    assert names["GITHUB_TOKEN"] == "passed-explicitly"
-
-
-@pytest.mark.asyncio
 async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "fail.sh").write_text(
