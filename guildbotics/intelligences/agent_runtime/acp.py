@@ -152,10 +152,6 @@ class AcpAdapterBase(JsonRpcAdapter):
         self._initialize_result: dict[str, Any] = {}
         self._auth_method = ""
         self._active_session_id = ""
-        #: Sessions the running process already holds open. Reloading one of
-        #: them is at best a wasted replay and at worst an error, so the load
-        #: only happens when this process does not have the session yet.
-        self._open_sessions: set[str] = set()
         self._unhandled: dict[str, dict[str, Any]] = {}
         self._tool_kinds: dict[str, str] = {}
         self._context_used = 0
@@ -327,9 +323,6 @@ class AcpAdapterBase(JsonRpcAdapter):
                 f"Could not start {self.product_label}: {exc}",
             ) from exc
         self._transport.start(process)
-        # A fresh process holds nothing, whatever the previous one held. A
-        # session the conversation still names is reloaded on the way in.
-        self._open_sessions = set()
         try:
             await self._initialize()
         except AgentRuntimeError:
@@ -422,17 +415,9 @@ class AcpAdapterBase(JsonRpcAdapter):
                     f"{self.agent_label} returned no session id.",
                     rotate_session=True,
                 )
-            self._open_sessions.add(session_id)
             await self._publish_session_settings(session_id, context, result, emit)
             return session_id
         session_id = conversation.provider_session_id
-        if session_id in self._open_sessions:
-            # The conversation never left this process, so there is no history
-            # to rehydrate and nothing to reload -- Copilot even refuses the
-            # second load with "already loaded". The turn's settings are still
-            # re-applied, from no known current state.
-            await self._publish_session_settings(session_id, context, {}, emit)
-            return session_id
         method = "session/resume" if self._supports_resume else "session/load"
         try:
             result = as_dict(
@@ -452,7 +437,6 @@ class AcpAdapterBase(JsonRpcAdapter):
                 details={"provider_error": str(exc), "session_method": method},
                 rotate_session=True,
             ) from exc
-        self._open_sessions.add(session_id)
         # ACP replays the whole transcript before answering session/load, so the
         # response is the boundary: everything already queued is history and
         # must not reach the current turn, chat, or the normal transcript.

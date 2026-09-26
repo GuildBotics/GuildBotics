@@ -382,7 +382,11 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
         tmp_path, monkeypatch, context, CommandAccess(read_only=True)
     )
 
-    writable = {mount.host for mount in spec.mounts if not mount.readonly}
+    writable = {
+        mount.host
+        for mount in spec.mounts
+        if mount.host is not None and not mount.readonly
+    }
     assert writable == {
         provider_state.read_only_state_dir(environment.cli_agent_info("claude"))
         / "projects"
@@ -491,9 +495,7 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         if mount != code
     )
     assert (
-        EnvironmentMount(
-            guest_path(checkout), None if read_only else checkout, read_only
-        )
+        EnvironmentMount(guest_path(checkout), None if read_only else checkout, False)
         in spec.mounts
     )
 

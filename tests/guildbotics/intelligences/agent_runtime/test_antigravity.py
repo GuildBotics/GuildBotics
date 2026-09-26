@@ -38,7 +38,12 @@ _HELP_TEXT = (
     b"--print --output-format stream-json --conversation "
     b"--model --effort --add-dir --dangerously-skip-permissions"
 )
-_MODELS_TEXT = b"gemini-3.6-flash-low\ngemini-3.6-flash-high\nclaude-sonnet-4-6\n"
+#: ``agy models`` as 1.2.1 prints it: the id, a tab, and the label.
+_MODELS_TEXT = (
+    b"gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n"
+    b"gemini-3.6-flash-low\tGemini 3.6 Flash (Low)\n"
+    b"claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"
+)
 
 
 class _CompletedProcess:
