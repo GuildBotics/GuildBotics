@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import stat
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
+from html.parser import HTMLParser
 from http import HTTPStatus
 from pathlib import Path, PurePosixPath
 from shutil import copyfileobj
@@ -12,6 +14,8 @@ from urllib.parse import quote, urlparse
 from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline, image, link
 
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_memory import MemberMemoryService
@@ -2025,19 +2029,138 @@ def _project_item_summary(item: dict[str, Any]) -> dict[str, Any]:
 _ISSUE_CLOSING_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 _ISSUE_REFS_KEYWORD = r"refs?"
 _ISSUE_LINK = re.compile(
-    rf"\b(?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})\s+#(\d+)\b", re.I
+    rf"(?:^|(?<=[\r\n]))[ \t]*((?:{_ISSUE_CLOSING_KEYWORD}|{_ISSUE_REFS_KEYWORD})"
+    r"[ \t]+#(\d+))[ \t]*(?=$|[\r\n])",
+    re.I,
 )
+
+
+class _ParagraphMarkers(HTMLParser):
+    """Find source markers rendered directly inside a plain paragraph."""
+
+    def __init__(self, prefix: str) -> None:
+        super().__init__()
+        self.pattern = re.compile(rf"{prefix}(\d+)z")
+        self.found: set[int] = set()
+        self.tags: dict[str, int] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }:
+            self.tags[tag] = self.tags.get(tag, 0) + 1
+
+    def handle_endtag(self, tag: str) -> None:
+        count = self.tags.get(tag, 0)
+        if count > 1:
+            self.tags[tag] = count - 1
+        else:
+            self.tags.pop(tag, None)
+
+    def handle_data(self, data: str) -> None:
+        if self.tags == {"p": 1}:
+            self.found.update(
+                int(match.group(1)) for match in self.pattern.finditer(data)
+            )
+
+
+def _linked_lines(content: str, env: dict[str, Any]) -> set[int]:
+    """Keep source markers from changing Markdown link identifiers."""
+    excluded: set[int] = set()
+    parser = MarkdownIt("commonmark")
+
+    def record(
+        rule: Callable[[StateInline, bool], bool],
+    ) -> Callable[[StateInline, bool], bool]:
+        def wrapped(state: StateInline, silent: bool) -> bool:
+            start = state.pos
+            matched = rule(state, silent)
+            if matched and not silent and state.src == content:
+                excluded.update(
+                    range(
+                        content.count("\n", 0, start),
+                        content.count("\n", 0, state.pos) + 1,
+                    )
+                )
+            return matched
+
+        return wrapped
+
+    parser.inline.ruler.at("link", record(link))
+    parser.inline.ruler.at("image", record(image))
+    parser.parseInline(content, env)
+    return excluded
+
+
+def _issue_links(body: str) -> Iterator[re.Match[str]]:
+    """Select standalone plain-text source lines in top-level paragraphs."""
+    plain_lines: set[int] = set()
+    parser = MarkdownIt("commonmark")
+    env: dict[str, Any] = {}
+    tokens = parser.parse(body, env)
+    for previous, token in zip(tokens, tokens[1:], strict=False):
+        if (
+            previous.type == "paragraph_open"
+            and previous.level == 0
+            and token.type == "inline"
+            and token.map is not None
+        ):
+            linked = _linked_lines(token.content, env)
+            plain_lines.update(
+                line for line in range(*token.map) if line - token.map[0] not in linked
+            )
+    matches = [
+        match
+        for match in _ISSUE_LINK.finditer(body)
+        if len(re.findall(r"\r\n?|\n", body[: match.start()])) in plain_lines
+    ]
+    if not matches:
+        return
+    # Mark original source spans, so decoding entities cannot invent a link.
+    prefix = f"guildboticslink{sha256(body.encode()).hexdigest()}x"
+    marked = body
+    for index, match in reversed(list(enumerate(matches))):
+        marked = f"{marked[: match.start(1)]}{prefix}{index}z{marked[match.end(1) :]}"
+    rendered = _ParagraphMarkers(prefix)
+    rendered.feed(parser.render(marked))
+    yield from (match for index, match in enumerate(matches) if index in rendered.found)
+
+
+def _append_trailer(body: str, trailer: str) -> str:
+    result = f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+    if not any(
+        link.group(1) == trailer and link.start(1) == len(result) - len(trailer)
+        for link in _issue_links(result)
+    ):
+        raise MemberCapabilityError(
+            "Cannot append an issue link outside Markdown code or HTML. "
+            "Close the open code or HTML block in the body first."
+        )
+    return result
 
 
 def _preserve_issue_links(body: str, previous_body: str) -> str:
     """Append missing issue links while keeping the replacement body's wording."""
-    mentioned = {match.group(1) for match in _ISSUE_LINK.finditer(body)}
+    mentioned = {match.group(2) for match in _issue_links(body)}
     inherited: set[str] = set()
-    for match in _ISSUE_LINK.finditer(previous_body):
-        number = match.group(1)
-        trailer = match.group(0)
+    for match in _issue_links(previous_body):
+        number = match.group(2)
+        trailer = match.group(1)
         if number not in mentioned and trailer.casefold() not in inherited:
-            body = f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+            body = _append_trailer(body, trailer)
             inherited.add(trailer.casefold())
     return body
 
@@ -2049,16 +2172,20 @@ def _append_issue_link(body: str, issue_url: str, *, closes: bool) -> str:
     if not match:
         return body
     issue_number = match.group(1)
-    closing_ref = rf"\b{_ISSUE_CLOSING_KEYWORD}\s+#{issue_number}\b"
-    refs_ref = rf"\b{_ISSUE_REFS_KEYWORD}\s+#{issue_number}\b"
-    if re.search(closing_ref, body, re.I):
+    links = [link for link in _issue_links(body) if link.group(2) == issue_number]
+    refs = [
+        link for link in links if re.match(_ISSUE_REFS_KEYWORD, link.group(1), re.I)
+    ]
+    if len(links) > len(refs):
         return body
-    if re.search(refs_ref, body, re.I):
+    if refs:
         if not closes:
             return body
-        return re.sub(refs_ref, f"Closes #{issue_number}", body, flags=re.I)
+        for link in reversed(refs):
+            body = f"{body[: link.start(1)]}Closes #{issue_number}{body[link.end(1) :]}"
+        return body
     trailer = f"Closes #{issue_number}" if closes else f"Refs #{issue_number}"
-    return f"{body.rstrip()}\n\n{trailer}" if body.strip() else trailer
+    return _append_trailer(body, trailer)
 
 
 def _remote_web_url(remote_url: str) -> str:

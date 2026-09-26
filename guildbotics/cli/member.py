@@ -1895,10 +1895,12 @@ def pr_create(
     "--drop-issue-links",
     is_flag=True,
     help=(
-        "Do not carry existing Closes/Fixes/Resolves/Refs issue links into the "
+        "Do not carry existing standalone Closes/Fixes/Resolves/Refs #<n> lines "
+        "in plain-text paragraphs into the "
         "replacement body. Requires --content-stdin/--content-file. By default, "
-        "links are preserved, even with empty content; new links to the same "
-        "issue take precedence."
+        "these lines are preserved, even with empty content; new standalone "
+        "links to the same issue take precedence. Code, quotes, HTML, prose, "
+        "colon-separated and cross-repository links are excluded."
     ),
 )
 @_json_format_option

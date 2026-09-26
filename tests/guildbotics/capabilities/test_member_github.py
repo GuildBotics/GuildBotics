@@ -2854,12 +2854,79 @@ def test_preserve_issue_links_keeps_keyword_variants(keyword):
         ("Refs #420", "Closes #42", "Refs #420\n\nCloses #42"),
         ("See #42", "Closes #42", "See #42\n\nCloses #42"),
         ("Refs #43", "Closes #42\nRefs #43", "Refs #43\n\nCloses #42"),
+        ("Use `tool`.\nRefs #42", "Closes #42", "Use `tool`.\nRefs #42"),
+        ("New", "Use `tool`.\nCloses #42", "New\n\nCloses #42"),
+        ("New", "Text\r\rCloses #99\n```\nCloses #42\n```", "New\n\nCloses #99"),
+        ("New", "Text\r\rCloses #42\rRefs #43", "New\n\nCloses #42\n\nRefs #43"),
+        ("New", "  Closes #42  \r\nRefs\t#43", "New\n\nCloses #42\n\nRefs\t#43"),
     ],
 )
 def test_preserve_issue_links_prefers_replacement_and_deduplicates(
     body, previous, expected
 ):
     assert _preserve_issue_links(body, previous) == expected
+
+
+@pytest.mark.parametrize(
+    "example",
+    [
+        "Example: `Closes #617`",
+        "Do not use Closes #617 here.",
+        "`Closes #617`",
+        "```text\nCloses #617\n```",
+        "~~~\nCloses #617\n~~~",
+        "    Closes #617",
+        "> Closes #617",
+        "> example\nCloses #617",
+        "<!--\nCloses #617\n-->",
+        "<pre>\nCloses #617\n</pre>",
+        "Text <code>\nCloses #617\n</code>",
+        "Text <code>\n\nCloses #617\n\n</code>",
+        "[Example\nCloses #617\n][sample]\n\n[sample]: https://example.com",
+        "[\nCloses #617\n]\n\n[Closes #617]: https://example.com",
+        "[\nCloses #617\n][]\n\n[Closes #617]: https://example.com",
+        "Closes &#35;617",
+        "Closes \\#617",
+        "Closes\n#617",
+        "`example\nCloses #617\nexample`",
+    ],
+)
+def test_issue_link_examples_do_not_become_trailers_or_override_real_links(example):
+    assert (
+        _preserve_issue_links("New", f"{example}\n\nCloses #630")
+        == "New\n\nCloses #630"
+    )
+    assert _preserve_issue_links(example, "Closes #617") == f"{example}\n\nCloses #617"
+    assert (
+        _append_issue_link(
+            example, "https://github.com/owner/repo/issues/617", closes=True
+        )
+        == f"{example}\n\nCloses #617"
+    )
+
+
+def test_create_upgrades_only_the_real_reference_link():
+    body = "Example: `Refs #42`\n\nRefs #42"
+    assert (
+        _append_issue_link(body, ISSUE_URL, closes=True)
+        == "Example: `Refs #42`\n\nCloses #42"
+    )
+
+
+def test_nested_image_code_does_not_mask_an_adjacent_link():
+    body = "Refs #42\n![`x`](https://example.com)"
+    assert _preserve_issue_links(body, "Closes #42") == body
+    assert _preserve_issue_links("New", body) == "New\n\nRefs #42"
+
+
+@pytest.mark.parametrize(
+    "body", ["```text\nNew", "~~~\nNew", "<!-- New", "<pre>\nNew", "Text <code>"]
+)
+def test_appending_issue_links_refuses_unclosed_markdown_blocks(body):
+    with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
+        _preserve_issue_links(body, "Closes #42")
+    with pytest.raises(MemberCapabilityError, match="Close the open code or HTML"):
+        _append_issue_link(body, ISSUE_URL, closes=True)
 
 
 @pytest.mark.asyncio
