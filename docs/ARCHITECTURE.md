@@ -277,7 +277,7 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   last record and the execution reads as running forever. The same test
   enumerates the boundary functions and requires them to catch `BaseException`.
   How the failure is classified belongs to
-  `capabilities/completion_retry.command_failure_payload()` alone, because the
+  `capabilities/command_failures.command_failure_payload()` alone, because the
   `code` decides what the Desktop does with it: `cancelled` and
   `cli_agent_authentication` open no generic execution alert.
 

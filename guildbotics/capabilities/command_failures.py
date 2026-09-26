@@ -1,3 +1,5 @@
+"""How a failed AI CLI command run is classified."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,17 +9,6 @@ import asyncio
 #: member command. Both are ``BaseException``, so a boundary that only catches
 #: ``Exception`` never records the end of the run it started.
 CANCELLATION_ERRORS = (asyncio.CancelledError, KeyboardInterrupt)
-
-
-class CompletionRetryExhausted(Exception):
-    """Raised when the agent never recorded a terminal completion in the budget."""
-
-    def __init__(self, attempts: int, last_error: Exception) -> None:
-        super().__init__(
-            f"Agent did not complete after {attempts} attempt(s): {last_error}"
-        )
-        self.attempts = attempts
-        self.last_error = last_error
 
 
 def find_cli_agent_execution_error(

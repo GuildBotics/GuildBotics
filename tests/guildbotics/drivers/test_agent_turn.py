@@ -5,11 +5,10 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.commands.errors import CommandError
 from guildbotics.drivers import agent_turn
-from guildbotics.drivers.agent_turn import run_agent_turn
+from guildbotics.drivers.agent_turn import CompletionRetryExhausted, run_agent_turn
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,

@@ -1,13 +1,13 @@
 import i18n  # type: ignore
 import pytest
 
-from guildbotics.capabilities.completion_retry import CompletionRetryExhausted
 from guildbotics.capabilities.workflow_rate_limits import (
     WorkflowRateLimit,
     record_workflow_rate_limited,
     workflow_rate_limit_from_exception,
     workflow_rate_limit_notice_text,
 )
+from guildbotics.drivers.agent_turn import CompletionRetryExhausted
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -39,9 +39,9 @@ def test_workflow_rate_limit_from_exception_extracts_from_cli_agent_error():
     assert rate_limit.retry_after_text == "11:44 AM"
 
 
-def test_workflow_rate_limit_from_exception_extracts_from_completion_retry_exhausted():
+def test_workflow_rate_limit_from_exception_extracts_from_exhausted_turn_last_error():
     base_exc = _make_rate_limit_error()
-    exc = CompletionRetryExhausted("exhausted", last_error=base_exc)
+    exc = CompletionRetryExhausted(1, last_error=base_exc)
     rate_limit = workflow_rate_limit_from_exception(exc)
 
     assert rate_limit is not None

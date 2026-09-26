@@ -21,7 +21,7 @@ from guildbotics.capabilities.chat_updates import (
     ChatUpdatesRequired,
     check_chat_updates,
 )
-from guildbotics.capabilities.completion_retry import command_failure_payload
+from guildbotics.capabilities.command_failures import command_failure_payload
 from guildbotics.capabilities.member_activity_events import (
     record_member_issue_close_event,
     record_member_issue_comment_event,
