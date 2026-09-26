@@ -397,9 +397,10 @@ async function seedWorkspace() {
     roles: ["architect"],
     speaking_style: "concise",
   });
-  // The seeded `cli_agent` resolves to the stub in `cliStubDir`, so a journey
-  // that does reach the agent path fails fast instead of driving the real
-  // binary. The command journey (`brain: none`) and the service journey (event
+  // The seeded `cli_agent` never runs on the host: a journey that does reach
+  // the agent path is refused by this device's agent environment before a
+  // process starts, and the stub in `cliStubDir` proves no host binary ran.
+  // The command journey (`brain: none`) and the service journey (event
   // trigger only) stay off that path to begin with.
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
 }
