@@ -11,7 +11,7 @@ ja:
     relay_failed: "環境の中で、認証ゲートウェイへの中継を起動できませんでした。"
     no_system_cas: "環境の image の %{path} にシステムの CA 証明書がありません。認証ゲートウェイの CA はここに加えて信頼させます。"
     outside_mounts: "turn の作業ディレクトリ %{path} は、このコマンドの環境が起動時にマウントした範囲の外にあります。"
-    not_started_for: "このコマンドの環境は、この %{tool} の turn 向けに起動されていません。起動後にアクセス契約かメンバーの AI CLI ツールが変わりました。"
+    not_started_for: "このコマンドの環境は、この %{tool} の turn 向けに起動されていません。起動後にメンバーの AI CLI ツールが変わりました。"
     build_start_failed: "ビルド用の環境を起動できませんでした（宣言: %{memory_mib} MiB・%{cpus} vCPU）。この端末に割り当てられない場合は、設定 → エージェント実行環境 → ワークスペース共通設定の宣言を見直してください: %{error}"
     build_step_failed: "ビルド手順 '%{step}' が終了コード %{code} で失敗しました。"
     build_failed: "スナップショットをビルドできませんでした: %{error}"

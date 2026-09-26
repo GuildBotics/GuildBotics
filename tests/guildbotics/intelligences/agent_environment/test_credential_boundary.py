@@ -68,6 +68,9 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.cli_agents import CLI_AGENTS, CliAgentInfo
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    settle_contract,
+)
 
 #: What every synthetic secret carries, and nothing else does.
 MARK = "SYNTH459SECRET"
@@ -306,11 +309,13 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("probe", name, "manual", "boundary"),
-        contract=AccessContract(),
     )
+    settle_contract(monkeypatch, AccessContract())
     before = _sandboxes()
     running = AsyncExitStack()
-    await running.enter_async_context(turn.command_environment(CommandAccess()))
+    await running.enter_async_context(
+        turn.command_environment(CommandAccess(), frozenset({name}))
+    )
     environment = await turn.start_turn_environment(context, name)
     try:
         (sandbox,) = _sandboxes() - before
@@ -401,8 +406,6 @@ async def test_the_turns_of_a_command_share_one_microvm(
             workspace_root=tmp_path,
             workspace_data_root=tmp_path,
             conversation_key=ConversationKey("probe", name, "manual", "shared"),
-            contract=AccessContract(),
-            tools=frozenset({"antigravity", "claude"}),
         )
 
     async def through_gateway(environment: Any, stand_in: str) -> str:
@@ -419,7 +422,10 @@ async def test_the_turns_of_a_command_share_one_microvm(
 
     before = _sandboxes()
     answers: list[str] = []
-    async with turn.command_environment(CommandAccess()):
+    settle_contract(monkeypatch, AccessContract())
+    async with turn.command_environment(
+        CommandAccess(), frozenset({"antigravity", "claude"})
+    ):
         first = await turn.start_turn_environment(
             context("antigravity", work), "antigravity"
         )

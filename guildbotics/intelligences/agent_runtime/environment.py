@@ -5,7 +5,7 @@ Every adapter starts its provider CLI the same way, through
 snapshot. The turns of one command execution (:func:`command_environment`)
 share one, and no turn runs outside a command. It boots before the first of
 them and is shaped once for all, since a running microVM cannot be reshaped:
-the turn's access contract, the persisted state of every AI CLI tool the
+the command's access contract, the persisted state of every AI CLI tool the
 member is configured with, the running process's own GuildBotics code and
 whatever of the workspace's own state the command declares its turns inspect
 mounted read-only, and the ports of the member
@@ -41,6 +41,13 @@ from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialGateway,
     CredentialUnavailableError,
 )
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    AccessContractError,
+    load_local_grants,
+    load_shared_grants,
+    resolve_access,
+)
 from guildbotics.intelligences.agent_environment.credential_vault import (
     CredentialVaultError,
     vault_problem,
@@ -64,7 +71,14 @@ from guildbotics.intelligences.agent_environment.spec import (
     build_environment_spec,
     guest_path,
 )
-from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_environment.status import (
+    device_status,
+    filesystem_permission_problem,
+)
+from guildbotics.intelligences.agent_environment.toolchain import (
+    ToolchainError,
+    load_toolchain,
+)
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
@@ -182,36 +196,65 @@ _COMMAND: ContextVar[_SharedEnvironment | None] = ContextVar(
 
 
 @asynccontextmanager
-async def command_environment(access: CommandAccess) -> AsyncIterator[None]:
+async def command_environment(
+    access: CommandAccess, tools: frozenset[str]
+) -> AsyncIterator[None]:
     """Run the AI CLI turns of one command execution in one microVM.
 
-    Nothing boots until a turn needs it, and what did is discarded when the
-    command ends, cancellation included. A command run inside another one
+    What shapes the microVM is settled here, once for the whole command: the
+    access contract, read from the workspace's settings, and the tools it
+    runs. Nothing boots until a turn needs it, and what did is discarded when
+    the command ends, cancellation included. A command run inside another one
     shares that one's: a command and its subcommands are one isolation, held
-    to the access the outer command declared.
+    to what the outer command was started with.
 
     Args:
         access: What the command declares of its turns' access.
+        tools: Every AI CLI tool the member is configured with; which one a
+            turn uses is decided while the command runs.
 
     Raises:
-        CommandError: If a command run inside another declares other access;
-            it cannot be given the isolation it declared.
+        CommandError: If the settings the contract is read from are invalid
+            or unreadable, or if a command run inside another declares other
+            access or runs other tools; it cannot be given the isolation it
+            declared.
     """
     shared = _COMMAND.get()
     if shared is not None:
-        if shared.access != access:
+        if (shared.access, shared.tools) != (access, tools):
             raise CommandError(
-                "A command cannot run inside a command that declares other access."
+                "A command cannot run inside a command that declares other access"
+                " or runs other AI CLI tools."
             )
         yield
         return
-    shared = _SharedEnvironment(access)
+    shared = _SharedEnvironment(access, _contract(access), tools)
     token = _COMMAND.set(shared)
     try:
         yield
     finally:
         _COMMAND.reset(token)
         await shared.close()
+
+
+def _contract(access: CommandAccess) -> AccessContract:
+    """What the command's turns may reach, as the workspace's settings say.
+
+    Raises:
+        CommandError: If the settings are invalid or cannot be read.
+    """
+    try:
+        return AccessContract(
+            network=load_toolchain().network,
+            access=resolve_access(load_shared_grants(), load_local_grants()),
+            read_only=access.read_only,
+        )
+    except PermissionError as exc:
+        raise CommandError(
+            filesystem_permission_problem(Path(exc.filename or Path.home()))
+        ) from exc
+    except (AccessContractError, ToolchainError) as exc:
+        raise CommandError(str(exc)) from exc
 
 
 def running_command() -> _SharedEnvironment:
@@ -239,6 +282,16 @@ def current_command_access() -> CommandAccess:
     return shared.access if shared is not None else CommandAccess()
 
 
+def current_command_contract() -> AccessContract | None:
+    """The access contract of the command running now; none outside one.
+
+    For what only records a turn and must not fail on its account; a turn
+    itself reads :func:`running_command`, which refuses outside a command.
+    """
+    shared = _COMMAND.get()
+    return shared.contract if shared is not None else None
+
+
 async def start_turn_environment(
     context: AgentExecutionContext,
     tool_name: str,
@@ -252,7 +305,7 @@ async def start_turn_environment(
     member broker serves one turn at a time.
 
     Args:
-        context: The turn: its working directory and access contract.
+        context: The turn: its working directory and who it runs for.
         tool_name: The catalog name of the AI CLI tool.
         env: What the provider process starts with beyond the tool's own
             state variables, its gateway, and the member broker's token.
@@ -261,8 +314,8 @@ async def start_turn_environment(
         AgentRuntimeError: ``configuration`` when no command is running,
             when this device cannot run the environment or holds no snapshot
             for the declaration, or when the command's microVM was not
-            started for this turn (another contract, a tool it does not hold,
-            a working directory outside what it mounted); ``authentication``
+            started for this turn (a tool it does not hold, a working
+            directory outside what it mounted); ``authentication``
             when the tool is not logged in here; ``process`` when the microVM
             or the broker does not start. Nothing is widened: a turn that
             cannot be confined does not run.
@@ -320,16 +373,22 @@ class TurnEnvironment:
 class _SharedEnvironment:
     """A microVM, what it was started with, and the turns it runs in turn."""
 
-    def __init__(self, access: CommandAccess) -> None:
+    def __init__(
+        self, access: CommandAccess, contract: AccessContract, tools: frozenset[str]
+    ) -> None:
         #: What the command declared; every turn of it is held to this.
         self.access = access
+        #: What every turn of the command may reach beyond its working
+        #: directory. A read-only contract is what lets a turn hold no
+        #: execution lease and run while the member is busy: the environment,
+        #: not the provider, keeps it from changing anything.
+        self.contract = contract
+        #: The tools the microVM is booted able to run; a turn of another is
+        #: refused.
+        self.tools = tools
         self._broker = MemberCapabilityBroker()
         self._turn = asyncio.Lock()
         self._environment: AgentEnvironment | None = None
-        #: The host directory the microVM was booted working in.
-        self._cwd = Path()
-        #: What shaped the microVM; a turn asking for another shape is refused.
-        self._shape: tuple[object, ...] = ()
         #: What GuildBotics bound of its own: no turn works in there.
         self._binds: frozenset[EnvironmentMount] = frozenset()
         #: The gateway of each tool the microVM was started able to run.
@@ -359,6 +418,14 @@ class _SharedEnvironment:
 
         try:
             tool, where = _ready(tool_name)
+            if tool.name not in self.tools:
+                raise AgentRuntimeError(
+                    AgentRuntimeErrorCategory.CONFIGURATION,
+                    t(
+                        "intelligences.agent_environment.runtime.not_started_for",
+                        tool=tool.label,
+                    ),
+                )
             # The login is read before anything boots: a tool that is not
             # logged in here refuses its turn, and only its turn.
             lent = await _lend(tool, where)
@@ -369,8 +436,8 @@ class _SharedEnvironment:
                     AgentRuntimeErrorCategory.PROCESS,
                     "Could not start the trusted member capability broker.",
                 ) from exc
-            environment = self._environment or await self._boot(context, tool, where)
-            self._admit(context, tool)
+            environment = self._environment or await self._boot(context, where)
+            self._admit(context)
             gateway = self._gateways[tool.name]
             gateway.lend(lent.access_token, lent.stand_in)
             context.login.refusal = lent.refusal
@@ -397,10 +464,7 @@ class _SharedEnvironment:
         return TurnEnvironment(environment, spec, self._broker, end)
 
     async def _boot(
-        self,
-        context: AgentExecutionContext,
-        tool: CliAgentInfo,
-        where: LoginEnvironment,
+        self, context: AgentExecutionContext, where: LoginEnvironment
     ) -> AgentEnvironment:
         """Boot the microVM able to run every tool the member is configured
         with, whatever of them the first turn runs: one member's slots can
@@ -412,7 +476,9 @@ class _SharedEnvironment:
         stopped, so the command's next turn boots afresh instead of starting
         a second listener beside one no one can stop."""
         try:
-            return await self._boot_able_to_run(context, tool, where)
+            return await self._boot_able_to_run(
+                context.cwd, context.workspace_root, where
+            )
         except BaseException:
             gateways, self._gateways = self._gateways, {}
             for gateway in gateways.values():
@@ -420,18 +486,12 @@ class _SharedEnvironment:
             raise
 
     async def _boot_able_to_run(
-        self,
-        context: AgentExecutionContext,
-        tool: CliAgentInfo,
-        where: LoginEnvironment,
+        self, cwd: Path, workspace_root: Path, where: LoginEnvironment
     ) -> AgentEnvironment:
         tools = [
-            tool,
-            *(
-                other
-                for name in sorted(context.tools - {tool.name})
-                if (other := cli_agent_info(name)).provision.provisioned
-            ),
+            each
+            for name in sorted(self.tools)
+            if (each := cli_agent_info(name)).provision.provisioned
         ]
         for each in tools:
             broker = each.provision.credential_broker
@@ -442,14 +502,14 @@ class _SharedEnvironment:
             *(
                 mount
                 for each in tools
-                for mount in bind_state(each, read_only=context.contract.read_only)
+                for mount in bind_state(each, read_only=self.contract.read_only)
             ),
             CODE_MOUNT,
-            *_inspected_mounts(context.inspects, context.workspace_root).values(),
+            *_inspected_mounts(self.access.inspects, workspace_root).values(),
         )
         spec = build_environment_spec(
-            context.contract,
-            context.cwd,
+            self.contract,
+            cwd,
             host_ports=(
                 self._broker.endpoint.port,
                 *(gateway.port for gateway in self._gateways.values()),
@@ -463,27 +523,17 @@ class _SharedEnvironment:
             mounts=binds,
         )
         self._environment = await _start(spec, where, before_stop=self._stop_relays)
-        self._cwd = context.cwd
-        self._shape = self._shape_of(context)
         self._binds = frozenset(binds)
         return self._environment
 
-    def _admit(self, context: AgentExecutionContext, tool: CliAgentInfo) -> None:
-        """Refuse a turn the running microVM was not started for.
+    def _admit(self, context: AgentExecutionContext) -> None:
+        """Refuse a turn working where the running microVM does not hold.
 
         Its working directory must be inside what the microVM mounted of the
-        turn's contract: the deepest mount it is under is one of the
+        command's contract: the deepest mount it is under is one of the
         contract's, backed by the host or the microVM's own working directory.
         """
         assert self._environment is not None
-        if self._shape_of(context) != self._shape or tool.name not in self._gateways:
-            raise AgentRuntimeError(
-                AgentRuntimeErrorCategory.CONFIGURATION,
-                t(
-                    "intelligences.agent_environment.runtime.not_started_for",
-                    tool=tool.label,
-                ),
-            )
         spec = self._environment.spec
         cwd = guest_path(context.cwd)
         mount = max(
@@ -507,15 +557,6 @@ class _SharedEnvironment:
                     path=context.cwd,
                 ),
             )
-
-    def _shape_of(self, context: AgentExecutionContext) -> tuple[object, ...]:
-        """What the turn's contract makes of the microVM: its mounts and its
-        network, and what the turn inspects. Compared rather than the contract
-        itself, so a change the microVM does not show -- a closed directory
-        appearing outside everything mounted -- refuses no turn, while one it
-        would show -- the same inside a mount -- does."""
-        spec = build_environment_spec(context.contract, self._cwd, nameservers=())
-        return spec.mounts, spec.network, context.inspects
 
     async def _hand_over(
         self,

@@ -106,6 +106,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             self.event_id = _turn(context).event_id
 
         async def run(self):
@@ -132,6 +133,7 @@ async def test_dispatcher_runs_workflow_and_clears_pending(
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             ran.append((context, command, args))
 
         async def run(self):
@@ -175,6 +177,7 @@ async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             self.person_id = context.person.person_id
 
         async def run(self):
@@ -237,6 +240,7 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             self.run_id = _turn(context).run_id
 
         async def run(self):
@@ -275,7 +279,7 @@ async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
-            pass
+            self.context = context
 
         async def run(self):
             trace = current_trace()
@@ -330,7 +334,7 @@ async def test_dispatch_records_the_trace_boundary_around_the_turn(
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
-            pass
+            self.context = context
 
         async def run(self):
             llm_decision = {"kind": "event", "type": "span.finished"}
@@ -548,7 +552,7 @@ async def test_cancelled_dispatch_records_a_failed_boundary(monkeypatch, tmp_pat
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
-            pass
+            self.context = context
 
         async def run(self):
             raise asyncio.CancelledError
@@ -607,6 +611,7 @@ async def test_dispatcher_uses_env_for_initial_retry_budget(
         access = CommandAccess()
 
         def __init__(self, context, command, args, *, ledger):
+            self.context = context
             ran.append(context)
 
         async def run(self):
@@ -635,6 +640,7 @@ async def test_dispatcher_skips_already_processed(monkeypatch, tmp_path):
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
+            self.context = a[0]
             raise AssertionError("should not run an already-processed event")
 
         async def run(self):
@@ -664,7 +670,7 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
-            pass
+            self.context = a[0]
 
         async def run(self):
             raise RuntimeError("boom")
@@ -708,7 +714,7 @@ async def test_dispatcher_failure_log_shares_workflow_trace(monkeypatch, tmp_pat
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
-            pass
+            self.context = a[0]
 
         async def run(self):
             workflow_traces.append(current_trace())
@@ -748,7 +754,7 @@ async def test_dispatcher_escalates_final_attempt_failure_to_error(
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
-            pass
+            self.context = a[0]
 
         async def run(self):
             raise RuntimeError("boom")
@@ -942,7 +948,7 @@ async def test_dispatcher_uses_provider_exact_rate_limit_reset(monkeypatch, tmp_
         access = CommandAccess()
 
         def __init__(self, *args, ledger):
-            pass
+            self.context = args[0]
 
         async def run(self):
             raise CliAgentExecutionError(
@@ -1012,6 +1018,7 @@ async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
+            self.context = a[0]
             raise AssertionError("future retry should not run")
 
         async def run(self):
@@ -1074,7 +1081,7 @@ async def test_thread_context_unavailable_keeps_event_pending_forever(
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
-            pass
+            self.context = a[0]
 
         async def run(self):
             raise ThreadContextUnavailableError("provider down")
@@ -1151,7 +1158,7 @@ async def test_failed_event_runs_again_once_its_retry_time_arrives(
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
-            pass
+            self.context = a[0]
 
         async def run(self):
             ran.append(len(ran) + 1)
@@ -1240,6 +1247,7 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
         access = CommandAccess()
 
         def __init__(self, *a, ledger):
+            self.context = a[0]
             raise AssertionError("a completed event must not run again")
 
         async def run(self):

@@ -13,7 +13,24 @@ from typing import Any
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
+from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import environment, windows_job
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    settle_contract,
+)
+
+
+@pytest.fixture(autouse=True)
+def _default_contract(monkeypatch) -> None:
+    """Every command here reads the default contract unless a test says
+    otherwise, whatever the settings of the machine running the tests."""
+    settle_contract(monkeypatch, AccessContract())
+
+
+def _command(*tools: str, access: CommandAccess = CommandAccess()):
+    """A command of a member configured with ``tools`` (Claude Code by
+    default), declaring ``access``."""
+    return environment.command_environment(access, frozenset(tools or {"claude"}))
 
 
 class _Process:
@@ -320,9 +337,10 @@ def _turn(tmp_path, tool_name="claude", **overrides: Any):
     )
 
 
-async def _claude_turn_spec(tmp_path, monkeypatch, context):
-    """The spec a Claude Code turn run in ``context`` boots with."""
-    async with environment.command_environment(CommandAccess()):
+async def _claude_turn_spec(tmp_path, monkeypatch, context, access=CommandAccess()):
+    """The spec a Claude Code turn run in ``context`` of a command declaring
+    ``access`` boots with."""
+    async with _command(access=access):
         _device(monkeypatch, tmp_path, "claude")
         turn = await environment.start_turn_environment(context, "claude")
         await turn.close()
@@ -337,15 +355,15 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
     store or cache other turns share is bound, so nothing a read-only turn
     wrote is resumed or run by a later one."""
     from guildbotics.intelligences.agent_environment import provider_state
-    from guildbotics.intelligences.agent_environment.contract import (
-        AccessContract,
-        NetworkPolicy,
-    )
+    from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
     from guildbotics.intelligences.agent_runtime.models import (
         AgentExecutionContext,
         ConversationKey,
     )
 
+    settle_contract(
+        monkeypatch, AccessContract(network=NetworkPolicy(mode="unrestricted"))
+    )
     monkeypatch.setattr(
         provider_state,
         "get_machine_state_path",
@@ -358,12 +376,11 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
-        contract=AccessContract(
-            network=NetworkPolicy(mode="unrestricted"), read_only=True
-        ),
     )
 
-    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+    spec = await _claude_turn_spec(
+        tmp_path, monkeypatch, context, CommandAccess(read_only=True)
+    )
 
     writable = {mount.host for mount in spec.mounts if not mount.readonly}
     assert writable == {
@@ -381,7 +398,7 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
     tmp_path, monkeypatch, inspects
 ):
     """The recorded runs and the configuration are mounted read-only only for
-    a turn whose caller lets it inspect them."""
+    a turn whose command declares it inspects them."""
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
         guest_path,
@@ -403,9 +420,10 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
-        inspects=inspects,
     )
-    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+    spec = await _claude_turn_spec(
+        tmp_path, monkeypatch, context, CommandAccess(inspects=inspects)
+    )
 
     mounts = set(spec.mounts)
     expected = {
@@ -441,7 +459,6 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
     microVM at a place of its own, read-only, so a turn working in the
     checkout it runs from still writes the package there."""
     import guildbotics
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
         guest_path,
@@ -460,9 +477,10 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
-        contract=AccessContract(read_only=read_only),
     )
-    spec = await _claude_turn_spec(tmp_path, monkeypatch, context)
+    spec = await _claude_turn_spec(
+        tmp_path, monkeypatch, context, CommandAccess(read_only=read_only)
+    )
 
     code = EnvironmentMount("/opt/guildbotics/code/guildbotics", package, True)
     assert code in spec.mounts
@@ -491,27 +509,6 @@ def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
 
     assert "diagnostics" not in directories
     assert directories["config"] == guest_path(tmp_path / ".guildbotics" / "config")
-
-
-def test_inspecting_is_limited_to_known_scopes(tmp_path):
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentExecutionContext,
-        ConversationKey,
-    )
-
-    def context(**overrides: Any) -> AgentExecutionContext:
-        return AgentExecutionContext(
-            person_id="aiko",
-            run_id="r1",
-            cwd=tmp_path,
-            workspace_root=tmp_path,
-            workspace_data_root=tmp_path,
-            conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
-            **overrides,
-        )
-
-    with pytest.raises(ValueError, match="Unknown inspection scopes"):
-        context(inspects=frozenset({"secrets"}))
 
 
 def _jwt(claims: dict[str, object]) -> str:
@@ -586,7 +583,6 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     import httpx
 
     from guildbotics.intelligences.agent_environment import provider_state
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
     from guildbotics.intelligences.agent_environment.spec import (
         GUEST_HOST_ALIAS,
         guest_home,
@@ -601,10 +597,10 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     assert broker is not None
     # The lending as it is, over a login that is not read from a vault.
     _device(monkeypatch, tmp_path, tool_name)
-    context = _turn(tmp_path, tool_name, contract=AccessContract())
+    context = _turn(tmp_path, tool_name)
 
     running = AsyncExitStack()
-    await running.enter_async_context(environment.command_environment(CommandAccess()))
+    await running.enter_async_context(_command(tool_name))
     turn = await environment.start_turn_environment(
         context, tool_name, env={"IS_SANDBOX": "1"}
     )
@@ -765,12 +761,11 @@ async def test_a_login_due_for_refresh_is_refreshed_before_the_turn_starts(
 ):
     """A tool may give up on its API sooner than a refresh takes, so the
     first request never waits for one; a refresh that fails starts no turn."""
-    async with environment.command_environment(CommandAccess()):
+    async with _command():
         from guildbotics.intelligences.agent_environment import provider_state
         from guildbotics.intelligences.agent_environment.auth_gateway import (
             CredentialUnavailableError,
         )
-        from guildbotics.intelligences.agent_environment.contract import AccessContract
         from guildbotics.intelligences.agent_runtime.models import (
             AgentRuntimeError,
             AgentRuntimeErrorCategory,
@@ -797,7 +792,7 @@ async def test_a_login_due_for_refresh_is_refreshed_before_the_turn_starts(
             return await booting(spec, at, before_stop=before_stop)
 
         monkeypatch.setattr(environment, "_start", start)
-        context = _turn(tmp_path, contract=AccessContract())
+        context = _turn(tmp_path)
 
         if refreshes:
             turn = await environment.start_turn_environment(context, "claude")
@@ -817,14 +812,13 @@ async def test_a_login_the_gateway_could_not_use_is_told_to_the_turn(
 ):
     """What the tool makes of a refused login is its own affair; the turn
     learns it from the login it lent."""
-    async with environment.command_environment(CommandAccess()):
+    async with _command("copilot"):
         import httpx
 
         from guildbotics.intelligences.agent_environment import provider_state
         from guildbotics.intelligences.agent_environment.auth_gateway import (
             CredentialGateway,
         )
-        from guildbotics.intelligences.agent_environment.contract import AccessContract
         from guildbotics.utils.i18n_tool import t
 
         tool = environment.cli_agent_info("copilot")
@@ -841,7 +835,7 @@ async def test_a_login_the_gateway_could_not_use_is_told_to_the_turn(
                 super().lend(tokens, stand_in)
 
         monkeypatch.setattr(environment, "CredentialGateway", Revoked)
-        context = _turn(tmp_path, "copilot", contract=AccessContract())
+        context = _turn(tmp_path, "copilot")
         turn = await environment.start_turn_environment(context, "copilot")
         (base_url,) = {
             turn.spec.env[variable]
@@ -882,16 +876,16 @@ async def test_the_turns_of_a_command_share_one_microvm_until_the_command_ends(
     from guildbotics.intelligences.agent_environment.spec import guest_path
 
     _device(monkeypatch, tmp_path, "claude", "codex")
-    tools = frozenset({"claude", "codex"})
+    tools = ("claude", "codex")
     repository = tmp_path / "repository"
 
-    async with environment.command_environment(CommandAccess()):
+    async with _command(*tools):
         first = await environment.start_turn_environment(
-            _turn(tmp_path, "claude", tools=tools), "claude"
+            _turn(tmp_path, "claude"), "claude"
         )
         await first.close()
         second = await environment.start_turn_environment(
-            _turn(tmp_path, "codex", tools=tools, cwd=repository / "package"),
+            _turn(tmp_path, "codex", cwd=repository / "package"),
             "codex",
         )
         await second.close()
@@ -910,6 +904,48 @@ async def test_the_turns_of_a_command_share_one_microvm_until_the_command_ends(
 
 
 @pytest.mark.asyncio
+async def test_the_workspace_settings_are_read_once_when_the_command_starts(
+    tmp_path, monkeypatch
+):
+    """Every turn of a command, whatever tool runs it, is held to the network
+    the workspace declares; the settings are read when the command starts,
+    not by each turn, since nothing a turn read could reshape the microVM."""
+    from guildbotics.intelligences.agent_environment.contract import NetworkPolicy
+    from guildbotics.intelligences.agent_environment.toolchain import (
+        DnsSettings,
+        ToolchainDeclaration,
+    )
+
+    _device(monkeypatch, tmp_path, "claude", "codex")
+    network = NetworkPolicy(
+        mode="allowlist",
+        allowed_domains=["registry.npmjs.org"],
+        allow_local_network=False,
+    )
+    reads: list[str] = []
+
+    def declared() -> ToolchainDeclaration:
+        reads.append("toolchain")
+        return ToolchainDeclaration(
+            network=network, dns=DnsSettings(nameservers=["1.1.1.1"])
+        )
+
+    monkeypatch.setattr(environment, "load_toolchain", declared)
+
+    async with _command("claude", "codex"):
+        assert reads == ["toolchain"]
+        for tool_name in ("claude", "codex"):
+            turn = await environment.start_turn_environment(
+                _turn(tmp_path, tool_name), tool_name
+            )
+            await turn.close()
+
+    (booted,) = _Booted.booted
+    assert "registry.npmjs.org" in booted.spec.network.domains
+    assert reads == ["toolchain"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("ending", ["failure", "cancellation"])
 async def test_a_command_that_does_not_end_well_still_discards_its_microvm(
     tmp_path, monkeypatch, ending
@@ -918,7 +954,7 @@ async def test_a_command_that_does_not_end_well_still_discards_its_microvm(
     started = asyncio.Event()
 
     async def command() -> None:
-        async with environment.command_environment(CommandAccess()):
+        async with _command():
             await environment.start_turn_environment(_turn(tmp_path), "claude")
             started.set()
             if ending == "failure":
@@ -1027,20 +1063,24 @@ def test_every_host_entry_runs_its_command_in_an_environment() -> None:
 @pytest.mark.asyncio
 async def test_a_command_inside_another_is_held_to_what_the_outer_declared():
     """A command and its subcommands are one isolation: the same declaration
-    shares it, and another cannot be given the one it declared."""
+    and tools share it, and another cannot be given the one it declared."""
     from guildbotics.commands.errors import CommandError
 
     read_only = CommandAccess(read_only=True, inspects=frozenset({"config"}))
-    async with environment.command_environment(read_only):
+    async with _command(access=read_only):
         outer = environment._COMMAND.get()
-        async with environment.command_environment(read_only):
+        async with _command(access=read_only):
             assert environment._COMMAND.get() is outer
             assert environment.current_command_access() == read_only
         with pytest.raises(CommandError):
-            async with environment.command_environment(CommandAccess()):
+            async with _command():
+                pass
+        with pytest.raises(CommandError):
+            async with _command("claude", "codex", access=read_only):
                 pass
 
     assert environment.current_command_access() == CommandAccess()
+    assert environment.current_command_contract() is None
 
 
 @pytest.mark.asyncio
@@ -1054,26 +1094,19 @@ async def test_a_tool_not_logged_in_is_refused_only_when_a_turn_of_it_comes(
     )
 
     _device(monkeypatch, tmp_path, "claude")
-    tools = frozenset({"claude", "codex"})
 
-    async with environment.command_environment(CommandAccess()):
-        turn = await environment.start_turn_environment(
-            _turn(tmp_path, tools=tools), "claude"
-        )
+    async with _command("claude", "codex"):
+        turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await turn.close()
         (booted,) = _Booted.booted
         assert any(
             mount.guest.startswith(_state_root("codex")) for mount in booted.spec.mounts
         )
         with pytest.raises(AgentRuntimeError) as refused:
-            await environment.start_turn_environment(
-                _turn(tmp_path, "codex", tools=tools), "codex"
-            )
+            await environment.start_turn_environment(_turn(tmp_path, "codex"), "codex")
         assert refused.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
         assert not booted.closed
-        again = await environment.start_turn_environment(
-            _turn(tmp_path, tools=tools), "claude"
-        )
+        again = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await again.close()
 
     assert len(_Booted.booted) == 1
@@ -1085,7 +1118,6 @@ async def test_a_tool_not_logged_in_is_refused_only_when_a_turn_of_it_comes(
     [
         ("elsewhere", "outside_mounts"),
         ("inside a denied corner", "outside_mounts"),
-        ("contract", "not_started_for"),
         ("tool", "not_started_for"),
     ],
 )
@@ -1095,9 +1127,7 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
     """A running microVM is not reshaped: a turn it cannot hold as it is
     does not run, and the command's next turn still does."""
     from guildbotics.intelligences.agent_environment.contract import (
-        AccessContract,
         DeniedPath,
-        NetworkPolicy,
         ResolvedAccess,
     )
     from guildbotics.intelligences.agent_runtime.models import (
@@ -1110,33 +1140,28 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
     repository = tmp_path / "repository"
     denied = repository / "private"
     denied.mkdir(parents=True)
-    contract = AccessContract(
-        access=ResolvedAccess(denied=(DeniedPath(path=denied, builtin=False),))
+    settle_contract(
+        monkeypatch,
+        AccessContract(
+            access=ResolvedAccess(denied=(DeniedPath(path=denied, builtin=False),))
+        ),
     )
     turn = {
-        "elsewhere": _turn(tmp_path, cwd=tmp_path / "elsewhere", contract=contract),
-        "inside a denied corner": _turn(tmp_path, cwd=denied, contract=contract),
-        "contract": _turn(
-            tmp_path,
-            contract=AccessContract(
-                network=NetworkPolicy(mode="unrestricted"), access=contract.access
-            ),
-        ),
-        "tool": _turn(tmp_path, "codex", contract=contract),
+        "elsewhere": _turn(tmp_path, cwd=tmp_path / "elsewhere"),
+        "inside a denied corner": _turn(tmp_path, cwd=denied),
+        # Logged in, but not a tool the member was configured with when the
+        # command started.
+        "tool": _turn(tmp_path, "codex"),
     }[change]
 
-    async with environment.command_environment(CommandAccess()):
-        first = await environment.start_turn_environment(
-            _turn(tmp_path, contract=contract), "claude"
-        )
+    async with _command():
+        first = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await first.close()
         with pytest.raises(AgentRuntimeError) as refused:
             await environment.start_turn_environment(
                 turn, turn.conversation_key.adapter
             )
-        again = await environment.start_turn_environment(
-            _turn(tmp_path, contract=contract), "claude"
-        )
+        again = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await again.close()
 
     assert refused.value.category is AgentRuntimeErrorCategory.CONFIGURATION
@@ -1153,7 +1178,7 @@ async def test_the_next_turn_waits_for_the_one_holding_the_microvm(
     """The member broker serves one turn at a time."""
     _device(monkeypatch, tmp_path, "claude")
 
-    async with environment.command_environment(CommandAccess()):
+    async with _command():
         first = await environment.start_turn_environment(_turn(tmp_path), "claude")
         second = asyncio.create_task(
             environment.start_turn_environment(_turn(tmp_path), "claude")
@@ -1192,7 +1217,7 @@ async def test_each_turn_is_lent_its_login_afresh(tmp_path, monkeypatch):
             )
         return answer.status_code
 
-    async with environment.command_environment(CommandAccess()):
+    async with _command():
         first_context = _turn(tmp_path)
         first = await environment.start_turn_environment(first_context, "claude")
         (booted,) = _Booted.booted
@@ -1222,7 +1247,7 @@ async def test_a_member_broker_that_does_not_start_is_a_process_error(
 ):
     """The broker's port is opened when the microVM boots, so nothing boots
     without it."""
-    async with environment.command_environment(CommandAccess()):
+    async with _command():
         from guildbotics.intelligences.agent_runtime.member_broker import (
             MemberCapabilityBroker,
         )
@@ -1254,7 +1279,7 @@ async def test_a_relayed_host_is_relayed_once_for_the_whole_command(
     broker = environment.cli_agent_info("antigravity").provision.credential_broker
     assert broker.relayed_hosts
 
-    async with environment.command_environment(CommandAccess()):
+    async with _command("antigravity"):
         for _ in range(2):
             turn = await environment.start_turn_environment(
                 _turn(tmp_path, "antigravity"), "antigravity"
@@ -1268,48 +1293,6 @@ async def test_a_relayed_host_is_relayed_once_for_the_whole_command(
     assert relay.killed
     for host in broker.relayed_hosts:
         assert hosts.count(f"127.0.0.2 {host}") == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("inside", "admitted"), [(False, True), (True, False)])
-async def test_a_contract_change_refuses_a_turn_only_if_the_microvm_would_show_it(
-    tmp_path, monkeypatch, inside, admitted
-):
-    """A closed directory can appear while a command runs (a credential
-    directory made on the host). Outside everything mounted it changes
-    nothing the microVM holds; inside a mount it would have been covered."""
-    from guildbotics.intelligences.agent_environment.contract import (
-        AccessContract,
-        DeniedPath,
-        ResolvedAccess,
-    )
-    from guildbotics.intelligences.agent_runtime.models import AgentRuntimeError
-
-    _device(monkeypatch, tmp_path, "claude")
-    repository = tmp_path / "repository"
-    closed = (repository if inside else tmp_path) / ".secrets"
-    closed.mkdir(parents=True)
-    later = AccessContract(
-        access=ResolvedAccess(denied=(DeniedPath(path=closed, builtin=True),))
-    )
-
-    async with environment.command_environment(CommandAccess()):
-        first = await environment.start_turn_environment(
-            _turn(tmp_path, contract=AccessContract()), "claude"
-        )
-        await first.close()
-        if admitted:
-            second = await environment.start_turn_environment(
-                _turn(tmp_path, contract=later), "claude"
-            )
-            await second.close()
-        else:
-            with pytest.raises(AgentRuntimeError):
-                await environment.start_turn_environment(
-                    _turn(tmp_path, contract=later), "claude"
-                )
-
-    assert len(_Booted.booted) == 1
 
 
 @pytest.mark.asyncio
@@ -1346,19 +1329,14 @@ async def test_a_boot_that_fails_leaves_no_gateway_running(tmp_path, monkeypatch
         return await booting(spec, at, before_stop=before_stop)
 
     monkeypatch.setattr(environment, "_start", start)
-    tools = frozenset({"claude", "codex"})
 
-    async with environment.command_environment(CommandAccess()):
+    async with _command("claude", "codex"):
         with pytest.raises(AgentRuntimeError):
-            await environment.start_turn_environment(
-                _turn(tmp_path, tools=tools), "claude"
-            )
+            await environment.start_turn_environment(_turn(tmp_path), "claude")
         failed = list(started)
         assert len(failed) == 2
         assert all(gateway._server is None for gateway in failed)
-        turn = await environment.start_turn_environment(
-            _turn(tmp_path, tools=tools), "claude"
-        )
+        turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await turn.close()
         assert len(started) == 4
 

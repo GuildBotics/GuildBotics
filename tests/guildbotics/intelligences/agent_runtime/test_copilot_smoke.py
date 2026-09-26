@@ -8,13 +8,13 @@ in the run output only.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import os
 import shutil
 
 import pytest
 
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
     ResolvedAccess,
@@ -22,12 +22,16 @@ from guildbotics.intelligences.agent_environment.contract import (
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
+from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentExecutionContext,
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
+)
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    settle_contract,
 )
 
 pytestmark = [
@@ -162,34 +166,37 @@ async def test_real_copilot_prompt_then_exact_reload(tmp_path) -> None:
         await adapter.close()
 
 
-async def test_real_copilot_read_only_turn_cannot_write(tmp_path) -> None:
+async def test_real_copilot_read_only_turn_cannot_write(tmp_path, monkeypatch) -> None:
     """A read-only turn is held by its environment, not by the prompt: Copilot
     runs as on any turn, and a `read_write` grant is read-only all the same."""
     granted = tmp_path / "granted"
     granted.mkdir()
-    adapter = CopilotAcpAdapter()
-    context = dataclasses.replace(
-        _context(tmp_path),
-        contract=AccessContract(
+    settle_contract(
+        monkeypatch,
+        AccessContract(
             access=ResolvedAccess(
                 documents=(ResolvedGrant(granted, "read_write", "granted"),)
-            ),
-            read_only=True,
+            )
         ),
     )
+    adapter = CopilotAcpAdapter()
+    context = _context(tmp_path)
     conversation = ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
 
-    try:
-        result = await adapter.run_turn(
-            f"Create a file named {guest_path(granted)}/smoke.txt containing the "
-            "word HELLO, then reply with exactly DONE or FAILED.",
-            context,
-            conversation,
-            events.append,
-        )
-        _report("read-only turn", events)
-        assert _settings(events)["allow_all"] == "on"
-        assert not (granted / "smoke.txt").exists(), result.output
-    finally:
-        await adapter.close()
+    async with command_environment(
+        CommandAccess(read_only=True), frozenset({"copilot"})
+    ):
+        try:
+            result = await adapter.run_turn(
+                f"Create a file named {guest_path(granted)}/smoke.txt containing the "
+                "word HELLO, then reply with exactly DONE or FAILED.",
+                context,
+                conversation,
+                events.append,
+            )
+            _report("read-only turn", events)
+            assert _settings(events)["allow_all"] == "on"
+            assert not (granted / "smoke.txt").exists(), result.output
+        finally:
+            await adapter.close()
