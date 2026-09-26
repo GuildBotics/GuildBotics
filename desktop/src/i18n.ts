@@ -1615,10 +1615,10 @@ const resources = {
             title: "LLM check passed",
             description: "The selected LLM provider accepted a minimal request.",
           },
-          cli_agent_executable: {
-            title: "AI CLI tool executable was found",
+          cli_agent_environment: {
+            title: "AI CLI tool can start",
             description:
-              "The selected AI CLI tool command was found on PATH. Runtime behavior is checked separately.",
+              "The isolated agent environment on this device can start the default AI CLI tool.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check passed",
@@ -1692,9 +1692,10 @@ const resources = {
             title: "Default AI CLI tool could not be determined",
             description: "Review the LLM / AI CLI tool settings.",
           },
-          cli_agent_executable: {
-            title: "Default AI CLI tool was not found",
-            description: "Install the selected AI CLI tool or choose another detected AI CLI tool.",
+          cli_agent_environment: {
+            title: "Default AI CLI tool cannot start",
+            description:
+              "The isolated agent environment on this device cannot start the default AI CLI tool. See the reason below.",
           },
           cli_agent_brain: {
             title: "AI CLI tool check failed",
@@ -2039,6 +2040,7 @@ const resources = {
           cli_agent: "AI CLI tool",
           llm: "LLM",
         },
+        requirementUnmet: "{{requirement}}: {{reason}}",
         status: {
           running: "Running",
           success: "Success",
@@ -2083,7 +2085,7 @@ const resources = {
         run: "Run",
         running: "Running",
         noOutput: "No output.",
-        requirementsMissing: "Needs configuration: {{requirements}}",
+        requirementsMissing: "Needs configuration:",
         copy: "Copy the output",
         copied: "Copied",
         failed: "Run failed",
@@ -3705,10 +3707,9 @@ const resources = {
             title: "LLM の検証に成功しました",
             description: "選択中の LLM provider が最小リクエストを受け付けました。",
           },
-          cli_agent_executable: {
-            title: "AI CLIツール実行ファイルを検出しました",
-            description:
-              "選択中の AI CLIツールコマンドが PATH 上に見つかりました。実際に応答できるかは別の項目で検証します。",
+          cli_agent_environment: {
+            title: "AI CLIツールを起動できます",
+            description: "この端末の隔離環境で既定の AI CLIツールを起動できます。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に成功しました",
@@ -3783,10 +3784,10 @@ const resources = {
             title: "既定の AI CLIツールを判定できません",
             description: "LLM・AI CLIツール設定を確認してください。",
           },
-          cli_agent_executable: {
-            title: "既定の AI CLIツールが見つかりません",
+          cli_agent_environment: {
+            title: "既定の AI CLIツールを起動できません",
             description:
-              "選択中の AI CLIツールをインストールするか、検出済みの別ツールを選択してください。",
+              "この端末の隔離環境で既定の AI CLIツールを起動できません。理由を確認してください。",
           },
           cli_agent_brain: {
             title: "AI CLIツールの検証に失敗しました",
@@ -4138,6 +4139,7 @@ const resources = {
           cli_agent: "AI CLIツール",
           llm: "LLM",
         },
+        requirementUnmet: "{{requirement}}：{{reason}}",
         status: {
           running: "実行中",
           success: "成功",
@@ -4182,7 +4184,7 @@ const resources = {
         run: "実行",
         running: "実行中",
         noOutput: "出力はありません。",
-        requirementsMissing: "設定が不足しています: {{requirements}}",
+        requirementsMissing: "設定が不足しています:",
         copy: "出力をコピー",
         copied: "コピーしました",
         failed: "実行に失敗しました",

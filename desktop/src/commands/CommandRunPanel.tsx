@@ -7,6 +7,7 @@ import { CommandRunDetails, type CommandRunRecord } from "../App";
 import { MemberSelector } from "../MemberSelector";
 import { CommandInput } from "./CommandInput";
 import { blockingMessageKey, hasMissingRequiredArgument } from "./commandEditorState";
+import { UnmetRequirements } from "./UnmetRequirements";
 
 type ActiveMember = { person_id: string; name: string };
 
@@ -70,8 +71,6 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
     missingRequiredArgument ||
     (messageRequired && !props.message.trim()) ||
     blockingCode != null;
-
-  const showUnsatisfied = unsatisfied.length > 0 && blockingCode !== "command_requirement_missing";
 
   return (
     <section className="command-run-panel" aria-label={t("commands.verifyHeading")}>
@@ -161,14 +160,15 @@ export function CommandRunPanel(props: CommandRunPanelProps) {
 
           {blockingCode ? (
             <Alert color="warning" title={t("commands.runBlockedTitle")}>
-              {t(blockingMessageKey(blockingCode, executionStatus?.blocking_context ?? {}))}
+              <Stack gap="xs">
+                <Text size="sm">
+                  {t(blockingMessageKey(blockingCode, executionStatus?.blocking_context ?? {}))}
+                </Text>
+                {unsatisfied.length > 0 ? (
+                  <UnmetRequirements requirements={unsatisfied} size="sm" />
+                ) : null}
+              </Stack>
             </Alert>
-          ) : null}
-
-          {showUnsatisfied ? (
-            <Text c="dimmed" size="sm">
-              {unsatisfied.map((req) => t(`commands.requirements.${req.kind}`)).join(", ")}
-            </Text>
           ) : null}
         </Stack>
 

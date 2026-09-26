@@ -210,9 +210,8 @@ let backendEnv = withEnvironment(stackEnv, {
   GUILDBOTICS_APP_API_TOKEN: token,
   GUILDBOTICS_APP_API_ALLOWED_ORIGINS: frontendOrigin,
 });
-// `get_cli_agent_search_path` appends the usual install locations after PATH,
-// so the stubs only win by being first. `withEnvironment` also replaces a
-// Windows parent environment's `Path` key instead of leaving two spellings.
+// `withEnvironment` replaces a Windows parent environment's `Path` key instead
+// of leaving two spellings.
 // The backend never derives a workspace from its cwd, so the stack's temp
 // workspace must be selected explicitly; remove any inherited config override.
 backendEnv = withoutEnvironment(backendEnv, ["GUILDBOTICS_CONFIG_DIR"]);
@@ -398,9 +397,10 @@ async function seedWorkspace() {
     roles: ["architect"],
     speaking_style: "concise",
   });
-  // The seeded `cli_agent` resolves to the stub in `cliStubDir`, so a journey
-  // that does reach the agent path fails fast instead of driving the real
-  // binary. The command journey (`brain: none`) and the service journey (event
+  // The seeded `cli_agent` never runs on the host: a journey that does reach
+  // the agent path is refused by this device's agent environment before a
+  // process starts, and the stub in `cliStubDir` proves no host binary ran.
+  // The command journey (`brain: none`) and the service journey (event
   // trigger only) stay off that path to begin with.
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
 }

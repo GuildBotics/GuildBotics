@@ -102,7 +102,7 @@ describe("requirements", () => {
   });
 
   it("names only the requirements that are unmet", () => {
-    expect(unmetRequirements(blocked)).toEqual(["github"]);
+    expect(unmetRequirements(blocked)).toEqual([{ kind: "github", satisfied: false, message: "" }]);
     expect(unmetRequirements(option())).toEqual([]);
     expect(unmetRequirements(undefined)).toEqual([]);
   });

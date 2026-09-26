@@ -27,6 +27,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     ExecutableInfo,
 )
 from guildbotics.utils.fileio import get_template_path
+from guildbotics.utils.i18n_tool import t
 
 TICKET_STATUSES = ["Todo", "Doing", "Done"]
 CLI_AGENT_FAILURE_RETURNCODE = 2
@@ -179,20 +180,6 @@ def _team(members: list[Person], services: dict | None = None) -> Team:
     return Team(project=Project(name="demo", services=services or {}), members=members)
 
 
-def _patch_cli(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    executable: str = "codex",
-    path: str = "/usr/local/bin/codex",
-) -> None:
-    monkeypatch.setattr(
-        diagnostics_module, "cli_agent_executable", lambda _name: executable
-    )
-    monkeypatch.setattr(
-        diagnostics_module, "resolve_cli_agent_path", lambda *_a, **_k: path
-    )
-
-
 def _patch_talk(monkeypatch: pytest.MonkeyPatch, result: Any = "OK") -> None:
     async def _talk(context: Any, *_args: Any, **_kwargs: Any) -> str:
         if isinstance(result, Exception):
@@ -286,7 +273,6 @@ async def test_no_active_members() -> None:
 async def test_person_id_inactive_member_warns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_cli(monkeypatch)
     _patch_talk(monkeypatch)
     context = _StubContext(team=_team([_person("alice", is_active=False)]))
 
@@ -342,7 +328,7 @@ async def test_person_id_human_member_uses_static_checks_only() -> None:
     assert checks["human_slack_user_id"].status == "ok"
     assert checks["human_github_user"].status == "ok"
     assert "llm_live_call" not in checks
-    assert "cli_agent_executable" not in checks
+    assert "cli_agent_brain" not in checks
     assert "slack_bot_auth" not in checks
     assert response.active_members == ["aiko"]
 
@@ -423,7 +409,6 @@ async def test_active_human_member_is_not_default_diagnostics_target() -> None:
 async def test_multiple_active_members_listed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_cli(monkeypatch)
     _patch_talk(monkeypatch)
     context = _StubContext(
         team=_team(
@@ -447,7 +432,6 @@ async def test_multiple_active_members_listed(
 
 @pytest.mark.asyncio
 async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_cli(monkeypatch)
     _patch_provider(monkeypatch, "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     _patch_talk(monkeypatch, "OK")
@@ -465,7 +449,6 @@ async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_llm_live_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_cli(monkeypatch)
     _patch_provider(monkeypatch, "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     _patch_talk(monkeypatch, RuntimeError("invalid api key"))
@@ -493,7 +476,6 @@ async def test_llm_check_skipped_when_api_key_missing(
     E2E does not depend on a live OpenAI round-trip (and so CI runners and
     offline dev environments do not produce false negatives).
     """
-    _patch_cli(monkeypatch)
     _patch_provider(monkeypatch, "openai")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     talk_calls: list[Any] = []
@@ -530,7 +512,6 @@ async def test_llm_check_falls_through_when_provider_unknown(
     Preserves backwards-compatible behavior for configurations whose default
     model name does not match a known provider.
     """
-    _patch_cli(monkeypatch)
     _patch_provider(monkeypatch, "")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _patch_talk(monkeypatch, "OK")
@@ -546,49 +527,40 @@ async def test_llm_check_falls_through_when_provider_unknown(
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_mapping_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cli_agent_reports_the_environments_refusal_without_a_host_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tool runs in the isolated environment, never from the host PATH:
+    the check is the turn itself, and a device that cannot start it is
+    reported in the refusal the turn was given."""
+    monkeypatch.setenv("PATH", "")
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch, executable="")
+    refusal = t("intelligences.agent_environment.snapshot.missing")
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
-        brain=_StubBrain(_CliResult()),
+        brain=_StubBrain(_CliResult(returncode=1, stderr=refusal)),
     )
 
     response = await _run(context)
 
-    check = _by_code(response)["cli_agent_mapping"]
+    checks = _by_code(response)
+    assert [code for code in checks if code.startswith("cli_agent")] == [
+        "cli_agent_brain"
+    ]
+    check = checks["cli_agent_brain"]
     assert check.status == "error"
-    assert check.message == "Configured AI CLI tool executable could not be inferred."
-    assert check.person_id == "alice"
-    assert check.target == "codex"
+    assert (check.person_id, check.target) == ("alice", "codex")
+    assert refusal in check.message
+    assert [(command, person) for command, person, _, _ in _CHECK_RUNS] == [
+        ("diagnostics/cli_agent", "alice")
+    ]
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_executable_not_found(
+async def test_cli_agent_brain_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch, executable="codex", path="")
-    context = _StubContext(
-        team=_team([_person("alice", is_active=True)]),
-        brain=_StubBrain(_CliResult()),
-    )
-
-    response = await _run(context)
-
-    check = _by_code(response)["cli_agent_executable"]
-    assert check.status == "error"
-    assert check.target == "codex"
-    assert check.person_id == "alice"
-    assert "not found on PATH" in check.message
-
-
-@pytest.mark.asyncio
-async def test_cli_agent_executable_found_and_brain_ok(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch, path="/usr/local/bin/codex")
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=_StubBrain(_CliResult(returncode=0, stdout="OK")),
@@ -597,8 +569,6 @@ async def test_cli_agent_executable_found_and_brain_ok(
     response = await _run(context)
 
     checks = _by_code(response)
-    assert checks["cli_agent_executable"].status == "ok"
-    assert checks["cli_agent_executable"].context["path"] == "/usr/local/bin/codex"
     assert checks["cli_agent_brain"].status == "ok"
     assert checks["cli_agent_brain"].person_id == "alice"
     assert checks["cli_agent_brain"].target == "codex"
@@ -620,13 +590,6 @@ async def test_cli_agent_uses_each_members_effective_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    resolved: list[str] = []
-
-    def resolve(executable: str) -> str:
-        resolved.append(executable)
-        return f"/tools/{executable}"
-
-    monkeypatch.setattr(diagnostics_module, "resolve_cli_agent_path", resolve)
     context = _StubContext(
         team=_team(
             [
@@ -642,19 +605,8 @@ async def test_cli_agent_uses_each_members_effective_tool(
 
     response = await _run(context)
 
-    executable_checks = [
-        check for check in response.checks if check.code == "cli_agent_executable"
-    ]
     brain_checks = [
         check for check in response.checks if check.code == "cli_agent_brain"
-    ]
-    assert resolved == ["codex", "grok"]
-    assert [
-        (check.person_id, check.target, check.context["path"])
-        for check in executable_checks
-    ] == [
-        ("alice", "codex", "/tools/codex"),
-        ("kenji", "grok", "/tools/grok"),
     ]
     assert [(check.person_id, check.target) for check in brain_checks] == [
         ("alice", "codex"),
@@ -667,7 +619,6 @@ async def test_cli_agent_failure_uses_the_members_effective_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch, executable="grok", path="C:/tools/grok.exe")
     context = _StubContext(
         team=_team([_person("kenji", is_active=True)]),
         brain=_StubBrain(RuntimeError("member broker failed"), adapter="grok"),
@@ -679,7 +630,6 @@ async def test_cli_agent_failure_uses_the_members_effective_tool(
     assert check.status == "error"
     assert check.person_id == "kenji"
     assert check.target == "grok"
-    assert check.context["executable"] == "grok"
     assert "member broker failed" in check.message
 
 
@@ -687,7 +637,6 @@ async def test_cli_agent_failure_uses_the_members_effective_tool(
 async def test_cli_agent_closes_context_before_removing_temporary_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
-    _patch_cli(monkeypatch)
     events: list[str] = []
 
     class TrackingTemporaryDirectory:
@@ -720,7 +669,6 @@ async def test_cli_agent_brain_non_zero_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=_StubBrain(
@@ -745,7 +693,6 @@ async def test_cli_agent_brain_empty_stdout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=_StubBrain(_CliResult(returncode=0, stdout="   ", stderr="")),
@@ -763,7 +710,6 @@ async def test_cli_agent_brain_wrong_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=object(),
@@ -781,7 +727,6 @@ async def test_github_not_configured_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=_StubBrain(_CliResult()),
@@ -799,7 +744,6 @@ async def test_github_enabled_project_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     services = {
         "ticket_manager": {"name": "GitHub"},
         "code_hosting_service": {"name": "GitHub"},
@@ -844,7 +788,6 @@ async def test_github_missing_ready_lane_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     ticket_manager = _StubTicketManager()
     # "Backlog" is not among TICKET_STATUSES, so the ready lane is missing.
     ticket_manager.lane_map = {"ready": "Backlog", "working": "Doing", "done": "Done"}
@@ -874,7 +817,6 @@ async def test_github_missing_working_lane_is_warning_not_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     ticket_manager = _StubTicketManager()
     ticket_manager.lane_map = {
         "ready": "Todo",
@@ -907,7 +849,6 @@ async def test_github_non_assignable_human_advises_repo_permissions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     ticket_manager = _StubTicketManager()
     # A human member with a GitHub username who is not a repo collaborator: the
     # Agent field does not apply, so the remediation is repo permissions.
@@ -938,7 +879,6 @@ async def test_github_agent_member_without_agent_field_option_is_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     ticket_manager = _StubTicketManager()
     ticket_manager.assignable = False
     ticket_manager.agent_field_options = []
@@ -971,7 +911,6 @@ async def test_github_agent_member_with_agent_field_option_is_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     ticket_manager = _StubTicketManager()
     ticket_manager.assignable = False
     ticket_manager.agent_field_options = ["⚙bot"]
@@ -1001,7 +940,6 @@ async def test_github_agent_member_with_agent_field_option_is_ok(
 @pytest.mark.asyncio
 async def test_github_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
 
     class _FailingTicketManager:
         async def get_statuses(self) -> list[str]:
@@ -1038,7 +976,6 @@ async def test_slack_not_configured_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     context = _StubContext(
         team=_team([_person("alice", is_active=True)]),
         brain=_StubBrain(_CliResult()),
@@ -1055,7 +992,6 @@ async def test_slack_credential_present_and_channel_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
     context = _StubContext(
@@ -1080,7 +1016,6 @@ async def test_slack_channel_not_joined_is_reported_on_its_own(
     from guildbotics.integrations.slack.slack_chat_service import SlackApiError
 
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
 
@@ -1108,7 +1043,6 @@ async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
     from guildbotics.capabilities.member_github import MemberCapabilityError
 
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     _patch_app_token_probe(monkeypatch, error=MemberCapabilityError("invalid_auth"))
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-broken")
     context = _StubContext(
@@ -1128,7 +1062,6 @@ async def test_slack_app_token_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_slack_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     monkeypatch.delenv("ALICE_SLACK_APP_TOKEN", raising=False)
     context = _StubContext(
         team=_team([_slack_member("alice")]),
@@ -1146,7 +1079,6 @@ async def test_slack_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None
 @pytest.mark.asyncio
 async def test_slack_access_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     _patch_app_token_probe(monkeypatch)
     monkeypatch.setenv("ALICE_SLACK_APP_TOKEN", "xapp-token")
 
@@ -1172,7 +1104,6 @@ async def test_person_id_targets_single_member(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_talk(monkeypatch)
-    _patch_cli(monkeypatch)
     _patch_provider(monkeypatch, "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     context = _StubContext(

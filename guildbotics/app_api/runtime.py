@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -161,14 +161,20 @@ from guildbotics.intelligences.agent_environment.runtime import (
 )
 from guildbotics.intelligences.agent_environment.snapshot import build_snapshot
 from guildbotics.intelligences.agent_environment.spec import guest_path
+from guildbotics.intelligences.agent_environment.status import (
+    DeviceStatus,
+    device_status,
+)
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainDeclaration,
     ToolchainError,
     load_toolchain,
 )
 from guildbotics.intelligences.agent_runtime.environment import inspected_directories
-from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
-from guildbotics.intelligences.cli_agents import CLI_AGENTS, resolve_cli_agent_path
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    get_cli_agent_mapping,
+)
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from guildbotics.observability import new_id, trace_scope
 from guildbotics.observability.activity_event_store import ActivityEventStore
@@ -708,7 +714,7 @@ class AppRuntime:
 
         metadata = load_command_metadata(path, language_code)
         requirements = _command_requirements(
-            path, metadata, self.is_github_integration_enabled(), context
+            path, metadata, self._requirement_facts(), context
         )
         if any(not requirement.satisfied for requirement in requirements):
             return "command_requirement_missing", {}, requirements
@@ -732,7 +738,7 @@ class AppRuntime:
         cannot run, instead of silently dropping it.
         """
         context = self._command_options_context(person)
-        github_enabled = self.is_github_integration_enabled()
+        facts = self._requirement_facts()
         language_code = context.team.project.get_language_code()
 
         options: dict[str, CommandOption] = {}
@@ -747,7 +753,7 @@ class AppRuntime:
             option = _command_option(
                 command=command,
                 path=path,
-                github_enabled=github_enabled,
+                facts=facts,
                 context=context,
                 metadata=metadata,
             )
@@ -792,8 +798,11 @@ class AppRuntime:
             )
         return context.clone_for(member)
 
+    def _requirement_facts(self) -> _RequirementFacts:
+        return _RequirementFacts(github_enabled=self.is_github_integration_enabled())
+
     def _collect_command_options(self, context: Context) -> dict[str, CommandOption]:
-        github_enabled = self.is_github_integration_enabled()
+        facts = self._requirement_facts()
         options: dict[str, CommandOption] = {}
         for command, path in iter_effective_commands(
             _command_roots(context.person.person_id),
@@ -805,7 +814,7 @@ class AppRuntime:
             options[command] = _command_option(
                 command=command,
                 path=path,
-                github_enabled=github_enabled,
+                facts=facts,
                 context=context,
             )
         return options
@@ -1954,13 +1963,13 @@ def _command_option(
     *,
     command: str,
     path: Path,
-    github_enabled: bool,
+    facts: _RequirementFacts,
     context: Context,
     metadata: dict[str, Any] | None = None,
 ) -> CommandOption:
     if metadata is None:
         metadata = load_command_metadata(path, context.team.project.get_language_code())
-    requirements = _command_requirements(path, metadata, github_enabled, context)
+    requirements = _command_requirements(path, metadata, facts, context)
     description = str(metadata.get("description", ""))
     try:
         arguments = to_command_arguments(parse_command_arguments(path, metadata))
@@ -2018,18 +2027,23 @@ def _resolved_display(resolved: Path) -> str:
 def _command_requirements(
     path: Path,
     metadata: dict[str, Any],
-    github_enabled: bool,
+    facts: _RequirementFacts,
     context: Context,
 ) -> list[CommandRequirement]:
-    kinds = _command_requirement_kinds(path, metadata, context, set())
-    return [
-        CommandRequirement(
-            kind=cast(Any, kind),
-            satisfied=_requirement_satisfied(kind, github_enabled),
-            message=_requirement_message(kind),
+    needs = _command_requirement_kinds(path, metadata, context, set())
+    requirements: list[CommandRequirement] = []
+    for kind in sorted({kind for kind, _ in needs}):
+        unmet = [
+            facts.unmet(kind, tool) for need, tool in sorted(needs) if need == kind
+        ]
+        requirements.append(
+            CommandRequirement(
+                kind=cast(Any, kind),
+                satisfied=all(reason is None for reason in unmet),
+                message=next((reason for reason in unmet if reason), ""),
+            )
         )
-        for kind in sorted(kinds)
-    ]
+    return requirements
 
 
 def _command_requirement_kinds(
@@ -2037,20 +2051,20 @@ def _command_requirement_kinds(
     metadata: dict[str, Any],
     context: Context,
     seen: set[Path],
-) -> set[str]:
+) -> set[_Need]:
     resolved_path = path.resolve(strict=False)
     if resolved_path in seen:
         return set()
     seen.add(resolved_path)
 
-    kinds: set[str] = _direct_command_requirement_kinds(path, metadata, context)
+    kinds: set[_Need] = _direct_command_requirement_kinds(path, metadata, context)
     kinds.update(_child_command_requirement_kinds(path, metadata, context, seen))
     return kinds
 
 
 def _direct_command_requirement_kinds(
     path: Path, metadata: dict[str, Any], context: Context
-) -> set[str]:
+) -> set[_Need]:
     if path.suffix == ".md":
         kind = _markdown_brain_requirement_kind(metadata, context)
         if kind:
@@ -2063,11 +2077,11 @@ def _direct_command_requirement_kinds(
 
 def _markdown_brain_requirement_kind(
     metadata: dict[str, Any], context: Context
-) -> str | None:
+) -> _Need | None:
     return _brain_requirement_kind(metadata.get("brain", "default"), context)
 
 
-def _brain_requirement_kind(brain_value: object, context: Context) -> str | None:
+def _brain_requirement_kind(brain_value: object, context: Context) -> _Need | None:
     brain = str(brain_value).strip()
     if is_brain_disabled(brain):
         return None
@@ -2082,8 +2096,19 @@ def _brain_requirement_kind(brain_value: object, context: Context) -> str | None
         mapping = {}
     brain_config = mapping.get(brain, {}) if isinstance(mapping, dict) else {}
     if isinstance(brain_config, dict) and brain_config.get("class") == CLI_BRAIN_CLASS:
-        return "cli_agent"
-    return "llm"
+        return ("cli_agent", _cli_agent_tool(brain_config, context))
+    return ("llm", "")
+
+
+def _cli_agent_tool(brain_config: dict, context: Context) -> str:
+    """The tool a CLI brain runs as this member, or "" when its slot does not
+    resolve (the turn then says why)."""
+    args = brain_config.get("args")
+    slot = args.get("cli_agent", "default") if isinstance(args, dict) else "default"
+    try:
+        return get_cli_agent_mapping(context.person.person_id)[str(slot)].adapter
+    except Exception:
+        return ""
 
 
 def _child_command_requirement_kinds(
@@ -2091,12 +2116,12 @@ def _child_command_requirement_kinds(
     metadata: dict[str, Any],
     context: Context,
     seen: set[Path],
-) -> set[str]:
+) -> set[_Need]:
     raw_commands = metadata.get("commands")
     if raw_commands is None:
         return set()
     entries = raw_commands if isinstance(raw_commands, list) else [raw_commands]
-    kinds: set[str] = set()
+    kinds: set[_Need] = set()
     for entry in entries:
         kinds.update(
             _command_entry_requirement_kinds(path.parent, entry, context, seen)
@@ -2109,7 +2134,7 @@ def _command_entry_requirement_kinds(
     entry: object,
     context: Context,
     seen: set[Path],
-) -> set[str]:
+) -> set[_Need]:
     if isinstance(entry, str):
         return _referenced_command_requirement_kinds(base_dir, entry, context, seen)
     if not isinstance(entry, dict):
@@ -2134,7 +2159,7 @@ def _command_entry_requirement_kinds(
     return set()
 
 
-def _inline_markdown_requirement_kinds(entry: dict, context: Context) -> set[str]:
+def _inline_markdown_requirement_kinds(entry: dict, context: Context) -> set[_Need]:
     if "print" in entry:
         return set()
     kind = _brain_requirement_kind(entry.get("brain", "default"), context)
@@ -2143,7 +2168,7 @@ def _inline_markdown_requirement_kinds(entry: dict, context: Context) -> set[str
     return {kind}
 
 
-def _inline_python_requirement_kinds(entry: dict) -> set[str]:
+def _inline_python_requirement_kinds(entry: dict) -> set[_Need]:
     code = entry.get("python")
     if not isinstance(code, str):
         return set()
@@ -2159,7 +2184,7 @@ def _referenced_command_requirement_kinds(
     command_text: str,
     context: Context,
     seen: set[Path],
-) -> set[str]:
+) -> set[_Need]:
     command_name = _command_reference_name(command_text)
     if not command_name:
         return set()
@@ -2179,7 +2204,7 @@ def _command_reference_name(command_text: str) -> str:
     return parts[0] if parts else ""
 
 
-def _python_requirement_kinds(path: Path) -> set[str]:
+def _python_requirement_kinds(path: Path) -> set[_Need]:
     try:
         module = ast.parse(path.read_text(encoding="utf-8"))
     except Exception:
@@ -2187,7 +2212,7 @@ def _python_requirement_kinds(path: Path) -> set[str]:
     return _python_module_requirement_kinds(module)
 
 
-def _python_module_requirement_kinds(module: ast.Module) -> set[str]:
+def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
     names: set[str] = set()
     attrs: set[str] = set()
     modules: set[str] = set()
@@ -2227,35 +2252,54 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[str]:
         kinds.add("llm")
     if names & {"CliAgentBrain"}:
         kinds.add("cli_agent")
-    return kinds
+    # A Python command names no tool, so only the device can refuse it here.
+    return {(kind, "") for kind in kinds}
 
 
-def _requirement_satisfied(kind: str, github_enabled: bool) -> bool:
-    from guildbotics.utils.fileio import get_config_path
-
-    if kind == "github":
-        return github_enabled
-    if kind == "slack":
-        return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
-    if kind == "llm":
-        from guildbotics.intelligences.llm_providers import provider_env_keys
-
-        return any(
-            os.getenv(env_var)
-            for env_var in provider_env_keys(get_config_path("")).values()
-        )
-    if kind == "cli_agent":
-        return any(resolve_cli_agent_path(agent.executable) for agent in CLI_AGENTS)
-    return True
+#: What a command needs: a requirement kind, and for ``cli_agent`` the tool
+#: its brain runs ("" when the command does not say which).
+_Need = tuple[str, str]
 
 
-def _requirement_message(kind: str) -> str:
-    return {
-        "github": "GitHub integration is required.",
-        "slack": "Slack bot and app tokens are required.",
-        "llm": "An LLM API key is required.",
-        "cli_agent": "A configured AI CLI tool executable is required.",
-    }.get(kind, "")
+@dataclass
+class _RequirementFacts:
+    """What this device has for the requirement kinds, read once per listing.
+
+    An AI CLI tool never runs on the host, so ``cli_agent`` is met when the
+    isolated agent environment can start a turn of the tool, and its refusal
+    is the reason when it cannot. The device is read only when a command
+    needs it.
+    """
+
+    github_enabled: bool
+
+    @cached_property
+    def device(self) -> DeviceStatus:
+        return device_status()
+
+    def unmet(self, kind: str, tool: str) -> str | None:
+        """None when the need is met, else why ("" when there is no reason
+        more specific than the kind)."""
+        if kind == "cli_agent":
+            refusal = self.device.turn_refusal(tool) if tool else self.device.refusal
+            return refusal or None
+        return None if self._satisfied(kind) else ""
+
+    def _satisfied(self, kind: str) -> bool:
+        from guildbotics.utils.fileio import get_config_path
+
+        if kind == "github":
+            return self.github_enabled
+        if kind == "slack":
+            return bool(os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"))
+        if kind == "llm":
+            from guildbotics.intelligences.llm_providers import provider_env_keys
+
+            return any(
+                os.getenv(env_var)
+                for env_var in provider_env_keys(get_config_path("")).values()
+            )
+        return True
 
 
 def _env_truthy(value: str) -> bool:

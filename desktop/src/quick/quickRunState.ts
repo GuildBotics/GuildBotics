@@ -4,7 +4,7 @@
 // — the one thing that separates a dedicated hotkey from the generic window —
 // is directly testable.
 
-import type { CommandOption, RuntimeEvent, TeamSummary } from "../api/client";
+import type { CommandOption, CommandRequirement, RuntimeEvent, TeamSummary } from "../api/client";
 import { hasMissingRequiredArgument } from "../commands/commandEditorState";
 
 type TeamMember = TeamSummary["members"][number];
@@ -32,10 +32,8 @@ export type QuickRunTrigger = {
 };
 
 /** Requirements (GitHub, Slack, LLM, ...) the command needs but does not have. */
-export function unmetRequirements(option: CommandOption | undefined): string[] {
-  return (option?.requirements ?? [])
-    .filter((requirement) => !requirement.satisfied)
-    .map((requirement) => requirement.kind);
+export function unmetRequirements(option: CommandOption | undefined): CommandRequirement[] {
+  return (option?.requirements ?? []).filter((requirement) => !requirement.satisfied);
 }
 
 /**
