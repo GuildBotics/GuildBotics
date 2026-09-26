@@ -4,8 +4,6 @@ import json
 import os
 import threading
 import time
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import pytest
@@ -18,7 +16,7 @@ from guildbotics.runtime.service_control import (
     read_stop_request,
     write_stop_request,
 )
-from guildbotics.utils.advisory_lock import LockTimeoutError
+from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
 
 
 def test_write_stop_request_is_atomic(monkeypatch, tmp_path) -> None:
@@ -43,21 +41,14 @@ def test_write_stop_request_is_atomic(monkeypatch, tmp_path) -> None:
     }
 
 
-@pytest.mark.parametrize("main_delay", [0, 1.1])
-def test_read_holds_control_lock_until_file_is_closed(
-    monkeypatch, tmp_path, main_delay
-) -> None:
+def test_read_holds_control_lock_until_file_is_closed(monkeypatch, tmp_path) -> None:
     path = tmp_path / "stop-request.json"
     write_stop_request("service-1", "graceful", path)
     read_started = threading.Event()
     release_read = threading.Event()
-    lock_attempted = threading.Event()
-    lock_acquired = threading.Event()
     reader_result: list[StopRequest | None] = []
-    writer_result: list[StopRequest] = []
     failures: list[BaseException] = []
     real_read_text = Path.read_text
-    real_held_lock = service_control.held_lock
 
     def blocking_read_text(target: Path, *args, **kwargs) -> str:
         if threading.current_thread().name == "service-control-reader":
@@ -65,62 +56,33 @@ def test_read_holds_control_lock_until_file_is_closed(
             release_read.wait()
         return real_read_text(target, *args, **kwargs)
 
-    @contextmanager
-    def observed_lock(target: Path, **kwargs) -> Iterator[object]:
-        with ExitStack() as stack:
-            if threading.current_thread().name == "service-control-writer":
-                # Observe actual contention, not the absence of progress in a
-                # scheduling window. Retry only after the main thread releases
-                # the reader so its delays cannot exhaust the production timeout.
-                try:
-                    handle = stack.enter_context(real_held_lock(target, timeout=0))
-                except LockTimeoutError:
-                    lock_attempted.set()
-                    release_read.wait()
-                    handle = stack.enter_context(real_held_lock(target, **kwargs))
-                lock_acquired.set()
-                lock_attempted.set()
-            else:
-                handle = stack.enter_context(real_held_lock(target, **kwargs))
-            yield handle
-
     def read() -> None:
         try:
             reader_result.append(read_stop_request(path))
         except BaseException as exc:
             failures.append(exc)
 
-    def write() -> None:
-        try:
-            writer_result.append(write_stop_request("service-1", "cancel", path))
-        except BaseException as exc:
-            failures.append(exc)
-
     monkeypatch.setattr(Path, "read_text", blocking_read_text)
-    monkeypatch.setattr(service_control, "held_lock", observed_lock)
     reader = threading.Thread(target=read, name="service-control-reader")
-    writer = threading.Thread(target=write, name="service-control-writer")
 
     reader.start()
     try:
         assert read_started.wait(timeout=10)
-        time.sleep(main_delay)
-        writer.start()
-        assert lock_attempted.wait(timeout=10)
-        time.sleep(main_delay)
-        assert not lock_acquired.is_set()
+        with (
+            pytest.raises(LockTimeoutError),
+            held_lock(path.with_name(f"{path.name}.lock"), timeout=0),
+        ):
+            pass
     finally:
         release_read.set()
         reader.join(timeout=10)
-        if writer.ident is not None:
-            writer.join(timeout=10)
 
     assert not reader.is_alive()
-    assert not writer.is_alive()
     assert failures == []
-    assert lock_acquired.is_set()
     assert reader_result == [StopRequest("service-1", "graceful")]
-    assert writer_result == [StopRequest("service-1", "cancel")]
+    assert write_stop_request("service-1", "cancel", path) == StopRequest(
+        "service-1", "cancel"
+    )
 
 
 def test_stop_request_stage_never_downgrades(tmp_path) -> None:
@@ -144,18 +106,17 @@ def test_new_service_instance_replaces_stale_request(tmp_path) -> None:
     assert not path.exists()
 
 
-def test_clear_stop_request_waits_for_writer(monkeypatch, tmp_path) -> None:
+def test_write_holds_control_lock_until_file_is_replaced(monkeypatch, tmp_path) -> None:
     path = tmp_path / "stop-request.json"
     write_stop_request("service-1", "graceful", path)
     replace_started = threading.Event()
-    clear_finished = threading.Event()
     release_writer = threading.Event()
     failures: list[BaseException] = []
     real_replace = os.replace
 
     def blocking_replace(source, target) -> None:
         replace_started.set()
-        assert release_writer.wait(timeout=1)
+        release_writer.wait()
         real_replace(source, target)
 
     def write() -> None:
@@ -164,32 +125,29 @@ def test_clear_stop_request_waits_for_writer(monkeypatch, tmp_path) -> None:
         except BaseException as exc:
             failures.append(exc)
 
-    def clear() -> None:
-        try:
-            clear_stop_request(path)
-        except BaseException as exc:
-            failures.append(exc)
-        finally:
-            clear_finished.set()
-
     monkeypatch.setattr(service_control.os, "replace", blocking_replace)
     writer = threading.Thread(target=write)
-    clearer = threading.Thread(target=clear)
 
     writer.start()
-    assert replace_started.wait(timeout=1)
-    clearer.start()
     try:
-        assert not clear_finished.wait(timeout=0.1)
+        assert replace_started.wait(timeout=10)
+        with (
+            pytest.raises(LockTimeoutError),
+            held_lock(path.with_name(f"{path.name}.lock"), timeout=0),
+        ):
+            pass
+        with monkeypatch.context() as patch:
+            patch.setattr(service_control, "_LOCK_TIMEOUT_SECONDS", 0)
+            clear_stop_request(path)
+        assert path.exists()
     finally:
         release_writer.set()
-        writer.join(timeout=1)
-        clearer.join(timeout=1)
+        writer.join(timeout=10)
 
     assert not writer.is_alive()
-    assert not clearer.is_alive()
     assert failures == []
-    assert clear_finished.is_set()
+    assert read_stop_request(path) == StopRequest("service-1", "cancel")
+    clear_stop_request(path)
     assert not path.exists()
 
 
