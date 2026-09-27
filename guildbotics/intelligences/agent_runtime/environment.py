@@ -67,6 +67,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     EnvironmentProcess,
 )
+from guildbotics.intelligences.agent_environment.snapshot import CODE_ROOT
 from guildbotics.intelligences.agent_environment.spec import (
     GUEST_HOST_ALIAS,
     AgentEnvironmentSpec,
@@ -125,12 +126,6 @@ _RELAY = (
 )
 #: How long the relay has to start, and to stop.
 _RELAY_SECONDS = 10.0
-#: Where every turn's microVM has the running process's own ``guildbotics`` package
-#: (the checkout run from, or this build's own bundle), read-only; its parent
-#: is what Python inside is pointed at. A place of GuildBotics' own rather
-#: than the host's path, so it never lands inside a directory of the user's
-#: that a turn works in.
-CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
 _PACKAGE = Path(guildbotics.__file__).resolve().parent
 CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / _PACKAGE.name), _PACKAGE, readonly=True)
 
@@ -598,9 +593,6 @@ class _SharedEnvironment:
         Its working directory must be inside what the microVM mounted of the
         command's contract: the deepest mount it is under is one of the
         contract's, backed by the host or the microVM's own working directory.
-        On the host, where the turn's member commands run, it must still be
-        there, as the turn starts, once the links a turn could have made are
-        followed.
         """
         assert self._environment is not None
         spec = self._environment.spec
@@ -618,10 +610,6 @@ class _SharedEnvironment:
             mount is None
             or mount in self._binds
             or (mount.host is None and mount.guest != spec.cwd)
-            or (
-                mount.host is not None
-                and not context.cwd.resolve().is_relative_to(mount.host.resolve())
-            )
         ):
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.CONFIGURATION,

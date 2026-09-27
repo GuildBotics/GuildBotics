@@ -1,5 +1,7 @@
 from copy import deepcopy
 from io import BytesIO
+import json
+from pathlib import Path
 import re
 from zipfile import ZipFile
 
@@ -15,6 +17,12 @@ from guildbotics.capabilities.member_github import (
     _preserve_issue_links,
 )
 from guildbotics.entities.team import Person, Project, Role, Team
+from guildbotics.runtime.member_invocation import (
+    GuestProcessError,
+    GuestResult,
+    MemberInvocation,
+    member_invocation_scope,
+)
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 HTTP_BAD_REQUEST = 400
@@ -3229,3 +3237,143 @@ def _review_threads_payload(resolved=False, outdated=False):
             }
         }
     }
+
+
+class _Guest:
+    """A command's environment as a member command sees it: what it was
+    asked to run, and what it reads on its standard input."""
+
+    def __init__(self, result: GuestResult | Exception) -> None:
+        self.result = result
+        self.runs: list[dict[str, object]] = []
+
+    def path(self, host: Path) -> str:
+        return f"/guest{host}"
+
+    def python(self, module: str, *args: str) -> list[str]:
+        return ["python", "-m", module, *args]
+
+    def remaining(self) -> float:
+        return 60.0
+
+    def run(self, argv, *, cwd, env, stdin=b"", stdout=None, stdout_limit):
+        self.runs.append(
+            {
+                "argv": list(argv),
+                "cwd": cwd,
+                "env": env,
+                "stdout_limit": stdout_limit,
+                "stdin": stdin,
+                "read": stdin.read_bytes(),
+            }
+        )
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _artifact_service(content: bytes) -> MemberGitHubCapabilityService:
+    service = _service()
+    fake = FakeClient()
+    fake.get_payloads["/repos/owner/repo/actions/runs/9/artifacts"] = {
+        "artifacts": [
+            {"id": 12, "name": "report", "expired": False, "size_in_bytes": 100}
+        ]
+    }
+    fake.contents["/repos/owner/repo/actions/artifacts/12/zip"] = content
+    service._client = fake
+    return service
+
+
+@pytest.mark.asyncio
+async def test_a_command_of_an_environment_has_its_artifact_unpacked_there(
+    tmp_path, symlinks
+):
+    """The host downloads it and writes none of it where the environment
+    can: a destination the environment made a link to elsewhere leads the
+    host nowhere, since only the environment unpacks it."""
+    archive = _artifact_zip({"report.md": b"details"})
+    unpacked = {"destination": "/guest/work", "files": ["/guest/work/report.md"]}
+    guest = _Guest(GuestResult(0, json.dumps(unpacked).encode(), b""))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "work").mkdir()
+    destination = tmp_path / "work" / "artifact"
+    destination.symlink_to(outside, target_is_directory=True)
+
+    with member_invocation_scope(MemberInvocation(guest=guest)):
+        result = await _artifact_service(archive).artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "report", destination
+        )
+
+    [run] = guest.runs
+    # Nothing of the host's: not where it works, nor its variables.
+    assert (run["cwd"], run["env"], run["stdout_limit"]) == ("/", {}, STREAM_READ_LIMIT)
+    assert run["argv"] == [
+        "python",
+        "-m",
+        "guildbotics.capabilities.artifact_archive",
+        f"/guest{destination}",
+    ]
+    assert run["read"] == archive
+    # Held where the environment has nothing: not under anything it works in.
+    assert not Path(str(run["stdin"])).is_relative_to(tmp_path)
+    assert not Path(str(run["stdin"])).exists()
+    assert list(outside.iterdir()) == []
+    assert (result["destination"], result["files"]) == (
+        unpacked["destination"],
+        unpacked["files"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_artifact_the_environment_refused_fails_the_command(tmp_path):
+    guest = _Guest(GuestResult(1, b"", b"Artifact contains an unsafe path: ../x\n"))
+
+    with (
+        member_invocation_scope(MemberInvocation(guest=guest)),
+        pytest.raises(MemberCapabilityError, match="unsafe path: ../x"),
+    ):
+        await _artifact_service(_artifact_zip({"../x": b""})).artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "message"),
+    [
+        (GuestProcessError("The member command ran out of time."), "ran out of time"),
+        (GuestResult(0, b"[]", b""), "cannot have been"),
+        (GuestResult(0, b'{"destination": 1, "files": []}', b""), "cannot have been"),
+        (GuestResult(0, b"not json", b""), "cannot have been"),
+    ],
+)
+async def test_what_the_environment_answers_is_read_as_no_more_than_it_can_be(
+    tmp_path, answer, message
+):
+    """It writes its answer where the agent's code runs: one that is not
+    where it unpacked fails the command, and says nothing of the host."""
+    guest = _Guest(answer)
+
+    with (
+        member_invocation_scope(MemberInvocation(guest=guest)),
+        pytest.raises(MemberCapabilityError, match=message),
+    ):
+        await _artifact_service(_artifact_zip({"a": b""})).artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        )
+
+
+@pytest.mark.asyncio
+async def test_what_the_environment_answers_decides_nothing_else(tmp_path):
+    """Fields the host decides stay the host's, whatever the answer adds."""
+    answer = {"destination": "/w", "files": [], "repo": "else/where", "run_id": 1}
+    guest = _Guest(GuestResult(0, json.dumps(answer).encode(), b""))
+
+    with member_invocation_scope(MemberInvocation(guest=guest)):
+        result = await _artifact_service(_artifact_zip({"a": b""})).artifact_download(
+            "https://github.com/owner/repo/actions/runs/9", "report", tmp_path
+        )
+
+    assert (result["repo"], result["run_id"]) == ("owner/repo", 9)

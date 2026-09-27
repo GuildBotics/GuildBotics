@@ -23,6 +23,7 @@ from guildbotics.intelligences.agent_environment.runtime import (
     EnvironmentProcess,
     EnvironmentStdin,
 )
+from guildbotics.intelligences.agent_environment.snapshot import CODE_ROOT, VENV
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.runtime.member_invocation import GuestProcessError, GuestResult
 
@@ -58,6 +59,17 @@ class EnvironmentGuest:
 
     def path(self, host: Path) -> str:
         return guest_path(host)
+
+    def python(self, module: str, *args: str) -> list[str]:
+        return [
+            "env",
+            f"PYTHONPATH={CODE_ROOT}",
+            "PYTHONDONTWRITEBYTECODE=1",
+            f"{VENV}/bin/python",
+            "-m",
+            module,
+            *args,
+        ]
 
     def remaining(self) -> float:
         left = self._deadline - time.monotonic()

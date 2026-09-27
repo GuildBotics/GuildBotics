@@ -276,26 +276,6 @@ async def test_a_turn_the_microvm_was_not_started_for_is_refused(
 
 
 @pytest.mark.asyncio
-async def test_a_turn_is_not_let_out_of_the_mounts_by_a_link_it_made(
-    tmp_path, monkeypatch, symlinks
-):
-    """The turn can write links where it works; its member commands run on
-    the host, where one would lead them anywhere."""
-    async with _command(monkeypatch, tmp_path) as command:
-        outside = tmp_path / "home" / ".ssh"
-        outside.mkdir(parents=True)
-        command.repository.mkdir(parents=True, exist_ok=True)
-        (command.repository / "link").symlink_to(outside, target_is_directory=True)
-        with pytest.raises(AgentRuntimeError) as refused:
-            await _begin(command, cwd=guest_path(command.repository / "link"))
-
-    assert str(refused.value) == t(
-        "intelligences.agent_environment.runtime.outside_mounts",
-        path=command.repository / "link",
-    )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cwd", ["relative/path", "/work/../etc", "/work/./here", "/work//here", "/work/"]
 )

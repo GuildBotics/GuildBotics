@@ -165,7 +165,9 @@ def _content_option(
 
         with_file = click.option(
             "--content-file",
-            type=_HostPath(exists=True, dir_okay=False, readable=True),
+            type=_HostPath(
+                read_on_host=True, exists=True, dir_okay=False, readable=True
+            ),
             help=t("cli.member.content.file_help"),
         )(wrapped)
         return click.option(
@@ -210,28 +212,25 @@ def _call(ctx: click.Context | None = None) -> MemberCall:
 class _HostPath(click.Path):
     """A path read from the command's working directory, then checked as usual.
 
-    A file the host ``opens`` for a turn's command must be the turn's own: it
-    stays where the turn works (:attr:`MemberInvocation.files`) once links are
-    followed, whatever the turn named. One only named, not opened, is checked
-    by what reads it.
+    For a command of an isolated environment it is only a name, checked by
+    nothing on the host: the host touches nothing that environment can write,
+    which it could swap for a link to anywhere between a check and a use. So
+    such a command names no ``read_on_host`` file, one the host itself reads.
     """
 
-    def __init__(self, *, opens: bool = True, **kwargs: Any) -> None:
+    def __init__(self, *, read_on_host: bool = False, **kwargs: Any) -> None:
         super().__init__(path_type=Path, **kwargs)
-        self._opens = opens
+        self._read_on_host = read_on_host
 
     def convert(
         self, value: Any, param: click.Parameter | None, ctx: click.Context | None
     ) -> Any:
         path = _call(ctx).cwd / value
-        files = current_member_invocation().files
-        if (
-            self._opens
-            and files is not None
-            and not path.resolve().is_relative_to(files)
-        ):
-            self.fail(t("cli.member.path.outside_turn", path=value), param, ctx)
-        return super().convert(path, param, ctx)
+        if current_member_invocation().guest is None:
+            return super().convert(path, param, ctx)
+        if self._read_on_host:
+            self.fail(t("cli.member.content.file_in_environment"), param, ctx)
+        return path
 
 
 def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -1412,8 +1411,7 @@ async def _git_prepare(
 @click.option(
     "--repo-path",
     required=True,
-    # Only named: member mode takes it only inside the member's clones.
-    type=_HostPath(opens=False),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1467,8 +1465,7 @@ async def _git_commit(
 @click.option(
     "--repo-path",
     required=True,
-    # Only named: member mode takes it only inside the member's clones.
-    type=_HostPath(opens=False),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_workspace_mode_option
@@ -1513,8 +1510,7 @@ async def _git_push(
 @click.option(
     "--repo-path",
     required=True,
-    # Only named: member mode takes it only inside the member's clones.
-    type=_HostPath(opens=False),
+    type=_HostPath(),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1568,10 +1564,15 @@ async def _git_publish(
 def _reject_current_workspace_mode_in_task_run(
     workspace_mode: str, task_run_id: str | None
 ) -> None:
-    if workspace_mode == "current" and task_run_id:
+    # A command of an isolated environment, run or not: the current mode runs
+    # git on the host in a repository that environment can write.
+    if workspace_mode == "current" and (
+        task_run_id or current_member_invocation().guest is not None
+    ):
         raise click.ClickException(
             "workspace-mode=current is only for interactive use and cannot be "
-            "used inside a workflow task run."
+            "used inside a workflow task run or a command of an isolated "
+            "environment."
         )
 
 

@@ -129,7 +129,7 @@ NOT_SHARED = {
     "guildbotics/capabilities/member_github.py:DEFAULT_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),
-    "guildbotics/capabilities/member_github.py:MAX_ARTIFACT_BYTES": (
+    "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (
         "a temporary GitHub Actions artifact outside shared workspace state"
     ),
     "guildbotics/observability/diagnostics_store.py:DEFAULT_DIAGNOSTICS_MAX_BYTES": (

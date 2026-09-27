@@ -31,7 +31,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from logging import Logger
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from guildbotics.intelligences.agent_environment import runtime
@@ -71,6 +71,12 @@ UV_VERSION = "0.12.10"
 #: already has this version on its PATH is used as it is.
 PYTHON_VERSION = "3.12"
 VENV = "/opt/guildbotics/venv"
+#: Where every microVM has the running process's own ``guildbotics`` package
+#: (the checkout run from, or this build's own bundle), read-only; its parent
+#: is what Python inside is pointed at. A place of GuildBotics' own rather
+#: than the host's path, so it never lands inside a directory of the user's
+#: that a turn works in.
+CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
 #: The dependencies of GuildBotics installed into :data:`VENV`: ``uv.lock``
 #: exported without what only the host uses (see the test that regenerates
 #: it). Its content is part of the build step, so a change rebuilds.

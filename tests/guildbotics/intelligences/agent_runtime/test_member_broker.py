@@ -8,7 +8,6 @@ import logging
 import socket
 import threading
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -466,35 +465,3 @@ async def test_bearer_token_is_exact_and_scoped() -> None:
     assert accepted is not None
     assert accepted.scopes == ["member:execute"]
     assert rejected is None
-
-
-@pytest.mark.asyncio
-async def test_a_turn_bounds_the_files_its_commands_open_where_it_started(
-    monkeypatch, tmp_path, symlinks
-) -> None:
-    """Where the turn works, as the host found it when the turn started: a
-    link the turn puts there later leads its commands nowhere else."""
-    invocations: list[MemberInvocation] = []
-
-    def run_in_process(arguments, invocation, *, cwd, stdin):
-        invocations.append(invocation)
-        return 0, "", ""
-
-    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
-    work = tmp_path / "work"
-    work.mkdir()
-    (tmp_path / "linked").symlink_to(work, target_is_directory=True)
-    context = replace(_context(tmp_path), cwd=tmp_path / "linked")
-    broker = MemberCapabilityBroker()
-    monkeypatch.setattr(broker, "start", _no_server)
-    await broker.activate(context)
-    (tmp_path / "linked").unlink()
-    (tmp_path / "linked").symlink_to(tmp_path, target_is_directory=True)
-    await broker.execute(broker.turn_grant, ["context", "--person", "aiko"])
-    await broker.deactivate(context)
-
-    assert [invocation.files for invocation in invocations] == [work.resolve()]
-
-
-async def _no_server() -> None:
-    pass
