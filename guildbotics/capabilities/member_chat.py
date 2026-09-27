@@ -118,6 +118,19 @@ class MemberChatCapabilityService:
             "person_id": self.person.person_id,
         }
 
+    async def resolve_channel(self, channel_name: str) -> dict[str, Any]:
+        """Name the channel ``channel_name`` is, without reading or writing it;
+        ``channel_id`` is empty when there is none of that name."""
+        try:
+            channel_id = await self._chat().resolve_channel_id(channel_name)
+        except Exception as exc:
+            raise MemberCapabilityError(_safe_chat_error(exc)) from exc
+        return {
+            "service": self.service_name,
+            "channel_name": channel_name,
+            "channel_id": channel_id or "",
+        }
+
     async def inspect_channel(
         self,
         *,
@@ -263,10 +276,7 @@ class MemberChatCapabilityService:
             raise MemberCapabilityError(
                 "Either channel_id or channel_name is required."
             )
-        try:
-            resolved = await self._chat().resolve_channel_id(channel_name)
-        except Exception as exc:
-            raise MemberCapabilityError(_safe_chat_error(exc)) from exc
+        resolved = (await self.resolve_channel(channel_name))["channel_id"]
         if not resolved:
             raise MemberCapabilityError(f"Chat channel was not found: {channel_name}")
         return resolved

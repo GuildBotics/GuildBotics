@@ -31,11 +31,8 @@ from guildbotics.intelligences.brains.brain import (
     ExecutionMetadata,
     public_parameters,
 )
-from guildbotics.intelligences.brains.util import (
-    record_summary,
-    to_plain_text,
-    to_response_class,
-)
+from guildbotics.intelligences.brains.span_summary import record_summary
+from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (

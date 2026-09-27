@@ -1,10 +1,7 @@
-import time
-from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any, cast
 
-from agno.agent import Agent
-from agno.models.base import Model
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from guildbotics.intelligences.brains.brain import (
@@ -12,29 +9,16 @@ from guildbotics.intelligences.brains.brain import (
     ExecutionMetadata,
     public_parameters,
 )
-from guildbotics.intelligences.brains.util import (
-    record_summary,
-    to_plain_text,
-    to_response_class,
-)
-from guildbotics.intelligences.effort import (
-    effort_diagnostics,
-    effort_settings,
-    resolve_effort,
-    validate_effort_overlay,
-)
+from guildbotics.intelligences.brains.inference import AgnoCall, inference
+from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
+from guildbotics.intelligences.effort import resolve_effort, validate_effort_overlay
 from guildbotics.observability import span_scope
-from guildbotics.observability.diagnostics_events import (
-    record_correlated_io,
-)
 from guildbotics.utils.fileio import (
     get_person_config_path,
     get_template_path,
     load_person_slot_mapping,
     load_yaml_file,
 )
-from guildbotics.utils.import_utils import instantiate_class
-from guildbotics.utils.rate_limiter import acquire
 from guildbotics.utils.text_utils import replace_placeholders
 
 
@@ -167,114 +151,47 @@ class AgnoAgentDefaultBrain(Brain):
             "parameters": public_parameters(self.model_config.parameters),
         }
 
-    async def run(self, message: str, **kwargs):
-        kwargs["name"] = kwargs.get("name", self.name)
-
-        description = kwargs.pop("description", self.description)
-        description = replace_placeholders(
-            description, kwargs.get("session_state", {}), self.template_engine
-        )
-        if self.model_config.is_restricted_model:
-            response_class = kwargs.pop("response_model", self.response_class)
-            message = to_plain_text(description, message, response_class)
-        else:
-            kwargs["description"] = description
-            output_schema = kwargs.pop("response_model", None) or self.response_class
-            if output_schema:
-                kwargs["output_schema"] = output_schema
-
-        kwargs["tool_call_limit"] = kwargs.get("tool_call_limit", 5)
-
-        resolved = resolve_effort(
-            kwargs.get("session_state"), self.effort, logger=self.logger
-        )
-        overlay = effort_settings(
-            self.model_config.effort, resolved, logger=self.logger
-        )
-        model_parameters = deepcopy(self.model_config.parameters)
-        model_parameters.update(deepcopy(overlay))
-        model = instantiate_class(
-            self.model_config.model_class, expected_type=Model, **model_parameters
-        )
-        kwargs["model"] = model
-        if "cwd" in kwargs:
-            kwargs.pop("cwd")
-        kwargs["session_state"] = _agent_session_state(kwargs.get("session_state"))
-
-        agent = Agent(**kwargs)
-
-        if (
-            self.model_config.rate_limit
-            and self.model_config.rate_limit.max_requests_per_minute
-        ):
-            await acquire(
-                self.model_config.name,
-                self.model_config.rate_limit.max_requests_per_minute,
-            )
-        message = self.patch_message(message)
-        # The request is made with this id, so it is the effective model whether
-        # or not the call succeeds. The effort level is effective only when it
-        # actually contributed settings.
-        model_id = str(model_parameters.get("id", "") or "")
-        applied_effort = resolved.resolved if overlay else ""
-        with span_scope("llm"):
-            started = time.monotonic()
-            self._write_request_io(
-                message,
-                description,
-                kwargs,
-                effort_diagnostics(resolved, overlay, model=model_id),
-            )
-            try:
-                response = await agent.arun(message)
-            except Exception:
-                self._record_summary("failed", started, model_id, applied_effort)
-                raise
-            content = response.content
-            self._write_response_io(content)
-            self._record_summary(
-                "finished",
-                started,
-                model_id,
-                applied_effort,
-                usage=_response_usage(response),
-            )
-        if self.response_class and (
-            self.model_config.is_restricted_model
-            or not isinstance(content, self.response_class)
-        ):
-            content = to_response_class(str(content), self.response_class)
-
-        self.execution = ExecutionMetadata(
-            model=model_id, usage=_response_usage(response)
-        )
-        return content
-
-    def _record_summary(
+    async def run(
         self,
-        status: str,
-        started: float,
-        model: str,
-        effort: str,
-        usage: dict[str, Any] | None = None,
-    ) -> None:
-        """Close the span with the model the request was really made with.
-
-        A definition that names no model id of its own leaves the span's model
-        empty — the request ran on the provider's default, which is unknown —
-        while ``model.slot`` still names the slot so traces stay searchable.
-        """
-        record_summary(
-            self.logger,
-            "llm",
-            self.model_config.name,
-            status,
-            started=started,
-            attributes={"model.slot": self.model_config.name},
-            model=model,
-            effort=effort,
-            usage=usage,
+        message: str,
+        *,
+        session_state: dict[str, Any] | None = None,
+        response_model: type[BaseModel] | None = None,
+        **_: Any,
+    ):
+        """Expand the template, have the slot's model answer it on the host
+        (:func:`inference`), and read the answer as the response class."""
+        state = session_state or {}
+        description = replace_placeholders(
+            self.description, state, self.template_engine
         )
+        response_class = response_model or self.response_class
+        output_schema = response_class.model_json_schema() if response_class else None
+        if self.model_config.is_restricted_model:
+            message = to_plain_text(description, message, response_class)
+            output_schema = None
+        with span_scope("llm") as span:
+            answer = await inference().agno(
+                self.person_id,
+                AgnoCall(
+                    brain=self.name,
+                    slot=self.model_slot,
+                    effort=resolve_effort(state, self.effort, logger=self.logger),
+                    description=description,
+                    message=self.patch_message(message),
+                    output_schema=output_schema,
+                    session_state=_agent_session_state(state),
+                    span=span,
+                ),
+            )
+        content = answer.content
+        if response_class:
+            content = to_response_class(
+                content if isinstance(content, str) else json.dumps(content),
+                response_class,
+            )
+        self.execution = ExecutionMetadata(model=answer.model, usage=answer.usage)
+        return content
 
     def patch_message(self, message: str) -> str:
         """
@@ -296,42 +213,6 @@ class AgnoAgentDefaultBrain(Brain):
 
         return "Execute exactly as specified in the system message."
 
-    def _write_request_io(
-        self,
-        message: str,
-        description: str,
-        kwargs: dict,
-        effort: dict[str, Any],
-    ) -> None:
-        record_correlated_io(
-            io_type="llm.request",
-            payload={
-                "effort": effort,
-                "person_id": self.person_id,
-                "brain": self.name,
-                "model": self.model_config.name,
-                "model_class": self.model_config.model_class,
-                "restricted_model": self.model_config.is_restricted_model,
-                "response_class": (
-                    self.response_class.__name__ if self.response_class else ""
-                ),
-                "description": description,
-                "message": message,
-                "session_state": kwargs.get("session_state", {}),
-            },
-        )
-
-    def _write_response_io(self, content: object) -> None:
-        record_correlated_io(
-            io_type="llm.response",
-            payload={
-                "person_id": self.person_id,
-                "brain": self.name,
-                "model": self.model_config.name,
-                "content": content,
-            },
-        )
-
 
 #: Session state entries the agent must not receive. ``context`` is the live
 #: runtime handle: it owns open HTTP clients, so agno's per-run
@@ -349,18 +230,3 @@ def _agent_session_state(session_state: object) -> dict[str, Any]:
         for key, value in session_state.items()
         if key not in _RUNTIME_ONLY_SESSION_KEYS
     }
-
-
-def _response_usage(response: object) -> dict[str, Any]:
-    """Token counters of a run, as a plain dict.
-
-    ``RunOutput.metrics`` is a dataclass that drops zero and empty entries in
-    ``to_dict()``, so the span only carries counters the provider reported.
-    """
-    metrics = getattr(response, "metrics", None)
-    to_dict = getattr(metrics, "to_dict", None)
-    if callable(to_dict):
-        return {str(key): value for key, value in to_dict().items()}
-    if isinstance(metrics, dict):
-        return {str(key): value for key, value in metrics.items()}
-    return {}

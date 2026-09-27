@@ -89,6 +89,7 @@ from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberBrokerEndpoint,
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
+    MemberCommandResult,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     AgentAdapter,
@@ -97,6 +98,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
+from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.runtime.person_lease import (
     PersonExecutionLease,
     current_person_lease,
@@ -509,6 +511,19 @@ class _SharedEnvironment:
         """Answer what the microVM asks of the host with ``host``, in the
         context the command runs in now."""
         self._broker.serve(host, contextvars.copy_context())
+
+    async def member(
+        self,
+        person_id: str,
+        arguments: list[str],
+        invocation: MemberInvocation,
+        stdin: str,
+    ) -> MemberCommandResult:
+        """Run a member command the command asks for itself, where it works,
+        as a turn's member commands run."""
+        return await self._broker.run(
+            person_id, arguments, invocation, cwd=self._cwd, stdin=stdin
+        )
 
     async def window(self) -> MemberBrokerEndpoint:
         """Where the microVM reaches the command's window to the host.

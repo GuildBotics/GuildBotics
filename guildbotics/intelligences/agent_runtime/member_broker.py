@@ -23,8 +23,9 @@ import threading
 import time
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -43,6 +44,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
 )
 from guildbotics.runtime.member_invocation import MemberInvocation
+from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -268,48 +270,67 @@ class MemberCapabilityBroker:
         whole run's status, failing a turn the agent already recovered from.
         Only infrastructure failures escape as exceptions.
         """
-        if len(stdin.encode()) > _MAX_STDIN_BYTES:
-            return _rejected("Member command stdin is too large.")
         async with self._command_lock:
             context = self._context
             if context is None:
                 return _rejected("No GuildBotics turn is active.")
             if not secrets.compare_digest(turn_grant, self._turn_grant):
                 return _rejected("The GuildBotics turn grant is invalid or expired.")
-            if reason := _rejection_reason(arguments, context.person_id):
-                return _rejected(reason)
-            # Imported here: the member CLI is the layer above this one.
-            from guildbotics.cli.member import run_in_process
-
-            chat = context.conversation_key.work_kind == "chat"
-            invocation = MemberInvocation(
-                run_id=context.run_id if chat else "",
-                task_run_id="" if chat else context.run_id,
-                participant_labels=context.participant_labels,
-                trace_id=context.trace_id,
-                lease=context.lease,
-                guest=(
-                    self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS)
-                    if self._guest is not None
-                    else None
+            return await self.run(
+                context.person_id,
+                arguments,
+                member_invocation(
+                    context.conversation_key.work_kind,
+                    context.run_id,
+                    context.trace_id,
+                    context.lease,
+                    participant_labels=context.participant_labels,
                 ),
+                cwd=context.cwd,
+                stdin=stdin,
             )
-            command = partial(
-                run_in_process, arguments, invocation, cwd=context.cwd, stdin=stdin
+
+    async def run(
+        self,
+        person_id: str,
+        arguments: list[str],
+        invocation: MemberInvocation,
+        *,
+        cwd: Path,
+        stdin: str,
+    ) -> MemberCommandResult:
+        """Run one member command as ``person_id`` with ``invocation``, handed
+        the command's microVM (see :meth:`execute`).
+
+        A turn's member command runs here once its grant is checked, and so
+        does one its command asks for itself, under the command's grant.
+        """
+        if len(stdin.encode()) > _MAX_STDIN_BYTES:
+            return _rejected("Member command stdin is too large.")
+        if reason := _rejection_reason(arguments, person_id):
+            return _rejected(reason)
+        # Imported here: the member CLI is the layer above this one.
+        from guildbotics.cli.member import run_in_process
+
+        if self._guest is not None:
+            invocation = replace(
+                invocation,
+                guest=self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS),
             )
-            work = asyncio.get_running_loop().run_in_executor(
-                None, contextvars.Context().run, command
+        command = partial(run_in_process, arguments, invocation, cwd=cwd, stdin=stdin)
+        work = asyncio.get_running_loop().run_in_executor(
+            None, contextvars.Context().run, command
+        )
+        try:
+            exit_code, stdout, stderr = await asyncio.wait_for(
+                work, timeout=_COMMAND_TIMEOUT_SECONDS
             )
-            try:
-                exit_code, stdout, stderr = await asyncio.wait_for(
-                    work, timeout=_COMMAND_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                return MemberCommandResult(
-                    exit_code=124,
-                    stdout="",
-                    stderr="Member capability command timed out; it may still complete.",
-                )
+        except TimeoutError:
+            return MemberCommandResult(
+                exit_code=124,
+                stdout="",
+                stderr="Member capability command timed out; it may still complete.",
+            )
         return MemberCommandResult(
             exit_code=exit_code, stdout=_bounded(stdout), stderr=_bounded(stderr)
         )
@@ -476,6 +497,26 @@ def _host_name(header: str) -> str:
 def _as_guest(url: str) -> str:
     """``url`` as the agent environment reaches it."""
     return url.replace(LOOPBACK_HOST, GUEST_HOST_ALIAS, 1)
+
+
+def member_invocation(
+    work_kind: str,
+    run_id: str,
+    trace_id: str,
+    lease: PersonExecutionLease | None,
+    *,
+    participant_labels: str = "",
+) -> MemberInvocation:
+    """What a member command asked for by ``run_id``'s work of ``work_kind``
+    runs with: a chat run's, or a task run's for any other work."""
+    chat = work_kind == "chat"
+    return MemberInvocation(
+        run_id=run_id if chat else "",
+        task_run_id="" if chat else run_id,
+        participant_labels=participant_labels,
+        trace_id=trace_id,
+        lease=lease,
+    )
 
 
 def _rejected(reason: str) -> MemberCommandResult:
