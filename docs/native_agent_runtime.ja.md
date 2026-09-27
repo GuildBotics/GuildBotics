@@ -109,8 +109,9 @@ buildした端末が全アーキテクチャのdigestをまとめて宣言でき
 アーキテクチャ向けの宣言が無い）なら、そのimageで動かしつつ状態カード・状態異常・`environment
 status`に「宣言と違うimageで動作中」と読み込みの手順を出し続けます。snapshotは読み込んだimageの
 digestで名付けられるので、読み込み直せば古い扱いになり、再ビルドされます。imageは既定imageを`FROM`に
-するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`）を備えていれば
-何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
+するか、buildの手順が使うもの（Debianの`apt-get`、Node.jsと`npm`、`curl`と`tar`）と、
+[member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
+備えていれば何でもかまいません。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuildと読み込み）が実例です。
 
@@ -480,6 +481,33 @@ execution leaseのもとで、そのprocessが選択中のworkspaceに対して�
 隔離作業ディレクトリから読みます。brokerの時間切れを越えたcommandは、そのことをagentへ
 返したうえで完了まで放置します。read-only turnはleaseを持たないため、member CLI guardが
 書き込み可能なcommandをすべて拒否します。全native adapterがこの同じmember capability境界を使用します。
+
+### member git とメンバーの clone
+
+メンバーのclone（`<workspace>/.guildbotics/local/clones/<person_id>`）はturnが書き込み、
+repositoryはそのgitが何を実行するか（hooks、filter、`core.fsmonitor`）、どこからfetchしどこへ
+pushするか、どのディレクトリを扱うかを決めます。そのためmember CLIはhostでcloneのgitを実行しません。
+member modeの`member git prepare` / `commit` / `push` / `publish`は、cloneのgitをすべて実行中の
+コマンドのmicroVMの中で動かします（brokerが各member commandへ渡します）。そのgitに渡すのは、
+すべての環境に渡すhostの事実とメンバーの名前だけで、turnの環境変数、brokerのtoken、ログインの
+置換用の値は渡しません。
+
+メンバーのGitHub tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
+の下に`owner/repo`ごとに持つhost専用のbare repository（どの環境にもmountしません）から、hostが
+導出したURLへ送ります。`prepare`はcloneがどれへpushするかを記録し（forkとupstreamは同じcloneの
+ディレクトリになり、最後の`prepare`が決めます）、`prepare`でcheckoutしていないcloneはpushしません。
+両者の間は、processの標準入出力で少しずつ流すgit bundleで受け渡し、増分だけを送ります。hostは
+cloneから受け取るもののうち`refs/heads/<branch>`（gitがブランチ名として受け付ける名前。1 GiBまで）
+だけを取り込み、pushするcommitは自分のrepositoryから読み直し、完全形のrefspecでpushします。
+`prepare`は毎回、cloneの`origin`のURL、ブランチのupstream、メンバーの`user.name` / `user.email`を
+書き直し、pushのあとはcloneの`origin/<branch>`をpushしたcommitへ進めます。brokerの時間切れを
+越えたmember gitのcommandは、microVMの中のgitを止め、そのメンバーの次のgitはその終了を待ちます。
+
+ワークスペースから見た変化: プロジェクトのgit hooksは、環境の中でimageにあるツールを使って動きます
+（Pythonが要るhookには、Pythonを入れたimageが要ります）。Git LFSは扱いません。実行中のコマンドの
+外には環境が無いので、そこではmember modeのgitを拒否します。対話セッションは
+`--workspace-mode current`を使い、これは利用者自身のrepositoryでhostが実行し、利用者のhooksに
+従います。turnからは使えません。
 
 ## Slackスレッド・チケットとセッションの対応付け
 

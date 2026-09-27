@@ -13,6 +13,7 @@ import contextvars
 import logging
 import secrets
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
+from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
 from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
@@ -94,9 +96,15 @@ class _ScopedTokenVerifier(TokenVerifier):
 
 
 class MemberCapabilityBroker:
-    """Expose the active turn's member CLI through authenticated localhost MCP."""
+    """Expose the active turn's member CLI through authenticated localhost MCP.
 
-    def __init__(self) -> None:
+    ``guest`` is the microVM of the command the broker serves: each command
+    it runs is handed it, with the time the broker gives it, to run there what
+    the command's turns can write.
+    """
+
+    def __init__(self, guest: EnvironmentGuest | None = None) -> None:
+        self._guest = guest
         self._token = secrets.token_urlsafe(32)
         self._name = f"guildbotics-member-{secrets.token_hex(6)}"
         self._turn_grant = ""
@@ -226,6 +234,11 @@ class MemberCapabilityBroker:
                 participant_labels=context.participant_labels,
                 trace_id=context.trace_id,
                 lease=context.lease,
+                guest=(
+                    self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS)
+                    if self._guest is not None
+                    else None
+                ),
             )
             command = partial(
                 run_in_process, arguments, invocation, cwd=context.cwd, stdin=stdin

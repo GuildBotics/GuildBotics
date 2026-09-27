@@ -20,7 +20,9 @@ its PATH -- reaches the provider, because the provider does not run on the
 host.
 
 What GuildBotics still runs on the host is its own: the member CLI the broker
-spawns for the agent, under the process-tree policy below.
+runs for the agent. What that CLI runs of what the turns can write -- git in
+the member's clones -- it runs back in the command's microVM
+(:class:`EnvironmentGuest`).
 """
 
 from __future__ import annotations
@@ -79,6 +81,7 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainError,
     load_toolchain,
 )
+from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
@@ -386,9 +389,11 @@ class _SharedEnvironment:
         #: The tools the microVM is booted able to run; a turn of another is
         #: refused.
         self.tools = tools
-        self._broker = MemberCapabilityBroker()
-        self._turn = asyncio.Lock()
         self._environment: AgentEnvironment | None = None
+        self._broker = MemberCapabilityBroker(
+            EnvironmentGuest(asyncio.get_running_loop(), lambda: self._environment)
+        )
+        self._turn = asyncio.Lock()
         #: What GuildBotics bound of its own: no turn works in there.
         self._binds: frozenset[EnvironmentMount] = frozenset()
         #: The gateway of each tool the microVM was started able to run.

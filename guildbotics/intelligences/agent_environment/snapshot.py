@@ -201,6 +201,9 @@ def build_steps() -> tuple[BuildStep, ...]:
     steps.extend(
         BuildStep(name, script) for name, script in provisioned_installs().items()
     )
+    # Last, so an image that lost git on the way is refused: member git runs
+    # every git of the member's clones in the environment.
+    steps.append(BuildStep("git", "git --version"))
     return tuple(steps)
 
 

@@ -1027,7 +1027,7 @@ const resources = {
               image: "Base image",
               imageDefault: "GuildBotics default ({{reference}}: Debian, Node.js, git, uv)",
               imageHint:
-                "An image loaded on this device (docker save → guildbotics environment image load), built FROM the default image or one with Debian's apt, Node.js with npm, curl and tar. Images are per CPU architecture: the declaration names one digest per architecture, and a device of another architecture builds the same Dockerfile itself and picks its image here too.",
+                "An image loaded on this device (docker save → guildbotics environment image load), built FROM the default image or one with Debian's apt, Node.js with npm, curl, tar and git. Images are per CPU architecture: the declaration names one digest per architecture, and a device of another architecture builds the same Dockerfile itself and picks its image here too.",
               imageUnavailable: "The images on this device cannot be read: {{problem}}",
               imageNotHere: "declared, not loaded on this device",
               imageNotDeclaredHere:
@@ -2805,7 +2805,7 @@ const resources = {
               image: "ベースイメージ",
               imageDefault: "GuildBotics 既定（{{reference}}: Debian、Node.js、git、uv）",
               imageHint:
-                "この端末に読み込み済みの image（docker save → guildbotics environment image load）から選びます。既定 image を FROM にするか、Debian の apt・Node.js と npm・curl と tar を備えた image にしてください。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入ります。別アーキテクチャの端末では同じ Dockerfile を自分で build し、ここで選んでください。",
+                "この端末に読み込み済みの image（docker save → guildbotics environment image load）から選びます。既定 image を FROM にするか、Debian の apt・Node.js と npm・curl と tar・git を備えた image にしてください。image は CPU アーキテクチャごとに別物なので、宣言にはアーキテクチャごとの digest が入ります。別アーキテクチャの端末では同じ Dockerfile を自分で build し、ここで選んでください。",
               imageUnavailable: "この端末の image を読めません: {{problem}}",
               imageNotHere: "宣言中。この端末に未読み込み",
               imageNotDeclaredHere:
