@@ -794,7 +794,6 @@ class CliAgentBrain(Brain):
                 person_id=self.person_id,
                 run_id=run_id,
                 cwd=Path(cwd),
-                workspace_root=get_workspace_root(),
                 workspace_data_root=data_root,
                 conversation_key=key,
                 trace_id=str(correlation_fields().get("trace_id") or ""),

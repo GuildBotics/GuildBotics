@@ -509,6 +509,44 @@ def test_a_turn_in_the_workspace_root_gets_its_state_directory_covered(
     assert all(mount.host is not None for mount in below.mounts)
 
 
+@pytest.mark.parametrize("in_root", [True, False], ids=["workspace root", "exchange"])
+@pytest.mark.parametrize("read_only", [False, True])
+def test_the_members_clone_is_opened_read_write_unless_the_contract_is_read_only(
+    tmp_path: Path, in_root: bool, read_only: bool
+) -> None:
+    """The clone is opened for its own sake, not granted: the workspace's
+    state directory it sits in is denied, and a command working in the
+    workspace root has that covered, so the clone is mounted inside the
+    cover, after it. A command working in the exchange directory opens no
+    tree the deny is inside, so nothing is covered. A read-only command
+    changes nothing, so it has no clone (nor a workspace root of the host's
+    to cover)."""
+    home = tmp_path / "home"
+    workspace = (tmp_path / "ws").resolve()
+    exchange = home / "Documents/GuildBotics"
+    clone = workspace / ".guildbotics/local/clones/aiko"
+    for directory in (exchange, clone):
+        directory.mkdir(parents=True)
+    access = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
+
+    spec = build_environment_spec(
+        _contract(access, read_only=read_only),
+        workspace if in_root else exchange,
+        worktrees=[clone],
+        home=home,
+    )
+
+    guests = [mount.guest for mount in spec.mounts]
+    cover = guest_path(workspace / ".guildbotics")
+    assert (cover in guests) == (in_root and not read_only)
+    if read_only:
+        assert not [mount for mount in spec.mounts if mount.guest == guest_path(clone)]
+        return
+    assert EnvironmentMount(guest_path(clone), clone, readonly=False) in spec.mounts
+    if in_root:
+        assert guests.index(guest_path(clone)) > guests.index(cover)
+
+
 def _ui_language_on(platform: str, setting: str, monkeypatch, fake_platform) -> None:
     """Make the host an operating system of ``platform`` whose UI language is
     ``setting``, kept where that operating system keeps it."""

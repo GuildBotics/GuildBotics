@@ -358,6 +358,29 @@ async def test_shell_runs_in_spec_cwd(config_dir: Path, tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_relative_spec_cwd_is_relative_to_the_calling_command(
+    config_dir: Path, tmp_path: Path
+):
+    """A relative ``cwd:`` names a directory under the command's own working
+    directory, never under the process's."""
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "marker.txt").write_text("under-the-command-cwd\n", encoding="utf-8")
+    commands = config_dir / "commands"
+    (commands / "pwd.yml").write_text(
+        "commands:\n  - command: print_pwd\n    cwd: work\n", encoding="utf-8"
+    )
+    (commands / "print_pwd.sh").write_text(
+        "#!/usr/bin/env bash\ncat marker.txt\n", encoding="utf-8"
+    )
+    ctx = _make_context()
+
+    await CommandRunner(ctx, "pwd", [], cwd=tmp_path).run()
+
+    assert ctx.shared_state["print_pwd"].strip() == "under-the-command-cwd"
+
+
+@pytest.mark.asyncio
 async def test_shell_receives_params_as_env(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "env_echo.sh").write_text(
@@ -618,9 +641,13 @@ async def test_a_read_only_command_runs_while_its_member_is_busy(config_dir: Pat
         busy.acquire, source="routine", command="workflows/ticket", work_id="other"
     )
     try:
-        outcome = await run_command(_make_context(), "look", [], cwd=config_dir)
+        outcome = await run_command(
+            _make_context(), "look", [], person_identifier=None, cwd=config_dir
+        )
         with pytest.raises(CommandError):
-            await run_command(_make_context(), "change", [], cwd=config_dir)
+            await run_command(
+                _make_context(), "change", [], person_identifier=None, cwd=config_dir
+            )
     finally:
         other_run.run(busy.release)
 
@@ -646,7 +673,9 @@ async def test_every_turn_of_a_run_is_held_to_the_main_commands_declaration(
         encoding="utf-8",
     )
 
-    outcome = await run_command(_make_context(), "probe", [], cwd=config_dir)
+    outcome = await run_command(
+        _make_context(), "probe", [], person_identifier=None, cwd=config_dir
+    )
 
     declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
     assert outcome.result == [declared, declared]
@@ -659,10 +688,13 @@ async def test_a_command_run_inside_another_cannot_declare_other_access(
     """A writing command run from a read-only one is refused, not widened."""
     commands = config_dir / "commands"
     (commands / "nested.py").write_text(
+        "from pathlib import Path\n"
         "from guildbotics.drivers.command_runner import run_command\n"
         'COMMAND_METADATA = {"read_only": True}\n\n'
         "async def main(context):\n"
-        "    return await run_command(context, 'change', [])\n",
+        "    return await run_command(\n"
+        f"        context, 'change', [], None, Path({str(config_dir)!r})\n"
+        "    )\n",
         encoding="utf-8",
     )
     (commands / "change.py").write_text(
@@ -670,7 +702,9 @@ async def test_a_command_run_inside_another_cannot_declare_other_access(
     )
 
     with pytest.raises(CommandError, match="declares other access"):
-        await run_command(_make_context(), "nested", [], cwd=config_dir)
+        await run_command(
+            _make_context(), "nested", [], person_identifier=None, cwd=config_dir
+        )
 
 
 @pytest.mark.asyncio
@@ -680,7 +714,9 @@ async def test_an_invalid_access_declaration_refuses_the_command(config_dir: Pat
     )
 
     with pytest.raises(CommandError, match="inspects"):
-        await run_command(_make_context(), "odd", [], cwd=config_dir)
+        await run_command(
+            _make_context(), "odd", [], person_identifier=None, cwd=config_dir
+        )
 
 
 @pytest.mark.asyncio
@@ -698,6 +734,8 @@ async def test_a_subcommands_own_declaration_is_not_consulted(config_dir: Path):
         encoding="utf-8",
     )
 
-    outcome = await run_command(_make_context(), "writer", [], cwd=config_dir)
+    outcome = await run_command(
+        _make_context(), "writer", [], person_identifier=None, cwd=config_dir
+    )
 
     assert outcome.result == CommandAccess()

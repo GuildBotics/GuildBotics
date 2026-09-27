@@ -1,6 +1,6 @@
 # Windows で GuildBotics Desktop をビルドする
 
-GuildBotics Desktop は MSVC toolchain による Windows x86_64 ビルドに対応し、ユーザー単位の NSIS installer を生成します。installer の build と smoke test は Windows 実機で行ってください。macOS 上のテストでは移植可能なロジックを確認できますが、Windows Job Object、registry 変更、NSIS 実行は検証できません。
+GuildBotics Desktop は MSVC toolchain による Windows x86_64 ビルドに対応し、ユーザー単位の NSIS installer を生成します。installer の build と smoke test は Windows 実機で行ってください。macOS 上のテストでは移植可能なロジックを確認できますが、registry 変更と NSIS 実行は検証できません。
 
 ## 前提ツール
 
@@ -44,7 +44,7 @@ uv run --no-sync python -m pytest \
 scripts/desktop-test-rust.sh
 ```
 
-これらは Windows 上で native 実行してください。特に、GuildBotics process が nested Job Object を作成でき、suspended 状態の AI CLI process を所属させてから resume できることを確認します。
+これらは Windows 上で native 実行してください。
 Rust test wrapper はテスト時だけ Tauri の `bundle.resources` を空にするため、PyInstaller の program を build する前でも実行できます。実際の package build では通常の Tauri config が使われ、program は引き続き必須です。
 
 ## build

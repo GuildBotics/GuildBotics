@@ -15,8 +15,6 @@ import os
 
 import pytest
 
-from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -25,6 +23,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     ResumePolicy,
 )
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
 
 pytestmark = [
     pytest.mark.skipif(
@@ -43,7 +42,6 @@ def _context(tmp_path) -> AgentExecutionContext:
         person_id="smoke",
         run_id="smoke-run",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("smoke", "grok", "manual", "smoke"),
         resume_policy=ResumePolicy.AUTO,
@@ -72,7 +70,7 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path) -> None:
     conversation = ConversationRecord(key=context.conversation_key)
     first_events: list[AgentEvent] = []
 
-    async with command_environment(CommandAccess(), frozenset({TOOL})):
+    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
         adapter = GrokAcpAdapter()
         try:
             first = await adapter.run_turn(
@@ -91,7 +89,7 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path) -> None:
     # A later command, in a microVM of its own, is what makes the reload real:
     # the session id on the conversation and the state the device keeps for
     # the tool are all the next turn has to go on.
-    async with command_environment(CommandAccess(), frozenset({TOOL})):
+    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
         adapter = GrokAcpAdapter()
         try:
             conversation.provider_session_id = first.provider_session_id

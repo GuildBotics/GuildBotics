@@ -4,15 +4,17 @@ Every adapter starts its provider CLI the same way, through
 :func:`start_turn_environment`, in a microVM booted from this device's
 snapshot. The turns of one command execution (:func:`command_environment`)
 share one, and no turn runs outside a command. It boots before the first of
-them and is shaped once for all, since a running microVM cannot be reshaped:
-the command's access contract, the persisted state of every AI CLI tool the
+them and is shaped once for all, from the command rather than from any turn,
+since a running microVM cannot be reshaped: the command's working directory
+and access contract, the running member's clone opened read-write for a
+command that may write, the persisted state of every AI CLI tool the
 member is configured with, the running process's own GuildBotics code and
 whatever of the workspace's own state the command declares its turns inspect
 mounted read-only, and the ports of the member
 broker and of each tool's credential gateway opened. It is discarded when the
 command ends, however it ends. What changes from turn to turn is only what
-can be given to a running microVM: the working directory, the environment,
-and the login the turn is lent.
+can be given to a running microVM: the working directory, which must be
+inside what it mounted, the environment, and the login the turn is lent.
 
 The adapter runs the CLI inside and speaks its protocol over the bridged
 stdio. Nothing of the host -- its environment variables, its credentials,
@@ -28,13 +30,11 @@ the member's clones -- it runs back in the command's microVM
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Any
 
 import guildbotics
 from guildbotics.commands.errors import CommandError
@@ -92,12 +92,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
 )
-from guildbotics.intelligences.agent_runtime.windows_job import (
-    WindowsJob,
-    creation_flags,
-    register_process_job,
-    terminate_process_job,
-)
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
 from guildbotics.utils.fileio import (
     get_template_path,
@@ -105,9 +99,6 @@ from guildbotics.utils.fileio import (
     get_workspace_local_path,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.processes import terminate_posix_process_group
-
-_WINDOWS = os.name == "nt"
 
 #: What every provider process starts with, beside the tool's own state
 #: variables: git must never wait for a terminal that is not there.
@@ -200,21 +191,33 @@ _COMMAND: ContextVar[_SharedEnvironment | None] = ContextVar(
 
 @asynccontextmanager
 async def command_environment(
-    access: CommandAccess, tools: frozenset[str]
+    access: CommandAccess,
+    tools: frozenset[str],
+    *,
+    cwd: Path,
+    workspace_root: Path,
+    clone: Path,
 ) -> AsyncIterator[None]:
     """Run the AI CLI turns of one command execution in one microVM.
 
     What shapes the microVM is settled here, once for the whole command: the
-    access contract, read from the workspace's settings, and the tools it
-    runs. Nothing boots until a turn needs it, and what did is discarded when
-    the command ends, cancellation included. A command run inside another one
-    shares that one's: a command and its subcommands are one isolation, held
-    to what the outer command was started with.
+    access contract, read from the workspace's settings, the tools it runs,
+    and where it works. Nothing boots until a turn needs it, and what did is
+    discarded when the command ends, cancellation included. A command run
+    inside another one shares that one's: a command and its subcommands are
+    one isolation, held to what the outer command was started with, wherever
+    the inner one works; each of its turns must work inside what it mounted.
 
     Args:
         access: What the command declares of its turns' access.
         tools: Every AI CLI tool the member is configured with; which one a
             turn uses is decided while the command runs.
+        cwd: The command's working directory, which the microVM's is.
+        workspace_root: The workspace the command runs in, whose own state
+            the command's turns may inspect.
+        clone: The running member's clone, where a turn works on its tickets
+            and chats; unless the command is read-only, made on the host
+            before the microVM boots when absent, and mounted read-write.
 
     Raises:
         CommandError: If the settings the contract is read from are invalid
@@ -231,7 +234,14 @@ async def command_environment(
             )
         yield
         return
-    shared = _SharedEnvironment(access, _contract(access), tools)
+    shared = _SharedEnvironment(
+        access,
+        _contract(access),
+        tools,
+        cwd=cwd,
+        workspace_root=workspace_root,
+        clone=clone,
+    )
     token = _COMMAND.set(shared)
     try:
         yield
@@ -377,7 +387,14 @@ class _SharedEnvironment:
     """A microVM, what it was started with, and the turns it runs in turn."""
 
     def __init__(
-        self, access: CommandAccess, contract: AccessContract, tools: frozenset[str]
+        self,
+        access: CommandAccess,
+        contract: AccessContract,
+        tools: frozenset[str],
+        *,
+        cwd: Path,
+        workspace_root: Path,
+        clone: Path,
     ) -> None:
         #: What the command declared; every turn of it is held to this.
         self.access = access
@@ -389,6 +406,12 @@ class _SharedEnvironment:
         #: The tools the microVM is booted able to run; a turn of another is
         #: refused.
         self.tools = tools
+        #: Where the command works: the microVM's own working directory, the
+        #: workspace whose state its turns may inspect, and the member's
+        #: clone its turns may work in.
+        self._cwd = cwd
+        self._workspace_root = workspace_root
+        self._clone = clone
         self._environment: AgentEnvironment | None = None
         self._broker = MemberCapabilityBroker(
             EnvironmentGuest(asyncio.get_running_loop(), lambda: self._environment)
@@ -441,7 +464,7 @@ class _SharedEnvironment:
                     AgentRuntimeErrorCategory.PROCESS,
                     "Could not start the trusted member capability broker.",
                 ) from exc
-            environment = self._environment or await self._boot(context, where)
+            environment = self._environment or await self._boot(where)
             self._admit(context)
             gateway = self._gateways[tool.name]
             gateway.lend(lent.access_token, lent.stand_in)
@@ -468,9 +491,7 @@ class _SharedEnvironment:
             raise
         return TurnEnvironment(environment, spec, self._broker, end)
 
-    async def _boot(
-        self, context: AgentExecutionContext, where: LoginEnvironment
-    ) -> AgentEnvironment:
+    async def _boot(self, where: LoginEnvironment) -> AgentEnvironment:
         """Boot the microVM able to run every tool the member is configured
         with, whatever of them the first turn runs: one member's slots can
         name different tools, and which one a later turn uses is decided
@@ -481,18 +502,14 @@ class _SharedEnvironment:
         stopped, so the command's next turn boots afresh instead of starting
         a second listener beside one no one can stop."""
         try:
-            return await self._boot_able_to_run(
-                context.cwd, context.workspace_root, where
-            )
+            return await self._boot_able_to_run(where)
         except BaseException:
             gateways, self._gateways = self._gateways, {}
             for gateway in gateways.values():
                 await gateway.close()
             raise
 
-    async def _boot_able_to_run(
-        self, cwd: Path, workspace_root: Path, where: LoginEnvironment
-    ) -> AgentEnvironment:
+    async def _boot_able_to_run(self, where: LoginEnvironment) -> AgentEnvironment:
         tools = [
             each
             for name in sorted(self.tools)
@@ -510,11 +527,16 @@ class _SharedEnvironment:
                 for mount in bind_state(each, read_only=self.contract.read_only)
             ),
             CODE_MOUNT,
-            *_inspected_mounts(self.access.inspects, workspace_root).values(),
+            *_inspected_mounts(self.access.inspects, self._workspace_root).values(),
         )
+        # What is mounted must exist before the microVM boots; a read-only
+        # command mounts no clone and changes nothing on the host.
+        if not self.contract.read_only:
+            self._clone.mkdir(parents=True, exist_ok=True)
         spec = build_environment_spec(
             self.contract,
-            cwd,
+            self._cwd,
+            worktrees=(self._clone,),
             host_ports=(
                 self._broker.endpoint.port,
                 *(gateway.port for gateway in self._gateways.values()),
@@ -741,83 +763,3 @@ async def _start(
         return await where.start(spec, before_stop=before_stop)
     except AgentEnvironmentError as exc:
         raise AgentRuntimeError(AgentRuntimeErrorCategory.PROCESS, str(exc)) from exc
-
-
-async def terminate_process_tree(
-    process: asyncio.subprocess.Process, *, grace_seconds: float = 2.0
-) -> None:
-    """Terminate the process group and reap the owned host subprocess."""
-    pid = getattr(process, "pid", None)
-    if _WINDOWS:
-        if process.returncode is None:
-            try:
-                await asyncio.wait_for(process.wait(), timeout=grace_seconds)
-                return
-            except TimeoutError:
-                pass
-        terminated = terminate_process_job(process)
-        if not terminated and process.returncode is None:
-            raise RuntimeError("Agent subprocess has no Windows Job Object.")
-        with suppress(asyncio.CancelledError, Exception):
-            await asyncio.shield(process.wait())
-        return
-
-    if process.returncode is not None:
-        # The direct child may have exited while background descendants still
-        # hold inherited pipes or continue working in its process group.
-        if os.name == "posix" and pid:
-            with suppress(ProcessLookupError):
-                terminate_posix_process_group(pid)
-        await process.wait()
-        return
-    if os.name == "posix" and pid:
-        with suppress(ProcessLookupError):
-            terminate_posix_process_group(pid)
-    else:
-        with suppress(ProcessLookupError):
-            process.terminate()
-    try:
-        await asyncio.wait_for(process.wait(), timeout=grace_seconds)
-        return
-    except TimeoutError:
-        pass
-    if os.name == "posix" and pid:
-        with suppress(ProcessLookupError):
-            terminate_posix_process_group(pid, force=True)
-    else:
-        with suppress(ProcessLookupError):
-            process.kill()
-    with suppress(asyncio.CancelledError, Exception):
-        await asyncio.shield(process.wait())
-
-
-async def create_agent_subprocess(
-    *program: str,
-    **kwargs: Any,
-) -> asyncio.subprocess.Process:
-    """Create a host subprocess of GuildBotics' own under the process-tree policy."""
-    if not _WINDOWS:
-        return await asyncio.create_subprocess_exec(*program, **kwargs)
-
-    job = WindowsJob.create()
-    process: asyncio.subprocess.Process | None = None
-    existing_flags = int(kwargs.pop("creationflags", 0))
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *program,
-            creationflags=existing_flags | creation_flags(),
-            **kwargs,
-        )
-        job.assign_and_resume(process.pid)
-    except Exception:
-        if process is not None:
-            with suppress(Exception):
-                job.terminate()
-            with suppress(Exception):
-                process.kill()
-            with suppress(Exception):
-                await process.wait()
-        job.close()
-        raise
-    register_process_job(process, job)
-    return process

@@ -93,7 +93,6 @@ async def test_every_provider_ends_its_turn_however_the_turn_fails(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", tool, "manual", "turn"),
     )
@@ -123,7 +122,6 @@ async def test_every_provider_revokes_the_member_grant_when_interrupted(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", tool, "manual", "turn"),
     )

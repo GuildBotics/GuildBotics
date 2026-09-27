@@ -3,13 +3,11 @@ import logging
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_runtime.environment import (
-    command_environment,
-    running_command,
-)
+from guildbotics.intelligences.agent_runtime.environment import running_command
 from guildbotics.intelligences.brains import cli_agent
 from guildbotics.intelligences.brains import util as brain_util
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
 
 
 def _test_logger():
@@ -482,7 +480,7 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     lease.acquire(source="routine", command="ticket", work_id="work-1")
     declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
     try:
-        async with command_environment(declared, frozenset({"claude"})):
+        async with command_at(isolated_cwd, {"claude"}, declared, person_id="p1"):
             result = await brain._execute(
                 input="why did it fail?",
                 cwd=isolated_cwd,
@@ -506,7 +504,6 @@ async def test_read_only_native_turn_takes_no_person_execution_lease(
     assert captured["command"].access.inspects == frozenset({"diagnostics"})
     assert captured["context"].lease is None
     assert captured["context"].cwd == isolated_cwd
-    assert captured["context"].workspace_root == workspace_root
 
 
 @pytest.mark.asyncio
@@ -528,7 +525,7 @@ async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
 
-    async with command_environment(CommandAccess(), frozenset({"claude"})):
+    async with command_at(tmp_path, {"claude"}, person_id="p1"):
         await brain._execute(
             input="hello",
             cwd=tmp_path,
@@ -575,8 +572,8 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
         effort={"high": {"model": "big-model"}},
     )
 
-    async with command_environment(
-        CommandAccess(read_only=True), frozenset({"claude"})
+    async with command_at(
+        tmp_path, {"claude"}, CommandAccess(read_only=True), person_id="p1"
     ):
         await brain._execute(
             input="hello",
@@ -1080,12 +1077,11 @@ async def test_a_turn_records_what_its_environment_confines_it_to(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "grok", "troubleshooting", "c1"),
     )
 
-    async with command_environment(CommandAccess(read_only=True), frozenset({"grok"})):
+    async with command_at(tmp_path, {"grok"}, CommandAccess(read_only=True)):
         await brain._execute_native_turn(
             input="why?",
             configured={},
@@ -1153,12 +1149,11 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         person_id="judge",
         run_id="turn",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
     )
 
-    async with command_environment(CommandAccess(), frozenset({"copilot"})):
+    async with command_at(tmp_path, {"copilot"}, person_id="judge"):
         turn = brain._execute_native_turn(
             input="work",
             configured={},

@@ -28,7 +28,7 @@ class CommandRunner:
         context: Context,
         command_name: str,
         command_args: Sequence[str],
-        cwd: Path | None = None,
+        cwd: Path,
         *,
         ledger: RunLedger | None = None,
     ) -> None:
@@ -41,7 +41,9 @@ class CommandRunner:
         self._command_args = list(command_args)
         self._registry: dict[str, CommandSpec] = {}
         self._call_stack: list[str] = []
-        self._cwd = cwd if cwd is not None else Path.cwd()
+        #: The main command's working directory, which the host names; the
+        #: run's isolated environment works there too.
+        self.cwd = cwd
         self._spec_factory = CommandSpecFactory(context)
         self._main_spec = self._prepare_main_spec()
         assert self._main_spec.path is not None
@@ -65,7 +67,7 @@ class CommandRunner:
     def _prepare_main_spec(self) -> CommandSpec:
         path = resolve_named_command(self.context, self.command_name)
         spec = self._spec_factory.prepare_main_spec(
-            path, self.command_name, self._command_args, self._cwd
+            path, self.command_name, self._command_args, self.cwd
         )
         return spec
 

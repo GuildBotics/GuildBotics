@@ -16,7 +16,7 @@ def run_on_desktop(
     args: tuple[str, ...],
     person: str | None,
     message: str,
-    cwd: Path | None,
+    cwd: Path,
 ) -> str | None:
     """Return output, or None only when no matching Desktop accepted work.
 
@@ -56,7 +56,7 @@ def run_on_desktop(
                     "args": list(args),
                     "person": person,
                     "message": message,
-                    "cwd": str(cwd) if cwd else None,
+                    "cwd": str(cwd),
                     "expected_workspace": str(workspace.resolve()),
                 },
             )

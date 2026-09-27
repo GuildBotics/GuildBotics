@@ -56,7 +56,6 @@ async def main(context: Context) -> Any:
     pull_request_url = turn["pull_request_url"]
     trigger_reason = turn["trigger_reason"]
     member_workspace = get_member_clone_path(person_id)
-    member_workspace.mkdir(parents=True, exist_ok=True)
     return await context.invoke(
         "functions/handle_github_ticket",
         person_id=person_id,

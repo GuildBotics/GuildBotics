@@ -22,7 +22,7 @@ class CommandSpec:
     args: list[Any] | None = None
     stdin_override: str | None = None
     children: list[CommandSpec] = field(default_factory=list)
-    cwd: Path = field(default_factory=Path.cwd)
+    cwd: Path = field(kw_only=True)
     command_index: int = 0
     config: dict[str, Any] = field(default_factory=dict)
     class_resolver: ClassResolver | None = None

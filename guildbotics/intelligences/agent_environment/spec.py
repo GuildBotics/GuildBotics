@@ -9,14 +9,18 @@ Filesystem: every granted directory -- the working directory, the documents,
 the device-local paths -- is mounted at the same path it has on the host, and
 the guest's home directory is the host's home path, so a path means the same
 thing on both sides: what the user typed, what the Desktop shows, and what the
-provider's session state records all agree. The working directory is
+provider's session state records all agree. The working directory, and the
+worktrees the command works in beside it (the running member's clone), are
 read-write; a grant is read-only when it says so. A read-only contract makes
-every grant read-only and the working directory an empty directory of the
-microVM's own, so what the turn may not change holds whatever provider runs it; only what
+every grant read-only, the working directory an empty directory of the
+microVM's own, and mounts no worktree, so what the turn may not change holds
+whatever provider runs it; only what
 GuildBotics binds itself (``mounts``) keeps its own access. Nothing else of the host is
 mounted except what GuildBotics binds itself (``mounts``), so credentials, the
 workspace configuration, and other members' clones are unreachable rather than
-forbidden -- unless a caller lets its turn inspect the workspace's own state. A deny inside an opened tree is
+forbidden -- unless a caller lets its turn inspect the workspace's own state. A
+worktree is opened whatever deny it is under: it is opened for its own sake,
+not granted. A deny inside an opened tree is
 covered with an empty directory of the microVM's own; a deny outside one
 closes nothing that was open. Such a directory holds nothing of the host and is
 discarded with the microVM, so it is writable: what is mounted under it needs a
@@ -116,6 +120,7 @@ def build_environment_spec(
     contract: AccessContract,
     cwd: Path,
     *,
+    worktrees: Iterable[Path] = (),
     host_ports: Iterable[int] = (),
     provider_domains: Iterable[str] = (),
     env: Mapping[str, str] | None = None,
@@ -128,6 +133,10 @@ def build_environment_spec(
     Args:
         contract: What the turn may reach, as resolved on this device.
         cwd: The turn's working directory on the host.
+        worktrees: Host directories the command works in beside ``cwd``,
+            opened read-write like it: a turn may work in them. They are not
+            grants, so a deny they are under does not close them; a
+            read-only contract mounts none.
         host_ports: Host TCP ports the turn must always reach (the member
             broker), whatever the contract's network mode.
         provider_domains: The provider's own API domains, allowed whenever
@@ -153,6 +162,7 @@ def build_environment_spec(
             *_mounts(
                 contract.access,
                 cwd,
+                () if contract.read_only else worktrees,
                 read_only=contract.read_only,
             ),
             *mounts,
@@ -236,7 +246,7 @@ def guest_path(path: PurePath) -> str:
 
 
 def _mounts(
-    access: ResolvedAccess, cwd: Path, *, read_only: bool
+    access: ResolvedAccess, cwd: Path, worktrees: Iterable[Path], *, read_only: bool
 ) -> tuple[EnvironmentMount, ...]:
     """The host-backed mounts, outermost first, then the denies they cover.
 
@@ -248,6 +258,11 @@ def _mounts(
             guest_path(cwd), None if read_only else cwd, readonly=False
         )
     }
+    for worktree in worktrees:
+        opened.setdefault(
+            guest_path(worktree),
+            EnvironmentMount(guest_path(worktree), worktree, readonly=False),
+        )
     for grant in (*access.documents, *access.paths):
         denied = any(grant.path.is_relative_to(d.path) for d in access.denied)
         if grant.present and not denied:

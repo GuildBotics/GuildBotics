@@ -49,7 +49,7 @@ def _main_spec():
 def _runner_for(spec):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
-        runner = CommandRunner(DummyContext(), "main", [])
+        runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
     runner._spec_factory.build_from_entry = lambda anchor, entry: entry
     return runner
 
@@ -58,7 +58,7 @@ def _runner_for(spec):
 async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
     ctx = DummyContext()
-    runner = CommandRunner(ctx, "main", [])
+    runner = CommandRunner(ctx, "main", [], Path("/workspace"))
 
     captured = {}
 
@@ -85,7 +85,7 @@ async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monke
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
     ctx = DummyContext()
     ledger = object()
-    runner = CommandRunner(ctx, "main", [], ledger=ledger)
+    runner = CommandRunner(ctx, "main", [], Path("/workspace"), ledger=ledger)
     captured = {}
 
     async def fake_run_agent_turn(*, invoke, execution_context, ledger):
@@ -128,7 +128,7 @@ async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monke
 @pytest.mark.asyncio
 async def test_invoke_refuses_completion_managed_turns_without_a_ledger(monkeypatch):
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
-    runner = CommandRunner(DummyContext(), "main", [])
+    runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
 
     async def fail_run_with_children(spec):
         raise AssertionError("the turn must not start")
@@ -152,17 +152,20 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
     monkeypatch, fails
 ):
     """Every AI CLI turn of the run, its subcommands' included, shares one
-    environment, and it is discarded when the run ends, however it ends."""
+    environment, working where the run does, and it is discarded when the run
+    ends, however it ends."""
     from guildbotics.drivers.command_runner import run_in_environment
     from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 
     closed: list[object] = []
     seen: list[object] = []
 
     class Shared:
-        def __init__(self, access, contract, tools) -> None:
+        def __init__(self, access, contract, tools, **where) -> None:
             self.access = access
             self.tools = tools
+            self.where = where
 
         async def close(self) -> None:
             closed.append(self)
@@ -188,7 +191,7 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
         )
     ]
     monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
-    runner = CommandRunner(DummyContext(), "main", [])
+    runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
     runner._spec_factory.build_from_entry = lambda anchor, entry: entry
 
     if fails:
@@ -199,6 +202,12 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
 
     assert seen and all(isinstance(shared, Shared) for shared in seen)
     assert len(set(map(id, seen))) == 1
+    workspace_root = get_workspace_root()
+    assert seen[0].where == {
+        "cwd": runner.cwd,
+        "workspace_root": workspace_root,
+        "clone": get_member_clone_path("aiko", workspace_root),
+    }
     assert closed == seen[:1]
     assert environment._COMMAND.get() is None
 
@@ -244,7 +253,7 @@ async def test_a_command_started_inside_another_shares_its_environment(
     seen: list[object] = []
 
     class Shared:
-        def __init__(self, access, contract, tools) -> None:
+        def __init__(self, access, contract, tools, **_where) -> None:
             self.access = access
             self.tools = tools
 
@@ -364,6 +373,7 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
     class FakeRunner:
         command_name = TICKET_WORKFLOW_COMMAND
         access = CommandAccess()
+        cwd = Path("/workspace")
 
         def __init__(self, context):
             self.context = context
