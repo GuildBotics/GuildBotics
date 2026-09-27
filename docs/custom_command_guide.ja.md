@@ -238,11 +238,16 @@ ${file}の最初のセクションを読み、その内容を${language}を用�
 コマンド呼び出し例:
 
 ```shell
-$ guildbotics run summarize file=README.md cwd=.
+$ guildbotics run summarize file=README.md
 GuildBoticsはAIエージェントとタスクボードで協働するアルファ版ツールであり、将来的な互換性崩壊や重大障害・損害の恐れがあるため利用者は隔離環境で自己責任の下検証すべきと警告している。
 ```
 
-AI CLIツールでは、`cwd` パラメータでAI CLIツールがシステムコマンドを実行する際の作業ディレクトリを指定する必要があります。
+AI CLIツールはコマンドの作業ディレクトリで動きます。作業ディレクトリは、コマンドの実行方法で決まります。
+
+- `guildbotics run`: `--cwd` で指定したディレクトリ。省略時は shell の作業ディレクトリ
+- デスクトップアプリからの手動実行: 画面で指定したディレクトリ。指定が無ければ受け渡しフォルダ（`~/Documents/GuildBotics`）
+- スケジューラが実行するコマンド（巡回コマンドと定期実行のコマンド）: 受け渡しフォルダ（[8. 巡回（routine）コマンドの宣言](#8-巡回routineコマンドの宣言)）
+- サブコマンド: `commands:` のエントリの `cwd:`（[5. サブコマンドの利用](#5-サブコマンドの利用)）、または `context.invoke` の `cwd=`（[7.2. コマンドの呼び出し](#72-コマンドの呼び出し)）。相対パスは呼び出し元コマンドの作業ディレクトリを基準に解決し、どちらも無ければ呼び出し元コマンドの作業ディレクトリで動きます
 
 ### 3.1. 読み取り専用の宣言
 
@@ -726,6 +731,8 @@ async def main(context) -> None:
 
 スケジューラは巡回コマンドを呼び出し側からの入力なしで実行するため、巡回候補は呼び出し側の引数や入力文を要求しない必要があります。`routine: true` を宣言したコマンドは、`inputs.defined_args: auto` によって呼び出し側へ必須引数を表示する場合、または `inputs.message: required` の場合、一覧に残ったまま理由付きで「実行不可」と表示されます。`inputs.defined_args: hidden` の場合、プレースホルダはワークフロー内部から供給されるため、巡回実行の可否には影響しません。
 
+巡回コマンドは、サービスをデスクトップアプリから開始しても `guildbotics start` で開始しても、受け渡しフォルダ（`~/Documents/GuildBotics`）で動きます。相対パスで書き出したファイルはここに出ます。
+
 
 ## 9. モデルエフォート（effort）の指定
 
@@ -746,7 +753,7 @@ effort: high
 実行時に上書きする場合は、通常の `key=value` パラメータとして渡します（専用の CLI オプションはありません）。
 
 ```shell
-guildbotics run summarize file=README.md cwd=. effort=high
+guildbotics run summarize file=README.md effort=high
 ```
 
 解決順位はすべての brain（LLM API 経路・AI CLIツール経路のいずれも）で共通です。
