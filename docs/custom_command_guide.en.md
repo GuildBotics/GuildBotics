@@ -242,6 +242,7 @@ The AI CLI tool works in the command's working directory, which is decided by ho
 
 - `guildbotics run`: the directory given by `--cwd`; without it, the shell's current directory
 - A manual run from the Desktop app: the directory specified on the screen; without one, the exchange folder (`~/Documents/GuildBotics`)
+- A command the scheduler runs (a routine or scheduled command): the exchange folder ([8. Declaring a routine (patrol) command](#8-declaring-a-routine-patrol-command))
 - A subcommand: the `cwd:` key of its `commands:` entry ([5. Using subcommands](#5-using-subcommands)), or `cwd=` of `context.invoke` ([7.2. Invoking other commands](#72-invoking-other-commands)). A relative path is resolved against the calling command's working directory; without either, the subcommand works in the calling command's working directory.
 
 ### 3.1. Declaring a command read-only
@@ -719,6 +720,8 @@ async def main(context) -> None:
 ```
 
 Because the scheduler runs a routine with no caller-supplied input, a routine candidate must not require caller-supplied arguments or a message. A command that declares `routine: true` stays listed but is marked ineligible when required arguments remain visible through `inputs.defined_args: auto` or when `inputs.message: required`. With `inputs.defined_args: hidden`, placeholders are supplied internally by the workflow and do not affect routine eligibility.
+
+A routine runs in the exchange folder (`~/Documents/GuildBotics`), whether the service was started from the Desktop app or with `guildbotics start`: a file it writes to a relative path lands there.
 
 
 ## 9. Specifying model effort
