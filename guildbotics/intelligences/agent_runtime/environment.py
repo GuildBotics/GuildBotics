@@ -30,6 +30,7 @@ the member's clones -- it runs back in the command's microVM
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
@@ -83,6 +84,8 @@ from guildbotics.intelligences.agent_environment.toolchain import (
 )
 from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.member_broker import (
+    HostCalls,
+    MemberBrokerEndpoint,
     MemberCapabilityBroker,
     MemberCapabilityBrokerError,
 )
@@ -93,6 +96,10 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentRuntimeErrorCategory,
 )
 from guildbotics.intelligences.cli_agents import CliAgentInfo, cli_agent_info
+from guildbotics.runtime.person_lease import (
+    PersonExecutionLease,
+    current_person_lease,
+)
 from guildbotics.utils.fileio import (
     get_template_path,
     get_workspace_config_dir,
@@ -197,6 +204,7 @@ async def command_environment(
     cwd: Path,
     workspace_root: Path,
     clone: Path,
+    host: HostCalls,
 ) -> AsyncIterator[None]:
     """Run the AI CLI turns of one command execution in one microVM.
 
@@ -218,6 +226,9 @@ async def command_environment(
         clone: The running member's clone, where a turn works on its tickets
             and chats; unless the command is read-only, made on the host
             before the microVM boots when absent, and mounted read-write.
+        host: The command's grant, which answers what its microVM asks of
+            the host (:meth:`_SharedEnvironment.window`), in the command's
+            context; a command run inside another is answered by that one's.
 
     Raises:
         CommandError: If the settings the contract is read from are invalid
@@ -243,6 +254,7 @@ async def command_environment(
         clone=clone,
     )
     token = _COMMAND.set(shared)
+    shared.serve(host)
     try:
         yield
     finally:
@@ -293,6 +305,13 @@ def current_command_access() -> CommandAccess:
     """
     shared = _COMMAND.get()
     return shared.access if shared is not None else CommandAccess()
+
+
+def command_lease() -> PersonExecutionLease | None:
+    """The execution lease the running command's turns hold: none for a
+    read-only command, which changes nothing and so runs while the member is
+    busy."""
+    return None if current_command_access().read_only else current_person_lease()
 
 
 def current_command_contract() -> AccessContract | None:
@@ -491,6 +510,26 @@ class _SharedEnvironment:
             raise
         return TurnEnvironment(environment, spec, self._broker, end)
 
+    def serve(self, host: HostCalls) -> None:
+        """Answer what the microVM asks of the host with ``host``, in the
+        context the command runs in now."""
+        self._broker.serve(host, contextvars.copy_context())
+
+    async def window(self) -> MemberBrokerEndpoint:
+        """Where the microVM reaches the command's window to the host.
+
+        Raises:
+            AgentRuntimeError: ``process`` when the broker does not start.
+        """
+        try:
+            await self._broker.start()
+        except MemberCapabilityBrokerError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.PROCESS,
+                "Could not start the trusted member capability broker.",
+            ) from exc
+        return self._broker.endpoint
+
     async def _boot(self, where: LoginEnvironment) -> AgentEnvironment:
         """Boot the microVM able to run every tool the member is configured
         with, whatever of them the first turn runs: one member's slots can
@@ -559,6 +598,9 @@ class _SharedEnvironment:
         Its working directory must be inside what the microVM mounted of the
         command's contract: the deepest mount it is under is one of the
         contract's, backed by the host or the microVM's own working directory.
+        On the host, where the turn's member commands run, it must still be
+        there, as the turn starts, once the links a turn could have made are
+        followed.
         """
         assert self._environment is not None
         spec = self._environment.spec
@@ -576,6 +618,10 @@ class _SharedEnvironment:
             mount is None
             or mount in self._binds
             or (mount.host is None and mount.guest != spec.cwd)
+            or (
+                mount.host is not None
+                and not context.cwd.resolve().is_relative_to(mount.host.resolve())
+            )
         ):
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.CONFIGURATION,
@@ -618,9 +664,11 @@ class _SharedEnvironment:
                 await asyncio.wait_for(relay.kill(), _RELAY_SECONDS)
 
     async def close(self) -> None:
-        """Close the command's adapters, discard the microVM, then stop the
-        gateways and the broker; the stand-ins open nothing once the microVM
-        is gone. Idempotent."""
+        """Stop answering the microVM's calls, once those being answered
+        end, then close the command's adapters, discard the microVM, and stop
+        the gateways and the broker; the stand-ins open nothing once the
+        microVM is gone. Idempotent."""
+        await self._broker.settle()
         adapters, self.adapters = list(self.adapters.values()), {}
         environment, self._environment = self._environment, None
         try:

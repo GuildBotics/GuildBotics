@@ -7,12 +7,15 @@ from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import environment
+from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+from guildbotics.intelligences.agent_runtime.member_broker import HostCalls
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 
 
@@ -22,10 +25,12 @@ def command_at(
     access: CommandAccess = CommandAccess(),
     *,
     person_id: str = "aiko",
+    host: HostCalls | None = None,
 ) -> AbstractAsyncContextManager[None]:
     """The environment of a command of ``person_id``, configured with
     ``tools`` and declaring ``access``, working in ``cwd`` of the test's
-    workspace."""
+    workspace, whose microVM's calls ``host`` answers (a grant for a run of
+    its own, recording nowhere, by default)."""
     workspace_root = get_workspace_root()
     return environment.command_environment(
         access,
@@ -33,6 +38,10 @@ def command_at(
         cwd=cwd,
         workspace_root=workspace_root,
         clone=get_member_clone_path(person_id, workspace_root),
+        host=host
+        or HostWindow(
+            person_id, "turn", "", workspace_root=workspace_root, ledger=Mock()
+        ),
     )
 
 

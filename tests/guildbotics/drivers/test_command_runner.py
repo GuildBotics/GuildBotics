@@ -167,6 +167,9 @@ async def test_the_command_is_the_span_its_turns_share_an_environment_in(
             self.tools = tools
             self.where = where
 
+        def serve(self, host) -> None:
+            self.host = host
+
         async def close(self) -> None:
             closed.append(self)
 
@@ -256,6 +259,10 @@ async def test_a_command_started_inside_another_shares_its_environment(
         def __init__(self, access, contract, tools, **_where) -> None:
             self.access = access
             self.tools = tools
+            self.served: list[object] = []
+
+        def serve(self, host) -> None:
+            self.served.append(host)
 
         async def close(self) -> None:
             closed.append(self)
@@ -291,6 +298,8 @@ async def test_a_command_started_inside_another_shares_its_environment(
     else:
         await run_in_environment(_runner_for(spec))
         assert len(seen) == 2 and seen[0] is seen[1]
+    # The outer command's grant answers for the inner one too.
+    assert len(seen[0].served) == 1
     assert closed == seen[:1]
     assert environment._COMMAND.get() is None
 
@@ -365,9 +374,12 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
     from guildbotics.runtime.workflow_invocation import (
         TICKET_WORKFLOW_COMMAND,
         WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
     )
 
-    invocation = object()
+    invocation = WorkflowInvocation(
+        TICKET_WORKFLOW_COMMAND, "aiko", source, "ticket", {"run_id": "run-1"}
+    )
     selected: list[str] = []
 
     class FakeRunner:
@@ -593,3 +605,66 @@ def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):
 
     with pytest.raises(WorkspaceNotConfiguredError):
         ledger.require_completion("run-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trigger", "payload", "traced", "run_id", "work_kind"),
+    [
+        ("ticket", {"run_id": "ticket-run"}, True, "ticket-run", "ticket"),
+        ("chat", {"run_id": "chat-run"}, True, "chat-run", "chat"),
+        ("scheduled", {"run_id": "ignored"}, True, "trace", ""),
+        (None, {}, True, "trace", ""),
+        (None, {}, False, None, ""),
+    ],
+)
+async def test_the_run_is_granted_for_its_member_and_run(
+    monkeypatch, trigger, payload, traced, run_id, work_kind
+):
+    """What its microVM asks of the host is answered for the member it runs
+    as and the run it records to: its workflow run's, or else one of its own
+    -- its trace's, or a fresh one outside any."""
+    from guildbotics.drivers.command_runner import run_in_environment
+    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+    from guildbotics.observability import trace_scope
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
+
+    served: list[HostWindow] = []
+
+    class Shared:
+        def __init__(self, access, contract, tools, **_where) -> None:
+            self.access = access
+            self.tools = tools
+
+        def serve(self, host) -> None:
+            served.append(host)
+
+        async def close(self) -> None:
+            pass
+
+    class Quiet(DummyCommand):
+        @staticmethod
+        def populate_spec(*_):
+            pass
+
+    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
+    spec = _main_spec()
+    spec.command_class = Quiet
+    runner = _runner_for(spec)
+    if trigger is not None:
+        runner.context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
+            "workflows/x", "aiko", "routine", trigger, payload
+        )
+    if traced:
+        with trace_scope("scheduler", trace_id="trace"):
+            await run_in_environment(runner)
+    else:
+        await run_in_environment(runner)
+
+    [grant] = served
+    assert (grant._person_id, grant._work_kind) == ("aiko", work_kind)
+    assert grant._run_id == run_id if run_id else len(grant._run_id) == 32

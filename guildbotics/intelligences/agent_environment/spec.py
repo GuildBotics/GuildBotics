@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from logging import getLogger
-from pathlib import Path, PurePath, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from zoneinfo import ZoneInfo
 
 from tzlocal import get_localzone_name, reload_localzone
@@ -243,6 +243,28 @@ def guest_path(path: PurePath) -> str:
             f"'{path}' is a network path and cannot be mounted"
         )
     return "/".join(("", drive[0].lower(), *path.parts[1:]))
+
+
+def host_path(guest: str) -> Path:
+    """The host path :func:`guest_path` spells as ``guest``.
+
+    The guest is not trusted to spell it: only an absolute path written the
+    way :func:`guest_path` writes one is read, never one that climbs out of
+    where it seems to be.
+
+    Raises:
+        AgentEnvironmentSpecError: When ``guest`` is not such a path, or on
+            Windows names no drive.
+    """
+    path = PurePosixPath(guest)
+    if not path.is_absolute() or path.as_posix() != guest or ".." in path.parts:
+        raise AgentEnvironmentSpecError(f"'{guest}' is not a normalized absolute path")
+    if not isinstance(Path(), PureWindowsPath):
+        return Path(path)
+    drive, *rest = path.parts[1:] or ("",)
+    if len(drive) != 1 or not drive.isalpha():
+        raise AgentEnvironmentSpecError(f"'{guest}' names no drive")
+    return Path(f"{drive.upper()}:\\", *rest)
 
 
 def _mounts(
