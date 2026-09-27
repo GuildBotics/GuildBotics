@@ -9,13 +9,13 @@ import { readStackContext } from "./stack-context";
 //
 // The "configured" harness pre-seeds a temp workspace (project + one active
 // member). This journey opens the command editor, creates a new Markdown
-// command, edits its source, saves-and-runs it through the REAL
-// `/commands/files` + `/commands/run` endpoints, then asserts the edited source
-// reached disk and the run output + trace records surface in the result area,
-// and finally deletes the command so the file leaves the workspace again.
+// command, edits and saves its source through the REAL `/commands/files`
+// endpoints, asserts the edited source reached disk, and finally deletes the
+// command so the file leaves the workspace again.
 //
-// A `brain: none` Markdown command is deterministic (no LLM / GitHub), so the
-// rendered body is echoed back as the run output.
+// Every command runs in the isolated agent environment, which this stack's
+// device cannot hold (see start-stack.mjs): the command's requirements, read
+// from the REAL backend, refuse the run before it starts, and say why.
 
 // Every line starts at column 0 on purpose: the editor keeps the previous
 // line's indentation when Enter is typed, so an indented block (such as a
@@ -24,7 +24,9 @@ import { readStackContext } from "./stack-context";
 // its default `optional` policy, which the run does not need to fill in.
 const SOURCE = ["---", "name: E2E note", "brain: none", "---", "E2E marker body"].join("\n");
 
-test("creates, edits, saves and runs a shared command", async ({ page }) => {
+test("creates, edits and saves a shared command, and says why it cannot run here", async ({
+  page,
+}) => {
   const ctx = readStackContext("configured");
 
   await page.goto("/#/commands");
@@ -85,18 +87,10 @@ test("creates, edits, saves and runs a shared command", async ({ page }) => {
   const storedImage = join(ctx.homeDir, "Documents", "GuildBotics", "tmp", session, name);
   expect(readFileSync(storedImage, "utf-8")).toBe("e2e-image");
 
-  // Save-and-run against the REAL backend.
-  const run = page.getByRole("button", { name: "Save and run" });
-  await expect(run).toBeEnabled({ timeout: 30_000 });
-  await run.click();
-
-  // The result area reaches a terminal success state driven by the real
-  // command.started / command.finished websocket frames.
-  await expect(page.getByText("Success")).toBeVisible({ timeout: 30_000 });
-
-  // The output tab echoes the rendered body (no LLM).
-  const output = page.locator("pre.command-output").first();
-  await expect(output).toContainText("E2E marker body", { timeout: 30_000 });
+  // The run is refused on this device, in the words the environment's
+  // status gives.
+  await expect(page.getByText(/^Isolated environment: .+/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Save and run" })).toBeDisabled();
 
   // The edited source actually reached disk, byte for byte: an editor that
   // reformats what was typed (auto-indent, bracket closing) would break the

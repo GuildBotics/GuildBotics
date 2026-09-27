@@ -38,7 +38,10 @@ from starlette.responses import JSONResponse, Response
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
-from guildbotics.intelligences.agent_runtime.host_client import HostCallError
+from guildbotics.intelligences.agent_runtime.host_client import (
+    MEMBER_BROKER_TOKEN_ENV,
+    HostCallError,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
@@ -55,7 +58,6 @@ _MAX_STDIN_BYTES = 2 * 1024 * 1024
 _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_OUTPUT_BYTES = STREAM_READ_LIMIT
 _COMMAND_TIMEOUT_SECONDS = 300.0
-MEMBER_BROKER_TOKEN_ENV = "GUILDBOTICS_MEMBER_BROKER_TOKEN"
 #: The names a request's Host header may give this server: loopback, and the
 #: alias the agent environment reaches the host by.
 _ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", GUEST_HOST_ALIAS)
@@ -63,15 +65,6 @@ _ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", GUEST_HOST_ALIAS)
 #: What answers the command's calls: the call's name and its arguments, to
 #: its JSON result. It raises :class:`HostCallError` for a call it refuses.
 HostCalls = Callable[[str, dict[str, Any]], Coroutine[Any, Any, Any]]
-
-_MEMBER_TOOL_INSTRUCTION = """<guildbotics_member_transport>
-A trusted MCP tool named `guildbotics_member` is available. Use it for every
-command documented as `guildbotics member ...`; never run those commands in the
-terminal. Pass the exact CLI tokens after `member` as `arguments`, without shell
-quoting. For any command documented with `--content-file`, pass `--content-stdin`
-instead and put the exact UTF-8 content in the tool's `stdin` field. Set
-`turn_grant` to `{turn_grant}`. This grant is valid only for this turn.
-</guildbotics_member_transport>"""
 
 
 class MemberCapabilityBrokerError(RuntimeError):
@@ -171,31 +164,11 @@ class MemberCapabilityBroker:
         )
 
     @property
-    def mcp_server(self) -> dict[str, Any]:
-        """Return the ACP HTTP MCP server descriptor for this broker.
-
-        The provider reads it inside the agent environment, so the broker is
-        named the way the guest reaches it.
-        """
-        endpoint = self.endpoint
-        return {
-            "type": "http",
-            "name": endpoint.name,
-            "url": endpoint.guest_url,
-            "headers": [{"name": "Authorization", "value": endpoint.authorization}],
-        }
-
-    @property
     def turn_grant(self) -> str:
         """Return the opaque grant required by calls in the active turn."""
         if not self._turn_grant:
             raise RuntimeError("Member capability broker has no active turn.")
         return self._turn_grant
-
-    def prompt(self, prompt: str) -> str:
-        """Prepend the common member-tool contract for the active turn."""
-        instruction = _MEMBER_TOOL_INSTRUCTION.format(turn_grant=self.turn_grant)
-        return f"{instruction}\n\n{prompt}"
 
     def provider_environment(self) -> dict[str, str]:
         """Return the bearer token source required by provider MCP clients."""
@@ -395,10 +368,15 @@ class MemberCapabilityBroker:
         except Exception as exc:
             raise HostCallError("failed", str(exc) or type(exc).__name__) from exc
 
-    async def settle(self) -> None:
+    async def settle(self, *, abandon: bool = False) -> None:
         """Stop answering the command's calls, and wait for those being
-        answered: each runs to its end, before what it uses is closed."""
+        answered: each runs to its end, before what it uses is closed --
+        or, ``abandon``, is stopped first, for a command no longer there to
+        read what it asked for."""
         self._host = None
+        if abandon:
+            for call in self._calls:
+                call.cancel()
         await asyncio.gather(*self._calls, return_exceptions=True)
 
     async def close(self) -> None:

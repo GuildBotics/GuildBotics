@@ -14,15 +14,6 @@ import secrets
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import (
-    start_probe_environment,
-    start_turn_environment,
-)
-from guildbotics.intelligences.agent_runtime.member_broker import (
-    MemberCapabilityBroker,
-)
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
     AgentEvent,
@@ -39,6 +30,11 @@ from guildbotics.intelligences.agent_runtime.provider_process import (
     StreamJsonAdapter,
     StreamJsonProcess,
     turn_deadline,
+)
+from guildbotics.intelligences.agent_runtime.turn import (
+    TurnBroker,
+    TurnError,
+    start_turn,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -135,9 +131,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        self._environment = environment = await start_turn_environment(
-            context, "antigravity"
-        )
+        self._environment = environment = await start_turn(context, "antigravity")
         prompt = environment.broker.prompt(prompt)
         prompt_bytes = len(prompt.encode())
         if prompt_bytes > _MAX_PROMPT_BYTES:
@@ -156,7 +150,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
                 f"{mcp_workspace}/.agents/mcp_config.json",
                 _mcp_config(environment.broker),
             )
-        except AgentEnvironmentError as exc:
+        except TurnError as exc:
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
                 f"Could not start Antigravity: {exc}",
@@ -169,7 +163,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
             "--output-format",
             "stream-json",
             _WORKSPACE_FLAG,
-            guest_path(context.cwd),
+            str(context.cwd),
             "--dangerously-skip-permissions",
             "--print-timeout",
             f"{int(self._timeout)}s",
@@ -192,7 +186,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
                 mcp_workspace,
                 limit=STREAM_READ_LIMIT,
             )
-        except AgentEnvironmentError as exc:
+        except TurnError as exc:
             await self._close_environment()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
@@ -235,7 +229,7 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
             await output.finish()
             try:
                 log_tail = _log_tail(await environment.read_file(log_file))
-            except AgentEnvironmentError:
+            except TurnError:
                 log_tail = ""
             await self._close_environment()
             self._process = None
@@ -325,29 +319,33 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         return requested, rejected
 
     async def _models(self) -> frozenset[str]:
-        """The model ids ``agy models`` offers, empty when it cannot be read."""
+        """The model ids ``agy models`` offers, empty when it cannot be read.
+
+        It is asked in the turn itself, with the turn's login, before the
+        turn's own process starts.
+        """
         if self._model_catalog_read:
             return self._model_catalog
         self._model_catalog_read = True
+        assert self._environment is not None
         try:
-            environment = await start_probe_environment("antigravity")
-        except AgentRuntimeError as exc:
-            _LOGGER.warning("Could not read the Antigravity model catalog: %s", exc)
-            return self._model_catalog
-        try:
-            process = await environment.run(
+            process = await self._environment.run(
                 self._executable, "models", limit=STREAM_READ_LIMIT
             )
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(), timeout=_MODELS_TIMEOUT_SECONDS
-            )
-        except (AgentEnvironmentError, TimeoutError) as exc:
+        except TurnError as exc:
             # Validation is a convenience; a catalog we cannot read must not
             # stop the turn.
             _LOGGER.warning("Could not read the Antigravity model catalog: %s", exc)
             return self._model_catalog
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(), timeout=_MODELS_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            _LOGGER.warning("Could not read the Antigravity model catalog: %s", exc)
+            return self._model_catalog
         finally:
-            await environment.close()
+            await process.kill()
         if process.returncode != 0:
             return self._model_catalog
         # Each line is a model id, then a tab and the model's label.
@@ -578,15 +576,14 @@ def _step_id(step: dict[str, Any]) -> str:
     return f"step-{index}" if index is not None else ""
 
 
-def _mcp_config(broker: MemberCapabilityBroker) -> bytes:
+def _mcp_config(broker: TurnBroker) -> bytes:
     """The only MCP configuration the turn's workspace contributes: the broker."""
-    endpoint = broker.endpoint
     payload = json.dumps(
         {
             "mcpServers": {
-                endpoint.name: {
-                    "serverUrl": endpoint.guest_url,
-                    "headers": {"Authorization": endpoint.authorization},
+                broker.name: {
+                    "serverUrl": broker.url,
+                    "headers": {"Authorization": broker.authorization},
                 }
             }
         },

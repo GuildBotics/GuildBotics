@@ -10,7 +10,6 @@ from guildbotics.capabilities.chat_selection import (
     ChatAttempt,
     ChatBatch,
     ChatSelector,
-    ChatTurn,
 )
 from guildbotics.capabilities.task_runs import RunStore, chat_event_work_identity
 from guildbotics.capabilities.workflow_completion_events import (
@@ -37,7 +36,7 @@ from guildbotics.integrations.chat_state_store import (
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.observability import trace_scope
 from guildbotics.runtime.context import Context
-from guildbotics.runtime.workflow_invocation import WorkflowInvocation
+from guildbotics.runtime.workflow_invocation import ChatTurn, WorkflowInvocation
 from guildbotics.utils.timestamps import parse_iso_datetime
 
 _SECOND_ATTEMPT = 2

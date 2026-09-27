@@ -45,7 +45,6 @@ def _record(
         person_id="aiko",
         run_id="run-1",
         cwd=Path("."),
-        workspace_data_root=Path("."),
         conversation_key=key,
     )
     with pytest.MonkeyPatch.context() as patch:
@@ -276,7 +275,6 @@ def test_failed_event_candidates_are_bounded(recorded: list[dict[str, Any]]) -> 
         person_id="aiko",
         run_id="run-1",
         cwd=Path("."),
-        workspace_data_root=Path("."),
         conversation_key=key,
     )
     diagnostics.record_network_egress_candidates(
@@ -302,7 +300,6 @@ def test_a_provider_destination_is_a_candidate_unless_its_turn_opens_it(
         person_id="aiko",
         run_id="run-1",
         cwd=Path("."),
-        workspace_data_root=Path("."),
         conversation_key=key,
     )
     diagnostics.record_network_egress_candidates(

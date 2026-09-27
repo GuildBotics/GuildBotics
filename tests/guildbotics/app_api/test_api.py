@@ -59,7 +59,7 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_state_store import ChannelCursorState
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.usage import (
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     CliAgentUsageSnapshot,
     CliAgentUsageWindow,
 )
@@ -567,8 +567,8 @@ def test_app_runtime_command_options_describe_workspace_commands(
     assert option.description == "Run a demo workflow."
     assert option.category == "workflow"
     assert [argument.name for argument in option.arguments] == ["title", "dry_run"]
-    assert option.requirements[0].kind == "github"
-    assert option.requirements[0].satisfied is False
+    requirements = {req.kind: req.satisfied for req in option.requirements}
+    assert requirements == {"environment": True, "github": False}
 
 
 def test_app_runtime_command_options_exclude_template_commands(
@@ -678,6 +678,7 @@ def test_app_runtime_command_options_propagate_nested_requirements(
 
     assert {requirement.kind for requirement in nested.requirements} == {
         "cli_agent",
+        "environment",
         "llm",
     }
 
@@ -747,10 +748,14 @@ def test_app_runtime_command_options_resolve_brain_mapping_requirements(
         option.command: option for option in runtime.get_command_options().options
     }
 
-    assert {req.kind for req in options["edit"].requirements} == {"cli_agent"}
-    assert {req.kind for req in options["inline-edit"].requirements} == {"cli_agent"}
-    assert {req.kind for req in options["legacy-cli"].requirements} == {"llm"}
-    assert {req.kind for req in options["inline-legacy-cli"].requirements} == {"llm"}
+    kinds = {
+        command: {req.kind for req in option.requirements} - {"environment"}
+        for command, option in options.items()
+    }
+    assert kinds["edit"] == {"cli_agent"}
+    assert kinds["inline-edit"] == {"cli_agent"}
+    assert kinds["legacy-cli"] == {"llm"}
+    assert kinds["inline-legacy-cli"] == {"llm"}
 
 
 def test_app_runtime_command_options_extract_markdown_arguments(
@@ -1218,10 +1223,10 @@ async def test_app_runtime_cli_agent_usage_reads_the_named_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from guildbotics.intelligences.agent_runtime import usage as usage_module
-    from guildbotics.intelligences.agent_runtime.usage import (
+    from guildbotics.intelligences.agent_runtime.usage_snapshots import (
         CliAgentUsageSnapshot,
     )
-    from guildbotics.intelligences.agent_runtime.usage import (
+    from guildbotics.intelligences.agent_runtime.usage_snapshots import (
         CliAgentUsageWindow as UsageWindow,
     )
 

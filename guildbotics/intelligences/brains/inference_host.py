@@ -97,7 +97,7 @@ class DirectInference:
                     "llm",
                     config.name,
                     status,
-                    started=started,
+                    duration_ms=(time.monotonic() - started) * 1000,
                     attributes={"model.slot": config.name},
                     model=model,
                     effort=effort,

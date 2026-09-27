@@ -8,7 +8,6 @@ import pytest
 
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers import task_scheduler
-from guildbotics.drivers.command_runner import HostRunLedger
 from guildbotics.drivers.task_scheduler import TaskScheduler
 from guildbotics.drivers.workflow_dispatcher import WorkflowDispatcher
 from guildbotics.entities.task import Task
@@ -17,6 +16,7 @@ from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
+from tests.guildbotics.command_environment_doubles import runs_as
 
 
 @pytest.fixture(autouse=True)
@@ -92,21 +92,19 @@ def test_workflow_invocation_dataclass():
 @pytest.mark.asyncio
 async def test_workflow_dispatcher_dispatch(monkeypatch):
     ran = []
-    ledgers = []
 
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             ran.append((context, command, args))
-            ledgers.append(ledger)
 
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
 
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")  # type: ignore[arg-type]
@@ -130,7 +128,6 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
     assert command == "workflows/chat_conversation_workflow"
     assert args == []
     # The workflow's completion-managed turn reports to the host's record.
-    assert [type(ledger) for ledger in ledgers] == [HostRunLedger]
 
     # Check context shared state injections
     assert ctx_used.shared_state[WORKFLOW_INVOCATION_KEY] == inv
@@ -475,7 +472,7 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
 
@@ -484,7 +481,7 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
             seen["trace_id"] = t.trace_id if t else None
             seen["attributes"] = dict(t.attributes) if t else {}
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")
     inv = WorkflowInvocation(
@@ -513,14 +510,14 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
 
         async def run(self):
             seen["trace"] = current_trace()
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")
     inv = WorkflowInvocation(

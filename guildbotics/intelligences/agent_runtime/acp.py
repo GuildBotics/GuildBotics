@@ -16,17 +16,11 @@ from contextlib import suppress
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     CLIENT_INFO,
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
     RpcError,
-)
-from guildbotics.intelligences.agent_runtime.member_broker import (
-    MemberCapabilityBroker,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -44,6 +38,11 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.provider_process import (
     JsonRpcAdapter,
     turn_deadline,
+)
+from guildbotics.intelligences.agent_runtime.turn import (
+    TurnBroker,
+    TurnError,
+    start_turn,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -162,7 +161,7 @@ class AcpAdapterBase(JsonRpcAdapter):
         self._turn_rate_limit: dict[str, Any] = {}
 
     @property
-    def _member_broker(self) -> MemberCapabilityBroker:
+    def _member_broker(self) -> TurnBroker:
         """The member broker, bound to the running turn."""
         assert self._environment is not None
         return self._environment.broker
@@ -311,12 +310,12 @@ class AcpAdapterBase(JsonRpcAdapter):
     ) -> None:
         if self._transport.process is not None:
             await self.close()
-        self._environment = await start_turn_environment(context, self.tool_name)
+        self._environment = await start_turn(context, self.tool_name)
         try:
             process = await self._environment.run(
                 *self._launch_argv(context), limit=STREAM_READ_LIMIT
             )
-        except AgentEnvironmentError as exc:
+        except TurnError as exc:
             await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
@@ -401,7 +400,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                     await self._transport.request(
                         "session/new",
                         {
-                            "cwd": guest_path(context.cwd),
+                            "cwd": str(context.cwd),
                             "mcpServers": self._mcp_servers(context),
                         },
                     )
@@ -425,7 +424,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                     method,
                     {
                         "sessionId": session_id,
-                        "cwd": guest_path(context.cwd),
+                        "cwd": str(context.cwd),
                         "mcpServers": self._mcp_servers(context),
                     },
                 )

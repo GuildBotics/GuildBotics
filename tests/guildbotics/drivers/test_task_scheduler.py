@@ -12,6 +12,7 @@ from guildbotics.entities.task import Task
 from guildbotics.observability import current_trace
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
 from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.command_environment_doubles import runs_as
 
 EXPECTED_ROUTINE_CALL_COUNT = 2
 
@@ -210,11 +211,15 @@ def test_routine_ticket_patrol_selects_outside_any_trace_or_tracked_work(
 
 
 @pytest.mark.parametrize("setting", ["building", "filesystem"])
-def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
+@pytest.mark.parametrize("routine", ["workflows/ticket_driven_workflow", "routine"])
+def test_a_routine_is_deferred_while_the_environment_is_unavailable(
     monkeypatch,
     setting,
+    routine,
 ) -> None:
-    person = _Person(["workflows/ticket_driven_workflow"])
+    """Every command runs in the environment, so a routine that is no ticket
+    patrol waits for it too."""
+    person = _Person([routine])
     warnings: list[str] = []
     context = _Context(person)
     context.logger.warning = warnings.append  # type: ignore[method-assign]
@@ -227,7 +232,12 @@ def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
         dispatched.append(command)
         return True
 
+    async def fake_run_command(context, command, task_type) -> bool:
+        dispatched.append(command)
+        return True
+
     monkeypatch.setattr(scheduler, "_patrol_tickets", fake_patrol)
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
     reason = (
         t("intelligences.agent_environment.filesystem.macos_documents", app="")
         if setting == "filesystem"
@@ -255,7 +265,43 @@ def test_ticket_patrol_is_deferred_while_the_environment_is_unavailable(
     assert (errors, should_stop) == (0, False)
     assert next_at is not None
     # Said once, not once per patrol.
-    assert warnings == [f"AI CLI work is deferred on this device: {reason}"]
+    assert warnings == [f"Work is deferred on this device: {reason}"]
+
+
+def test_a_scheduled_command_waits_for_the_environment_and_runs_once_it_is_ready(
+    monkeypatch,
+) -> None:
+    """A scheduled command is not due while the device cannot run it, and
+    runs when it can: its slot is kept, not failed nor dropped."""
+    person = _Person()
+    scheduler = TaskScheduler(_Context(person), consecutive_error_limit=1)
+    ran: list[str] = []
+
+    async def fake_run_command(context, command, task_type) -> bool:
+        ran.append(command)
+        return True
+
+    monkeypatch.setattr(task_scheduler, "run_command", fake_run_command)
+    monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
+    due = SimpleNamespace(command="report", should_run=lambda now: True)
+    loop = asyncio.new_event_loop()
+    try:
+        _set_environment_refusal(monkeypatch, "no runtime")
+        waiting = scheduler._process_scheduled_tasks(
+            loop, _Context(person), person, [due], dt.datetime.now(), 0
+        )
+        ran_while_waiting = list(ran)
+        _set_environment_refusal(monkeypatch, "")
+        ready = scheduler._process_scheduled_tasks(
+            loop, _Context(person), person, [due], dt.datetime.now(), 0
+        )
+    finally:
+        loop.close()
+
+    assert waiting == (0, False)
+    assert ran_while_waiting == []
+    assert ready == (0, False)
+    assert ran == ["report"]
 
 
 @pytest.mark.asyncio
@@ -613,7 +659,7 @@ class _FailingRunner:
 
     access = CommandAccess()
 
-    def __init__(self, context, name, args, cwd, *, ledger) -> None:
+    def __init__(self, context, name, args, cwd) -> None:
         self.cwd = cwd
         self.context = context
         self.command_name = name
@@ -642,10 +688,8 @@ def _run_scheduler_slot(scheduler: TaskScheduler, source: str) -> tuple[int, boo
 
 @pytest.mark.parametrize("source", ["scheduled", "routine"])
 def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> None:
-    from guildbotics.drivers import command_runner
-
     scheduler = TaskScheduler(_Context(_Person()))
-    monkeypatch.setattr(command_runner, "CommandRunner", _FailingRunner)
+    runs_as(monkeypatch, _FailingRunner)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     assert _run_scheduler_slot(scheduler, source) == (1, False)
@@ -659,8 +703,6 @@ def test_failed_scheduler_command_is_recorded_as_failed(monkeypatch, source) -> 
 def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
     monkeypatch,
 ) -> None:
-    from guildbotics.drivers import command_runner
-
     scheduler = TaskScheduler(_Context(_Person()))
 
     class _StoppedRunner(_FailingRunner):
@@ -669,7 +711,7 @@ def test_force_stopped_scheduler_command_is_recorded_as_cancelled(
             await asyncio.sleep(30)
             return ""
 
-    monkeypatch.setattr(command_runner, "CommandRunner", _StoppedRunner)
+    runs_as(monkeypatch, _StoppedRunner)
     monkeypatch.setattr(scheduler, "_sleep_interruptible", lambda seconds: None)
 
     # A stop is not a command error, so the worker does not count it.

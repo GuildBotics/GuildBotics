@@ -10,7 +10,6 @@ from guildbotics.capabilities import chat_selection
 from guildbotics.capabilities.chat_selection import (
     ChatAttempt,
     ChatSelector,
-    ChatTurn,
 )
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.commands.metadata import CommandAccess
@@ -40,10 +39,12 @@ from guildbotics.observability import trace_scope
 from guildbotics.runtime.event_listener import IncomingChatEvent
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
+    ChatTurn,
     WorkflowInvocation,
 )
 from guildbotics.templates.commands.workflows import chat_conversation_workflow
 from guildbotics.utils.i18n_tool import t
+from tests.guildbotics.command_environment_doubles import runs_as
 
 _WORKFLOW = "workflows/chat_conversation_workflow"
 
@@ -1786,14 +1787,14 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
     class Runner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.cwd = cwd
             self.context = context
 
         async def run(self):
             await chat_conversation_workflow.main(self.context)
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", Runner)
+    runs_as(monkeypatch, Runner)
     dispatcher = PendingChatDispatcher(
         Parent(), state_store=store, execution_coordinator=ExecutionCoordinator()
     )

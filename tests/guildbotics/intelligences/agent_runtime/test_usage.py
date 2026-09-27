@@ -9,19 +9,22 @@ from typing import Any
 import pytest
 
 from guildbotics.intelligences.agent_runtime import usage as usage_module
+from guildbotics.intelligences.agent_runtime import usage_snapshots
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
-    parse_antigravity_usage,
-    parse_claude_usage,
-    parse_codex_rate_limits,
-    parse_copilot_quota,
-    parse_grok_billing,
     read_antigravity_usage,
     read_claude_usage,
     read_codex_usage,
     read_copilot_usage,
     read_grok_usage,
+)
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    parse_antigravity_usage,
+    parse_claude_usage,
+    parse_codex_rate_limits,
+    parse_copilot_quota,
+    parse_grok_billing,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -1293,9 +1296,9 @@ async def test_usage_recovery_clears_authentication_on_usage_or_explicit_limit(
     async def read():
         if outcome == "error":
             raise CliAgentUsageError("connection failed")
-        return usage_module.CliAgentUsageSnapshot(
+        return usage_snapshots.CliAgentUsageSnapshot(
             agent=name,
-            windows=[usage_module.CliAgentUsageWindow("primary", 12)]
+            windows=[usage_snapshots.CliAgentUsageWindow("primary", 12)]
             if outcome == "windows"
             else [],
             limit_reached=outcome == "limit",

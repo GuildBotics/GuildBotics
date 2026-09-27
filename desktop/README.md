@@ -107,14 +107,14 @@ npm run e2e
 
 `npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
-| spec                      | journey                                                                                                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `e2e/setup.spec.ts`       | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み                                                                                                                                   |
-| `e2e/service.spec.ts`     | ③ scheduler / events を start → running → stop                                                                                                                                                |
-| `e2e/commands.spec.ts`    | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタント Drawer の開閉、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
-| `e2e/members.spec.ts`     | ② member 追加 → `person.yml` 実永続                                                                                                                                                           |
-| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                               |
-| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                               |
+| spec                      | journey                                                                                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `e2e/setup.spec.ts`       | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み                                                                                                                                                                          |
+| `e2e/service.spec.ts`     | ③ scheduler / events を start → running → stop                                                                                                                                                                                       |
+| `e2e/commands.spec.ts`    | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタント Drawer の開閉、自力作成 → source 編集 → 保存（`/commands/files`）→ 実 file 反映。隔離環境を持てないこのスタックの端末では、要件「隔離環境」が理由つきで実行を止める |
+| `e2e/members.spec.ts`     | ② member 追加 → `person.yml` 実永続                                                                                                                                                                                                  |
+| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                                                                      |
+| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                                                                      |
 
 補足:
 

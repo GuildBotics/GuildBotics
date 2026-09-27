@@ -91,7 +91,6 @@ class AgentExecutionContext:
     person_id: str
     run_id: str
     cwd: Path
-    workspace_data_root: Path
     conversation_key: ConversationKey
     resume_policy: ResumePolicy = ResumePolicy.AUTO
     context_cursor: str = ""

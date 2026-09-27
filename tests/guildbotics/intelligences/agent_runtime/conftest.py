@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-
 from guildbotics.intelligences.agent_runtime import (
     acp,
     antigravity,
@@ -14,9 +13,13 @@ from guildbotics.intelligences.agent_runtime import (
     codex,
     usage,
 )
+from guildbotics.intelligences.agent_runtime.host_client import (
+    MEMBER_BROKER_TOKEN_ENV,
+)
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
 )
+from guildbotics.intelligences.agent_runtime.turn import TurnBroker, TurnError
 from guildbotics.intelligences.cli_agents import cli_agent_info
 
 
@@ -35,10 +38,10 @@ def _adapter_member_broker_without_socket(request, monkeypatch) -> None:
 
 
 class FakeEnvironment:
-    """Stands in for a turn's environment: what the adapter asked to start,
-    the member broker bound to the turn, the files written into it, and the
-    process the test scripted, started through ``asyncio``'s
-    ``create_subprocess_exec`` so a test's own fake process is what runs."""
+    """Stands in for a turn: what the adapter asked to start, the member
+    broker bound to the turn, the files written for it, and the process the
+    test scripted, started through ``asyncio``'s ``create_subprocess_exec`` so
+    a test's own fake process is what runs."""
 
     started: list[FakeEnvironment] = []
 
@@ -48,14 +51,17 @@ class FakeEnvironment:
         self.commands: list[tuple[str, ...]] = []
         self.files: dict[str, bytes] = {}
         self.closed = False
-        self.broker = MemberCapabilityBroker()
+        self.broker = TurnBroker(
+            name="guildbotics-member-test",
+            url="http://host.microsandbox.internal:43123/mcp",
+            authorization="Bearer member-token",
+            turn_grant="turn-grant",
+        )
         FakeEnvironment.started.append(self)
 
     @classmethod
     async def start(cls, context: Any, tool: str, **kwargs: Any) -> FakeEnvironment:
-        environment = cls(tool, {"context": context, **kwargs})
-        await environment.broker.activate(context)
-        return environment
+        return cls(tool, {"context": context, **kwargs})
 
     @property
     def spec(self) -> Any:
@@ -71,7 +77,7 @@ class FakeEnvironment:
             if broker is not None
             else {}
         )
-        return type("Spec", (), {"cwd": cwd, "home": home, "mounts": (), "env": env})()
+        return type("Spec", (), {"cwd": cwd, "home": home, "mounts": {}, "env": env})()
 
     async def run(self, command: str, *args: str, limit: int) -> Any:
         self.commands.append((command, *args))
@@ -86,12 +92,15 @@ class FakeEnvironment:
                 limit=limit,
                 cwd=str(context.cwd) if context is not None else self.spec.home,
                 env={
-                    **self.broker.provider_environment(),
+                    MEMBER_BROKER_TOKEN_ENV: "member-token",
                     **(self.kwargs.get("env") or {}),
                 },
             )
         except OSError as exc:
-            raise AgentEnvironmentError(str(exc)) from exc
+            # A probe runs in an environment of its own on the host; a turn's
+            # process in the command's.
+            error = AgentEnvironmentError if self.kwargs.get("probe") else TurnError
+            raise error(str(exc)) from exc
         return _ProcessInEnvironment(process)
 
     async def write_file(self, path: str, data: bytes) -> None:
@@ -101,7 +110,6 @@ class FakeEnvironment:
         return self.files.get(path)
 
     async def close(self) -> None:
-        await self.broker.deactivate()
         self.closed = True
 
 
@@ -168,10 +176,9 @@ def fake_environment(request, monkeypatch) -> type[FakeEnvironment]:
         return FakeEnvironment
 
     async def start_probe(tool: str) -> FakeEnvironment:
-        return FakeEnvironment(tool, {})
+        return FakeEnvironment(tool, {"probe": True})
 
     for module in (codex, acp, claude, antigravity):
-        monkeypatch.setattr(module, "start_turn_environment", FakeEnvironment.start)
-    for module in (usage, antigravity):
-        monkeypatch.setattr(module, "start_probe_environment", start_probe)
+        monkeypatch.setattr(module, "start_turn", FakeEnvironment.start)
+    monkeypatch.setattr(usage, "start_probe_environment", start_probe)
     return FakeEnvironment

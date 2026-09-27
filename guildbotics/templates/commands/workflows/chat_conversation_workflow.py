@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from guildbotics.capabilities.chat_selection import ChatTurn
-from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
-from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
+from guildbotics.utils.fileio import get_member_clone_path
 from guildbotics.utils.i18n_tool import t
 
 _IN_DISPATCH_COMPLETION_ATTEMPTS = 2
@@ -55,7 +54,6 @@ async def main(context: Any) -> None:
         member_workspace=str(member_workspace),
         agent_execution_context={
             "run_id": turn.run_id,
-            "workspace_data_root": str(get_workspace_root()),
             "work_kind": "chat",
             "work_identity": turn.work_identity,
             "resume_policy": "auto",

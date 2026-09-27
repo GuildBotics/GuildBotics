@@ -18,6 +18,9 @@ from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from tests.git_seed import WorkerGitSeed
+from tests.guildbotics.command_environment_doubles import (  # noqa: F401
+    commands_in_process,
+)
 from tests.windows_shards import (
     WINDOWS_SHARDS,
     verify_windows_shards,

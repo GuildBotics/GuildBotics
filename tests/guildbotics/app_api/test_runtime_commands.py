@@ -45,12 +45,10 @@ from guildbotics.commands.errors import (
 )
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers.command_runner import run_main_command
 from guildbotics.drivers.execution import WorkRejectedError
 from guildbotics.entities import Person, Project, Team
 from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_runtime.environment import current_command_access
 from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
@@ -68,6 +66,10 @@ from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
     ScriptedAgent,
 )
+
+#: The commands the host starts run in this process.
+pytestmark = pytest.mark.usefixtures("commands_in_process")
+
 
 HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
@@ -486,7 +488,7 @@ def test_command_options_detect_github_and_slack_requirements(
     )
     requirements = {req.kind: req for req in option.requirements}
 
-    assert set(requirements) == {"github", "slack"}
+    assert set(requirements) == {"environment", "github", "slack"}
     # github_enabled context -> github requirement is satisfied.
     assert requirements["github"].satisfied is True
     assert requirements["github"].message == ""
@@ -515,18 +517,26 @@ def test_command_options_detect_llm_and_cli_requirements(
 
     options = {item.command: item for item in runtime.get_command_options().options}
 
-    assert {req.kind for req in options["llm_task"].requirements} == {"llm"}
-    assert {req.kind for req in options["cli_task"].requirements} == {"cli_agent"}
-    assert options["static"].requirements == []
+    # Every command runs in the isolated environment, whatever else it needs.
+    assert {req.kind for req in options["llm_task"].requirements} == {
+        "environment",
+        "llm",
+    }
+    assert {req.kind for req in options["cli_task"].requirements} == {
+        "cli_agent",
+        "environment",
+    }
+    assert [req.kind for req in options["static"].requirements] == ["environment"]
 
 
 def test_cli_requirement_asks_the_environment_about_the_commands_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
 ) -> None:
     """The tool runs inside the isolated environment: a host PATH without it
-    meets the requirement, and when the environment cannot start the tool the
-    command's brain runs, its refusal is the reason. The device is read once
-    per listing, however many commands need it."""
+    meets the requirement, and when the tool the command's brain runs cannot
+    start a turn there, the tool's refusal is the reason. What the device
+    refuses is the environment requirement's to say, for every command. The
+    device is read once per listing, however many commands need it."""
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     monkeypatch.setenv("PATH", "")
     for name in ("first", "second"):
@@ -547,29 +557,33 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
     monkeypatch.setattr(runtime_module, "device_status", counted)
     runtime = _runtime_with_context(monkeypatch, _make_context([_make_person()]))
 
-    def requirements() -> dict[str, tuple[bool, str]]:
+    def requirements(kind: str) -> dict[str, tuple[bool, str]]:
         return {
-            option.command: (
-                option.requirements[0].satisfied,
-                option.requirements[0].message,
+            option.command: next(
+                (requirement.satisfied, requirement.message)
+                for requirement in option.requirements
+                if requirement.kind == kind
             )
             for option in runtime.get_command_options().options
             if option.command in {"first", "second", "scripted"}
         }
 
     met = (True, "")
-    assert requirements() == {"first": met, "second": met, "scripted": met}
+    everything = {"first": met, "second": met, "scripted": met}
+    assert requirements("cli_agent") == everything
     assert len(reads) == 1
+    assert requirements("environment") == everything
 
     # The template maps the `agent` brain to codex; a Python command names no
-    # tool, so only the device can refuse it here.
+    # tool, so no tool refuses it here.
     agent_environment.log_out("codex")
     logged_out = (False, agent_environment().tool("codex").refusal)
-    assert requirements() == {
+    assert requirements("cli_agent") == {
         "first": logged_out,
         "second": logged_out,
         "scripted": met,
     }
+    assert requirements("environment") == everything
 
     # A slot this member does not have names no tool; the turn says why.
     _write(
@@ -579,11 +593,16 @@ def test_cli_requirement_asks_the_environment_about_the_commands_tool(
         "  args:\n"
         "    cli_agent: missing\n",
     )
-    assert requirements() == {"first": met, "second": met, "scripted": met}
+    assert requirements("cli_agent") == everything
 
     agent_environment.refuse("no hypervisor")
     refused = (False, "no hypervisor")
-    assert requirements() == {"first": refused, "second": refused, "scripted": refused}
+    assert requirements("environment") == {
+        "first": refused,
+        "second": refused,
+        "scripted": refused,
+    }
+    assert requirements("cli_agent") == everything
 
 
 def test_command_options_ignore_invalid_metadata_without_crashing(
@@ -603,8 +622,9 @@ def test_command_options_ignore_invalid_metadata_without_crashing(
     options = {item.command: item for item in runtime.get_command_options().options}
 
     assert "ok" in options
-    # Invalid files are still listed but yield empty metadata / no requirements.
-    assert options["broken"].requirements == []
+    # Invalid files are still listed but yield empty metadata and need only
+    # what every command does.
+    assert [req.kind for req in options["broken"].requirements] == ["environment"]
     assert options["broken"].arguments == []
 
 
@@ -2387,7 +2407,7 @@ async def test_only_a_writing_command_takes_the_manual_command_slot(
 
 @pytest.mark.asyncio
 async def test_the_run_is_the_command_its_slot_was_decided_on(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, commands_in_process: list[Any]
 ) -> None:
     """The declaration is read once: an edit after the run was decided on
     changes neither the access its turns get nor how it is tracked."""
@@ -2408,21 +2428,15 @@ async def test_the_run_is_the_command_its_slot_was_decided_on(
 
     monkeypatch.setattr(runtime._execution, "track_work", record_exclusive)
     monkeypatch.setattr(runtime_module, "run_main_command", edited_meanwhile)
-    seen: list[CommandAccess] = []
-    original = CommandRunner._run_with_children
-
-    async def run_with_children(self: CommandRunner, *args: Any) -> Any:
-        # What every turn of the run would be held to.
-        seen.append(current_command_access())
-        return await original(self, *args)
-
-    monkeypatch.setattr(CommandRunner, "_run_with_children", run_with_children)
 
     await runtime.run_command(CommandRunRequest(command="look"))
 
-    # What the run declared -- the access its turns are held to -- is what its
-    # slot and its tracking were decided on. (The body is read when it runs.)
-    assert seen == [CommandAccess(read_only=True)]
+    # What the run declared -- the access its environment is held to -- is
+    # what its slot and its tracking were decided on. (The body is read when
+    # it runs.)
+    assert [command.access for command in commands_in_process] == [
+        CommandAccess(read_only=True)
+    ]
     assert exclusivity == [False]
 
 

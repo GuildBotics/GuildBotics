@@ -15,7 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
@@ -233,7 +232,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         resume_policy=ResumePolicy.AUTO,
         **overrides,
@@ -272,7 +270,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     assert result.provider_turn_id == ""
     assert result.finish_reason == "completed"
     assert peer.methods()[:3] == ["initialize", "authenticate", "session/new"]
-    assert peer.sent("session/new")["params"]["cwd"] == guest_path(tmp_path)
+    assert peer.sent("session/new")["params"]["cwd"] == str(tmp_path)
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
@@ -1611,20 +1609,3 @@ async def test_disabled_resume_without_load_session_is_unsupported(
         await _run(GrokAcpAdapter(), tmp_path)
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.UNSUPPORTED_VERSION
-
-
-@pytest.mark.asyncio
-async def test_the_session_names_the_working_directory_as_the_guest_spells_it(
-    monkeypatch, tmp_path
-) -> None:
-    """``session/new`` names the directory inside the environment (``/c/...``
-    on Windows), never the host's own spelling."""
-    monkeypatch.setattr(
-        acp_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
-    )
-    peer = _Peer(updates=[text_chunk("ok")])
-    install(monkeypatch, peer)
-
-    await _run(GrokAcpAdapter(), tmp_path)
-
-    assert peer.sent("session/new")["params"]["cwd"] == f"/guest{tmp_path.as_posix()}"

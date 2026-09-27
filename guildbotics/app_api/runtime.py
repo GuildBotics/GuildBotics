@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import cached_property, partial
 from pathlib import Path
@@ -131,12 +131,12 @@ from guildbotics.commands.metadata import (
     parse_command_input_policy,
 )
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
 )
 from guildbotics.drivers.command_runner import (
+    PreparedCommand,
     host_command_cwd,
     prepare_command,
     run_main_command,
@@ -917,12 +917,15 @@ class AppRuntime:
             # and the run itself all go by this runner. A command that cannot be
             # resolved never ran, so it leaves no trace.
             try:
-                runner = prepare_command(
-                    context,
-                    execution.command,
-                    execution.args,
-                    acting.person_id,
-                    execution.cwd(),
+                runner = replace(
+                    prepare_command(
+                        context,
+                        execution.command,
+                        execution.args,
+                        acting.person_id,
+                        execution.cwd(),
+                    ),
+                    result_type=execution.result_type,
                 )
             except CommandError as exc:
                 raise execution.failure(exc) from exc
@@ -1020,7 +1023,7 @@ class AppRuntime:
             ) from exc
 
     async def _run_command_traced(
-        self, execution: _Execution, runner: CommandRunner
+        self, execution: _Execution, runner: PreparedCommand
     ) -> CommandOutcome:
         # This opens the run's trace, so it is the only layer that can say the
         # whole run started and ended. Events carry the resolved person so an
@@ -1036,13 +1039,6 @@ class AppRuntime:
                 outcome = await run_main_command(runner, source="manual")
             finally:
                 await runner.context.aclose()
-            if execution.result_type is not None and not isinstance(
-                outcome.result, execution.result_type
-            ):
-                raise CommandError(
-                    f"Command '{execution.command}' did not return a "
-                    f"{execution.result_type.__name__}."
-                )
         except BaseException as exc:
             # Cancellation lands here as well: a force stop cancels this task,
             # and the run it started has to be reported as ended either way.
@@ -2028,7 +2024,11 @@ def _command_requirements(
     facts: _RequirementFacts,
     context: Context,
 ) -> list[CommandRequirement]:
-    needs = _command_requirement_kinds(path, metadata, context, set())
+    # Every command runs in the isolated environment, whatever else it needs.
+    needs = {
+        ("environment", ""),
+        *_command_requirement_kinds(path, metadata, context, set()),
+    }
     requirements: list[CommandRequirement] = []
     for kind in sorted({kind for kind, _ in needs}):
         unmet = [
@@ -2250,7 +2250,7 @@ def _python_module_requirement_kinds(module: ast.Module) -> set[_Need]:
         kinds.add("llm")
     if names & {"CliAgentBrain"}:
         kinds.add("cli_agent")
-    # A Python command names no tool, so only the device can refuse it here.
+    # A Python command names no tool, so no tool of its own refuses it here.
     return {(kind, "") for kind in kinds}
 
 
@@ -2263,10 +2263,11 @@ _Need = tuple[str, str]
 class _RequirementFacts:
     """What this device has for the requirement kinds, read once per listing.
 
-    An AI CLI tool never runs on the host, so ``cli_agent`` is met when the
-    isolated agent environment can start a turn of the tool, and its refusal
-    is the reason when it cannot. The device is read only when a command
-    needs it.
+    Every command runs in the isolated agent environment, so ``environment``
+    is met when the device can start one, and its refusal is the reason when
+    it cannot. An AI CLI tool runs there too, so ``cli_agent`` is met unless
+    the tool itself cannot start a turn (not logged in), which is the reason
+    then; what the device refuses is the ``environment``'s to say.
     """
 
     github_enabled: bool
@@ -2278,9 +2279,10 @@ class _RequirementFacts:
     def unmet(self, kind: str, tool: str) -> str | None:
         """None when the need is met, else why ("" when there is no reason
         more specific than the kind)."""
+        if kind == "environment":
+            return self.device.refusal or None
         if kind == "cli_agent":
-            refusal = self.device.turn_refusal(tool) if tool else self.device.refusal
-            return refusal or None
+            return (self.device.tool(tool).refusal or None) if tool else None
         return None if self._satisfied(kind) else ""
 
     def _satisfied(self, kind: str) -> bool:

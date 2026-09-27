@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from pydantic import BaseModel
+
 WorkflowSource = Literal[
     "routine",
     "scheduled",
@@ -31,3 +33,20 @@ class WorkflowInvocation:
     trigger_type: WorkflowTriggerType
     payload: dict[str, Any] = field(default_factory=dict)
     idempotency_key: str = ""
+
+
+class ChatTurn(BaseModel):
+    """Everything the chat workflow needs to run one AI CLI turn: the payload
+    of a chat workflow's invocation."""
+
+    run_id: str
+    attempt: int
+    service_name: str
+    channel_id: str
+    thread_ts: str
+    event_id: str
+    message_ts: str
+    work_identity: str
+    context_cursor: str
+    effort: str = ""
+    prompt: dict[str, Any]

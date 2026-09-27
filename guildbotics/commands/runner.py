@@ -1,27 +1,40 @@
 """Run a command and its subcommands.
 
-The execution machinery itself, free of the host: the isolated environment the
-run's AI CLI turns share is opened by the host entry that starts the run
-(``guildbotics.drivers.command_runner``), never here.
+The execution machinery itself, free of the host: it runs inside the
+command's isolated environment, which the host entry that starts the run
+(``guildbotics.drivers.command_runner``) boots, never here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from guildbotics.commands.agent_turn import RunLedger, run_agent_turn
-from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError
-from guildbotics.commands.metadata import command_access
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.runtime.context import Context
 
 
 class CommandRunner:
-    """Coordinate the execution of main and sub commands."""
+    """Coordinate the execution of main and sub commands.
+
+    Args:
+        context: The run's context.
+        command_name: The main command, by the name it was asked for.
+        command_args: Its arguments.
+        cwd: Its working directory, which the host names.
+        path: Its file, as the host resolved it: the main command is never
+            resolved again by name.
+        mounts: Where the environment lets a command work
+            (:func:`~guildbotics.intelligences.agent_runtime.host_client.admits`):
+            a subcommand working anywhere else is refused.
+        ledger: The host's run record, which an invocation driven until its
+            run records completion reads and reports to; without one it is
+            refused.
+    """
 
     def __init__(
         self,
@@ -30,26 +43,22 @@ class CommandRunner:
         command_args: Sequence[str],
         cwd: Path,
         *,
+        path: Path,
+        mounts: Mapping[str, bool],
         ledger: RunLedger | None = None,
     ) -> None:
         context.set_invoker(self._invoke)
-        #: The host's run record, which an invocation driven until its run
-        #: records completion reads and reports to; without one it is refused.
         self._ledger = ledger
         self.context = context
         self.command_name = command_name
         self._command_args = list(command_args)
         self._registry: dict[str, CommandSpec] = {}
         self._call_stack: list[str] = []
-        #: The main command's working directory, which the host names; the
-        #: run's isolated environment works there too.
         self.cwd = cwd
-        self._spec_factory = CommandSpecFactory(context)
-        self._main_spec = self._prepare_main_spec()
-        assert self._main_spec.path is not None
-        #: What the main command declares of its turns' access; every turn of
-        #: the run, its subcommands' included, is held to it.
-        self.access = command_access(self._main_spec.path)
+        self._spec_factory = CommandSpecFactory(context, mounts)
+        self._main_spec = self._spec_factory.prepare_main_spec(
+            path, command_name, self._command_args, cwd
+        )
 
     async def run(self) -> CommandOutcome:
         """Run the command and return the main command's result.
@@ -63,13 +72,6 @@ class CommandRunner:
             result=outcome.result if outcome is not None else None,
             text_output=self.context.pipe,
         )
-
-    def _prepare_main_spec(self) -> CommandSpec:
-        path = resolve_named_command(self.context, self.command_name)
-        spec = self._spec_factory.prepare_main_spec(
-            path, self.command_name, self._command_args, self.cwd
-        )
-        return spec
 
     async def _run_with_children(
         self, spec: CommandSpec, parent: CommandSpec | None = None

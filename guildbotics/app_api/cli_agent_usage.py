@@ -20,8 +20,10 @@ from guildbotics.intelligences.agent_environment.provider_state import has_crede
 from guildbotics.intelligences.agent_runtime.usage import (
     CLI_AGENT_USAGE_READERS,
     CliAgentUsageError,
-    CliAgentUsageSnapshot,
     read_cli_agent_usage,
+)
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    CliAgentUsageSnapshot,
 )
 from guildbotics.intelligences.cli_agents import cli_agent_info
 
