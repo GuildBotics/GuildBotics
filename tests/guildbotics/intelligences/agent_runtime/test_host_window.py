@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
@@ -450,8 +451,9 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
     details = written[1]["payload"]["details"]
     assert TURN_WORKING_DIRECTORY not in details
     assert details["requested_policy"]["read_only"] is True
+    # Spelled as the device spells its paths.
     assert details["requested_policy"]["filesystem"]["working_directory"] == (
-        "<workspace>/repository"
+        f"<workspace>{os.sep}repository"
     )
     # The transcript keeps what its detail says of a response's stderr.
     assert written[2]["payload"]["stderr_truncated"] is True

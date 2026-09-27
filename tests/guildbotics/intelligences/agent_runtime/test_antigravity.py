@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import antigravity as antigravity_module
 from guildbotics.intelligences.agent_runtime.antigravity import (
     _LOG_TAIL_BYTES,
@@ -186,7 +185,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
         index for index, argument in enumerate(run_args) if argument == "--add-dir"
     ]
     assert len(workspace_indexes) == 2
-    assert run_args[workspace_indexes[0] + 1] == guest_path(tmp_path)
+    assert run_args[workspace_indexes[0] + 1] == str(tmp_path)
     assert "--dangerously-skip-permissions" in run_args
     prompt = run_args[run_args.index("--print") + 1]
     assert "never run those commands" in prompt

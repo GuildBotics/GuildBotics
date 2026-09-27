@@ -11,6 +11,7 @@ from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.spec_factory import CommandSpecFactory
 from guildbotics.drivers import command_runner
 from guildbotics.drivers.command_runner import PreparedCommand
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.host_client import (
     CommandFailure,
     CommandReply,
@@ -79,19 +80,20 @@ def _runner(context=None, spec=None, **kwargs):
         )
 
 
-def _prepared(
-    context=None,
-    *,
-    path=Path("/workspace/.guildbotics/config/commands/main.md"),
-    **kwargs,
-):
-    """The host's reading of ``main`` for aiko, working in ``/workspace``."""
+#: Where the host's commands below work, as this OS spells an absolute path,
+#: and the file of ``main`` there.
+_WORK = Path("/workspace").resolve()
+_MAIN = _WORK / ".guildbotics" / "config" / "commands" / "main.md"
+
+
+def _prepared(context=None, *, path=_MAIN, **kwargs):
+    """The host's reading of ``main`` for aiko, working in ``_WORK``."""
     context = context or DummyContext()
     return PreparedCommand(
         context,
         kwargs.pop("command_name", "main"),
         ["x=1"],
-        Path("/workspace"),
+        _WORK,
         path,
         kwargs.pop("access", CommandAccess()),
         **kwargs,
@@ -217,10 +219,7 @@ async def test_invoke_refuses_completion_managed_turns_without_a_ledger(monkeypa
 @pytest.mark.parametrize(
     ("path", "spelled"),
     [
-        (
-            Path("/workspace/.guildbotics/config/commands/main.md"),
-            "/workspace/.guildbotics/config/commands/main.md",
-        ),
+        (_MAIN, guest_path(_MAIN)),
         (
             Path(command_runner.__file__).parents[1] / "templates/commands/ask.md",
             "/opt/guildbotics/code/guildbotics/templates/commands/ask.md",
@@ -258,7 +257,7 @@ async def test_the_command_runs_in_the_environment_booted_for_it(
     workspace_root = get_workspace_root()
     ((opened,), (request,)) = booted.opened, booted.requests
     assert {key: opened[key] for key in ("cwd", "workspace_root", "clone")} == {
-        "cwd": Path("/workspace"),
+        "cwd": _WORK,
         "workspace_root": workspace_root,
         "clone": get_member_clone_path("aiko", workspace_root),
     }
@@ -266,7 +265,7 @@ async def test_the_command_runs_in_the_environment_booted_for_it(
         spelled,
         "main",
         ["x=1"],
-        "/workspace",
+        guest_path(_WORK),
     )
     assert (request.pipe, request.invocation) == (
         "the input",

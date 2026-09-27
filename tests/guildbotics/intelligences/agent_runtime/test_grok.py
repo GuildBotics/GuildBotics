@@ -15,7 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
@@ -271,7 +270,7 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
     assert result.provider_turn_id == ""
     assert result.finish_reason == "completed"
     assert peer.methods()[:3] == ["initialize", "authenticate", "session/new"]
-    assert peer.sent("session/new")["params"]["cwd"] == guest_path(tmp_path)
+    assert peer.sent("session/new")["params"]["cwd"] == str(tmp_path)
     server = peer.sent("session/new")["params"]["mcpServers"][0]
     assert server["type"] == "http"
     assert server["name"].startswith("guildbotics-member-")
