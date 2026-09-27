@@ -946,7 +946,10 @@ async def test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token(
     for name in ("pre-commit", "post-checkout", "pre-push", "reference-transaction"):
         _hook(trap, name, _trap(Path(f"trap-{name}"), marker))
     await member.prepare()
-    member.stage(content="before\n").index.commit("before")
+    # Closed before planting: on Windows, the processes an open repository
+    # keeps hold its directory, which the symlink plant moves.
+    with member.stage(content="before\n") as repo:
+        repo.index.commit("before")
     _PLANTS[plant](member, trap, marker)
     host_git.clear()
 
