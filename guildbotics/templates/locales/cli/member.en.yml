@@ -6,6 +6,8 @@ en:
     file_help: "Read the command's entire free-form content from a UTF-8 file."
     file_not_utf8: "Content file is not valid UTF-8: %{path}"
     file_read_failed: "Could not read content file %{path}: %{error}"
+  path:
+    outside_turn: "'%{path}' is outside the turn's working directory."
   agent:
     help: Manage native agent runtime state.
     conversation_help: Manage persisted native agent conversations.

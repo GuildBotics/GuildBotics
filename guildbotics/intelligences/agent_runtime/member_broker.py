@@ -25,6 +25,7 @@ from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -138,6 +139,8 @@ class MemberCapabilityBroker:
         self._name = f"guildbotics-member-{secrets.token_hex(6)}"
         self._turn_grant = ""
         self._context: AgentExecutionContext | None = None
+        #: Where the active turn works on the host, as it was when it started.
+        self._files: Path | None = None
         self._command_lock = asyncio.Lock()
         self._host: HostCalls | None = None
         self._host_context = contextvars.Context()
@@ -217,6 +220,7 @@ class MemberCapabilityBroker:
             )
         await self.start()
         self._context = context
+        self._files = context.cwd.resolve()
         self._turn_grant = secrets.token_urlsafe(24)
 
     async def start(self) -> None:
@@ -250,6 +254,7 @@ class MemberCapabilityBroker:
         """Revoke command execution after the matching turn finishes."""
         if context is None or self._context is context:
             self._context = None
+            self._files = None
             self._turn_grant = ""
 
     async def execute(
@@ -288,6 +293,7 @@ class MemberCapabilityBroker:
                 participant_labels=context.participant_labels,
                 trace_id=context.trace_id,
                 lease=context.lease,
+                files=self._files,
                 guest=(
                     self._guest.until(time.monotonic() + _COMMAND_TIMEOUT_SECONDS)
                     if self._guest is not None
@@ -384,6 +390,7 @@ class MemberCapabilityBroker:
         """Revoke the token, stop answering the command's calls, and stop the
         loopback server."""
         self._context = None
+        self._files = None
         self._turn_grant = ""
         self._host = None
         server = self._server

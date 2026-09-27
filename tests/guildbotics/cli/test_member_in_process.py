@@ -258,3 +258,64 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in stderr
+
+
+def _outside_the_turn(tmp_path: Path) -> list[list[str]]:
+    """Every way the host would open a file of its own for a turn's command:
+    read one to post, or write an artifact into a directory."""
+    (tmp_path / "secret").write_text("the host's own", encoding="utf-8")
+    (tmp_path / "work" / "link").symlink_to(tmp_path / "secret")
+    content = ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
+    artifact = ["github", "run", "artifact", "download", "--person", "aiko"]
+    artifact += ["--url", "https://github.com/o/r/pull/1", "--name", "n"]
+    return [
+        [*content, "--content-file", str(tmp_path / "secret")],
+        [*content, "--content-file", "../secret"],
+        [*content, "--content-file", "link"],
+        [*artifact, "--dest", str(tmp_path)],
+        [*artifact, "--dest", ".."],
+    ]
+
+
+def test_a_turn_has_the_host_open_only_its_own_files(
+    monkeypatch, tmp_path, symlinks
+) -> None:
+    """Its member commands run on the host, where a path it names could be
+    any of the host's files; it is held to where the turn works, however it
+    is spelled."""
+    _record_git_commit(monkeypatch)
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "message.txt").write_text("the turn's own", encoding="utf-8")
+    turn = MemberInvocation(task_run_id="run-1", files=work.resolve())
+
+    attempts = _outside_the_turn(tmp_path)
+    refused = [_run(arguments, turn, cwd=work) for arguments in attempts]
+    own = _run(
+        ["git", "commit", "--person", "aiko", "--repo-path", str(tmp_path / "repo")]
+        + ["--content-file", "message.txt"],
+        turn,
+        cwd=work,
+    )
+
+    for arguments, (exit_code, stdout, stderr) in zip(attempts, refused, strict=True):
+        assert (exit_code, stdout) == (2, "")
+        assert t("cli.member.path.outside_turn", path=arguments[-1]) in stderr
+    # A clone is only named: member git itself takes the member's alone.
+    assert own[0] == 0
+    assert member_module.json.loads(own[1])["message"] == "the turn's own"
+
+
+def test_outside_a_turn_a_command_opens_what_it_is_named(monkeypatch, tmp_path) -> None:
+    _record_git_commit(monkeypatch)
+    (tmp_path / "message.txt").write_text("the user's own", encoding="utf-8")
+
+    exit_code, stdout, _stderr = _run(
+        ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
+        + ["--content-file", str(tmp_path / "message.txt")],
+        MemberInvocation(task_run_id="run-1"),
+        cwd=tmp_path / "elsewhere",
+    )
+
+    assert exit_code == 0
+    assert member_module.json.loads(stdout)["message"] == "the user's own"

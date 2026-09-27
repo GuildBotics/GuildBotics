@@ -208,15 +208,30 @@ def _call(ctx: click.Context | None = None) -> MemberCall:
 
 
 class _HostPath(click.Path):
-    """A path read from the command's working directory, then checked as usual."""
+    """A path read from the command's working directory, then checked as usual.
 
-    def __init__(self, **kwargs: Any) -> None:
+    A file the host ``opens`` for a turn's command must be the turn's own: it
+    stays where the turn works (:attr:`MemberInvocation.files`) once links are
+    followed, whatever the turn named. One only named, not opened, is checked
+    by what reads it.
+    """
+
+    def __init__(self, *, opens: bool = True, **kwargs: Any) -> None:
         super().__init__(path_type=Path, **kwargs)
+        self._opens = opens
 
     def convert(
         self, value: Any, param: click.Parameter | None, ctx: click.Context | None
     ) -> Any:
-        return super().convert(_call(ctx).cwd / value, param, ctx)
+        path = _call(ctx).cwd / value
+        files = current_member_invocation().files
+        if (
+            self._opens
+            and files is not None
+            and not path.resolve().is_relative_to(files)
+        ):
+            self.fail(t("cli.member.path.outside_turn", path=value), param, ctx)
+        return super().convert(path, param, ctx)
 
 
 def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -1397,7 +1412,8 @@ async def _git_prepare(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    # Only named: member mode takes it only inside the member's clones.
+    type=_HostPath(opens=False),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option
@@ -1451,7 +1467,8 @@ async def _git_commit(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    # Only named: member mode takes it only inside the member's clones.
+    type=_HostPath(opens=False),
     help="Path to the member repository workspace.",
 )
 @_workspace_mode_option
@@ -1496,7 +1513,8 @@ async def _git_push(
 @click.option(
     "--repo-path",
     required=True,
-    type=_HostPath(),
+    # Only named: member mode takes it only inside the member's clones.
+    type=_HostPath(opens=False),
     help="Path to the member repository workspace.",
 )
 @_required_content_stdin_option

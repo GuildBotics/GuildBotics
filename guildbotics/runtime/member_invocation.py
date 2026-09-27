@@ -87,7 +87,10 @@ class MemberInvocation:
     ``lease`` is the execution lease of the turn that asked for the command:
     holding it is what lets a workflow's member command write as that person.
     ``guest`` is the environment of the command that turn belongs to; outside
-    a command there is none.
+    a command there is none. ``files`` is where that turn works on the host,
+    as it was when the turn started: a file the command reads or writes on
+    the host for it stays inside, once links are followed; outside a turn
+    there is no such bound.
     """
 
     run_id: str = ""
@@ -96,6 +99,7 @@ class MemberInvocation:
     trace_id: str = ""
     lease: PersonExecutionLease | None = None
     guest: CommandGuest | None = None
+    files: Path | None = None
 
 
 _current_invocation: ContextVar[MemberInvocation | None] = ContextVar(
