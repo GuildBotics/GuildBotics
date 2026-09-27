@@ -19,7 +19,6 @@ from guildbotics.commands.errors import (
     PersonNotFoundError,
     PersonSelectionRequiredError,
 )
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.intelligences.functions import to_text
@@ -27,11 +26,16 @@ from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import resolve_person
 from guildbotics.utils import local_api
 from guildbotics.utils.local_api import LocalApiEndpoint
+from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
     DummyLoaderFactory,
 )
+
+
+#: The commands the host starts run in this process.
+pytestmark = pytest.mark.usefixtures("commands_in_process")
 
 
 def test_parse_command_spec_with_person():
@@ -510,7 +514,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     )
 
     context = _get_context("initial")
-    executor = CommandRunner(context, "pipeline", ["ARG"], tmp_path)
+    executor = machinery(context, "pipeline", ["ARG"], tmp_path)
     result = (await executor.run()).text_output
 
     runner = executor.context
@@ -561,7 +565,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     script_path.chmod(0o755)
 
     context = _get_context("initial")
-    executor = CommandRunner(context, "shell_driver", ["ARG"], tmp_path)
+    executor = machinery(context, "shell_driver", ["ARG"], tmp_path)
     result = (await executor.run()).text_output
 
     runner = executor.context
@@ -599,7 +603,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     )
 
     context = _get_context()
-    executor = CommandRunner(context, "driver", [], tmp_path)
+    executor = machinery(context, "driver", [], tmp_path)
     await executor.run()
 
     shared = executor.context.shared_state
@@ -652,7 +656,7 @@ async def test_run_command_drives_a_turn_until_the_host_record_completes(
 
     outcome = await run_command(_get_context(), "driver", [], None, tmp_path)
 
-    assert outcome.result == "attempt-2"
+    assert outcome.text_output == "attempt-2"
 
 
 @pytest.mark.asyncio
@@ -668,7 +672,7 @@ async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
         """,
     )
 
-    executor = CommandRunner(_get_context(), "functions/cached", [], tmp_path)
+    executor = machinery(_get_context(), "functions/cached", [], tmp_path)
     result = (await executor.run()).text_output
 
     assert result == "done"
@@ -692,7 +696,7 @@ async def test_python_command_named_like_stdlib_keeps_stdlib_import(
         """,
     )
 
-    executor = CommandRunner(_get_context(), "inspect", [], tmp_path)
+    executor = machinery(_get_context(), "inspect", [], tmp_path)
     outcome = await executor.run()
 
     assert outcome.result != "inspect"
@@ -715,7 +719,7 @@ async def test_python_commands_sharing_a_stem_get_distinct_modules(
 
     names = [
         (
-            await CommandRunner(_get_context(), f"{directory}/tool", [], tmp_path).run()
+            await machinery(_get_context(), f"{directory}/tool", [], tmp_path).run()
         ).result
         for directory in ("alpha", "beta")
     ]
@@ -746,6 +750,6 @@ async def test_python_command_supports_dataclass_with_postponed_annotations(
         """,
     )
 
-    executor = CommandRunner(_get_context(), "record", [], tmp_path)
+    executor = machinery(_get_context(), "record", [], tmp_path)
 
     assert (await executor.run()).text_output == "ok"

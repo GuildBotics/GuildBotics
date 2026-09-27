@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from collections.abc import Mapping
 from contextlib import nullcontext
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,9 @@ from typing import Any
 from pydantic import ValidationError, validate_call
 
 from guildbotics.commands.agent_turn import RunLedger
+from guildbotics.intelligences.agent_environment.provider_state import (
+    record_authentication_outcome,
+)
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
     guest_path,
@@ -45,7 +49,9 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     COMMAND_ENV,
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
+    TURN_WORKING_DIRECTORY,
     CommandFacts,
+    CredentialEntry,
     Entry,
     EventEntry,
     HostCallError,
@@ -63,10 +69,12 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
+from guildbotics.intelligences.brains.span_summary import record_summary
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.observability import bind_span, correlation_fields
 from guildbotics.observability.diagnostics_events import (
+    record_correlated_event,
     record_correlated_io,
-    record_span_summary,
 )
 from guildbotics.observability.session_transcripts import recorded_stderr
 from guildbotics.utils.fileio import (
@@ -147,9 +155,12 @@ class HostWindow:
                 " invalid argument(s).",
             ) from exc
 
-    def variables(self, endpoint: MemberBrokerEndpoint) -> dict[str, str]:
+    def variables(
+        self, endpoint: MemberBrokerEndpoint, mounts: Mapping[str, bool]
+    ) -> dict[str, str]:
         """What the command's microVM is started with to reach this window and
-        know the command, as it spells the workspace."""
+        know the command, as it spells the workspace: its ``mounts`` among it,
+        and whether work may happen under each."""
         access = current_command_access()
         facts = CommandFacts(
             person_id=self._person_id,
@@ -158,6 +169,7 @@ class HostWindow:
             trace_id=str(correlation_fields().get("trace_id") or ""),
             access=access,
             inspected=inspected_directories(access.inspects, self._workspace_root),
+            mounts=dict(mounts),
         )
         return {
             HOST_URL_ENV: endpoint.guest_host_url,
@@ -198,7 +210,6 @@ class HostWindow:
             person_id=self._person_id,
             run_id=run_id,
             cwd=where,
-            workspace_data_root=self._workspace_root,
             conversation_key=ConversationKey(
                 self._person_id, tool, work_kind, work_identity
             ),
@@ -218,11 +229,18 @@ class HostWindow:
             self._turning = False
             raise
         self._turn = (context, turn)
+        endpoint = turn.broker.endpoint
         return {
             "turn_grant": turn.broker.turn_grant,
             "env": turn.spec.env,
             "cwd": turn.spec.cwd,
-            "member_server": turn.broker.mcp_server,
+            "home": turn.spec.home,
+            "mounts": {mount.guest: mount.readonly for mount in turn.spec.mounts},
+            "member": {
+                "name": endpoint.name,
+                "url": endpoint.guest_url,
+                "authorization": endpoint.authorization,
+            },
         }
 
     @validate_call
@@ -233,6 +251,32 @@ class HostWindow:
             turn_grant, self._turn[1].broker.turn_grant
         ):
             raise HostCallError("refused", "No such turn of this command is running.")
+        context = await self._end()
+        return {"refusal": context.login.refusal()}
+
+    async def close(self) -> None:
+        """End the grant with its command. A turn the command left running
+        -- it was stopped mid-turn -- is ended, and its conversation marked
+        unhealthy: the session it was cut short in is not resumed. What
+        could not be marked is logged: the command ends with its own outcome.
+        """
+        if self._turn is None:
+            return
+        context = await self._end()
+        try:
+            record = await asyncio.to_thread(
+                self._conversations.load, context.conversation_key
+            )
+            if record is not None:
+                await asyncio.to_thread(
+                    self._conversations.mark_unhealthy, record, "cancelled"
+                )
+        except Exception:
+            get_logger().exception("Could not mark the cut-short conversation.")
+
+    async def _end(self) -> AgentExecutionContext:
+        """End the running turn, and say which it was."""
+        assert self._turn is not None
         (context, turn), self._turn = self._turn, None
         self._turning = False
         try:
@@ -240,7 +284,7 @@ class HostWindow:
         finally:
             if context.lease is not None:
                 context.lease.unbind_run_id(context.run_id)
-        return {"refusal": context.login.refusal()}
+        return context
 
     @validate_call
     async def require_completion(self, run_id: str) -> None:
@@ -311,11 +355,14 @@ class HostWindow:
 
         Only what a turn records can be written: its events, as the member's
         conversations of the grant's run; its request and response; how its
-        span ended. The event types and attributes are the host's own.
+        span ended; what it proved of a tool's login the command runs. The
+        event types and attributes are the host's own.
         """
         for entry in entries:
             if isinstance(entry, EventEntry):
                 self._check_conversation(entry.conversation)
+            elif isinstance(entry, CredentialEntry):
+                self._check_tool(entry.tool)
         await asyncio.to_thread(self._write, entries)
 
     @validate_call
@@ -376,31 +423,63 @@ class HostWindow:
                             "stderr_truncated": kept != stderr,
                         }
                     record_correlated_io(io_type=entry.io_type, payload=payload)
+                elif isinstance(entry, CredentialEntry):
+                    self._write_credential(entry)
                 else:
-                    record_span_summary(
-                        status=entry.status,
-                        model=entry.model,
-                        effort=entry.effort,
+                    record_summary(
+                        get_logger(),
+                        "cli_agent",
+                        entry.slot,
+                        entry.status,
                         duration_ms=entry.duration_ms,
-                        usage=entry.usage,
                         attributes={
                             "agent.kind": "cli_agent",
                             "agent.slot": entry.slot,
                         },
+                        model=entry.model,
+                        effort=entry.effort,
+                        usage=entry.usage,
                     )
+
+    def _write_credential(self, entry: CredentialEntry) -> None:
+        """Record what a turn proved about its tool's login here.
+
+        All members share the device/tool outcome used by the status card and
+        alerts. Diagnostics retain the member and tool for attribution.
+        """
+        record_authentication_outcome(cli_agent_info(entry.tool), failed=entry.failed)
+        code = "authentication" if entry.failed else ""
+        record_correlated_event(
+            event_type="credential.failed" if entry.failed else "credential.verified",
+            default_source="cli_agent",
+            attributes={
+                "credential.provider": "cli_agent",
+                "credential.cli_agent": entry.tool,
+                **({"error.category": code} if code else {}),
+            },
+            person_id=self._person_id,
+            payload={
+                "provider": "cli_agent",
+                "cli_agent": entry.tool,
+                "person_id": self._person_id,
+                **({"code": code} if code else {}),
+            },
+        )
 
     def _write_event(self, entry: EventEntry) -> None:
         context = AgentExecutionContext(
             person_id=self._person_id,
             run_id=self._run_id,
             cwd=self._workspace_root,
-            workspace_data_root=self._workspace_root,
             conversation_key=entry.conversation,
             context_cursor=entry.context_cursor,
             lease=command_lease(),
         )
+        event = entry.event
+        if TURN_WORKING_DIRECTORY in event.details:
+            event = replace(event, details=self._confinement(event.details))
         record_agent_event(
-            entry.event,
+            event,
             context,
             ConversationRecord(key=entry.conversation, generation=entry.generation),
         )
@@ -417,13 +496,35 @@ class HostWindow:
         ):
             raise HostCallError("refused", "The work is not this command's.")
 
+    def _confinement(self, details: Mapping[str, Any]) -> dict[str, Any]:
+        """An event's details, with where its turn works replaced by what the
+        environment confines it to there, whatever provider runs it.
+
+        Raises:
+            HostCallError: ``refused`` for a working directory that is not a
+                normalized path.
+        """
+        kept = dict(details)
+        try:
+            cwd = host_path(str(kept.pop(TURN_WORKING_DIRECTORY, "")))
+        except AgentEnvironmentSpecError as exc:
+            raise HostCallError("refused", str(exc)) from exc
+        kept["requested_policy"] = running_command().contract.requested_policy(
+            cwd, workspace_root=self._workspace_root
+        )
+        return kept
+
+    def _check_tool(self, tool: str) -> None:
+        """Refuse a tool the command does not run."""
+        if tool not in running_command().tools:
+            raise HostCallError("refused", "The command does not run that tool.")
+
     def _check_conversation(self, key: ConversationKey) -> None:
         """Refuse a conversation not of the member's work of the grant's run
         with a tool the command runs."""
         if key.person_id != self._person_id:
             raise HostCallError("refused", "The conversation is another member's.")
-        if key.adapter not in running_command().tools:
-            raise HostCallError("refused", "The command does not run that tool.")
+        self._check_tool(key.adapter)
         self._check_run(self._run_id, key.work_kind)
 
 

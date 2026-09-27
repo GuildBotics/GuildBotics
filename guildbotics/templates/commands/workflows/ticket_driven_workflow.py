@@ -2,7 +2,7 @@ from typing import Any
 
 from guildbotics.runtime import Context
 from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
-from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
+from guildbotics.utils.fileio import get_member_clone_path
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -76,7 +76,6 @@ async def main(context: Context) -> Any:
         prepare_command=_prepare_command(person_id, ticket_url, pull_request_url),
         agent_execution_context={
             "run_id": turn["run_id"],
-            "workspace_data_root": str(get_workspace_root()),
             "work_kind": "ticket",
             "work_identity": ticket_url,
             "resume_policy": "fresh",

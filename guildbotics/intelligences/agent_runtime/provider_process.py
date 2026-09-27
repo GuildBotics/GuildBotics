@@ -17,8 +17,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import EnvironmentProcess
-from guildbotics.intelligences.agent_runtime.environment import TurnEnvironment
 from guildbotics.intelligences.agent_runtime.jsonrpc import LineJsonRpcTransport
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
@@ -28,6 +26,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationRecord,
     EventSink,
 )
+from guildbotics.intelligences.agent_runtime.turn import ProviderProcess, Turn
 
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
 _PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
@@ -67,13 +66,16 @@ class ProviderAdapter:
     def __init__(self, *, executable: str, timeout: float) -> None:
         self._executable = executable
         self._timeout = timeout
-        self._environment: TurnEnvironment | None = None
+        self._environment: Turn | None = None
 
     async def interrupt(self) -> None:
-        """Stop the running turn: its member broker first, then its provider."""
-        if self._environment is not None:
-            await self._environment.broker.deactivate()
-        await self._stop_provider()
+        """Stop the running turn: end it first, which revokes its member
+        broker grant and its login, then its provider."""
+        try:
+            if self._environment is not None:
+                await self._environment.close()
+        finally:
+            await self._stop_provider()
 
     async def _stop_provider(self) -> None:
         raise NotImplementedError
@@ -95,7 +97,7 @@ class StreamJsonAdapter(ProviderAdapter):
 
     def __init__(self, *, executable: str, timeout: float) -> None:
         super().__init__(executable=executable, timeout=timeout)
-        self._process: EnvironmentProcess | None = None
+        self._process: ProviderProcess | None = None
 
     async def run_turn(
         self,
@@ -182,7 +184,7 @@ class StreamJsonProcess:
     pipe never blocks on it.
     """
 
-    def __init__(self, process: EnvironmentProcess, label: str) -> None:
+    def __init__(self, process: ProviderProcess, label: str) -> None:
         self._process = process
         self._label = label
         self._stderr_task = asyncio.create_task(process.stderr.read())

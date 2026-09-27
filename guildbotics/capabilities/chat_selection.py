@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel
-
 from guildbotics.capabilities.chat_batch import completed_chat_event_ids
 from guildbotics.capabilities.chat_updates import (
     check_chat_updates,
@@ -62,6 +60,7 @@ from guildbotics.intelligences.decisions.assessment import assess
 from guildbotics.intelligences.decisions.models import Selection
 from guildbotics.intelligences.effort import promote_effort
 from guildbotics.runtime.context import Context
+from guildbotics.runtime.workflow_invocation import ChatTurn
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.workspace_sync_port import await_shared_change
 
@@ -81,22 +80,6 @@ class ChatAttempt:
     @property
     def is_final(self) -> bool:
         return self.attempt_count >= self.max_attempts
-
-
-class ChatTurn(BaseModel):
-    """Everything the chat workflow needs to run one AI CLI turn."""
-
-    run_id: str
-    attempt: int
-    service_name: str
-    channel_id: str
-    thread_ts: str
-    event_id: str
-    message_ts: str
-    work_identity: str
-    context_cursor: str
-    effort: str = ""
-    prompt: dict[str, Any]
 
 
 @dataclass

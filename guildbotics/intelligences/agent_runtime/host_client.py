@@ -12,7 +12,9 @@ window (:data:`HOST_URL_ENV`, :data:`HOST_TOKEN_ENV`), what the command is
 (:data:`COMMAND_ENV`, a :class:`CommandFacts`), and the workspace the way the
 environment spells it (``GUILDBOTICS_WORKSPACE_ROOT`` and
 ``GUILDBOTICS_CONFIG_DIR``, read by :mod:`guildbotics.utils.fileio`). They are
-fixed for the command, as its grant is, so none is asked for.
+fixed for the command, as its grant is, so none is asked for. What to run
+reaches it as a :class:`CommandRequest` on the entry's standard input, and
+how it ended leaves as a :class:`CommandReply` on its standard output.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
+from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -41,6 +44,11 @@ HOST_URL_ENV = "GUILDBOTICS_HOST_URL"
 HOST_TOKEN_ENV = "GUILDBOTICS_HOST_TOKEN"
 #: What the command is: a :class:`CommandFacts`, as JSON.
 COMMAND_ENV = "GUILDBOTICS_COMMAND"
+#: The detail of a turn's ``started`` event that says where the turn works;
+#: the host records what the environment confines it to there instead.
+TURN_WORKING_DIRECTORY = "working_directory"
+#: The variable a turn's provider reads the member broker's token from.
+MEMBER_BROKER_TOKEN_ENV = "GUILDBOTICS_MEMBER_BROKER_TOKEN"
 #: How long a call may take: the host gives it as long as a member command,
 #: and answers a call it gave up on.
 _CALL_SECONDS = 330.0
@@ -77,6 +85,8 @@ class CommandFacts:
     kind of work a workflow run does (``ticket`` or ``chat``), empty for any
     other command. ``access`` is what the command declared, and ``inspected``
     the directories its turns inspect, as the environment spells them.
+    ``mounts`` is what the microVM mounted, by where, and whether a command or
+    a turn may work under it (see :func:`admits`).
     """
 
     person_id: str
@@ -85,6 +95,7 @@ class CommandFacts:
     trace_id: str
     access: CommandAccess
     inspected: dict[str, str] = field(default_factory=dict)
+    mounts: dict[str, bool] = field(default_factory=dict)
 
     @classmethod
     def read(cls, environ: Mapping[str, str]) -> CommandFacts:
@@ -94,6 +105,67 @@ class CommandFacts:
     def dump(self) -> str:
         """The facts as :data:`COMMAND_ENV` carries them."""
         return TypeAdapter(CommandFacts).dump_json(self).decode()
+
+
+def admits(mounts: Mapping[str, bool], cwd: str) -> bool:
+    """Whether work may happen in ``cwd``: the deepest of ``mounts`` it is
+    under is one where it may.
+
+    Args:
+        mounts: The microVM's mounts, by where it spells them, and whether
+            work may happen under each: what the command's contract opened
+            may; what GuildBotics bound for itself and the covers over what
+            the contract denies may not.
+        cwd: A directory as the microVM spells it.
+    """
+    path = PurePosixPath(cwd)
+    deepest = max(
+        (guest for guest in mounts if path.is_relative_to(guest)),
+        key=lambda guest: len(PurePosixPath(guest).parts),
+        default=None,
+    )
+    return deepest is not None and mounts[deepest]
+
+
+class CommandRequest(BaseModel):
+    """What the command's environment runs: the main command the host
+    resolved (``path``, as the environment spells it), its arguments, where it
+    works, its input, and the workflow run it is, if any.
+
+    ``wants_result`` asks for the main command's own result besides its text
+    output: only a caller that reads one asks, so a result nobody reads (a
+    PDF's bytes) never crosses.
+    """
+
+    path: str
+    name: str
+    args: list[str]
+    cwd: str
+    pipe: str = ""
+    invocation: dict[str, Any] | None = None
+    wants_result: bool = False
+
+
+class CommandFailure(BaseModel):
+    """How the command failed: ``command`` for a command's own failure (a
+    ``CommandError``), and the AI CLI tool's failure the error came from, if
+    any, as the tool reported it (``cli_agent``, ``message`` and ``result``).
+    """
+
+    command: bool
+    type: str
+    message: str
+    cli_agent: str = ""
+    cli_agent_message: str = ""
+    cli_agent_result: dict[str, Any] | None = None
+
+
+class CommandReply(BaseModel):
+    """How the command ended: its result and text output, or its failure."""
+
+    result: Any = None
+    text_output: str = ""
+    failure: CommandFailure | None = None
 
 
 class EventEntry(BaseModel):
@@ -129,20 +201,35 @@ class SummaryEntry(BaseModel):
     usage: dict[str, int] | None = None
 
 
+class CredentialEntry(BaseModel):
+    """What a turn proved of its tool's login on this device."""
+
+    type: Literal["credential"] = "credential"
+    span: SpanContext | None
+    tool: str
+    failed: bool
+
+
 #: One record the command's environment sends the host to write.
-Entry = Annotated[EventEntry | IoEntry | SummaryEntry, Field(discriminator="type")]
+Entry = Annotated[
+    EventEntry | IoEntry | SummaryEntry | CredentialEntry,
+    Field(discriminator="type"),
+]
 
 
 @dataclass(frozen=True, slots=True)
 class HostTurn:
     """A turn the host started: the grant its member commands carry, the
-    environment and working directory its provider starts with, and the MCP
-    server descriptor of the member broker."""
+    environment, working directory and home its provider starts with, the
+    microVM's mounts (by where, and whether read-only), and the member
+    broker's MCP server (``name``, ``url`` and ``authorization``)."""
 
     turn_grant: str
     env: dict[str, str]
     cwd: str
-    member_server: dict[str, Any]
+    home: str
+    mounts: dict[str, bool]
+    member: dict[str, str]
 
 
 class HostClient:
@@ -208,9 +295,9 @@ class HostClient:
         """End the turn; why the login it was lent could not be used, if so."""
         return str((await self.acall("end_turn", turn_grant=turn_grant))["refusal"])
 
-    def record(self, entries: Sequence[EventEntry | IoEntry | SummaryEntry]) -> None:
+    async def record(self, entries: Sequence[BaseModel]) -> None:
         """Have the host write ``entries``, in order, in the command's trace."""
-        self.call(
+        await self.acall(
             "record", entries=[entry.model_dump(mode="json") for entry in entries]
         )
 

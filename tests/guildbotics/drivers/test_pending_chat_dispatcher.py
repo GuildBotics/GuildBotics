@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from guildbotics.capabilities.chat_selection import ChatAttempt, ChatTurn
+from guildbotics.capabilities.chat_selection import ChatAttempt
 from guildbotics.capabilities.task_runs import RunStore
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.drivers.execution import (
@@ -23,7 +23,8 @@ from guildbotics.intelligences.brains.cli_agent import (
 )
 from guildbotics.observability import current_trace
 from guildbotics.observability.trace_status import resolve_trace_status
-from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY
+from tests.guildbotics.command_environment_doubles import runs_as
+from guildbotics.runtime.workflow_invocation import WORKFLOW_INVOCATION_KEY, ChatTurn
 
 
 class _FakeContext:
@@ -105,7 +106,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
     class _Runner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             self.event_id = _turn(context).event_id
@@ -116,7 +117,7 @@ def _install_runner(monkeypatch, ran, *, fail_events=()):
                 raise RuntimeError("boom")
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _Runner)
+    runs_as(monkeypatch, _Runner)
 
 
 @pytest.mark.asyncio
@@ -131,7 +132,7 @@ async def test_dispatcher_runs_workflow_and_clears_pending(
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             ran.append((context, command, args))
@@ -139,7 +140,7 @@ async def test_dispatcher_runs_workflow_and_clears_pending(
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -174,7 +175,7 @@ async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             self.person_id = context.person.person_id
@@ -183,7 +184,7 @@ async def test_dispatcher_runs_same_chat_event_for_each_member(monkeypatch, tmp_
             ran.append(self.person_id)
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
     dispatcher = PendingChatDispatcher(
         _FakeContext(),  # type: ignore[arg-type]
         state_store=store,
@@ -236,7 +237,7 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
     class _Runner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             self.run_id = _turn(context).run_id
@@ -250,7 +251,7 @@ async def test_dispatcher_finishes_the_run_the_workflow_started(monkeypatch, tmp
             )
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _Runner)
+    runs_as(monkeypatch, _Runner)
     dispatcher = PendingChatDispatcher(
         _FakeContext(),  # type: ignore[arg-type]
         state_store=store,
@@ -274,7 +275,7 @@ async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
     class _Runner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
 
@@ -284,7 +285,7 @@ async def test_dispatcher_tracks_work_under_its_trace_id(monkeypatch, tmp_path):
             seen.append((trace.trace_id if trace else None, [w.id for w in works]))
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _Runner)
+    runs_as(monkeypatch, _Runner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -328,7 +329,7 @@ async def test_dispatch_records_the_trace_boundary_around_the_turn(
     class _Runner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
 
@@ -337,7 +338,7 @@ async def test_dispatch_records_the_trace_boundary_around_the_turn(
             mid_turn.append(resolve_trace_status([*recorded, llm_decision]))
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _Runner)
+    runs_as(monkeypatch, _Runner)
 
     dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
     assert (
@@ -545,14 +546,14 @@ async def test_cancelled_dispatch_records_a_failed_boundary(monkeypatch, tmp_pat
     class _Runner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
 
         async def run(self):
             raise asyncio.CancelledError
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _Runner)
+    runs_as(monkeypatch, _Runner)
 
     dispatcher = PendingChatDispatcher(_FakeContext(), state_store=store)  # type: ignore[arg-type]
     with pytest.raises(asyncio.CancelledError):
@@ -603,7 +604,7 @@ async def test_dispatcher_uses_env_for_initial_retry_budget(
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.cwd = cwd
             self.context = context
             ran.append(context)
@@ -611,7 +612,7 @@ async def test_dispatcher_uses_env_for_initial_retry_budget(
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -631,7 +632,7 @@ async def test_dispatcher_skips_already_processed(monkeypatch, tmp_path):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
             raise AssertionError("should not run an already-processed event")
@@ -639,7 +640,7 @@ async def test_dispatcher_skips_already_processed(monkeypatch, tmp_path):
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -660,16 +661,14 @@ async def test_dispatcher_leaves_event_queued_on_error(monkeypatch, tmp_path):
     class _FailingRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
         async def run(self):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", _FailingRunner
-    )
+    runs_as(monkeypatch, _FailingRunner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -705,7 +704,7 @@ async def test_dispatcher_failure_log_shares_workflow_trace(monkeypatch, tmp_pat
     class _FailingRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
@@ -713,9 +712,7 @@ async def test_dispatcher_failure_log_shares_workflow_trace(monkeypatch, tmp_pat
             workflow_traces.append(current_trace())
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", _FailingRunner
-    )
+    runs_as(monkeypatch, _FailingRunner)
     context = _FakeContext()
     logged = []
     context.logger.warning = lambda *a, **k: logged.append(current_trace())
@@ -746,16 +743,14 @@ async def test_dispatcher_escalates_final_attempt_failure_to_error(
     class _FailingRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
         async def run(self):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", _FailingRunner
-    )
+    runs_as(monkeypatch, _FailingRunner)
     context = _FakeContext()
     logged = []
     context.logger.warning = lambda *a, **k: logged.append(("warning",) + a)
@@ -941,7 +936,7 @@ async def test_dispatcher_uses_provider_exact_rate_limit_reset(monkeypatch, tmp_
     class _RateLimitedRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
@@ -957,10 +952,7 @@ async def test_dispatcher_uses_provider_exact_rate_limit_reset(monkeypatch, tmp_
                 ),
             )
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner",
-        _RateLimitedRunner,
-    )
+    runs_as(monkeypatch, _RateLimitedRunner)
     dispatcher = PendingChatDispatcher(  # type: ignore[arg-type]
         _FakeContext(), state_store=store
     )
@@ -1012,7 +1004,7 @@ async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
             raise AssertionError("future retry should not run")
@@ -1020,7 +1012,7 @@ async def test_dispatcher_skips_future_retry(monkeypatch, tmp_path):
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
+    runs_as(monkeypatch, _FakeRunner)
 
     context = _FakeContext()
     person = Person(person_id="alice", name="A", is_active=True)
@@ -1074,16 +1066,14 @@ async def test_thread_context_unavailable_keeps_event_pending_forever(
     class _UnavailableRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
         async def run(self):
             raise ThreadContextUnavailableError("provider down")
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", _UnavailableRunner
-    )
+    runs_as(monkeypatch, _UnavailableRunner)
     abandoned: list[dict] = []
     monkeypatch.setattr(
         "guildbotics.drivers.pending_chat_dispatcher.record_chat_dispatch_abandoned",
@@ -1152,7 +1142,7 @@ async def test_failed_event_runs_again_once_its_retry_time_arrives(
     class _FailsOnceRunner:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
 
@@ -1162,9 +1152,7 @@ async def test_failed_event_runs_again_once_its_retry_time_arrives(
                 raise RuntimeError("boom")
             return "ok"
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", _FailsOnceRunner
-    )
+    runs_as(monkeypatch, _FailsOnceRunner)
     person = Person(person_id="alice", name="A", is_active=True)
     dispatcher = PendingChatDispatcher(
         _FakeContext(),  # type: ignore[arg-type]
@@ -1242,7 +1230,7 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
     class _NeverRuns:
         access = CommandAccess()
 
-        def __init__(self, context, _command, _args, cwd, *, ledger):
+        def __init__(self, context, _command, _args, cwd):
             self.context = context
             self.cwd = cwd
             raise AssertionError("a completed event must not run again")
@@ -1250,7 +1238,7 @@ async def test_event_completed_elsewhere_is_processed_without_running_again(
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _NeverRuns)
+    runs_as(monkeypatch, _NeverRuns)
     dispatcher = PendingChatDispatcher(
         _FakeContext(),  # type: ignore[arg-type]
         state_store=store,

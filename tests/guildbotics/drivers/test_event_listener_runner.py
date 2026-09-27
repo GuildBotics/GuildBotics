@@ -238,6 +238,7 @@ class _BackfillContext(_FakeContext):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("commands_in_process")
 async def test_pending_dispatcher_runs_real_workflow_via_command_runner(
     monkeypatch, tmp_path
 ):

@@ -38,11 +38,11 @@ from guildbotics.commands.errors import (
     PersonSelectionRequiredError,
 )
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.person_lease import PersonExecutionLease
+from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
@@ -82,7 +82,7 @@ async def _run_main(
 ) -> Context:
     """Run a named command resolved from config_dir and return its context."""
     ctx = _make_context(message)
-    runner = CommandRunner(ctx, name, args or [], cwd=config_dir)
+    runner = machinery(ctx, name, args or [], config_dir)
     await runner.run()
     return ctx
 
@@ -160,7 +160,7 @@ async def test_child_failure_propagates_and_parent_not_executed(config_dir: Path
     )
 
     ctx = _make_context("seed")
-    runner = CommandRunner(ctx, "outer", [], cwd=config_dir)
+    runner = machinery(ctx, "outer", [], config_dir)
 
     with pytest.raises(ValueError, match="child exploded"):
         await runner.run()
@@ -192,7 +192,7 @@ async def test_yaml_invalid_command_entry_raises(config_dir: Path):
     (commands / "bad.yml").write_text("commands:\n  - [1, 2, 3]\n", encoding="utf-8")
 
     ctx = _make_context()
-    runner = CommandRunner(ctx, "bad", [], cwd=config_dir)
+    runner = machinery(ctx, "bad", [], config_dir)
 
     with pytest.raises(CommandError, match="must be a mapping or string"):
         await runner.run()
@@ -228,7 +228,7 @@ async def test_markdown_brain_disabled_renders_placeholders(config_dir: Path):
 
     ctx = _make_context("ignored-pipe")
     ctx.shared_state["name"] = "Ada"
-    runner = CommandRunner(ctx, "render", [], cwd=config_dir)
+    runner = machinery(ctx, "render", [], config_dir)
     await runner.run()
 
     assert ctx.shared_state["render"] == "Name is Ada"
@@ -375,7 +375,7 @@ async def test_relative_spec_cwd_is_relative_to_the_calling_command(
     )
     ctx = _make_context()
 
-    await CommandRunner(ctx, "pwd", [], cwd=tmp_path).run()
+    await machinery(ctx, "pwd", [], tmp_path).run()
 
     assert ctx.shared_state["print_pwd"].strip() == "under-the-command-cwd"
 
@@ -434,7 +434,7 @@ async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
     )
 
     ctx = _make_context()
-    runner = CommandRunner(ctx, "fail", [], cwd=config_dir)
+    runner = machinery(ctx, "fail", [], config_dir)
 
     with pytest.raises(CommandError) as excinfo:
         await runner.run()
@@ -565,6 +565,11 @@ async def test_falls_back_to_common_command_when_no_person_specific(config_dir: 
 # --- run_command person resolution -----------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _in_process(commands_in_process) -> None:
+    """The commands the host starts run in this process."""
+
+
 @pytest.mark.asyncio
 async def test_run_command_requires_person_without_candidates(config_dir: Path):
     """Without a member that can execute commands, selection is required."""
@@ -610,16 +615,10 @@ async def test_run_command_selects_single_active_member(config_dir: Path):
         ctx, "whoami", [], person_identifier=None, cwd=config_dir
     )
 
-    assert outcome.result == outcome.text_output == "alice"
+    assert outcome.text_output == "alice"
 
 
 # --- declared access ------------------------------------------------------
-
-_ACCESS_PROBE = (
-    "from guildbotics.intelligences.agent_runtime.environment import (\n"
-    "    current_command_access,\n"
-    ")\n"
-)
 
 
 @pytest.mark.asyncio
@@ -651,60 +650,7 @@ async def test_a_read_only_command_runs_while_its_member_is_busy(config_dir: Pat
     finally:
         other_run.run(busy.release)
 
-    assert outcome.result == "looked"
-
-
-@pytest.mark.asyncio
-async def test_every_turn_of_a_run_is_held_to_the_main_commands_declaration(
-    config_dir: Path,
-):
-    """A subcommand declares nothing of its own: the run is one isolation."""
-    commands = config_dir / "commands"
-    (commands / "probe.py").write_text(
-        _ACCESS_PROBE
-        + 'COMMAND_METADATA = {"read_only": True, "inspects": ["diagnostics"]}\n\n'
-        "async def main(context):\n"
-        "    child = await context.invoke('child')\n"
-        "    return [current_command_access(), child]\n",
-        encoding="utf-8",
-    )
-    (commands / "child.py").write_text(
-        _ACCESS_PROBE + "\ndef main():\n    return current_command_access()\n",
-        encoding="utf-8",
-    )
-
-    outcome = await run_command(
-        _make_context(), "probe", [], person_identifier=None, cwd=config_dir
-    )
-
-    declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
-    assert outcome.result == [declared, declared]
-
-
-@pytest.mark.asyncio
-async def test_a_command_run_inside_another_cannot_declare_other_access(
-    config_dir: Path,
-):
-    """A writing command run from a read-only one is refused, not widened."""
-    commands = config_dir / "commands"
-    (commands / "nested.py").write_text(
-        "from pathlib import Path\n"
-        "from guildbotics.drivers.command_runner import run_command\n"
-        'COMMAND_METADATA = {"read_only": True}\n\n'
-        "async def main(context):\n"
-        "    return await run_command(\n"
-        f"        context, 'change', [], None, Path({str(config_dir)!r})\n"
-        "    )\n",
-        encoding="utf-8",
-    )
-    (commands / "change.py").write_text(
-        "def main():\n    return 'changed'\n", encoding="utf-8"
-    )
-
-    with pytest.raises(CommandError, match="declares other access"):
-        await run_command(
-            _make_context(), "nested", [], person_identifier=None, cwd=config_dir
-        )
+    assert outcome.text_output == "looked"
 
 
 @pytest.mark.asyncio
@@ -717,25 +663,3 @@ async def test_an_invalid_access_declaration_refuses_the_command(config_dir: Pat
         await run_command(
             _make_context(), "odd", [], person_identifier=None, cwd=config_dir
         )
-
-
-@pytest.mark.asyncio
-async def test_a_subcommands_own_declaration_is_not_consulted(config_dir: Path):
-    """Only the command that was run declares: a read-only subcommand of a
-    command that can write runs as that command's turns do."""
-    commands = config_dir / "commands"
-    (commands / "writer.py").write_text(
-        "async def main(context):\n    return await context.invoke('looker')\n",
-        encoding="utf-8",
-    )
-    (commands / "looker.py").write_text(
-        _ACCESS_PROBE + 'COMMAND_METADATA = {"read_only": True}\n\n'
-        "def main():\n    return current_command_access()\n",
-        encoding="utf-8",
-    )
-
-    outcome = await run_command(
-        _make_context(), "writer", [], person_identifier=None, cwd=config_dir
-    )
-
-    assert outcome.result == CommandAccess()

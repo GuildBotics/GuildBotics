@@ -31,6 +31,7 @@ from guildbotics.integrations.window import (
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
+    host_environment,
     guest_path,
     host_path,
 )
@@ -39,9 +40,12 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     COMMAND_ENV,
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
+    MEMBER_BROKER_TOKEN_ENV,
     ClientConversationStore,
     ClientRunLedger,
     CommandFacts,
+    TURN_WORKING_DIRECTORY,
+    CredentialEntry,
     EventEntry,
     HostCallError,
     HostClient,
@@ -50,7 +54,6 @@ from guildbotics.intelligences.agent_runtime.host_client import (
 )
 from guildbotics.intelligences.agent_runtime.host_window import HostWindow
 from guildbotics.intelligences.agent_runtime.member_broker import (
-    MEMBER_BROKER_TOKEN_ENV,
     MemberCapabilityBroker,
 )
 from guildbotics.intelligences.agent_runtime.models import (
@@ -142,6 +145,7 @@ class _Command:
     ledger: _Ledger
     repository: Path
     trace_id: str
+    grant: HostWindow
 
 
 @asynccontextmanager
@@ -151,13 +155,14 @@ async def _command(
     *tools: str,
     work_kind: str = "",
     access: CommandAccess = CommandAccess(),
+    logins: tuple[str, ...] = (),
 ) -> AsyncIterator[_Command]:
     """A command of aiko in ``repository`` of the test's workspace, running
-    ``tools`` (Claude Code by default, logged in), for the run ``run-1``,
-    in a trace of the scheduler's: its window, and the client its microVM
-    reaches it with."""
+    ``tools`` (Claude Code by default), for the run ``run-1``, in a trace of
+    the scheduler's, on a device where ``logins`` (the tools by default) are
+    logged in: its window, and the client its microVM reaches it with."""
     tools = tools or ("claude",)
-    _device(monkeypatch, tmp_path, *tools)
+    _device(monkeypatch, tmp_path, *(logins or tools))
     ledger = _Ledger()
     repository = get_workspace_root() / "repository"
     grant = HostWindow(
@@ -167,12 +172,13 @@ async def _command(
         "scheduler", person_id="aiko", attributes={"service_run_id": "svc-1"}
     ) as trace:
         async with command_at(repository, tools, access, host=grant):
-            endpoint = await environment.running_command().window()
+            endpoint = environment.running_command().endpoint
             yield _Command(
                 HostClient(endpoint.host_url, endpoint.token),
                 ledger,
                 repository,
                 trace.trace_id,
+                grant,
             )
 
 
@@ -229,7 +235,18 @@ async def test_a_turn_is_lent_its_login_and_what_it_was_refused_comes_back(
             assert lease.metadata.run_id == _RUN
             assert turn.cwd == guest_path(command.repository)
             assert turn.env[MEMBER_BROKER_TOKEN_ENV]
-            assert turn.member_server == broker.mcp_server
+            endpoint = broker.endpoint
+            assert turn.member == {
+                "name": endpoint.name,
+                "url": endpoint.guest_url,
+                "authorization": endpoint.authorization,
+            }
+            # What the provider's own sandbox mirrors of the microVM.
+            (booted,) = _Booted.booted
+            assert turn.home == booted.spec.home
+            assert turn.mounts == {
+                mount.guest: mount.readonly for mount in booted.spec.mounts
+            }
             (base_url,) = {
                 turn.env[name] for name in tool.provision.credential_broker.base_url_env
             }
@@ -272,8 +289,9 @@ async def test_a_turn_the_microvm_was_not_started_for_is_refused(
     lease = PersonExecutionLease("aiko")
     lease.acquire(source="manual", command="test", work_id="work")
     try:
-        async with _command(monkeypatch, tmp_path) as command:
-            _device(monkeypatch, tmp_path, "claude", "codex")
+        async with _command(
+            monkeypatch, tmp_path, logins=("claude", "codex")
+        ) as command:
             elsewhere = tmp_path / "elsewhere"
             with pytest.raises(AgentRuntimeError) as refused:
                 if change == "tool":
@@ -304,9 +322,10 @@ async def test_a_working_directory_is_read_only_as_the_microvm_writes_one(
     async with _command(monkeypatch, tmp_path) as command:
         with pytest.raises(HostCallError) as refused:
             await _begin(command, cwd=cwd)
+        # No turn started: the command's next one may.
+        await command.client.end_turn((await _begin(command)).turn_grant)
 
     assert refused.value.category == "refused"
-    assert _Booted.booted == []
 
 
 @pytest.mark.asyncio
@@ -366,11 +385,17 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
 ):
     """In the trace as the command runs it -- its source and attributes
     included -- and each under the span the microVM opened, in the order sent
-    at once."""
+    at once. Where a turn works becomes what the environment confines it to
+    there, and what it proved of its tool's login is the device's too."""
+    from guildbotics.intelligences.agent_environment import provider_state
+
     span = SpanContext("span-1", "call-1", "parent-1", "cli_agent")
-    async with _command(monkeypatch, tmp_path) as command:
-        await asyncio.to_thread(
-            command.client.record,
+    tool = environment.cli_agent_info("claude")
+    provider_state.record_authentication_outcome(tool, failed=False)
+    async with _command(
+        monkeypatch, tmp_path, access=CommandAccess(read_only=True)
+    ) as command:
+        await command.client.record(
             [
                 IoEntry(
                     span=span, io_type="cli_agent.request", payload={"prompt": "p"}
@@ -380,21 +405,36 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
                     conversation=_key(),
                     generation=2,
                     context_cursor="7",
-                    event=AgentEvent(AgentEventKind.TURN, "started"),
+                    event=AgentEvent(
+                        AgentEventKind.TURN,
+                        "started",
+                        details={
+                            "work_kind": "manual",
+                            TURN_WORKING_DIRECTORY: guest_path(command.repository),
+                        },
+                    ),
                 ),
                 IoEntry(
                     span=span,
                     io_type="cli_agent.response",
                     payload={"stdout": "done", "stderr": "e" * 70_000},
                 ),
-                SummaryEntry(span=span, slot="default", status="finished", model="m"),
-            ],
+                CredentialEntry(span=span, tool="claude", failed=True),
+                SummaryEntry(
+                    span=span,
+                    slot="default",
+                    status="finished",
+                    model="m",
+                    duration_ms=1500,
+                ),
+            ]
         )
 
     assert [(record["kind"], record["type"]) for record in written] == [
         ("io", "cli_agent.request"),
         ("event", "agent_runtime.turn"),
         ("io", "cli_agent.response"),
+        ("event", "credential.failed"),
         ("event", "span.finished"),
     ]
     for record in written:
@@ -407,9 +447,22 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
     assert event["agent.run_id"] == _RUN
     assert event["agent.conversation_id"] == _key().stable_id
     assert event["agent.conversation_generation"] == 2
+    details = written[1]["payload"]["details"]
+    assert TURN_WORKING_DIRECTORY not in details
+    assert details["requested_policy"]["read_only"] is True
+    assert details["requested_policy"]["filesystem"]["working_directory"] == (
+        "<workspace>/repository"
+    )
     # The transcript keeps what its detail says of a response's stderr.
     assert written[2]["payload"]["stderr_truncated"] is True
-    assert written[3]["attributes"]["agent.slot"] == "default"
+    assert written[3]["payload"] == {
+        "provider": "cli_agent",
+        "cli_agent": "claude",
+        "person_id": "aiko",
+        "code": "authentication",
+    }
+    assert provider_state.authentication_failed(tool)
+    assert written[4]["attributes"]["agent.slot"] == "default"
 
 
 @pytest.mark.asyncio
@@ -501,6 +554,33 @@ _OTHERS = {
         "record",
         {"entries": [{"type": "io", "span": None, "io_type": "span.completed"}]},
     ),
+    "a login of a tool the command does not run": (
+        "record",
+        {
+            "entries": [
+                CredentialEntry(span=None, tool="codex", failed=False).model_dump(
+                    mode="json"
+                )
+            ]
+        },
+    ),
+    "a turn starting where no path is": (
+        "record",
+        {
+            "entries": [
+                EventEntry(
+                    span=None,
+                    conversation=_key(),
+                    generation=0,
+                    event=AgentEvent(
+                        AgentEventKind.TURN,
+                        "started",
+                        details={TURN_WORKING_DIRECTORY: "/work/../etc"},
+                    ),
+                ).model_dump(mode="json")
+            ]
+        },
+    ),
     "a call there is not": ("read_file", {"path": "/etc/passwd"}),
     "an argument there is not": ("evidence", {"run_id": _RUN, "path": "/"}),
 }
@@ -515,10 +595,11 @@ async def test_the_grant_covers_its_own_member_run_and_calls_only(
     async with _command(monkeypatch, tmp_path) as command:
         with pytest.raises(HostCallError) as refused:
             await command.client.acall(name, **arguments)
+        started = environment.running_command()._broker._context
 
     assert refused.value.category == "refused"
     assert command.ledger.calls == [] and written == []
-    assert _Booted.booted == []
+    assert started is None
 
 
 @pytest.mark.asyncio
@@ -565,8 +646,14 @@ async def test_the_microvm_is_told_the_command_and_its_window(tmp_path, monkeypa
     (get_workspace_root() / ".guildbotics" / "config").mkdir(parents=True)
     async with _command(monkeypatch, tmp_path, access=access) as command:
         shared = environment.running_command()
-        endpoint = await shared.window()
-        variables = shared._broker._host.variables(endpoint)
+        endpoint = shared.endpoint
+        mounts = shared._mounts
+    (booted,) = _Booted.booted
+    variables = {
+        name: value
+        for name, value in booted.spec.env.items()
+        if name not in host_environment()
+    }
 
     facts = CommandFacts.read(variables)
     assert facts == CommandFacts(
@@ -578,7 +665,12 @@ async def test_the_microvm_is_told_the_command_and_its_window(tmp_path, monkeypa
         inspected=environment.inspected_directories(
             access.inspects, get_workspace_root()
         ),
+        mounts=mounts,
     )
+    # Where the command may work: what its contract opened, never what
+    # GuildBotics bound for itself.
+    assert mounts[guest_path(command.repository)] is True
+    assert mounts[environment.CODE_MOUNT.guest] is False
     assert variables[HOST_URL_ENV] == endpoint.guest_host_url
     assert variables[HOST_TOKEN_ENV] == endpoint.token
     assert variables[GUILDBOTICS_WORKSPACE_ROOT] == guest_path(get_workspace_root())
@@ -674,27 +766,27 @@ async def test_turns_asked_for_at_once_are_refused_but_one(tmp_path, monkeypatch
 async def test_a_call_being_answered_ends_before_the_command_closes_what_it_uses(
     tmp_path, monkeypatch
 ):
-    """A turn still starting when the command ends starts, and its microVM
-    is discarded with the command, not left running beside it."""
-    booting, boot = asyncio.Event(), asyncio.Event()
+    """A turn still starting when the command ends starts before the command
+    closes its microVM, and is not left holding it."""
+    lending, lend = asyncio.Event(), asyncio.Event()
     async with _command(monkeypatch, tmp_path) as command:
-        start = environment._start
+        lent = environment._lend
 
         async def slow(*args: Any, **kwargs: Any) -> Any:
-            booting.set()
-            await boot.wait()
-            return await start(*args, **kwargs)
+            lending.set()
+            await lend.wait()
+            return await lent(*args, **kwargs)
 
-        monkeypatch.setattr(environment, "_start", slow)
+        monkeypatch.setattr(environment, "_lend", slow)
         turn = asyncio.create_task(_begin(command))
-        waiting = asyncio.create_task(booting.wait())
+        waiting = asyncio.create_task(lending.wait())
         await asyncio.wait({turn, waiting}, return_when=asyncio.FIRST_COMPLETED)
         waiting.cancel()
-        assert booting.is_set(), turn.exception()
-        asyncio.get_running_loop().call_later(0.2, boot.set)
+        assert lending.is_set(), turn.exception()
+        [booted] = _Booted.booted
+        asyncio.get_running_loop().call_later(0.2, lend.set)
 
     assert (await turn).turn_grant
-    [booted] = _Booted.booted
     assert booted.closed
     with pytest.raises(HostCallError):
         await command.client.acall("evidence", run_id=_RUN)
@@ -835,7 +927,7 @@ async def test_a_brain_in_the_environment_has_the_host_ask_its_model(
     and records the call under the brain's span, in the command's trace."""
     model = _Model(monkeypatch, {"text": "Tea it is."}, person_id="aiko")
     async with _command(monkeypatch, tmp_path) as command:
-        in_the_environment(await environment.running_command().window())
+        in_the_environment(environment.running_command().endpoint)
         assert not isinstance(inference(), DirectInference)
         brain = SimpleBrainFactory().create_brain(
             "aiko",
@@ -893,7 +985,7 @@ async def test_what_a_template_names_to_load_never_reaches_the_host(
     defines its class, nor the name it is loaded by."""
     _Model(monkeypatch, "{}", person_id="aiko")
     async with _command(monkeypatch, tmp_path):
-        in_the_environment(await environment.running_command().window())
+        in_the_environment(environment.running_command().endpoint)
         brain = SimpleBrainFactory().create_brain(
             "aiko",
             "functions/answer",
@@ -920,7 +1012,7 @@ async def test_jev_is_asked_by_the_host(tmp_path, monkeypatch, in_the_environmen
 
     monkeypatch.setattr(inference_host, "request", request)
     async with _command(monkeypatch, tmp_path):
-        in_the_environment(await environment.running_command().window())
+        in_the_environment(environment.running_command().endpoint)
         brain = JevBrain("aiko", "chat_decision", logging.getLogger("test"))
         result = await brain.run(json.dumps({"state": {"s": 1}, "questions": {}}))
 
@@ -956,7 +1048,7 @@ async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
     failed span."""
     _Model(monkeypatch, RuntimeError("401 key sk-secret"), person_id="aiko")
     async with _command(monkeypatch, tmp_path):
-        in_the_environment(await environment.running_command().window())
+        in_the_environment(environment.running_command().endpoint)
         brain = SimpleBrainFactory().create_brain(
             "aiko", "functions/reply", "en", logging.getLogger("test"), {"body": "Hi."}
         )
@@ -1050,3 +1142,78 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
     assert general == "C9"
     assert str(refused.value).endswith(t("cli.member.lease.invalid_delegation"))
     assert chat.posted == []
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_command_left_running_is_ended_and_not_resumed(
+    tmp_path, monkeypatch
+):
+    """A command stopped mid-turn never ends its turn itself: its grant ends
+    it with the command, and the session it was cut short in is marked so
+    that the next turn of that work starts afresh."""
+    conversations = ConversationStore(get_workspace_root())
+    record = conversations.resolve(_key(), ResumePolicy.AUTO)
+    record.provider_session_id = "session-1"
+    conversations.save(record)
+    lease = PersonExecutionLease("aiko")
+    lease.acquire(source="manual", command="test", work_id="work")
+    try:
+        async with _command(monkeypatch, tmp_path) as command:
+            await _begin(command)
+            assert lease.metadata.run_id == _RUN
+        await command.grant.close()
+        await command.grant.close()
+        run_id = lease.metadata.run_id
+    finally:
+        lease.release()
+
+    saved = conversations.load(_key())
+    assert saved is not None
+    assert (saved.healthy, saved.rotation_reason) == (False, "cancelled")
+    assert run_id == ""
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_that_cannot_be_marked_leaves_the_command_its_end(
+    tmp_path, monkeypatch, caplog
+):
+    """The grant still ends the turn the command left running; what it
+    could not mark of the conversation is logged, not what the command ends
+    with."""
+    async with _command(monkeypatch, tmp_path) as command:
+        await _begin(command)
+
+    def unreadable(*_):
+        raise OSError("the ledger is unreadable")
+
+    monkeypatch.setattr(ConversationStore, "load", unreadable)
+    with caplog.at_level(logging.ERROR, logger="guildbotics"):
+        await command.grant.close()
+
+    assert "the ledger is unreadable" in caplog.text
+    assert command.grant._turn is None
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_did_not_end_well_stops_the_calls_it_made(
+    tmp_path, monkeypatch
+):
+    """What a stopped or failed command asked for is no longer wanted: the
+    calls being answered are stopped rather than waited for."""
+    lending = asyncio.Event()
+
+    async def never(*_args: Any, **_kwargs: Any) -> Any:
+        lending.set()
+        await asyncio.Event().wait()
+
+    turn: asyncio.Task[Any] | None = None
+    with pytest.raises(RuntimeError, match="the command failed"):
+        async with _command(monkeypatch, tmp_path) as command:
+            monkeypatch.setattr(environment, "_lend", never)
+            turn = asyncio.create_task(_begin(command))
+            await asyncio.wait_for(lending.wait(), 5)
+            raise RuntimeError("the command failed")
+
+    assert turn is not None
+    with pytest.raises(HostCallError):
+        await asyncio.wait_for(turn, 5)

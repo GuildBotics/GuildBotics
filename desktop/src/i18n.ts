@@ -1615,6 +1615,11 @@ const resources = {
             title: "LLM check passed",
             description: "The selected LLM provider accepted a minimal request.",
           },
+          agent_environment: {
+            title: "Commands can run in the isolated environment",
+            description:
+              "Every command runs in the isolated agent environment, and this device can start it.",
+          },
           cli_agent_environment: {
             title: "AI CLI tool can start",
             description:
@@ -1691,6 +1696,11 @@ const resources = {
           cli_agent_mapping: {
             title: "Default AI CLI tool could not be determined",
             description: "Review the LLM / AI CLI tool settings.",
+          },
+          agent_environment: {
+            title: "Commands cannot run in the isolated environment",
+            description:
+              "Every command runs in the isolated agent environment, which this device cannot start now. See the reason below.",
           },
           cli_agent_environment: {
             title: "Default AI CLI tool cannot start",
@@ -2035,6 +2045,7 @@ const resources = {
           template: "Built-in",
         },
         requirements: {
+          environment: "Isolated environment",
           github: "GitHub",
           slack: "Slack",
           cli_agent: "AI CLI tool",
@@ -3707,6 +3718,11 @@ const resources = {
             title: "LLM の検証に成功しました",
             description: "選択中の LLM provider が最小リクエストを受け付けました。",
           },
+          agent_environment: {
+            title: "隔離環境でコマンドを実行できます",
+            description:
+              "コマンドはすべて隔離環境の中で動きます。この端末は隔離環境を起動できます。",
+          },
           cli_agent_environment: {
             title: "AI CLIツールを起動できます",
             description: "この端末の隔離環境で既定の AI CLIツールを起動できます。",
@@ -3783,6 +3799,11 @@ const resources = {
           cli_agent_mapping: {
             title: "既定の AI CLIツールを判定できません",
             description: "LLM・AI CLIツール設定を確認してください。",
+          },
+          agent_environment: {
+            title: "隔離環境でコマンドを実行できません",
+            description:
+              "コマンドはすべて隔離環境の中で動きますが、この端末は今は隔離環境を起動できません。理由を確認してください。",
           },
           cli_agent_environment: {
             title: "既定の AI CLIツールを起動できません",
@@ -4134,6 +4155,7 @@ const resources = {
           template: "組み込み",
         },
         requirements: {
+          environment: "隔離環境",
           github: "GitHub",
           slack: "Slack",
           cli_agent: "AI CLIツール",

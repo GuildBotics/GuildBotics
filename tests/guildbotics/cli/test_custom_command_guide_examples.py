@@ -4,16 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from tests.conftest import coverage_suspended
+from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
     DummyIntegrationFactory,
     DummyLoaderFactory,
 )
+
+
+#: The commands the host starts run in this process.
+pytestmark = pytest.mark.usefixtures("commands_in_process")
 
 
 def _write(path: Path, content: str) -> None:
@@ -121,7 +125,7 @@ def test_named_args_placeholders(tmp_path, monkeypatch):
         以下のテキストを${source}から${target}に翻訳してください:
         """,
     )
-    ex2 = CommandRunner(ctx, "translate2", ["source=英語", "target=日本語"], tmp_path)
+    ex2 = machinery(ctx, "translate2", ["source=英語", "target=日本語"], tmp_path)
     out = asyncio.run(ex2.run()).text_output
     assert "英語から日本語に翻訳してください" in out
 
@@ -145,11 +149,11 @@ async def test_jinja2_conditional_rendering(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
-    ex1 = CommandRunner(ctx, "cond", [], tmp_path)
+    ex1 = machinery(ctx, "cond", [], tmp_path)
     out1 = (await ex1.run()).text_output
     assert "以下のテキストを英訳してください:" in out1
 
-    ex2 = CommandRunner(ctx, "cond", ["target=中国語"], tmp_path)
+    ex2 = machinery(ctx, "cond", ["target=中国語"], tmp_path)
     out2 = (await ex2.run()).text_output
     assert "以下のテキストを中国語に翻訳してください:" in out2
 
@@ -182,7 +186,7 @@ async def test_context_variables_in_jinja2(tmp_path, monkeypatch):
         Person(person_id="yuki", name="Yuki", is_active=False),
     ]
     ctx = _make_context("", members)
-    ex = CommandRunner(ctx, "context-info", [], tmp_path)
+    ex = machinery(ctx, "context-info", [], tmp_path)
     with coverage_suspended():
         out = (await ex.run()).text_output
     assert "言語コード: en" in out
@@ -210,7 +214,7 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "summarize", ["file=README.md"], tmp_path)
+    ex = machinery(ctx, "summarize", ["file=README.md"], tmp_path)
     await ex.run()
     result = ex.context.shared_state.get("summarize")
     # DummyBrain returns kwargs; ensure cwd and session_state are provided
@@ -238,7 +242,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "get-time-of-day", [], tmp_path)
+    ex = machinery(ctx, "get-time-of-day", [], tmp_path)
     await ex.run()
     shared = ex.context.shared_state
     assert "current_time" in shared
@@ -275,7 +279,7 @@ async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "greet-time", [], tmp_path)
+    ex = machinery(ctx, "greet-time", [], tmp_path)
     out = (await ex.run()).text_output
     # With DummyBrain, no label; template should fall back to else branch
     assert "こんにちは。" in out
@@ -320,7 +324,7 @@ async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
     script_path.chmod(0o755)
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "echo-args", [], tmp_path)
+    ex = machinery(ctx, "echo-args", [], tmp_path)
     out = (await ex.run()).text_output
     assert "arg1: a" in out
     assert "arg2: b" in out
@@ -340,7 +344,7 @@ async def test_python_command_hello_world(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "hello", [], tmp_path)
+    ex = machinery(ctx, "hello", [], tmp_path)
     out = (await ex.run()).text_output
     assert out.strip() == "Hello, world!"
 
@@ -364,7 +368,7 @@ def main(context: Context, arg1, arg2, key1=None, key2=None):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "hello", ["a", "b", "key1=c", "key2=d"], tmp_path)
+    ex = machinery(ctx, "hello", ["a", "b", "key1=c", "key2=d"], tmp_path)
     out = (await ex.run()).text_output
     assert "arg1: a" in out
     assert "arg2: b" in out
@@ -391,7 +395,7 @@ def main(context: Context, *args, **kwargs):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "hello", ["a", "b", "key1=c", "key2=d"], tmp_path)
+    ex = machinery(ctx, "hello", ["a", "b", "key1=c", "key2=d"], tmp_path)
     out = (await ex.run()).text_output
     assert "arg[0]: a" in out
     assert "arg[1]: b" in out
@@ -430,7 +434,7 @@ async def main(context: Context):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "hello", [], tmp_path)
+    ex = machinery(ctx, "hello", [], tmp_path)
     out = (await ex.run()).text_output
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
@@ -449,7 +453,7 @@ async def test_print_command_basic(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "greet", [], tmp_path)
+    ex = machinery(ctx, "greet", [], tmp_path)
     out = (await ex.run()).text_output
     assert "こんにちは。" in out
 
@@ -480,7 +484,7 @@ async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "greet-time-print", [], tmp_path)
+    ex = machinery(ctx, "greet-time-print", [], tmp_path)
     out = (await ex.run()).text_output
     # With DummyBrain, label is absent; falls to else branch
     assert "こんにちは。" in out
@@ -531,7 +535,7 @@ async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatc
     )
 
     ctx = _make_context("")
-    ex = CommandRunner(ctx, "greet-ext", [], tmp_path)
+    ex = machinery(ctx, "greet-ext", [], tmp_path)
     out = (await ex.run()).text_output
     assert "こんにちは。" in out
     assert "現在の時刻は" in out
@@ -658,7 +662,7 @@ async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
             return _StubBrain(name, config)
 
     ctx.brain_factory = _StubBrainFactory()  # type: ignore[assignment]
-    ex = CommandRunner(ctx, "coverage", [], tmp_path)
+    ex = machinery(ctx, "coverage", [], tmp_path)
     out = (await ex.run()).text_output
     # Verify template expanded schema-defined variables into the final output.
     assert "- [ ] Implement coverage-driven tests (priority: 1)" in out

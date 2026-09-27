@@ -241,6 +241,34 @@ async def _sh(environment: Any, script: str, *, timeout: float = 120) -> str:
     return out.decode(errors="replace") + err.decode(errors="replace")
 
 
+class _Turn:
+    """A turn as its provider's processes see it: they run in the command's
+    microVM, in the turn's working directory and with its environment."""
+
+    def __init__(self, held: turn.TurnEnvironment) -> None:
+        self._held = held
+        self.spec = held.spec
+        self._microvm = turn.running_command()._environment
+
+    async def run(self, *argv: str, limit: int) -> Any:
+        assert self._microvm is not None
+        return await self._microvm.run(
+            *argv, limit=limit, cwd=self.spec.cwd, env=self.spec.env
+        )
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        assert self._microvm is not None
+        await self._microvm.write_file(path, data)
+
+    async def close(self) -> None:
+        await self._held.close()
+
+
+async def _in_turn(context: AgentExecutionContext, name: str) -> _Turn:
+    """Start a turn of ``name`` in the running command, as the host does."""
+    return _Turn(await turn.start_turn_environment(context, name))
+
+
 #: Every process of the guest but this one: its environment and command line.
 _PROCESSES = (
     "const fs=require('fs');const mark='SYNTH459'+'SECRET';const hits=[];"
@@ -308,14 +336,13 @@ async def test_a_turn_holds_no_real_value_and_is_answered_none(
         person_id="probe",
         run_id="boundary",
         cwd=work,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("probe", name, "manual", "boundary"),
     )
     settle_contract(monkeypatch, AccessContract())
     before = _sandboxes()
     running = AsyncExitStack()
     await running.enter_async_context(command_at(work, {name}, person_id="probe"))
-    environment = await turn.start_turn_environment(context, name)
+    environment = await _in_turn(context, name)
     try:
         (sandbox,) = _sandboxes() - before
         # What the checks must find: a file, and a process's environment.
@@ -402,7 +429,6 @@ async def test_the_turns_of_a_command_share_one_microvm(
             person_id="probe",
             run_id="shared",
             cwd=cwd,
-            workspace_data_root=tmp_path,
             conversation_key=ConversationKey("probe", name, "manual", "shared"),
         )
 
@@ -422,26 +448,20 @@ async def test_the_turns_of_a_command_share_one_microvm(
     answers: list[str] = []
     settle_contract(monkeypatch, AccessContract())
     async with command_at(work, {"antigravity", "claude"}, person_id="probe"):
-        first = await turn.start_turn_environment(
-            context("antigravity", work), "antigravity"
-        )
+        first = await _in_turn(context("antigravity", work), "antigravity")
         try:
             (sandbox,) = _sandboxes() - before
             answers.append(await through_gateway(first, stand_ins[-1]))
             await _sh(first, "echo left-by-the-first-turn > /var/tmp/trace")
         finally:
             await first.close()
-        second = await turn.start_turn_environment(
-            context("claude", work / "package"), "claude"
-        )
+        second = await _in_turn(context("claude", work / "package"), "claude")
         try:
             where = (await _sh(second, "pwd; cat /var/tmp/trace")).split()
             told = await _sh(second, f'printf %s "${base_url_env}"')
         finally:
             await second.close()
-        third = await turn.start_turn_environment(
-            context("antigravity", work), "antigravity"
-        )
+        third = await _in_turn(context("antigravity", work), "antigravity")
         try:
             answers.append(await through_gateway(third, stand_ins[0]))
             answers.append(await through_gateway(third, stand_ins[-1]))

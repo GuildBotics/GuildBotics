@@ -9,24 +9,14 @@ from logging import getLogger
 from pathlib import PurePosixPath
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-from guildbotics.intelligences.agent_environment.spec import (
-    AgentEnvironmentSpec,
-    guest_path,
-)
-from guildbotics.intelligences.agent_runtime.environment import (
-    TurnEnvironment,
-    start_turn_environment,
+from guildbotics.intelligences.agent_runtime.host_client import (
+    MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import (
     CLIENT_INFO,
     FATAL_NOTIFICATION,
     METHOD_NOT_FOUND,
     RpcError,
-)
-from guildbotics.intelligences.agent_runtime.member_broker import (
-    MEMBER_BROKER_TOKEN_ENV,
-    MemberCapabilityBroker,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
@@ -45,7 +35,16 @@ from guildbotics.intelligences.agent_runtime.provider_process import (
     JsonRpcAdapter,
     turn_deadline,
 )
-from guildbotics.intelligences.agent_runtime.usage import parse_codex_rate_limits
+from guildbotics.intelligences.agent_runtime.turn import (
+    Turn,
+    TurnBroker,
+    TurnError,
+    TurnSpec,
+    start_turn,
+)
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    parse_codex_rate_limits,
+)
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -181,7 +180,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                             "text": environment.broker.prompt(prompt),
                         }
                     ],
-                    "cwd": guest_path(context.cwd),
+                    "cwd": str(context.cwd),
                     "approvalPolicy": _APPROVAL_POLICY,
                     **turn_settings,
                 },
@@ -298,10 +297,10 @@ class CodexAppServerAdapter(JsonRpcAdapter):
 
     async def _ensure_started(
         self, context: AgentExecutionContext, emit: EventSink
-    ) -> TurnEnvironment:
+    ) -> Turn:
         if self._transport.process is not None:
             await self.close()
-        environment = await start_turn_environment(context, "codex")
+        environment = await start_turn(context, "codex")
         self._environment = environment
         try:
             process = await environment.run(
@@ -316,7 +315,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
                 ),
                 limit=STREAM_READ_LIMIT,
             )
-        except AgentEnvironmentError as exc:
+        except TurnError as exc:
             await self.close()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
@@ -363,7 +362,7 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         else:
             response = await self._request(
                 "thread/start",
-                {"cwd": guest_path(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
+                {"cwd": str(context.cwd), "approvalPolicy": _APPROVAL_POLICY},
             )
         thread_id = _identifier(_dict(_dict(response).get("thread")))
         if not thread_id:
@@ -551,13 +550,12 @@ class CodexAppServerAdapter(JsonRpcAdapter):
         await super()._handle_reverse_request(method, request_id, _params)
 
 
-def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
+def _codex_mcp_arguments(broker: TurnBroker) -> tuple[str, ...]:
     """Build strict per-process MCP overrides for Codex App Server."""
-    endpoint = broker.endpoint
-    prefix = f"mcp_servers.{endpoint.name}"
+    prefix = f"mcp_servers.{broker.name}"
     return (
         "-c",
-        f"{prefix}.url={json.dumps(endpoint.guest_url)}",
+        f"{prefix}.url={json.dumps(broker.url)}",
         "-c",
         f'{prefix}.bearer_token_env_var="{MEMBER_BROKER_TOKEN_ENV}"',
         "-c",
@@ -569,7 +567,7 @@ def _codex_mcp_arguments(broker: MemberCapabilityBroker) -> tuple[str, ...]:
     )
 
 
-def _gateway_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+def _gateway_overrides(spec: TurnSpec) -> dict[str, Any]:
     """Point ChatGPT, and the model provider threads run on, at the gateway.
 
     The turn's environment names the gateway in the catalog's
@@ -592,7 +590,7 @@ def _gateway_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     }
 
 
-def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
+def _sandbox_overrides(spec: TurnSpec) -> dict[str, Any]:
     """Codex's own sandbox: the environment, as seen from inside it.
 
     The environment is the boundary and everything it holds is already
@@ -625,9 +623,9 @@ def _sandbox_overrides(spec: AgentEnvironmentSpec) -> dict[str, Any]:
     """
     state = f"{spec.home}/.codex"
     mounts = {
-        mount.guest: "read" if mount.readonly else "write"
-        for mount in spec.mounts
-        if not PurePosixPath(mount.guest).is_relative_to(state)
+        guest: "read" if readonly else "write"
+        for guest, readonly in spec.mounts.items()
+        if not PurePosixPath(guest).is_relative_to(state)
     }
     workspace = max(
         (guest for guest in mounts if PurePosixPath(spec.cwd).is_relative_to(guest)),

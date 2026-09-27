@@ -76,7 +76,6 @@ async def test_workflow_runs_one_turn_with_the_host_selected_ticket(tmp_path):
     assert command_name == "functions/handle_github_ticket"
     assert kwargs["agent_execution_context"] == {
         "run_id": "trace-7",
-        "workspace_data_root": str(Path(tmp_path)),
         "work_kind": "ticket",
         "work_identity": ISSUE_URL,
         "resume_policy": "fresh",

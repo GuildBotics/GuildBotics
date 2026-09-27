@@ -39,6 +39,8 @@ class PreparedCommand:
     cwd: Path | None
     access: CommandAccess
     context: RunContext = field(repr=False)
+    #: What the caller reads the command's result as, if it reads one.
+    result_type: Any = None
 
 
 def stub_commands(

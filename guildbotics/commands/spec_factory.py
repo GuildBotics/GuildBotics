@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import posixpath
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,8 @@ from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.registry import find_command_class, get_command_types
+from guildbotics.intelligences.agent_runtime.host_client import admits
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.import_utils import ClassResolver
 from guildbotics.utils.text_utils import get_placeholders_from_args
 
@@ -24,8 +27,14 @@ if TYPE_CHECKING:
 class CommandSpecFactory:
     """Build `CommandSpec` instances from declarative command entries."""
 
-    def __init__(self, context: Context) -> None:
+    def __init__(self, context: Context, mounts: Mapping[str, bool]) -> None:
+        """
+        Args:
+            context: The run's context.
+            mounts: Where the environment lets a command work.
+        """
         self._context = context
+        self._mounts = mounts
 
     def prepare_main_spec(
         self,
@@ -167,10 +176,23 @@ class CommandSpecFactory:
 
     def _resolve_cwd(self, raw_cwd: Any, default: Path) -> Path:
         """``raw_cwd`` against the calling command's working directory:
-        a relative one is relative to it, never to the process's."""
+        a relative one is relative to it, never to the process's.
+
+        Raises:
+            CommandError: If it is outside what the environment lets a
+                command work in: nothing of the host is there.
+        """
         if raw_cwd is None:
             return default
-        return default / Path(str(raw_cwd))
+        cwd = Path(posixpath.normpath((default / Path(str(raw_cwd))).as_posix()))
+        if not admits(self._mounts, cwd.as_posix()):
+            raise CommandError(
+                t(
+                    "intelligences.agent_environment.runtime.outside_mounts",
+                    path=cwd,
+                )
+            )
+        return cwd
 
     def _default_name_from_path(self, path: Path) -> str:
         if path.name.startswith(".") and path.stem:

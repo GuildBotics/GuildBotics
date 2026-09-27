@@ -659,6 +659,27 @@ async def test_kill_ends_a_running_process_and_a_closed_stdin_raises() -> None:
         await process.stdin.drain()
 
 
+@pytest.mark.asyncio
+async def test_kill_does_not_wait_forever_on_a_process_it_could_not_kill(
+    monkeypatch,
+) -> None:
+    """A process the runtime could not kill ends with its environment; the
+    kill does not hold its caller until then."""
+
+    class _Unkillable(_Handle):
+        async def kill(self) -> None:
+            raise RuntimeError("the agent did not answer")
+
+    monkeypatch.setattr(runtime, "_STOP_TIMEOUT", 0.01)
+    process = EnvironmentProcess(
+        _Unkillable([_event("started", pid=1)], gate=asyncio.Event()), limit=1 << 16
+    )
+
+    await asyncio.wait_for(process.kill(), 5)
+
+    assert process.returncode is None
+
+
 # --- close ----------------------------------------------------------------------
 
 

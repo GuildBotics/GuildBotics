@@ -12,9 +12,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from guildbotics.entities import Person, Project, Team
-from guildbotics.intelligences.agent_runtime.environment import (
-    current_command_access,
-)
 from guildbotics.observability import correlation_fields
 
 
@@ -38,7 +35,6 @@ class ScriptedAgent:
                     "agent_execution_context"
                 ),
                 "cwd": kwargs.get("cwd"),
-                "access": current_command_access(),
                 "correlation": correlation_fields(),
             }
         )

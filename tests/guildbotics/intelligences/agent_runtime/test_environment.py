@@ -4,6 +4,7 @@ import ast
 import asyncio
 import base64
 import json
+import logging
 import re
 import time
 from collections.abc import Callable
@@ -17,7 +18,7 @@ import pytest
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import environment
-from guildbotics.intelligences.agent_runtime.member_broker import (
+from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.runtime.member_invocation import GuestProcessError, GuestResult
@@ -46,9 +47,10 @@ def _command(
     )
 
 
-def test_no_adapter_starts_a_process_on_the_host() -> None:
-    """A provider runs inside its turn's microVM, started through the turn;
-    nothing in the agent runtime starts a host process of its own."""
+def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
+    """A provider runs as its turn's process in the command's microVM,
+    started through the turn: the turn is the one place in the agent runtime
+    that starts a process, and the host starts none of its own."""
     runtime_dir = Path(environment.__file__).parent
     starting = [
         path.name
@@ -59,7 +61,7 @@ def test_no_adapter_starts_a_process_on_the_host() -> None:
         )
     ]
 
-    assert starting == []
+    assert starting == ["turn.py"]
 
 
 def test_no_adapter_decides_what_a_read_only_turn_may_do() -> None:
@@ -185,6 +187,7 @@ def _device(monkeypatch, tmp_path, *logins: str, where=None):
     monkeypatch.setattr(
         environment, "_ready", lambda name: (environment.cli_agent_info(name), where)
     )
+    monkeypatch.setattr(environment, "_device", lambda: where)
 
     def unsealed(tool):
         if tool.name not in logins:
@@ -214,7 +217,6 @@ def _turn(tmp_path, tool_name="claude", **overrides: Any):
             "person_id": "aiko",
             "run_id": "turn",
             "cwd": tmp_path / "repository",
-            "workspace_data_root": tmp_path,
             "conversation_key": ConversationKey("aiko", tool_name, "manual", "turn"),
             **overrides,
         }
@@ -224,8 +226,8 @@ def _turn(tmp_path, tool_name="claude", **overrides: Any):
 async def _claude_turn_spec(tmp_path, monkeypatch, context, access=CommandAccess()):
     """The spec a Claude Code turn run in ``context`` of a command declaring
     ``access``, and working where the turn does, boots with."""
+    _device(monkeypatch, tmp_path, "claude")
     async with _command(access=access, cwd=context.cwd):
-        _device(monkeypatch, tmp_path, "claude")
         turn = await environment.start_turn_environment(context, "claude")
         await turn.close()
         return turn.spec
@@ -257,7 +259,6 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
         person_id="aiko",
         run_id="investigate",
         cwd=tmp_path / "work",
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
     )
 
@@ -284,8 +285,9 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
 async def test_what_a_turn_inspects_is_mounted_read_only(
     tmp_path, monkeypatch, inspects
 ):
-    """The recorded runs and the configuration are mounted read-only only for
-    a turn whose command declares it inspects them."""
+    """The configuration is mounted read-only for every command, which reads
+    it; the recorded runs only for a command that declares its turns inspect
+    them, and a turn is told of either only then."""
     from guildbotics.intelligences.agent_environment.spec import (
         EnvironmentMount,
         guest_path,
@@ -304,7 +306,6 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
         person_id="aiko",
         run_id="investigate",
         cwd=state / "local" / "work" / "troubleshooting",
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
     )
     spec = await _claude_turn_spec(
@@ -312,12 +313,12 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
     )
 
     mounts = set(spec.mounts)
-    expected = {
-        EnvironmentMount(guest_path(run), run, True),
-        EnvironmentMount(guest_path(state / "config"), state / "config", True),
-    }
+    runs = EnvironmentMount(guest_path(run), run, True)
+    assert EnvironmentMount(guest_path(state / "config"), state / "config", True) in (
+        mounts
+    )
     if inspects:
-        assert expected <= mounts
+        assert runs in mounts
         # The packaged defaults are named inside the code every microVM has.
         named = environment.inspected_directories(inspects, tmp_path)
         assert named == {
@@ -333,7 +334,8 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
             for mount in mounts
         )
     else:
-        assert not expected & mounts
+        assert runs not in mounts
+        assert environment.inspected_directories(inspects, tmp_path) == {}
 
 
 @pytest.mark.asyncio
@@ -360,7 +362,6 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         person_id="aiko",
         run_id="r1",
         cwd=checkout,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
     )
     spec = await _claude_turn_spec(
@@ -484,9 +485,7 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
 
     running = AsyncExitStack()
     await running.enter_async_context(_command(tool_name))
-    turn = await environment.start_turn_environment(
-        context, tool_name, env={"IS_SANDBOX": "1"}
-    )
+    turn = await environment.start_turn_environment(context, tool_name)
     (booted,) = _Booted.booted
 
     spec = turn.spec
@@ -496,7 +495,6 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
     assert base_url == f"{scheme}://{GUEST_HOST_ALIAS}:{port}{broker.base_url_path}"
     assert spec.network.host_ports == (turn.broker.endpoint.port, port)
     assert set(spec.network.domains) == set(broker.turn_domains)
-    assert spec.env["IS_SANDBOX"] == "1"
     held = b"".join(booted.files.values()) + json.dumps(dict(spec.env)).encode()
     for secret in (
         "REAL-SYNTHETIC-459",
@@ -644,49 +642,50 @@ async def test_a_login_due_for_refresh_is_refreshed_before_the_turn_starts(
 ):
     """A tool may give up on its API sooner than a refresh takes, so the
     first request never waits for one; a refresh that fails starts no turn."""
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.agent_environment.auth_gateway import (
+        CredentialUnavailableError,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentRuntimeError,
+        AgentRuntimeErrorCategory,
+    )
+
+    tool = environment.cli_agent_info("claude")
+    _device(monkeypatch, tmp_path)
+    due = {"claudeAiOauth": {**_LOGINS["claude"]["claudeAiOauth"], "expiresAt": 0}}
+    sealed = {tool.provision.auth: json.dumps(due).encode()}
+    monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
+    happened: list[str] = []
+
+    async def refresh(selected, at, stale):
+        happened.append("refresh")
+        if not refreshes:
+            raise CredentialUnavailableError("log in again")
+        return {tool.provision.auth: json.dumps(_LOGINS["claude"]).encode()}
+
+    monkeypatch.setattr(provider_state, "refresh_login", refresh)
+    booting = environment._start
+
+    async def start(spec, at, *, before_stop):
+        happened.append("start")
+        return await booting(spec, at, before_stop=before_stop)
+
+    monkeypatch.setattr(environment, "_start", start)
+    context = _turn(tmp_path)
+
     async with _command():
-        from guildbotics.intelligences.agent_environment import provider_state
-        from guildbotics.intelligences.agent_environment.auth_gateway import (
-            CredentialUnavailableError,
-        )
-        from guildbotics.intelligences.agent_runtime.models import (
-            AgentRuntimeError,
-            AgentRuntimeErrorCategory,
-        )
-
-        tool = environment.cli_agent_info("claude")
-        _device(monkeypatch, tmp_path)
-        due = {"claudeAiOauth": {**_LOGINS["claude"]["claudeAiOauth"], "expiresAt": 0}}
-        sealed = {tool.provision.auth: json.dumps(due).encode()}
-        monkeypatch.setattr(provider_state, "_unsealed_login", lambda _: sealed)
-        happened: list[str] = []
-
-        async def refresh(selected, at, stale):
-            happened.append("refresh")
-            if not refreshes:
-                raise CredentialUnavailableError("log in again")
-            return {tool.provision.auth: json.dumps(_LOGINS["claude"]).encode()}
-
-        monkeypatch.setattr(provider_state, "refresh_login", refresh)
-        booting = environment._start
-
-        async def start(spec, at, *, before_stop):
-            happened.append("start")
-            return await booting(spec, at, before_stop=before_stop)
-
-        monkeypatch.setattr(environment, "_start", start)
-        context = _turn(tmp_path)
-
         if refreshes:
             turn = await environment.start_turn_environment(context, "claude")
             await turn.close()
-            assert happened == ["refresh", "start"]
         else:
             with pytest.raises(AgentRuntimeError) as refused:
                 await environment.start_turn_environment(context, "claude")
             assert refused.value.category is AgentRuntimeErrorCategory.AUTHENTICATION
             assert str(refused.value) == "log in again"
-            assert happened == ["refresh"]
+        # The command's microVM runs from its start; the turn is refreshed
+        # before it is lent anything.
+        assert happened == ["start", "refresh"]
 
 
 @pytest.mark.asyncio
@@ -695,29 +694,29 @@ async def test_a_login_the_gateway_could_not_use_is_told_to_the_turn(
 ):
     """What the tool makes of a refused login is its own affair; the turn
     learns it from the login it lent."""
+    import httpx
+
+    from guildbotics.intelligences.agent_environment import provider_state
+    from guildbotics.intelligences.agent_environment.auth_gateway import (
+        CredentialGateway,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    tool = environment.cli_agent_info("copilot")
+    _device(monkeypatch, tmp_path, "copilot")
+    stand_ins: list[str] = []
+
+    class Revoked(CredentialGateway):
+        def __init__(self, *args, **kwargs):
+            refuse = httpx.MockTransport(lambda _: httpx.Response(401))
+            super().__init__(*args, transport=refuse, **kwargs)
+
+        def lend(self, tokens, stand_in):
+            stand_ins.append(stand_in)
+            super().lend(tokens, stand_in)
+
+    monkeypatch.setattr(environment, "CredentialGateway", Revoked)
     async with _command("copilot"):
-        import httpx
-
-        from guildbotics.intelligences.agent_environment import provider_state
-        from guildbotics.intelligences.agent_environment.auth_gateway import (
-            CredentialGateway,
-        )
-        from guildbotics.utils.i18n_tool import t
-
-        tool = environment.cli_agent_info("copilot")
-        _device(monkeypatch, tmp_path, "copilot")
-        stand_ins: list[str] = []
-
-        class Revoked(CredentialGateway):
-            def __init__(self, *args, **kwargs):
-                refuse = httpx.MockTransport(lambda _: httpx.Response(401))
-                super().__init__(*args, transport=refuse, **kwargs)
-
-            def lend(self, tokens, stand_in):
-                stand_ins.append(stand_in)
-                super().lend(tokens, stand_in)
-
-        monkeypatch.setattr(environment, "CredentialGateway", Revoked)
         context = _turn(tmp_path, "copilot")
         turn = await environment.start_turn_environment(context, "copilot")
         (base_url,) = {
@@ -974,13 +973,13 @@ def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
     assert openers == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
 
 
-def test_every_host_entry_runs_its_command_in_an_environment() -> None:
-    """The host starts every command inside the environment its turns share.
+def test_every_command_runs_in_an_environment() -> None:
+    """The host runs every command in the environment booted for it.
 
-    The execution machinery opens none, so a host entry that ran a command
-    by itself would have every turn of it refused. The machinery runs the
-    commands it holds with ``await ....run()`` too, so outside it the
-    population of places a command starts is every such call.
+    The execution machinery runs the commands it holds with
+    ``await ....run()``; outside it, only the environment's entry does so,
+    and the entry is started only where the host runs a command in its
+    environment.
     """
     starters = {
         site
@@ -994,8 +993,15 @@ def test_every_host_entry_runs_its_command_in_an_environment() -> None:
         )
         if not site[0].startswith("guildbotics/commands/")
     }
+    entries = _call_sites(
+        lambda call: (
+            getattr(call.func, "attr", None) == "execute" and len(call.args) == 1
+        ),
+        awaited=True,
+    )
 
-    assert starters == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+    assert starters == {("guildbotics/runtime/command_entry.py", "run")}
+    assert entries == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
 
 
 def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
@@ -1013,7 +1019,11 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
 
     makers = {
         "guildbotics.commands.runner": {"CommandRunner": 3},
-        "guildbotics.drivers.command_runner": {"prepare_command": 4, "run_command": 4},
+        "guildbotics.drivers.command_runner": {
+            "_prepared": 3,
+            "prepare_command": 4,
+            "run_command": 4,
+        },
     }
     package = Path(guildbotics.__file__).parent
     sites: dict[tuple[str, str], str] = {}
@@ -1051,12 +1061,13 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
             )
 
     assert sites == {
-        ("guildbotics/drivers/command_runner.py", "prepare_command"): "cwd",
         ("guildbotics/drivers/command_runner.py", "run_command"): "cwd",
         (
             "guildbotics/drivers/command_runner.py",
             "prepare_host_command",
         ): "host_command_cwd()",
+        ("guildbotics/drivers/command_runner.py", "prepare_command"): "cwd",
+        ("guildbotics/runtime/command_entry.py", "run"): "Path(request.cwd)",
         (
             "guildbotics/app_api/runtime.py",
             "_execute_command",
@@ -1064,31 +1075,6 @@ def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
         ("guildbotics/app_api/diagnostics.py", "_run_cli_agent_check"): "Path(cwd)",
         ("guildbotics/runtime/local_command_executor.py", "run"): "cwd",
     }
-
-
-@pytest.mark.asyncio
-async def test_a_command_inside_another_is_held_to_what_the_outer_declared():
-    """A command and its subcommands are one isolation: the same declaration
-    and tools share it, wherever the inner one works (its turns are held to
-    what the outer one mounted), and another cannot be given the one it
-    declared."""
-    from guildbotics.commands.errors import CommandError
-
-    read_only = CommandAccess(read_only=True, inspects=frozenset({"config"}))
-    async with _command(access=read_only):
-        outer = environment._COMMAND.get()
-        async with _command(access=read_only, cwd=get_workspace_root() / "other"):
-            assert environment._COMMAND.get() is outer
-            assert environment.current_command_access() == read_only
-        with pytest.raises(CommandError):
-            async with _command():
-                pass
-        with pytest.raises(CommandError):
-            async with _command("claude", "codex", access=read_only):
-                pass
-
-    assert environment.current_command_access() == CommandAccess()
-    assert environment.current_command_contract() is None
 
 
 @pytest.mark.asyncio
@@ -1226,9 +1212,7 @@ async def test_a_member_command_runs_in_the_microvm_the_turn_holds(
     _device(monkeypatch, tmp_path, "claude")
 
     async with _command():
-        turn = await environment.start_turn_environment(
-            _turn(tmp_path), "claude", env={"TURN_ONLY": "1"}
-        )
+        turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
         source = tmp_path / "bundle"
         source.write_bytes(b"history")
         written = tmp_path / "written"
@@ -1250,7 +1234,6 @@ async def test_a_member_command_runs_in_the_microvm_the_turn_holds(
     program = booted.programs[-1]
     assert (program.command, program.cwd) == (("git", "commit"), "/work")
     assert program.env == {**booted.spec.env, "GIT_AUTHOR_NAME": "Aiko"}
-    assert "TURN_ONLY" not in program.env
     assert MEMBER_BROKER_TOKEN_ENV not in program.env
 
 
@@ -1357,26 +1340,26 @@ async def test_a_member_broker_that_does_not_start_is_a_process_error(
 ):
     """The broker's port is opened when the microVM boots, so nothing boots
     without it."""
-    async with _command():
-        from guildbotics.intelligences.agent_runtime.member_broker import (
-            MemberCapabilityBroker,
-        )
-        from guildbotics.intelligences.agent_runtime.models import (
-            AgentRuntimeError,
-            AgentRuntimeErrorCategory,
-        )
+    from guildbotics.intelligences.agent_runtime.member_broker import (
+        MemberCapabilityBroker,
+    )
+    from guildbotics.intelligences.agent_runtime.models import (
+        AgentRuntimeError,
+        AgentRuntimeErrorCategory,
+    )
 
-        async def fail_to_start(_broker: MemberCapabilityBroker) -> None:
-            raise OSError("bind failed")
+    async def fail_to_start(_broker: MemberCapabilityBroker) -> None:
+        raise OSError("bind failed")
 
-        monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
-        _device(monkeypatch, tmp_path, "claude")
+    monkeypatch.setattr(MemberCapabilityBroker, "_start", fail_to_start)
+    _device(monkeypatch, tmp_path, "claude")
 
-        with pytest.raises(AgentRuntimeError) as refused:
-            await environment.start_turn_environment(_turn(tmp_path), "claude")
+    with pytest.raises(AgentRuntimeError) as refused:
+        async with _command():
+            pass
 
-        assert refused.value.category is AgentRuntimeErrorCategory.PROCESS
-        assert _Booted.booted == []
+    assert refused.value.category is AgentRuntimeErrorCategory.PROCESS
+    assert _Booted.booted == []
 
 
 @pytest.mark.asyncio
@@ -1407,8 +1390,8 @@ async def test_a_relayed_host_is_relayed_once_for_the_whole_command(
 
 @pytest.mark.asyncio
 async def test_a_boot_that_fails_leaves_no_gateway_running(tmp_path, monkeypatch):
-    """The command may try another turn after a failed boot: that turn boots
-    afresh, and no listener of the failed boot is left that no one can stop."""
+    """A command whose microVM does not start leaves no listener of it that
+    no one can stop, and the next command boots afresh."""
     from guildbotics.intelligences.agent_environment.auth_gateway import (
         CredentialGateway,
     )
@@ -1440,14 +1423,223 @@ async def test_a_boot_that_fails_leaves_no_gateway_running(tmp_path, monkeypatch
 
     monkeypatch.setattr(environment, "_start", start)
 
+    with pytest.raises(AgentRuntimeError):
+        async with _command("claude", "codex"):
+            pass
+    failed = list(started)
+    assert len(failed) == 2
+    assert all(gateway._server is None for gateway in failed)
     async with _command("claude", "codex"):
-        with pytest.raises(AgentRuntimeError):
-            await environment.start_turn_environment(_turn(tmp_path), "claude")
-        failed = list(started)
-        assert len(failed) == 2
-        assert all(gateway._server is None for gateway in failed)
         turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
         await turn.close()
         assert len(started) == 4
 
     assert all(gateway._server is None for gateway in started)
+
+
+class _Entry:
+    """The command's entry as the microVM runs it: it reads its request, logs
+    what ``log`` says, answers ``reply``, and ends with ``returncode``; or,
+    ``forever``, never ends; or, ``lingers``, answers but leaves a process
+    holding its output open."""
+
+    def __init__(
+        self,
+        reply: bytes,
+        log: bytes = b"",
+        *,
+        returncode=0,
+        forever=False,
+        lingers=False,
+    ):
+        self.reply, self.log = reply, log
+        self.returncode_on_end, self.forever = returncode, forever
+        self.lingers = lingers
+        self.read = bytearray()
+        self.stdin = self
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.returncode: int | None = None
+        self.killed = False
+        self.argv: tuple[str, ...] = ()
+        self._ended = asyncio.Event()
+
+    def write(self, data: bytes) -> None:
+        self.read += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        if self.forever:
+            return
+        self.stderr.feed_data(self.log)
+        self.stdout.feed_data(self.reply)
+        if not self.lingers:
+            self._end(self.returncode_on_end)
+
+    def _end(self, returncode: int) -> None:
+        if self.returncode is None:
+            self.returncode = returncode
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._ended.set()
+
+    async def wait(self) -> int:
+        await self._ended.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    async def kill(self) -> None:
+        self.killed = True
+        self._end(-9)
+
+
+async def _executed(tmp_path, monkeypatch, entry: _Entry):
+    """Run a command in a microVM whose entry is ``entry``; how it ended."""
+    from guildbotics.intelligences.agent_runtime.host_client import CommandRequest
+
+    _device(monkeypatch, tmp_path, "claude")
+    async with _command() as shared:
+        (booted,) = _Booted.booted
+
+        async def run(*argv, limit, **_):
+            entry.argv = argv
+            return entry
+
+        booted.run = run
+        request = CommandRequest(path="/c/x.md", name="x", args=[], cwd="/work")
+        try:
+            return await shared.execute(request), request
+        finally:
+            assert json.loads(entry.read) == request.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_the_command_runs_in_its_microvm_and_says_how_it_ended(
+    tmp_path, monkeypatch, caplog
+):
+    """GuildBotics' own entry runs the request in the microVM with the
+    snapshot's Python and the running code; what it logs is logged on the
+    host at its own level, a line without one at the level before it."""
+    from guildbotics.intelligences.agent_environment.snapshot import CODE_ROOT, VENV
+    from guildbotics.intelligences.agent_runtime.host_client import CommandReply
+
+    answer = CommandReply(text_output="done")
+    entry = _Entry(
+        answer.model_dump_json().encode() + b"\n",
+        b"INFO started\nWARNING careful\n  continued\n",
+    )
+
+    with caplog.at_level(logging.INFO, logger="guildbotics"):
+        reply, _ = await _executed(tmp_path, monkeypatch, entry)
+
+    assert reply == answer
+    assert entry.argv == (
+        "env",
+        f"PYTHONPATH={CODE_ROOT}",
+        "PYTHONDONTWRITEBYTECODE=1",
+        f"{VENV}/bin/python",
+        "-m",
+        "guildbotics.runtime.command_entry",
+    )
+    logged = [
+        (record.levelname, record.getMessage())
+        for record in caplog.records
+        if record.getMessage() in {"started", "careful", "  continued"}
+    ]
+    assert logged == [
+        ("INFO", "started"),
+        ("WARNING", "careful"),
+        ("WARNING", "  continued"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entry", "key"),
+    [
+        (lambda: _Entry(b"", b"Traceback ...\n", returncode=1), "no_reply"),
+        (lambda: _Entry(b"not json", returncode=0), "no_reply"),
+        (lambda: _Entry(b"x" * (10 * 1024 * 1024 + 1)), "reply_too_large"),
+    ],
+    ids=["crashed", "garbled", "too-large"],
+)
+async def test_an_entry_that_does_not_say_how_the_command_ended_fails_it(
+    tmp_path, monkeypatch, entry, key
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.utils.i18n_tool import t
+
+    entry = entry()
+
+    with pytest.raises(CommandError) as failed:
+        await _executed(tmp_path, monkeypatch, entry)
+
+    assert str(failed.value) == t(
+        f"intelligences.agent_environment.runtime.{key}",
+        code=entry.returncode,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_process_the_command_left_running_does_not_hold_its_end(
+    tmp_path, monkeypatch
+):
+    """The entry's reply is the line it writes last: a process the command
+    left running holds the entry's log open, not the command, which ends
+    with what the entry said (and the process with the microVM)."""
+    from guildbotics.intelligences.agent_runtime.host_client import CommandReply
+
+    monkeypatch.setattr(environment, "_LOG_DRAIN_SECONDS", 0.01)
+    answer = CommandReply(text_output="done")
+    entry = _Entry(answer.model_dump_json().encode() + b"\n", lingers=True)
+
+    reply, _ = await asyncio.wait_for(_executed(tmp_path, monkeypatch, entry), 5)
+
+    assert reply == answer
+
+
+@pytest.mark.asyncio
+async def test_a_command_stopped_while_it_runs_ends_its_entry(tmp_path, monkeypatch):
+    """A stop cancels the host's wait, and nothing of the command is left
+    running in the microVM, which goes with it."""
+    entry = _Entry(b"", forever=True)
+    running = asyncio.create_task(_executed(tmp_path, monkeypatch, entry))
+    for _ in range(50):
+        if entry.read:
+            break
+        await asyncio.sleep(0.01)
+
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert entry.killed
+    (booted,) = _Booted.booted
+    assert booted.closed
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_cannot_run_the_environment_refuses_the_command(
+    tmp_path, monkeypatch
+):
+    """Every command runs in the environment, so a device that cannot run
+    one refuses the command when it starts, in the words its status gives."""
+    from types import SimpleNamespace
+
+    from guildbotics.commands.errors import CommandError
+
+    booted: list[object] = []
+    monkeypatch.setattr(environment, "_start", lambda *args, **_: booted.append(args))
+    monkeypatch.setattr(
+        environment,
+        "device_status",
+        lambda: SimpleNamespace(snapshot=None, refusal="the snapshot is building"),
+    )
+
+    with pytest.raises(CommandError, match="the snapshot is building"):
+        async with _command():
+            pass
+
+    assert booted == []

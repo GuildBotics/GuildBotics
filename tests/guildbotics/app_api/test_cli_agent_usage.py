@@ -6,7 +6,7 @@ import pytest
 from guildbotics.app_api import cli_agent_usage as module
 from guildbotics.app_api.cli_agent_usage import CliAgentUsageCache
 from guildbotics.app_api.errors import AppApiError
-from guildbotics.intelligences.agent_runtime import usage
+from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +28,7 @@ class Readers:
             )
         monkeypatch.setattr(module, "has_credentials", lambda _: True)
 
-    async def read(self, name: str) -> usage.CliAgentUsageSnapshot:
+    async def read(self, name: str) -> usage_snapshots.CliAgentUsageSnapshot:
         self.calls.append(name)
         self.running += 1
         self.peak = max(self.peak, self.running)
@@ -42,9 +42,9 @@ class Readers:
         self.gates[name].clear()
         if name in self.fail:
             raise usage.CliAgentUsageError("offline")
-        return usage.CliAgentUsageSnapshot(
+        return usage_snapshots.CliAgentUsageSnapshot(
             agent=name,
-            windows=[usage.CliAgentUsageWindow("primary", self.percent)],
+            windows=[usage_snapshots.CliAgentUsageWindow("primary", self.percent)],
             checked_at=f"{self.percent}",
         )
 

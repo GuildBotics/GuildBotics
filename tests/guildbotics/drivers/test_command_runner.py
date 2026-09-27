@@ -1,13 +1,26 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from guildbotics.commands.errors import CommandError
+from guildbotics.commands.errors import CommandError, CommandFailedError
+from guildbotics.commands.metadata import CommandAccess
 from guildbotics.commands.models import CommandOutcome, CommandSpec
 from guildbotics.commands.runner import CommandRunner
-from guildbotics.intelligences.brains.cli_agent import PromptInfo
+from guildbotics.commands.spec_factory import CommandSpecFactory
+from guildbotics.drivers import command_runner
+from guildbotics.drivers.command_runner import PreparedCommand
+from guildbotics.intelligences.agent_runtime.host_client import (
+    CommandFailure,
+    CommandReply,
+)
+from guildbotics.intelligences.brains.cli_agent import (
+    CliAgentExecutionError,
+    PromptInfo,
+)
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
+from tests.guildbotics.command_environment_doubles import machinery
 
 
 class DummyCommand:
@@ -46,19 +59,76 @@ def _main_spec():
     )
 
 
-def _runner_for(spec):
+def _runner(context=None, spec=None, **kwargs):
+    """The machinery for ``spec`` (``main`` by default), working in
+    ``/workspace`` where it may work anywhere."""
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
-        runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
-    runner._spec_factory.build_from_entry = lambda anchor, entry: entry
-    return runner
+        patch.setattr(
+            CommandSpecFactory,
+            "prepare_main_spec",
+            lambda self, *_: spec or _main_spec(),
+        )
+        return CommandRunner(
+            context or DummyContext(),
+            "main",
+            [],
+            Path("/workspace"),
+            path=Path("main.md"),
+            mounts={"/": True},
+            **kwargs,
+        )
+
+
+def _prepared(
+    context=None,
+    *,
+    path=Path("/workspace/.guildbotics/config/commands/main.md"),
+    **kwargs,
+):
+    """The host's reading of ``main`` for aiko, working in ``/workspace``."""
+    context = context or DummyContext()
+    return PreparedCommand(
+        context,
+        kwargs.pop("command_name", "main"),
+        ["x=1"],
+        Path("/workspace"),
+        path,
+        kwargs.pop("access", CommandAccess()),
+        **kwargs,
+    )
+
+
+def _environment(monkeypatch, *replies):
+    """The environment every command the host runs is booted in: what it was
+    booted for, what it was asked to run, and whether it was discarded. It
+    answers with ``replies``, in turn; one that is an exception is raised."""
+    booted = SimpleNamespace(opened=[], requests=[], closed=0)
+    answers = list(replies) or [CommandReply(text_output="ok")]
+
+    @asynccontextmanager
+    async def command_environment(access, tools, **where):
+        booted.opened.append({"access": access, "tools": tools, **where})
+
+        class Running:
+            async def execute(self, request):
+                booted.requests.append(request)
+                answer = answers.pop(0)
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+
+        try:
+            yield Running()
+        finally:
+            booted.closed += 1
+
+    monkeypatch.setattr(command_runner, "command_environment", command_environment)
+    return booted
 
 
 @pytest.mark.asyncio
 async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
-    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
-    ctx = DummyContext()
-    runner = CommandRunner(ctx, "main", [], Path("/workspace"))
+    runner = _runner()
 
     captured = {}
 
@@ -82,10 +152,8 @@ async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
 async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monkeypatch):
     from guildbotics.commands import runner as runner_module
 
-    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
-    ctx = DummyContext()
     ledger = object()
-    runner = CommandRunner(ctx, "main", [], Path("/workspace"), ledger=ledger)
+    runner = _runner(ledger=ledger)
     captured = {}
 
     async def fake_run_agent_turn(*, invoke, execution_context, ledger):
@@ -127,8 +195,7 @@ async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monke
 
 @pytest.mark.asyncio
 async def test_invoke_refuses_completion_managed_turns_without_a_ledger(monkeypatch):
-    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
-    runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
+    runner = _runner()
 
     async def fail_run_with_children(spec):
         raise AssertionError("the turn must not start")
@@ -147,168 +214,78 @@ async def test_invoke_refuses_completion_managed_turns_without_a_ledger(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "spelled"),
+    [
+        (
+            Path("/workspace/.guildbotics/config/commands/main.md"),
+            "/workspace/.guildbotics/config/commands/main.md",
+        ),
+        (
+            Path(command_runner.__file__).parents[1] / "templates/commands/ask.md",
+            "/opt/guildbotics/code/guildbotics/templates/commands/ask.md",
+        ),
+    ],
+)
 @pytest.mark.parametrize("fails", [False, True])
-async def test_the_command_is_the_span_its_turns_share_an_environment_in(
-    monkeypatch, fails
+async def test_the_command_runs_in_the_environment_booted_for_it(
+    monkeypatch, path, spelled, fails
 ):
-    """Every AI CLI turn of the run, its subcommands' included, shares one
-    environment, working where the run does, and it is discarded when the run
-    ends, however it ends."""
-    from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_runtime import environment
+    """One environment per run, booted for where the command works and
+    discarded however the run ends; it runs the very file the host read, as
+    it spells it, with the command's input and workflow run."""
+    from guildbotics.runtime.workflow_invocation import (
+        WORKFLOW_INVOCATION_KEY,
+        WorkflowInvocation,
+    )
     from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 
-    closed: list[object] = []
-    seen: list[object] = []
-
-    class Shared:
-        def __init__(self, access, contract, tools, **where) -> None:
-            self.access = access
-            self.tools = tools
-            self.where = where
-
-        def serve(self, host) -> None:
-            self.host = host
-
-        async def close(self) -> None:
-            closed.append(self)
-
-    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
-
-    class Turning(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-        async def run(self):
-            seen.append(environment._COMMAND.get())
-            if fails:
-                raise RuntimeError("the command failed")
-            return await super().run()
-
-    spec = _main_spec()
-    spec.command_class = Turning
-    spec.children = [
-        CommandSpec(
-            name="child", base_dir=Path("."), command_class=Turning, cwd=Path("/")
-        )
-    ]
-    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: spec)
-    runner = CommandRunner(DummyContext(), "main", [], Path("/workspace"))
-    runner._spec_factory.build_from_entry = lambda anchor, entry: entry
+    booted = _environment(
+        monkeypatch,
+        RuntimeError("the environment failed") if fails else CommandReply(),
+    )
+    command = _prepared(path=path)
+    command.context.pipe = "the input"
+    invocation = WorkflowInvocation("main", "aiko", "routine", "generic", {"k": "v"})
+    command.context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
 
     if fails:
         with pytest.raises(RuntimeError):
-            await run_in_environment(runner)
+            await command_runner.run_in_environment(command)
     else:
-        await run_in_environment(runner)
+        await command_runner.run_in_environment(command)
 
-    assert seen and all(isinstance(shared, Shared) for shared in seen)
-    assert len(set(map(id, seen))) == 1
     workspace_root = get_workspace_root()
-    assert seen[0].where == {
-        "cwd": runner.cwd,
+    ((opened,), (request,)) = booted.opened, booted.requests
+    assert {key: opened[key] for key in ("cwd", "workspace_root", "clone")} == {
+        "cwd": Path("/workspace"),
         "workspace_root": workspace_root,
         "clone": get_member_clone_path("aiko", workspace_root),
     }
-    assert closed == seen[:1]
-    assert environment._COMMAND.get() is None
-
-
-@pytest.mark.asyncio
-async def test_the_machinery_opens_no_environment_of_its_own():
-    """The host that starts a run opens its environment; the runner alone
-    runs the command outside any."""
-    from guildbotics.intelligences.agent_runtime import environment
-
-    seen: list[object] = []
-
-    class Turning(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-        async def run(self):
-            seen.append(environment._COMMAND.get())
-            return await super().run()
-
-    spec = _main_spec()
-    spec.command_class = Turning
-    await _runner_for(spec).run()
-
-    assert seen == [None]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("inner_read_only", [False, True])
-async def test_a_command_started_inside_another_shares_its_environment(
-    monkeypatch, inner_read_only
-):
-    """A host entry that starts a command inside a running one shares the
-    running one's environment when it declares the same access, and is
-    refused when it declares other access."""
-    from guildbotics.commands.errors import CommandError
-    from guildbotics.commands.metadata import CommandAccess
-    from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_runtime import environment
-
-    closed: list[object] = []
-    seen: list[object] = []
-
-    class Shared:
-        def __init__(self, access, contract, tools, **_where) -> None:
-            self.access = access
-            self.tools = tools
-            self.served: list[object] = []
-
-        def serve(self, host) -> None:
-            self.served.append(host)
-
-        async def close(self) -> None:
-            closed.append(self)
-
-    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
-
-    class Inner(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-        async def run(self):
-            seen.append(environment._COMMAND.get())
-            return await super().run()
-
-    class Outer(Inner):
-        async def run(self):
-            seen.append(environment._COMMAND.get())
-            inner_spec = _main_spec()
-            inner_spec.command_class = Inner
-            inner = _runner_for(inner_spec)
-            inner.access = CommandAccess(read_only=inner_read_only)
-            await run_in_environment(inner)
-            return await DummyCommand.run(self)
-
-    spec = _main_spec()
-    spec.command_class = Outer
-
-    if inner_read_only:
-        with pytest.raises(CommandError):
-            await run_in_environment(_runner_for(spec))
-        assert len(seen) == 1
-    else:
-        await run_in_environment(_runner_for(spec))
-        assert len(seen) == 2 and seen[0] is seen[1]
-    # The outer command's grant answers for the inner one too.
-    assert len(seen[0].served) == 1
-    assert closed == seen[:1]
-    assert environment._COMMAND.get() is None
+    assert (request.path, request.name, request.args, request.cwd) == (
+        spelled,
+        "main",
+        ["x=1"],
+        "/workspace",
+    )
+    assert (request.pipe, request.invocation) == (
+        "the input",
+        {
+            "command": "main",
+            "person_id": "aiko",
+            "source": "routine",
+            "trigger_type": "generic",
+            "payload": {"k": "v"},
+            "idempotency_key": "",
+        },
+    )
+    assert request.wants_result is False
+    assert booted.closed == 1
 
 
 @pytest.mark.asyncio
 async def test_run_uses_spec_cwd_not_runner_cwd(monkeypatch):
-    monkeypatch.setattr(CommandRunner, "_prepare_main_spec", lambda self: _main_spec())
-    ctx = DummyContext()
-    runner = CommandRunner(ctx, "main", [], cwd=Path("/workspace"))
+    runner = _runner()
     spec = CommandSpec(
         name="child",
         base_dir=Path("."),
@@ -357,7 +334,7 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
         return SimpleNamespace(run=run, response_class=None)
 
     ctx.get_brain = get_brain
-    outcome = await CommandRunner(ctx, "ask", [], cwd=working_tree).run()
+    outcome = await machinery(ctx, "ask", [], working_tree).run()
 
     result = "Review completed: local edit inspected."
     assert outcome.result == outcome.text_output == result
@@ -368,9 +345,7 @@ async def test_ask_passes_message_member_and_working_tree_to_brain(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["manual", "scheduled", "routine"])
 async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, source):
-    from guildbotics.commands.metadata import CommandAccess
-    from guildbotics.drivers import command_runner, ticket_selector
-    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.drivers import ticket_selector
     from guildbotics.runtime.workflow_invocation import (
         TICKET_WORKFLOW_COMMAND,
         WORKFLOW_INVOCATION_KEY,
@@ -382,20 +357,10 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
     )
     selected: list[str] = []
 
-    class FakeRunner:
-        command_name = TICKET_WORKFLOW_COMMAND
-        access = CommandAccess()
-        cwd = Path("/workspace")
-
-        def __init__(self, context):
-            self.context = context
-
-        async def run(self):
-            # The workflow finds the ticket the host selected, and runs in the
-            # environment its turns share.
-            assert self.context.shared_state[WORKFLOW_INVOCATION_KEY] is invocation
-            assert environment._COMMAND.get() is not None
-            return CommandOutcome(result="worked", text_output="worked")
+    async def run_in_environment(command):
+        # The workflow finds the ticket the host selected.
+        assert command.context.shared_state[WORKFLOW_INVOCATION_KEY] is invocation
+        return CommandOutcome(result=None, text_output="worked")
 
     class FakeSelector:
         def __init__(self, context, *, source):
@@ -405,10 +370,11 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
             return await run_workflow(invocation)
 
     monkeypatch.setattr(ticket_selector, "TicketSelector", FakeSelector)
-    context = DummyContext()
-    context.person = SimpleNamespace(person_id="aiko")
+    monkeypatch.setattr(command_runner, "run_in_environment", run_in_environment)
 
-    outcome = await command_runner.run_main_command(FakeRunner(context), source=source)
+    outcome = await command_runner.run_main_command(
+        _prepared(command_name=TICKET_WORKFLOW_COMMAND), source=source
+    )
 
     assert outcome.text_output == "worked"
     assert selected == [source]
@@ -423,17 +389,8 @@ async def test_ticket_workflow_runs_only_through_its_selector(monkeypatch, sourc
 async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
     monkeypatch, reply, output
 ):
-    from guildbotics.drivers import command_runner, ticket_selector
+    from guildbotics.drivers import ticket_selector
     from guildbotics.runtime.workflow_invocation import TICKET_WORKFLOW_COMMAND
-
-    class FakeRunner:
-        command_name = TICKET_WORKFLOW_COMMAND
-
-        def __init__(self, context):
-            self.context = context
-
-        async def run(self):
-            raise AssertionError("no ticket, no workflow")
 
     class IdleSelector:
         def __init__(self, context, *, source):
@@ -443,12 +400,12 @@ async def test_ticket_workflow_without_a_run_outputs_what_the_selector_said(
             return reply
 
     monkeypatch.setattr(ticket_selector, "TicketSelector", IdleSelector)
-    context = DummyContext()
-    context.person = SimpleNamespace(person_id="aiko")
+    booted = _environment(monkeypatch)
 
     outcome = await command_runner.run_main_command(
-        FakeRunner(context), source="manual"
+        _prepared(command_name=TICKET_WORKFLOW_COMMAND), source="manual"
     )
+    assert booted.opened == []
 
     assert outcome.text_output == output
 
@@ -458,9 +415,8 @@ async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured
     monkeypatch,
 ):
     """Which tool a turn uses is decided while the command runs, so the
-    environment is started able to run each of the member's slots."""
-    from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_runtime import environment
+    environment is started able to run each of the member's slots, and held
+    to what the command declares."""
     from guildbotics.intelligences.brains import cli_agent
 
     monkeypatch.setitem(
@@ -472,22 +428,14 @@ async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured
             "again": cli_agent.ExecutableInfo(adapter="claude"),
         },
     )
-    seen: list[frozenset[str]] = []
+    booted = _environment(monkeypatch)
+    declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
 
-    class Turning(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
+    await command_runner.run_in_environment(_prepared(access=declared))
 
-        async def run(self):
-            seen.append(environment.running_command().tools)
-            return await super().run()
-
-    spec = _main_spec()
-    spec.command_class = Turning
-    await run_in_environment(_runner_for(spec))
-
-    assert seen == [frozenset({"claude", "codex"})]
+    ((opened,),) = [booted.opened]
+    assert opened["tools"] == frozenset({"claude", "codex"})
+    assert opened["access"] == declared
 
 
 def _unreadable(name: str):
@@ -540,25 +488,14 @@ async def test_invalid_contract_settings_fail_the_command_when_it_starts(
             "permission": _unreadable(str(unreadable)),
         }[failure],
     )
-    ran: list[str] = []
-
-    class Plain(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-        async def run(self):
-            ran.append("ran")
-            return await super().run()
-
-    spec = _main_spec()
-    spec.command_class = Plain
+    booted: list[object] = []
+    monkeypatch.setattr(environment, "_start", lambda *args, **_: booted.append(args))
 
     with pytest.raises(CommandError) as refused:
-        await run_in_environment(_runner_for(spec))
+        await run_in_environment(_prepared())
 
     assert str(refused.value) == (message or filesystem_permission_problem(unreadable))
-    assert ran == []
+    assert booted == []
     assert environment._COMMAND.get() is None
 
 
@@ -566,30 +503,15 @@ async def test_invalid_contract_settings_fail_the_command_when_it_starts(
 async def test_invalid_ai_cli_tool_settings_fail_the_command_when_it_starts(
     monkeypatch,
 ):
-    from guildbotics.commands.errors import CommandError
-    from guildbotics.drivers import command_runner
-
     def invalid(person_id):
         raise ValueError(f"AI CLI tool slot 'default' of {person_id} is invalid")
 
     monkeypatch.setattr(command_runner, "get_cli_agent_mapping", invalid)
-    ran: list[str] = []
-
-    class Plain(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-        async def run(self):
-            ran.append("ran")
-            return await super().run()
-
-    spec = _main_spec()
-    spec.command_class = Plain
+    booted = _environment(monkeypatch)
 
     with pytest.raises(CommandError, match="slot 'default' of aiko is invalid"):
-        await command_runner.run_in_environment(_runner_for(spec))
-    assert ran == []
+        await command_runner.run_in_environment(_prepared())
+    assert booted.opened == []
 
 
 def test_host_ledger_needs_a_workspace_only_when_a_turn_uses_it(monkeypatch):
@@ -625,7 +547,6 @@ async def test_the_run_is_granted_for_its_member_and_run(
     as and the run it records to: its workflow run's, or else one of its own
     -- its trace's, or a fresh one outside any."""
     from guildbotics.drivers.command_runner import run_in_environment
-    from guildbotics.intelligences.agent_runtime import environment
     from guildbotics.intelligences.agent_runtime.host_window import HostWindow
     from guildbotics.observability import trace_scope
     from guildbotics.runtime.workflow_invocation import (
@@ -633,38 +554,215 @@ async def test_the_run_is_granted_for_its_member_and_run(
         WorkflowInvocation,
     )
 
-    served: list[HostWindow] = []
-
-    class Shared:
-        def __init__(self, access, contract, tools, **_where) -> None:
-            self.access = access
-            self.tools = tools
-
-        def serve(self, host) -> None:
-            served.append(host)
-
-        async def close(self) -> None:
-            pass
-
-    class Quiet(DummyCommand):
-        @staticmethod
-        def populate_spec(*_):
-            pass
-
-    monkeypatch.setattr(environment, "_SharedEnvironment", Shared)
-    spec = _main_spec()
-    spec.command_class = Quiet
-    runner = _runner_for(spec)
+    booted = _environment(monkeypatch)
+    command = _prepared()
     if trigger is not None:
-        runner.context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
+        command.context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
             "workflows/x", "aiko", "routine", trigger, payload
         )
     if traced:
         with trace_scope("scheduler", trace_id="trace"):
-            await run_in_environment(runner)
+            await run_in_environment(command)
     else:
-        await run_in_environment(runner)
+        await run_in_environment(command)
 
-    [grant] = served
+    [grant] = [opened["host"] for opened in booted.opened]
+    assert isinstance(grant, HostWindow)
     assert (grant._person_id, grant._work_kind) == ("aiko", work_kind)
     assert grant._run_id == run_id if run_id else len(grant._run_id) == 32
+
+
+@pytest.mark.asyncio
+async def test_the_grant_ends_with_its_command_however_it_ended(monkeypatch):
+    """What the command's microVM was granted ends with the command -- a
+    turn it left open among it -- whether the command said how it ended or
+    its environment failed."""
+    from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+
+    closed = []
+
+    async def close(self):
+        closed.append(self)
+
+    monkeypatch.setattr(HostWindow, "close", close)
+    booted = _environment(
+        monkeypatch, CommandReply(text_output="ok"), CommandError("broken")
+    )
+
+    await command_runner.run_in_environment(_prepared())
+    with pytest.raises(CommandError, match="broken"):
+        await command_runner.run_in_environment(_prepared())
+
+    assert closed == [opened["host"] for opened in booted.opened]
+    assert len(closed) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_result_crosses_only_as_the_type_the_caller_reads_it_as(
+    monkeypatch,
+):
+    """What the environment returns is the command's to say, so the host
+    reads it only as what it asked for: a caller that reads no result gets
+    none, and a result that is not of its type fails the command."""
+    from guildbotics.intelligences.troubleshooting import TroubleshootingResult
+
+    answer = {"message": "The token expired.", "trace_ids": ["abc"]}
+    booted = _environment(
+        monkeypatch,
+        CommandReply(result=answer, text_output="out"),
+        CommandReply(result=answer, text_output="out"),
+        CommandReply(result={"message": 3}, text_output="out"),
+    )
+
+    unread = await command_runner.run_in_environment(_prepared())
+    read = await command_runner.run_in_environment(
+        _prepared(result_type=TroubleshootingResult)
+    )
+    with pytest.raises(CommandError, match="did not return a TroubleshootingResult"):
+        await command_runner.run_in_environment(
+            _prepared(result_type=TroubleshootingResult)
+        )
+
+    assert unread == CommandOutcome(result=None, text_output="out")
+    assert read.result == TroubleshootingResult(**answer)
+    assert [request.wants_result for request in booted.requests] == [
+        False,
+        True,
+        True,
+    ]
+
+
+_REFUSED = {
+    "stdout": "",
+    "stderr": "slow down",
+    "returncode": 1,
+    "error_category": "rate_limited",
+    "error_details": {"retry_after_at": "2026-09-27T10:00:00+09:00"},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "raised", "error_type", "code"),
+    [
+        (
+            CommandFailure(command=True, type="CommandError", message="m"),
+            CommandError,
+            "CommandError",
+            "",
+        ),
+        (
+            CommandFailure(command=False, type="ValueError", message="m"),
+            CommandFailedError,
+            "ValueError",
+            "",
+        ),
+        (
+            CommandFailure(
+                command=True,
+                type="CommandError",
+                message="m",
+                cli_agent="codex",
+                cli_agent_message="limited",
+                cli_agent_result=_REFUSED,
+            ),
+            CommandError,
+            "CommandError",
+            "",
+        ),
+        (
+            CommandFailure(
+                command=False,
+                type="CliAgentExecutionError",
+                message="limited",
+                cli_agent="codex",
+                cli_agent_message="limited",
+                cli_agent_result={**_REFUSED, "error_category": "authentication"},
+            ),
+            CliAgentExecutionError,
+            "CliAgentExecutionError",
+            "cli_agent_authentication",
+        ),
+        # A tool's failure that is not one as the host reads it is no cause.
+        (
+            CommandFailure(
+                command=False,
+                type="CliAgentExecutionError",
+                message="limited",
+                cli_agent="codex",
+                cli_agent_result={**_REFUSED, "returncode": "failed"},
+            ),
+            CommandFailedError,
+            "CliAgentExecutionError",
+            "",
+        ),
+        (
+            CommandFailure(
+                command=True,
+                type="CommandError",
+                message="m",
+                cli_agent="codex",
+                cli_agent_result={**_REFUSED, "error_details": "slow down"},
+            ),
+            CommandError,
+            "CommandError",
+            "",
+        ),
+    ],
+)
+async def test_a_failure_in_the_environment_is_rebuilt_as_the_host_knows_it(
+    monkeypatch, failure, raised, error_type, code
+):
+    """A command's own failure is a failed command; anything else is named by
+    what it raised there; and the AI CLI tool's failure it came from reaches
+    the host whole, so a rate limit or a refused login is told apart."""
+    from guildbotics.capabilities.command_failures import command_failure_payload
+    from guildbotics.capabilities.workflow_rate_limits import (
+        workflow_rate_limit_from_exception,
+    )
+
+    _environment(monkeypatch, CommandReply(failure=failure))
+
+    with pytest.raises(raised) as failed:
+        await command_runner.run_in_environment(_prepared())
+
+    assert type(failed.value) is raised
+    assert command_failure_payload(failed.value) == {
+        "error_type": error_type,
+        "code": code,
+    }
+    limit = workflow_rate_limit_from_exception(failed.value)
+    if failure.cli_agent_result == _REFUSED:
+        assert limit is not None
+        assert limit.retry_after_at == "2026-09-27T10:00:00+09:00"
+    else:
+        assert limit is None
+
+
+@pytest.mark.parametrize(
+    ("cwd", "resolved"),
+    [
+        ("/elsewhere", "/elsewhere"),
+        ("../outside", "/outside"),
+        ("/workspace/../etc", "/etc"),
+        ("secret/deeper", "/workspace/secret/deeper"),
+    ],
+)
+def test_a_subcommand_works_only_where_the_environment_lets_one_work(cwd, resolved):
+    """A subcommand's working directory outside what the environment lets a
+    command work in -- beyond what it mounted, or under a corner it covers --
+    holds nothing of the host: it is refused, not run in the microVM's own."""
+    from guildbotics.utils.i18n_tool import t
+
+    factory = CommandSpecFactory(
+        DummyContext(), {"/workspace": True, "/workspace/secret": False}
+    )
+
+    with pytest.raises(CommandError) as refused:
+        factory._resolve_cwd(cwd, Path("/workspace"))
+
+    assert str(refused.value) == t(
+        "intelligences.agent_environment.runtime.outside_mounts",
+        path=Path(resolved),
+    )
+    assert factory._resolve_cwd("child", Path("/workspace")) == Path("/workspace/child")

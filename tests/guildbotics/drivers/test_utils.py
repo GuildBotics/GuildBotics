@@ -5,8 +5,9 @@ from typing import List
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.drivers.command_runner import HostRunLedger, host_command_cwd
+from guildbotics.drivers.command_runner import host_command_cwd
 from guildbotics.drivers.utils import run_command
+from tests.guildbotics.command_environment_doubles import runs_as
 
 
 class StubLogger:
@@ -35,27 +36,23 @@ class FakeContext:
 @pytest.mark.asyncio
 async def test_run_command_success_logs_and_returns_true(monkeypatch):
     events = []
-    ledgers = []
     cwds = []
 
     class FakeCommandRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd, *, ledger):
+        def __init__(self, context, command, args, cwd):
             self.context = context
             self.command_name = command
             self.args = args
             self.cwd = cwd
-            ledgers.append(ledger)
             cwds.append(cwd)
 
         async def run(self):
             # Simulate successful command execution
             await asyncio.sleep(0)
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunner
-    )
+    runs_as(monkeypatch, FakeCommandRunner)
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",
         lambda **kwargs: events.append(kwargs),
@@ -64,8 +61,6 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     ctx = FakeContext()
     ok = await run_command(ctx, "test", task_type="scheduled")
     assert ok is True
-    # Completion-managed turns of a scheduled run report to the host's record.
-    assert [type(ledger) for ledger in ledgers] == [HostRunLedger]
     # A command the host starts on its own works in the exchange directory.
     assert cwds == [host_command_cwd()]
     # Validate logs contain start and finish messages
@@ -90,15 +85,7 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
     class FakeCommandRunnerError:
         access = CommandAccess()
 
-        def __init__(
-            self,
-            context,
-            command,
-            args,
-            cwd,
-            *,
-            ledger,
-        ):
+        def __init__(self, context, command, args, cwd):
             self.context = context
             self.command_name = command
             self.args = args
@@ -108,9 +95,7 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
             await asyncio.sleep(0)
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunnerError
-    )
+    runs_as(monkeypatch, FakeCommandRunnerError)
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",
         lambda **kwargs: events.append(kwargs),

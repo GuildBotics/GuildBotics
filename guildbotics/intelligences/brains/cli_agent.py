@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import time
 from contextlib import suppress
@@ -7,33 +8,44 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
-from uuid import uuid4
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel
 
-from guildbotics.intelligences.agent_environment.provider_state import (
-    record_authentication_outcome,
+from guildbotics.intelligences.agent_runtime.factory import create_native_adapter
+from guildbotics.intelligences.agent_runtime.host_client import (
+    TURN_WORKING_DIRECTORY,
+    ClientConversationStore,
+    CommandFacts,
+    CredentialEntry,
+    EventEntry,
+    HostCallError,
+    HostClient,
+    IoEntry,
+    SummaryEntry,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     CONTEXT_COMPACTION,
     SETTINGS_SCOPE_SESSION,
     SETTINGS_SCOPE_TURN,
+    AgentEvent,
+    AgentEventKind,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    ConversationKey,
     ConversationRecord,
+    ResumePolicy,
     settings_fingerprint,
 )
+from guildbotics.intelligences.agent_runtime.turn import turn_window
 from guildbotics.intelligences.brains.brain import (
     Brain,
     ExecutionMetadata,
     public_parameters,
 )
-from guildbotics.intelligences.brains.span_summary import record_summary
 from guildbotics.intelligences.brains.util import to_plain_text, to_response_class
-from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.intelligences.common import AgentResponse
 from guildbotics.intelligences.effort import (
     ResolvedEffort,
@@ -42,20 +54,20 @@ from guildbotics.intelligences.effort import (
     resolve_effort,
     validate_effort_overlay,
 )
-from guildbotics.observability import correlation_fields, span_scope
-from guildbotics.observability.diagnostics_events import (
-    record_correlated_event,
-    record_correlated_io,
-)
-from guildbotics.observability.session_transcripts import recorded_stderr
+from guildbotics.observability import current_span, span_scope
 from guildbotics.utils.fileio import (
     get_person_config_path,
     load_person_slot_mapping,
     load_yaml_file,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.text_utils import replace_placeholders
 
+#: How many of a turn's records go to the host at a time, and how long one
+#: waits at most before it goes.
+_RECORD_BATCH = 64
+_RECORD_SECONDS = 0.5
 _HOURS_PER_HALF_DAY = 12
 _MAX_24_HOUR = 23
 _MAX_MINUTE = 59
@@ -533,6 +545,36 @@ def get_cli_agent_mapping(person_id: str) -> dict[str, ExecutableInfo]:
     return cli_agent_mapping
 
 
+class _TurnRecords:
+    """What a turn records, sent to the host through the command's window in
+    order: a few at a time, so a turn streaming an event per token neither
+    makes a call per token nor waits long to be seen. What the host refuses
+    to record is logged and dropped: the turn's work is what it did, not the
+    record of it."""
+
+    def __init__(self, client: HostClient) -> None:
+        self.client = client
+        self._entries: list[BaseModel] = []
+        self._sent = time.monotonic()
+
+    async def add(self, entry: BaseModel) -> None:
+        self._entries.append(entry)
+        if (
+            len(self._entries) >= _RECORD_BATCH
+            or time.monotonic() - self._sent >= _RECORD_SECONDS
+        ):
+            await self.flush()
+
+    async def flush(self) -> None:
+        entries, self._entries = self._entries, []
+        self._sent = time.monotonic()
+        if entries:
+            try:
+                await self.client.record(entries)
+            except HostCallError as exc:
+                get_logger().warning("The host did not record the turn: %s", exc)
+
+
 class PromptInfo:
     """
     Information about a prompt for an agent.
@@ -608,47 +650,33 @@ class CliAgentBrain(Brain):
             message (str): The message to pass to the agent.
             **kwargs: Arguments to pass to the agent.
         """
-        cwd = kwargs["cwd"]
-        input = self.prompt_info.to_prompt(
-            message, kwargs.get("session_state", {}), self.template_engine
-        )
-        # The span wraps the whole call (including this brain's own logging) so
-        # logs emitted here are attributed to the "cli_agent" span in diagnostics.
-        effort = self._resolve_provider_effort(kwargs)
-        with span_scope("cli_agent"):
-            started = time.monotonic()
-            self._write_request_io(input, kwargs, effort)
-            try:
-                result = await self._execute(input, cwd, kwargs, effort)
-            except Exception:
-                self._record_summary(status="failed", started=started)
-                raise
-            output: Any = result.stdout
-            self._write_response_io(result)
-            self._record_credential_outcome(result)
-            self._record_summary(
-                status="finished" if result.returncode == 0 else "failed",
-                started=started,
-                result=result,
-            )
-            self.execution = ExecutionMetadata(model=result.model, usage=result.usage)
-            self._raise_if_execution_failed(result)
-
-            if self.response_class:
-                output = to_response_class(output, self.response_class)
-            if isinstance(output, AgentResponse):
-                trace_id = str(correlation_fields().get("trace_id") or "")
-                if output.status == AgentResponse.ASKING and trace_id:
-                    output.message = (
-                        f"{output.message}\n\n"
-                        f"{t('intelligences.cli_agent.trace_reference', trace_id=trace_id)}"
-                    )
-
+        records = _TurnRecords(turn_window())
+        result = await self._run(message, kwargs, records)
+        output: Any = result.stdout
+        self.execution = ExecutionMetadata(model=result.model, usage=result.usage)
+        self._raise_if_execution_failed(result)
+        if self.response_class:
+            output = to_response_class(output, self.response_class)
+        if isinstance(output, AgentResponse):
+            trace_id = CommandFacts.read(os.environ).trace_id
+            if output.status == AgentResponse.ASKING and trace_id:
+                output.message = (
+                    f"{output.message}\n\n"
+                    f"{t('intelligences.cli_agent.trace_reference', trace_id=trace_id)}"
+                )
         return output
 
     async def run_with_execution_details(
         self, message: str, **kwargs
     ) -> CliAgentExecutionResult:
+        return await self._run(message, kwargs, _TurnRecords(turn_window()))
+
+    async def _run(
+        self, message: str, kwargs: dict[str, Any], records: _TurnRecords
+    ) -> CliAgentExecutionResult:
+        """Run the turn in its span, and have the host record it: the request,
+        the turn's events, the response, what it proved of the tool's login,
+        and how the span ended."""
         cwd = kwargs["cwd"]
         input = self.prompt_info.to_prompt(
             message, kwargs.get("session_state", {}), self.template_engine
@@ -656,46 +684,49 @@ class CliAgentBrain(Brain):
         effort = self._resolve_provider_effort(kwargs)
         with span_scope("cli_agent"):
             started = time.monotonic()
-            self._write_request_io(input, kwargs, effort)
+            await records.add(self._request_entry(input, kwargs, effort))
             try:
-                result = await self._execute(input, cwd, kwargs, effort)
-            except Exception:
-                self._record_summary(status="failed", started=started)
+                result = await self._execute(input, cwd, kwargs, effort, records)
+            except BaseException:
+                await self._end_span(records, started, "failed")
                 raise
-            self._write_response_io(result)
-            self._record_credential_outcome(result)
-            self._record_summary(
-                status="finished" if result.returncode == 0 else "failed",
-                started=started,
-                result=result,
+            await records.add(self._response_entry(result))
+            if (credential := self._credential_entry(result)) is not None:
+                await records.add(credential)
+            await self._end_span(
+                records,
+                started,
+                "finished" if result.returncode == 0 else "failed",
+                result,
             )
         return result
 
-    def _record_summary(
+    async def _end_span(
         self,
-        *,
-        status: str,
+        records: _TurnRecords,
         started: float,
+        status: Literal["finished", "failed"],
         result: CliAgentExecutionResult | None = None,
     ) -> None:
-        """Close the span with what the turn really ran on, and log one line.
+        """Close the span with what the turn really ran on.
 
         An unknown model stays empty rather than being papered over with the
         slot name — the span is still attributable through ``agent.slot``, and
         an invented effective value is worse than an absent one. A run that
         never reached the provider has no effective values at all.
         """
-        record_summary(
-            self.logger,
-            "cli_agent",
-            self.cli_agent,
-            status,
-            started=started,
-            attributes={"agent.kind": "cli_agent", "agent.slot": self.cli_agent},
-            model=result.model if result else "",
-            effort=result.effort if result else "",
-            usage=result.usage if result else None,
+        await records.add(
+            SummaryEntry(
+                span=current_span(),
+                slot=self.cli_agent,
+                status=status,
+                model=result.model if result else "",
+                effort=result.effort if result else "",
+                duration_ms=(time.monotonic() - started) * 1000,
+                usage=result.usage if result else None,
+            )
         )
+        await records.flush()
 
     def _resolve_provider_effort(self, kwargs: dict[str, Any]) -> EffortDecision:
         """Resolve the effort level and translate it into provider settings."""
@@ -718,113 +749,60 @@ class CliAgentBrain(Brain):
         cwd: Path | str,
         kwargs: dict[str, Any],
         effort: EffortDecision,
+        records: _TurnRecords,
     ) -> CliAgentExecutionResult:
-        from guildbotics.intelligences.agent_runtime.environment import (
-            current_command_access,
-        )
-        from guildbotics.intelligences.agent_runtime.models import (
-            ConversationKey,
-            ResumePolicy,
-        )
-        from guildbotics.observability import correlation_fields
-        from guildbotics.runtime.person_lease import (
-            PersonExecutionLease,
-            PersonLeaseUnavailableError,
-            current_person_lease,
-        )
-        from guildbotics.utils.fileio import get_workspace_root
-
+        """Run the turn for the command's run, or the workflow run's work the
+        call names: the host's grant holds every turn of the command to its
+        run, and gives it the execution lease the run holds."""
+        facts = CommandFacts.read(os.environ)
         configured = _agent_execution_context(kwargs)
         adapter_name = self.executable_info.adapter
-        run_id = str(
-            configured.get("run_id")
-            or correlation_fields().get("trace_id")
-            or uuid4().hex
-        )
-        data_root = Path(
-            str(configured.get("workspace_data_root") or get_workspace_root())
-        )
-        work_kind = str(configured.get("work_kind") or "manual")
-        work_identity = str(configured.get("work_identity") or run_id)
+        run_id = str(configured.get("run_id") or facts.run_id)
+        work_kind = str(configured.get("work_kind") or facts.work_kind or "manual")
         key = ConversationKey(
             person_id=self.person_id,
             adapter=adapter_name,
             work_kind=work_kind,
-            work_identity=work_identity,
+            work_identity=str(configured.get("work_identity") or run_id),
         )
         try:
             policy = ResumePolicy(str(configured.get("resume_policy") or "fresh"))
         except ValueError:
             policy = ResumePolicy.FRESH
-        # The command declares its turns' access, and every turn of it is held
-        # to that. A read-only turn takes no execution lease. It never touches
-        # the member's workspace, chat or tickets, and holding the lease would
-        # make it unusable exactly when it is most needed: while that member
-        # is busy.
-        read_only = current_command_access().read_only
-        lease = None if read_only else current_person_lease()
-        owned_lease: PersonExecutionLease | None = None
-        if lease is None and not read_only:
-            owned_lease = PersonExecutionLease(self.person_id, data_root)
-            try:
-                owned_lease.acquire(
-                    source="manual",
-                    command=f"agent:{adapter_name}",
-                    work_id=run_id,
-                )
-            except PersonLeaseUnavailableError as exc:
-                return CliAgentExecutionResult(
-                    stdout="",
-                    stderr=str(exc),
-                    returncode=1,
-                    error_category="lease_unavailable",
-                    error_details={"cli_agent": adapter_name},
-                )
-            lease = owned_lease
-        try:
-            if lease is not None:
-                lease.bind_run_id(run_id)
-            context = AgentExecutionContext(
-                person_id=self.person_id,
-                run_id=run_id,
-                cwd=Path(cwd),
-                workspace_data_root=data_root,
-                conversation_key=key,
-                trace_id=str(correlation_fields().get("trace_id") or ""),
-                resume_policy=policy,
-                context_cursor=str(configured.get("context_cursor") or ""),
-                event_id=str(configured.get("event_id") or ""),
-                lease=lease,
-                model=effort.model or str(configured.get("model") or ""),
-                # `default` and unspecified state nothing: the turn imposes no
-                # settings, which leaves a resumed session on the ones it
-                # already has instead of rotating it back to provider defaults.
-                # A level whose overlay is empty also imposed nothing of its
-                # own, so it must not be reported as the turn's effort.
-                effort=(
-                    effort.resolved.resolved
-                    if effort.resolved.intervenes and effort.overlay
-                    else ""
-                ),
-                provider_options=dict(effort.provider_options),
-                rebuild_context=str(configured.get("rebuild_context") or ""),
-                rebuild_context_complete=_context_is_complete(configured),
-                attempt=_attempt(configured),
-                continuation_input=str(configured.get("continuation_input") or ""),
-                participant_labels=str(configured.get("participant_labels") or ""),
-            )
-            return await self._execute_native_turn(
-                input=input,
-                configured=configured,
-                context=context,
-                adapter_name=adapter_name,
-                run_id=run_id,
-            )
-        finally:
-            if lease is not None:
-                lease.unbind_run_id(run_id)
-            if owned_lease is not None:
-                owned_lease.release()
+        context = AgentExecutionContext(
+            person_id=self.person_id,
+            run_id=run_id,
+            cwd=Path(cwd),
+            conversation_key=key,
+            trace_id=facts.trace_id,
+            resume_policy=policy,
+            context_cursor=str(configured.get("context_cursor") or ""),
+            event_id=str(configured.get("event_id") or ""),
+            model=effort.model or str(configured.get("model") or ""),
+            # `default` and unspecified state nothing: the turn imposes no
+            # settings, which leaves a resumed session on the ones it
+            # already has instead of rotating it back to provider defaults.
+            # A level whose overlay is empty also imposed nothing of its
+            # own, so it must not be reported as the turn's effort.
+            effort=(
+                effort.resolved.resolved
+                if effort.resolved.intervenes and effort.overlay
+                else ""
+            ),
+            provider_options=dict(effort.provider_options),
+            rebuild_context=str(configured.get("rebuild_context") or ""),
+            rebuild_context_complete=_context_is_complete(configured),
+            attempt=_attempt(configured),
+            continuation_input=str(configured.get("continuation_input") or ""),
+            participant_labels=str(configured.get("participant_labels") or ""),
+        )
+        return await self._execute_native_turn(
+            input=input,
+            configured=configured,
+            context=context,
+            adapter_name=adapter_name,
+            records=records,
+        )
 
     async def _execute_native_turn(
         self,
@@ -833,201 +811,190 @@ class CliAgentBrain(Brain):
         configured: dict[str, Any],
         context: AgentExecutionContext,
         adapter_name: str,
-        run_id: str,
+        records: _TurnRecords,
     ) -> CliAgentExecutionResult:
-        from guildbotics.intelligences.agent_runtime.diagnostics import (
-            record_agent_event,
-        )
-        from guildbotics.intelligences.agent_runtime.environment import (
-            running_command,
-        )
-        from guildbotics.intelligences.agent_runtime.models import (
-            AgentEvent,
-            AgentEventKind,
-        )
-        from guildbotics.intelligences.agent_runtime.registry import get_native_adapter
-        from guildbotics.intelligences.agent_runtime.store import ConversationStore
-
-        store = ConversationStore(context.workspace_data_root)
-        adapter = await get_native_adapter(self.person_id, adapter_name, run_id)
-        # A turn-scoped adapter re-sends its settings on every turn, so a change
-        # never justifies discarding the session. For a session-scoped one the
-        # fingerprint comes from what the adapter will really impose, so a
-        # request it cannot act on does not read as a change.
-        fingerprint = (
-            ""
-            if getattr(adapter, "settings_scope", SETTINGS_SCOPE_SESSION)
-            == SETTINGS_SCOPE_TURN
-            else settings_fingerprint(adapter.applied_settings(context))
-        )
+        store = ClientConversationStore(records.client)
+        # The adapter is the turn's: its provider starts with the turn and
+        # ends with it, and a session outlives it by being resumed by id.
+        adapter = create_native_adapter(adapter_name)
         try:
-            conversation = store.resolve(
-                context.conversation_key,
-                context.resume_policy,
-                model=context.model,
-                settings_fingerprint=fingerprint,
+            # A turn-scoped adapter re-sends its settings on every turn, so a
+            # change never justifies discarding the session. For a
+            # session-scoped one the fingerprint comes from what the adapter
+            # will really impose, so a request it cannot act on does not read
+            # as a change.
+            fingerprint = (
+                ""
+                if getattr(adapter, "settings_scope", SETTINGS_SCOPE_SESSION)
+                == SETTINGS_SCOPE_TURN
+                else settings_fingerprint(adapter.applied_settings(context))
             )
-        except LookupError as exc:
-            return CliAgentExecutionResult(
-                stdout="",
-                stderr=str(exc),
-                returncode=1,
-                error_category="session_unavailable",
-            )
+            try:
+                conversation = store.resolve(
+                    context.conversation_key,
+                    context.resume_policy,
+                    model=context.model,
+                    settings_fingerprint=fingerprint,
+                )
+            except LookupError as exc:
+                return CliAgentExecutionResult(
+                    stdout="",
+                    stderr=str(exc),
+                    returncode=1,
+                    error_category="session_unavailable",
+                )
 
-        async def emit(event: Any) -> None:
-            record_agent_event(event, context, conversation)
+            async def emit(event: Any) -> None:
+                await records.add(
+                    EventEntry(
+                        span=current_span(),
+                        conversation=conversation.key,
+                        generation=conversation.generation,
+                        context_cursor=context.context_cursor,
+                        event=event,
+                    )
+                )
 
-        try:
-            rejection = _continuation_rejection(context, conversation)
-            if rejection is not None:
+            try:
+                rejection = _continuation_rejection(context, conversation)
+                if rejection is not None:
+                    await emit(
+                        AgentEvent(
+                            AgentEventKind.TURN,
+                            "continuation_rejected",
+                            message=(
+                                "resumed session cannot safely continue this turn; "
+                                "rotating to a fresh session with full context"
+                            ),
+                            provider_session_id=conversation.provider_session_id,
+                            details=rejection,
+                        )
+                    )
+                    conversation.rotate(str(rejection["reason"]))
+                native_input = _native_turn_input(
+                    input, configured, context, conversation
+                )
                 await emit(
                     AgentEvent(
                         AgentEventKind.TURN,
-                        "continuation_rejected",
-                        message=(
-                            "resumed session cannot safely continue this turn; "
-                            "rotating to a fresh session with full context"
-                        ),
+                        "started",
                         provider_session_id=conversation.provider_session_id,
-                        details=rejection,
+                        details={
+                            "work_kind": context.conversation_key.work_kind,
+                            # Where the turn works; the host records what the
+                            # environment confines it to there, whatever provider
+                            # runs it.
+                            TURN_WORKING_DIRECTORY: str(context.cwd),
+                        },
                     )
                 )
-                conversation.rotate(str(rejection["reason"]))
-            native_input = _native_turn_input(input, configured, context, conversation)
-            await emit(
-                AgentEvent(
-                    AgentEventKind.TURN,
-                    "started",
-                    provider_session_id=conversation.provider_session_id,
-                    details={
-                        "work_kind": context.conversation_key.work_kind,
-                        # What the environment confines the turn to, whatever
-                        # provider runs it.
-                        "requested_policy": running_command().contract.requested_policy(
-                            context.cwd, workspace_root=context.workspace_data_root
-                        ),
-                    },
-                )
-            )
-            try:
-                terminal = await adapter.run_turn(
-                    native_input, context, conversation, emit
-                )
-            except Exception as exc:
-                if refused := _login_refused(context, str(exc)):
-                    raise refused from exc
+                try:
+                    terminal = await adapter.run_turn(
+                        native_input, context, conversation, emit
+                    )
+                except Exception as exc:
+                    if refused := _login_refused(context, str(exc)):
+                        raise refused from exc
+                    raise
+                if refused := _login_refused(context, terminal.output):
+                    raise refused
+            except asyncio.CancelledError:
+                store.mark_unhealthy(conversation, "cancelled")
                 raise
-            if refused := _login_refused(context, terminal.output):
-                raise refused
-        except asyncio.CancelledError:
-            store.mark_unhealthy(conversation, "cancelled")
-            raise
-        except AgentRuntimeError as exc:
-            await emit(
-                AgentEvent(
-                    AgentEventKind.FAILED,
-                    exc.category.value,
-                    message=str(exc),
-                    provider_session_id=conversation.provider_session_id,
-                    details=exc.details,
+            except AgentRuntimeError as exc:
+                await emit(
+                    AgentEvent(
+                        AgentEventKind.FAILED,
+                        exc.category.value,
+                        message=str(exc),
+                        provider_session_id=conversation.provider_session_id,
+                        details=exc.details,
+                    )
                 )
+                if exc.rotate_session:
+                    store.mark_unhealthy(conversation, exc.category.value)
+                details = {str(key): str(value) for key, value in exc.details.items()}
+                details["cli_agent"] = adapter_name
+                if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
+                    _normalize_native_retry_after(details)
+                # What the tool itself said last is the only lead a reader has
+                # when the process just ended, so it rides along with the reason.
+                stderr = str(exc)
+                if tail := details.get("stderr", "").strip():
+                    stderr = f"{stderr}\n{tail}"
+                return CliAgentExecutionResult(
+                    stdout="",
+                    stderr=stderr,
+                    returncode=1,
+                    error_category=exc.category.value,
+                    error_details=details,
+                    provider_session_id=conversation.provider_session_id,
+                )
+            conversation.provider_session_id = terminal.provider_session_id
+            conversation.provider_turn_id = terminal.provider_turn_id
+            conversation.provider = adapter_name
+            # A continued session keeps its settings when a turn states none, so
+            # only a turn that established a value may overwrite what is known.
+            conversation.effective_model = (
+                terminal.model or conversation.effective_model
             )
-            if exc.rotate_session:
-                store.mark_unhealthy(conversation, exc.category.value)
-            details = {str(key): str(value) for key, value in exc.details.items()}
-            details["cli_agent"] = adapter_name
-            if exc.category is AgentRuntimeErrorCategory.RATE_LIMITED:
-                _normalize_native_retry_after(details)
-            # What the tool itself said last is the only lead a reader has
-            # when the process just ended, so it rides along with the reason.
-            stderr = str(exc)
-            if tail := details.get("stderr", "").strip():
-                stderr = f"{stderr}\n{tail}"
+            conversation.effective_effort = (
+                terminal.effort or conversation.effective_effort
+            )
+            # The cursor is a monotonic watermark of what was fed into the provider
+            # session; never let a re-dispatched older event rewind it.
+            if not conversation.context_cursor or (
+                _cursor_relation(context.context_cursor, conversation.context_cursor)
+                == "newer"
+            ):
+                conversation.context_cursor = context.context_cursor
+            conversation.last_event_id = context.event_id
+            conversation.last_run_id = context.run_id
+            conversation.turn_count += 1
+            conversation.input_tokens += terminal.usage.get("input_tokens", 0)
+            conversation.output_tokens += terminal.usage.get("output_tokens", 0)
+            # Context usage is the provider's absolute session size, so the latest
+            # snapshot replaces the stored one instead of being summed with it.
+            if "context_size_tokens" in terminal.usage:
+                conversation.context_used_tokens = terminal.usage.get(
+                    "context_used_tokens", 0
+                )
+                conversation.context_size_tokens = terminal.usage["context_size_tokens"]
+            compacted = any(
+                event.kind is AgentEventKind.TURN and event.name == CONTEXT_COMPACTION
+                for event in terminal.events
+            )
+            conversation.healthy = not compacted
+            if compacted:
+                conversation.rotation_reason = CONTEXT_COMPACTION
+            store.save(conversation)
             return CliAgentExecutionResult(
-                stdout="",
-                stderr=stderr,
-                returncode=1,
-                error_category=exc.category.value,
-                error_details=details,
-                provider_session_id=conversation.provider_session_id,
+                stdout=terminal.output.strip(),
+                stderr=terminal.stderr.strip(),
+                returncode=terminal.returncode,
+                provider_session_id=terminal.provider_session_id,
+                provider_turn_id=terminal.provider_turn_id,
+                finish_reason=terminal.finish_reason,
+                usage=dict(terminal.usage),
+                model=terminal.model,
+                effort=terminal.effort,
             )
-        conversation.provider_session_id = terminal.provider_session_id
-        conversation.provider_turn_id = terminal.provider_turn_id
-        conversation.provider = adapter_name
-        # A continued session keeps its settings when a turn states none, so
-        # only a turn that established a value may overwrite what is known.
-        conversation.effective_model = terminal.model or conversation.effective_model
-        conversation.effective_effort = terminal.effort or conversation.effective_effort
-        # The cursor is a monotonic watermark of what was fed into the provider
-        # session; never let a re-dispatched older event rewind it.
-        if not conversation.context_cursor or (
-            _cursor_relation(context.context_cursor, conversation.context_cursor)
-            == "newer"
-        ):
-            conversation.context_cursor = context.context_cursor
-        conversation.last_event_id = context.event_id
-        conversation.last_run_id = context.run_id
-        conversation.turn_count += 1
-        conversation.input_tokens += terminal.usage.get("input_tokens", 0)
-        conversation.output_tokens += terminal.usage.get("output_tokens", 0)
-        # Context usage is the provider's absolute session size, so the latest
-        # snapshot replaces the stored one instead of being summed with it.
-        if "context_size_tokens" in terminal.usage:
-            conversation.context_used_tokens = terminal.usage.get(
-                "context_used_tokens", 0
-            )
-            conversation.context_size_tokens = terminal.usage["context_size_tokens"]
-        compacted = any(
-            event.kind is AgentEventKind.TURN and event.name == CONTEXT_COMPACTION
-            for event in terminal.events
-        )
-        conversation.healthy = not compacted
-        if compacted:
-            conversation.rotation_reason = CONTEXT_COMPACTION
-        store.save(conversation)
-        return CliAgentExecutionResult(
-            stdout=terminal.output.strip(),
-            stderr=terminal.stderr.strip(),
-            returncode=terminal.returncode,
-            provider_session_id=terminal.provider_session_id,
-            provider_turn_id=terminal.provider_turn_id,
-            finish_reason=terminal.finish_reason,
-            usage=dict(terminal.usage),
-            model=terminal.model,
-            effort=terminal.effort,
-        )
+        finally:
+            await adapter.close()
 
-    def _record_credential_outcome(self, result: CliAgentExecutionResult) -> None:
-        """Record what the turn proved about the tool's credentials here.
-
-        All members share the device/tool outcome used by the status card and
-        alerts. Diagnostics retain the member and tool for attribution even
-        outside a trace context. Other failures say nothing about credentials.
-        """
+    def _credential_entry(
+        self, result: CliAgentExecutionResult
+    ) -> CredentialEntry | None:
+        """What the turn proved about the tool's login here, if anything:
+        other failures say nothing about credentials."""
         if result.error_category == "authentication":
-            event_type, code = "credential.failed", "authentication"
+            failed = True
         elif result.error_category or result.returncode != 0:
-            return
+            return None
         else:
-            event_type, code = "credential.verified", ""
-        agent_name = self._agent_name(result)
-        record_authentication_outcome(cli_agent_info(agent_name), failed=bool(code))
-        record_correlated_event(
-            event_type=event_type,
-            default_source="cli_agent",
-            attributes={
-                "credential.provider": "cli_agent",
-                "credential.cli_agent": agent_name,
-                **({"error.category": code} if code else {}),
-            },
-            person_id=self.person_id,
-            payload={
-                "provider": "cli_agent",
-                "cli_agent": agent_name,
-                "person_id": self.person_id,
-                **({"code": code} if code else {}),
-            },
+            failed = False
+        return CredentialEntry(
+            span=current_span(), tool=self._agent_name(result), failed=failed
         )
 
     def _agent_name(self, result: CliAgentExecutionResult) -> str:
@@ -1052,17 +1019,18 @@ class CliAgentBrain(Brain):
                 message=f"AI CLI tool '{self.cli_agent}' produced no response: {detail}",
             )
 
-    def _write_request_io(
+    def _request_entry(
         self, prompt: str, kwargs: dict[str, Any], effort: EffortDecision
-    ) -> None:
-        record_correlated_io(
+    ) -> IoEntry:
+        return IoEntry(
+            span=current_span(),
             io_type="cli_agent.request",
             payload={
                 "effort": effort.diagnostics(),
                 "person_id": self.person_id,
                 "brain": self.name,
                 "cli_agent": self.cli_agent,
-                "cwd": kwargs.get("cwd"),
+                "cwd": str(kwargs.get("cwd")),
                 "response_class": (
                     self.response_class.__name__ if self.response_class else ""
                 ),
@@ -1070,9 +1038,10 @@ class CliAgentBrain(Brain):
             },
         )
 
-    def _write_response_io(self, result: CliAgentExecutionResult) -> None:
-        stderr = recorded_stderr(result.stderr)
-        record_correlated_io(
+    def _response_entry(self, result: CliAgentExecutionResult) -> IoEntry:
+        # The whole stderr goes: the host keeps what it records of it.
+        return IoEntry(
+            span=current_span(),
             io_type="cli_agent.response",
             payload={
                 "person_id": self.person_id,
@@ -1080,8 +1049,7 @@ class CliAgentBrain(Brain):
                 "cli_agent": self.cli_agent,
                 "returncode": result.returncode,
                 "stdout": result.stdout,
-                "stderr": stderr,
-                "stderr_truncated": stderr != result.stderr,
+                "stderr": result.stderr,
             },
         )
 

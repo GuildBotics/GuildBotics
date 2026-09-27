@@ -115,7 +115,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         **overrides,
     )
@@ -591,21 +590,3 @@ def test_decode_events_ignores_steps_with_nothing_to_report() -> None:
         == []
     )
     assert _decode_events({"event": "unknown"}, "c1") == []
-
-
-@pytest.mark.asyncio
-async def test_the_working_directory_is_passed_as_the_guest_spells_it(
-    monkeypatch, tmp_path
-) -> None:
-    """The workspace flag names the directory inside the environment
-    (``/c/...`` on Windows), never the host's own spelling."""
-    monkeypatch.setattr(
-        antigravity_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
-    )
-    calls: list[tuple[Any, ...]] = []
-    _install(monkeypatch, _StreamProcess(_fixture_lines()), calls=calls, kwargs_log=[])
-
-    await _run(AntigravityStreamJsonAdapter(), _context(tmp_path), [])
-
-    run_args = calls[-1]
-    assert run_args[run_args.index("--add-dir") + 1] == f"/guest{tmp_path.as_posix()}"
