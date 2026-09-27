@@ -31,6 +31,9 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.utils.log_utils import get_logger
 
+#: How long the pipes of a process the turn started are read after it ended.
+_PIPES_OUTLIVE_SECONDS = 2.0
+
 _MEMBER_TOOL_INSTRUCTION = """<guildbotics_member_transport>
 A trusted MCP tool named `guildbotics_member` is available. Use it for every
 command documented as `guildbotics member ...`; never run those commands in the
@@ -64,33 +67,99 @@ class ProviderProcess(Protocol):
     async def communicate(self) -> tuple[bytes, bytes]: ...
 
 
-class TurnProcess:
-    """A process the turn started, with the surface adapters speak to."""
+class _Protocol(asyncio.subprocess.SubprocessStreamProtocol):
+    """asyncio's protocol for a process with piped streams, which also says
+    when the process itself has ended (``ended``) -- asyncio's own ``wait``
+    says so only once its pipes have closed too."""
 
-    def __init__(self, process: asyncio.subprocess.Process) -> None:
-        self._process = process
-        assert process.stdin is not None
-        assert process.stdout is not None and process.stderr is not None
-        self.stdin: asyncio.StreamWriter = process.stdin
-        self.stdout: asyncio.StreamReader = process.stdout
-        self.stderr: asyncio.StreamReader = process.stderr
+    def __init__(self, limit: int, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(limit, loop)
+        self.ended: asyncio.Future[None] = loop.create_future()
+
+    def process_exited(self) -> None:
+        super().process_exited()
+        if not self.ended.done():
+            self.ended.set_result(None)
+
+
+class TurnProcess:
+    """A process the turn started, with the surface adapters speak to.
+
+    It ends with the process itself, not with what the process started: a
+    process a provider leaves running may hold its pipes open past it, so
+    they are closed shortly after it ends -- whoever reads them reaches
+    their end then -- and what it left ends with the microVM.
+    """
+
+    def __init__(
+        self, transport: asyncio.SubprocessTransport, protocol: _Protocol
+    ) -> None:
+        self._ended = protocol.ended
+        self._process = asyncio.subprocess.Process(
+            transport, protocol, asyncio.get_running_loop()
+        )
+        assert self._process.stdin is not None
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
+        self.stdin: asyncio.StreamWriter = self._process.stdin
+        self.stdout: asyncio.StreamReader = self._process.stdout
+        self.stderr: asyncio.StreamReader = self._process.stderr
+        self._closing = asyncio.create_task(self._close_once_ended(transport))
+
+    @classmethod
+    async def start(
+        cls,
+        command: str,
+        *args: str,
+        limit: int,
+        cwd: str,
+        env: Mapping[str, str],
+    ) -> TurnProcess:
+        """Start ``command`` with piped standard streams.
+
+        Raises:
+            OSError: When it cannot be started.
+        """
+        loop = asyncio.get_running_loop()
+        transport, protocol = await loop.subprocess_exec(
+            lambda: _Protocol(limit, loop),
+            command,
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+            env=env,
+        )
+        return cls(transport, protocol)
 
     @property
     def returncode(self) -> int | None:
         return self._process.returncode
 
     async def wait(self) -> int:
-        return await self._process.wait()
+        """Wait until the process itself has ended."""
+        await asyncio.shield(self._ended)
+        returncode = self._process.returncode
+        assert returncode is not None
+        return returncode
 
     async def kill(self) -> None:
         """End the process now, and wait until it has."""
         if self._process.returncode is None:
             with suppress(ProcessLookupError):
                 self._process.kill()
-        await self._process.wait()
+        await self.wait()
 
     async def communicate(self) -> tuple[bytes, bytes]:
         return await self._process.communicate()
+
+    async def _close_once_ended(self, transport: asyncio.SubprocessTransport) -> None:
+        try:
+            await self.wait()
+            await asyncio.sleep(_PIPES_OUTLIVE_SECONDS)
+        finally:
+            transport.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,12 +231,9 @@ class Turn:
             TurnError: When it cannot be started.
         """
         try:
-            process = await asyncio.create_subprocess_exec(
+            return await TurnProcess.start(
                 command,
                 *args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
                 limit=limit,
                 cwd=self.spec.cwd,
                 # What the microVM runs everything with -- its PATH among it --
@@ -176,7 +242,6 @@ class Turn:
             )
         except OSError as exc:
             raise TurnError(f"Could not start {command}: {exc}") from exc
-        return TurnProcess(process)
 
     async def write_file(self, path: str, data: bytes) -> None:
         """Write ``data`` at ``path``, making the directories it is in.

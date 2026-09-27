@@ -30,7 +30,8 @@ from guildbotics.intelligences.agent_runtime.turn import Turn
 
 
 class _Process:
-    """A provider process whose exit the test decides."""
+    """A provider process whose exit the test decides; its pipes end with it,
+    as those of a process a turn started do (``TurnProcess``)."""
 
     def __init__(self, *, limit: int = 2**16) -> None:
         self.stdout = asyncio.StreamReader(limit=limit)
@@ -41,6 +42,8 @@ class _Process:
 
     def exit(self, code: int) -> None:
         self.returncode = code
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
         self._exited.set()
 
     async def wait(self) -> int:
@@ -115,7 +118,6 @@ async def test_finish_observes_the_exit_status_of_a_process_exiting_on_its_own()
 @pytest.mark.asyncio
 async def test_finish_ends_a_process_that_outlives_the_grace(monkeypatch) -> None:
     monkeypatch.setattr(provider_process, "_PROCESS_EXIT_GRACE_SECONDS", 0.01)
-    monkeypatch.setattr(provider_process, "_PIPE_DRAIN_TIMEOUT_SECONDS", 0.01)
     process = _Process()
     output = _output(process)
 
@@ -125,8 +127,6 @@ async def test_finish_ends_a_process_that_outlives_the_grace(monkeypatch) -> Non
     assert output.returncode(terminal_seen=False) == -9
     # A terminal result the provider printed outweighs our ending it.
     assert output.returncode(terminal_seen=True) == 0
-    # A stderr that never ends is given up on, not waited for.
-    assert output.stderr == ""
 
 
 @pytest.mark.asyncio

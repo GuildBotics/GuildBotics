@@ -29,7 +29,6 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.turn import ProviderProcess, Turn
 
 _PROCESS_EXIT_GRACE_SECONDS = 2.0
-_PIPE_DRAIN_TIMEOUT_SECONDS = 2.0
 
 
 @asynccontextmanager
@@ -235,16 +234,7 @@ class StreamJsonProcess:
         self._exit_status = (
             observed if observed is not None else (process.returncode or 0)
         )
-        try:
-            stderr = await asyncio.wait_for(
-                self._stderr_task, timeout=_PIPE_DRAIN_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            self._stderr_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._stderr_task
-        else:
-            self.stderr = stderr.decode(errors="replace").strip()
+        self.stderr = (await self._stderr_task).decode(errors="replace").strip()
 
     def returncode(self, *, terminal_seen: bool) -> int:
         """The process's exit status as the turn's outcome, after :meth:`finish`.

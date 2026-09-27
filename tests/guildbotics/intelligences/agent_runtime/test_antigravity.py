@@ -58,18 +58,26 @@ class _CompletedProcess:
 
 
 class _HangingProcess:
-    """A turn that never writes a line and never exits."""
+    """A turn that never writes a line and never exits until it is killed,
+    which ends it and its pipes, as a turn's process ends."""
 
     def __init__(self) -> None:
-        # Neither reader is ever fed or closed, so readline() blocks forever.
+        # Neither reader is fed, so readline() blocks until the kill.
         self.stdout = asyncio.StreamReader()
         self.stderr = asyncio.StreamReader()
-        self.returncode = None
+        self.returncode: int | None = None
         self.pid = 0
+        self.killed = False
 
     async def wait(self) -> int:
         await asyncio.sleep(3600)
         raise AssertionError("unreachable")
+
+    async def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
 
 
 class _StreamProcess:
@@ -531,17 +539,11 @@ async def test_terminal_result_survives_a_nonzero_exit(monkeypatch, tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> None:
-    terminated: list[Any] = []
-    _install(monkeypatch, _HangingProcess())
+    hanging = _HangingProcess()
+    _install(monkeypatch, hanging)
     monkeypatch.setattr(
         "guildbotics.intelligences.agent_runtime.antigravity._TIMEOUT_GRACE_SECONDS",
         0.01,
-    )
-    monkeypatch.setattr(
-        _HangingProcess,
-        "kill",
-        lambda self: terminated.append(self) or asyncio.sleep(0),
-        raising=False,
     )
     adapter = AntigravityStreamJsonAdapter(timeout=0.01)
 
@@ -549,7 +551,7 @@ async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> Non
         await _run(adapter, _context(tmp_path), [])
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert terminated
+    assert hanging.killed
 
 
 @pytest.mark.asyncio
