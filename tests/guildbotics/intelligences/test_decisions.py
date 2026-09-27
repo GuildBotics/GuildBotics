@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from guildbotics.intelligences.brains import jev
+from guildbotics.intelligences.brains import inference_host, jev
 from guildbotics.intelligences.brains.brain import (
     Brain,
     ExecutionMetadata,
@@ -501,7 +501,7 @@ async def test_jev_uses_latest_and_records_the_returned_version(monkeypatch):
             "usage": {"input_tokens": 12},
         }
 
-    monkeypatch.setattr(jev, "request", request)
+    monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     await brain.run(json.dumps({"state": "test", "questions": {}}))
     assert brain.execution.model == "jev-future-test-version"
@@ -522,7 +522,7 @@ async def test_jev_one_request_and_failure_is_sanitized(tmp_path, monkeypatch):
         calls.append(args)
         raise RuntimeError("private-test-key")
 
-    monkeypatch.setattr(jev, "request", request)
+    monkeypatch.setattr(inference_host, "request", request)
     brain = jev.JevBrain("alice", "chat_decision", logging.getLogger())
     factory = SimpleNamespace(create_brain=lambda *args, **kwargs: brain)
     result = await engines.evaluate(
@@ -727,4 +727,4 @@ async def test_jev_credentials_are_fresh_and_never_fall_back_to_environment(
     assert jev.credential(tmp_path) == "current-secret"
     store.delete(jev.JEV_KEY)
     with pytest.raises(ValueError, match="credentials_missing"):
-        await jev.request(tmp_path, "POST", "/systemone", {})
+        await inference_host.request(tmp_path, "POST", "/systemone", {})

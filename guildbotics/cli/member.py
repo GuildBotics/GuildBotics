@@ -955,6 +955,38 @@ async def _chat_inspect_channel(
         await service.aclose()
 
 
+@chat.command(name="resolve-channel")
+@_read_only_member_command
+@_person_option
+@_service_option
+@click.option("--channel-name", required=True, help="Channel name to resolve.")
+@_json_format_option
+def chat_resolve_channel(
+    person: str, service_name: str, channel_name: str, output_format: str
+) -> None:
+    _run(
+        _chat_resolve_channel(person, service_name, channel_name),
+        output_format=output_format,
+    )
+
+
+async def _chat_resolve_channel(
+    person: str, service_name: str, channel_name: str
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        return await service.resolve_channel(channel_name)
+    finally:
+        await service.aclose()
+
+
 @chat_inspect.command(name="thread")
 @_read_only_member_command
 @_person_option

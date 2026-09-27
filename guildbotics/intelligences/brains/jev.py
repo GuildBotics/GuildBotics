@@ -4,33 +4,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from guildbotics.intelligences.brains.brain import Brain, ExecutionMetadata
-from guildbotics.utils.fileio import get_workspace_config_dir
-from guildbotics.utils.secret_store import KeyringSecretStore
+from guildbotics.intelligences.brains.inference import JevCall, inference
 
 JEV_KEY = "TYPESAFE_API_KEY"
 JEV_MODEL = "jev-latest"
 
 
 def credential(config_dir: Path) -> str:
+    """The workspace's Jev key: only the host holds it."""
+    # Imported here: the keychain is the host's.
+    from guildbotics.utils.secret_store import KeyringSecretStore
+
     return KeyringSecretStore(config_dir).get(JEV_KEY) or ""
-
-
-async def request(config_dir: Path, method: str, path: str, payload: Any = None):
-    key = credential(config_dir)
-    if not key:
-        raise ValueError("credentials_missing")
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.request(
-            method,
-            "https://api.typesafe.ai/v1" + path,
-            headers={"Authorization": f"Bearer {key}"},
-            json=payload,
-        )
-        response.raise_for_status()
-        return response.json()
 
 
 class JevBrain(Brain):
@@ -50,15 +36,12 @@ class JevBrain(Brain):
 
     async def run(self, message: str, **kwargs):
         payload = json.loads(message)
-        result = await request(
-            get_workspace_config_dir(),
-            "POST",
-            "/systemone",
-            {
-                "state": payload["state"],
-                "questions": payload["questions"],
-                "model": self.model,
-            },
+        result = await inference().jev(
+            JevCall(
+                state=payload["state"],
+                questions=payload["questions"],
+                model=self.model,
+            )
         )
         self.execution = ExecutionMetadata(
             model=result["model"],

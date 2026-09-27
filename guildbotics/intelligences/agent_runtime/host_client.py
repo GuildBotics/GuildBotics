@@ -17,6 +17,7 @@ fixed for the command, as its grant is, so none is asked for.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
 from typing import Annotated, Any, Literal
@@ -212,6 +213,13 @@ class HostClient:
         self.call(
             "record", entries=[entry.model_dump(mode="json") for entry in entries]
         )
+
+
+def command_window() -> HostClient | None:
+    """The command's window to the host, when this process runs inside the
+    command's isolated environment; none on the host."""
+    url = os.environ.get(HOST_URL_ENV)
+    return HostClient(url, os.environ[HOST_TOKEN_ENV]) if url else None
 
 
 class ClientRunLedger:

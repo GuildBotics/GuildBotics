@@ -5,18 +5,29 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
 
+from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.commands.metadata import CommandAccess
+from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+from guildbotics.entities.team import Person
+from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.integrations.window import (
+    MemberCommandError,
+    WindowChatService,
+    WindowIntegrationFactory,
+)
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
@@ -51,6 +62,11 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
+from guildbotics.intelligences.brains import inference_host
+from guildbotics.intelligences.brains.inference import AgnoCall, inference
+from guildbotics.intelligences.brains.inference_host import DirectInference
+from guildbotics.intelligences.brains.jev import JevBrain
+from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import SpanContext, trace_scope
 from guildbotics.observability import diagnostics_events
 from guildbotics.runtime.person_lease import PersonExecutionLease
@@ -68,6 +84,7 @@ from tests.guildbotics.intelligences.agent_runtime.test_environment import (
     _Booted,
     _device,
 )
+from tests.guildbotics.intelligences.brains.test_inference import _Model
 
 _RUN = "run-1"
 
@@ -583,11 +600,23 @@ def test_a_guest_path_is_taken_back_to_the_host_path_it_spells(tmp_path) -> None
             host_path(guest)
 
 
-def test_the_client_loads_nothing_only_the_host_may_hold() -> None:
-    """It runs inside the command's microVM, beside the command's machinery."""
+@pytest.mark.parametrize(
+    "module",
+    [
+        "guildbotics.intelligences.agent_runtime.host_client",
+        "guildbotics.intelligences.brains.agno_agent",
+        "guildbotics.intelligences.brains.jev",
+        "guildbotics.integrations.window",
+    ],
+)
+def test_what_runs_in_the_environment_loads_nothing_only_the_host_may_hold(
+    module: str,
+) -> None:
+    """The client, the brains, and the member's services run inside the
+    command's microVM, beside the command's machinery."""
     probe = (
-        "import json, sys\n"
-        "import guildbotics.intelligences.agent_runtime.host_client\n"
+        "import importlib, json, sys\n"
+        f"importlib.import_module({module!r})\n"
         "print(json.dumps(sorted(sys.modules)))\n"
     )
     loaded = json.loads(
@@ -596,6 +625,7 @@ def test_the_client_loads_nothing_only_the_host_may_hold() -> None:
         ).stdout
     )
     host_only = {
+        "agno",
         "keyring",
         "mcp",
         "microsandbox",
@@ -603,6 +633,7 @@ def test_the_client_loads_nothing_only_the_host_may_hold() -> None:
         "uvicorn",
         "guildbotics.intelligences.agent_runtime.environment",
         "guildbotics.intelligences.agent_runtime.member_broker",
+        "guildbotics.intelligences.brains.inference_host",
         "guildbotics.observability.diagnostics_events",
     }
     assert host_only.isdisjoint(module.split(".")[0] for module in loaded)
@@ -762,3 +793,258 @@ async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
         "failed",
         "The call's result is too large.",
     )
+
+
+@pytest.fixture
+def in_the_environment(monkeypatch):
+    """This process as the command's microVM: what it asks of the host goes
+    through the window the test names, as its boot variables would say."""
+
+    def enter(endpoint) -> None:
+        monkeypatch.setenv(HOST_URL_ENV, endpoint.host_url)
+        monkeypatch.setenv(HOST_TOKEN_ENV, endpoint.token)
+
+    return enter
+
+
+@pytest.fixture
+def sent(monkeypatch) -> list[tuple[str, str]]:
+    """Every call the microVM sends, as the wire carries it."""
+    calls: list[tuple[str, str]] = []
+    send = HostClient.acall
+
+    async def acall(self: HostClient, name: str, **arguments: Any) -> Any:
+        calls.append((name, json.dumps(arguments)))
+        return await send(self, name, **arguments)
+
+    monkeypatch.setattr(HostClient, "acall", acall)
+    return calls
+
+
+_ANSWER_SCHEMA = "class Answer(BaseModel):\n    text: str\n"
+
+
+@pytest.mark.asyncio
+async def test_a_brain_in_the_environment_has_the_host_ask_its_model(
+    tmp_path, monkeypatch, written, in_the_environment, sent
+):
+    """The brain expands its template and reads the answer where it runs; the
+    host asks the model of the member's slot with the schema of the output,
+    and records the call under the brain's span, in the command's trace."""
+    model = _Model(monkeypatch, {"text": "Tea it is."}, person_id="aiko")
+    async with _command(monkeypatch, tmp_path) as command:
+        in_the_environment(await environment.running_command().window())
+        assert not isinstance(inference(), DirectInference)
+        brain = SimpleBrainFactory().create_brain(
+            "aiko",
+            "functions/answer",
+            "en",
+            logging.getLogger("test"),
+            {
+                "body": "Answer about {topic}.",
+                "schema": _ANSWER_SCHEMA,
+                "response_class": "Answer",
+            },
+        )
+        answer = await brain.run(
+            "hello", session_state={"topic": "tea", "context": object()}
+        )
+
+    assert type(answer).__name__ == "Answer"
+    assert answer.model_dump() == {"text": "Tea it is."}
+    assert brain.execution.model == "test-model"
+    (asked,) = model.asked
+    assert asked["message"] == "hello"
+    assert asked["description"] == "Answer about tea."
+    assert asked["session_state"] == {"topic": "tea"}
+    schema = asked["output_schema"].model_json_schema()
+    assert schema == type(answer).model_json_schema()
+    assert [name for name, _ in sent] == ["agno"]
+    request, response, summary = written
+    assert (request["type"], response["type"]) == ("llm.request", "llm.response")
+    assert request["payload"]["description"] == "Answer about tea."
+    assert summary["type"] == "span.finished"
+    for record in written:
+        assert record["trace_id"] == command.trace_id
+        assert record["span"] == "llm"
+    assert request["span_id"] == summary["span_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "withheld"),
+    [
+        (
+            {"schema": _ANSWER_SCHEMA, "response_class": "Answer"},
+            ("class Answer", "BaseModel", "response_class"),
+        ),
+        (
+            {"response_class": "guildbotics.intelligences.common.MessageResponse"},
+            ("guildbotics.intelligences", "response_class"),
+        ),
+    ],
+)
+async def test_what_a_template_names_to_load_never_reaches_the_host(
+    tmp_path, monkeypatch, in_the_environment, sent, config, withheld
+):
+    """The host is sent the JSON Schema of the output: never the source that
+    defines its class, nor the name it is loaded by."""
+    _Model(monkeypatch, "{}", person_id="aiko")
+    async with _command(monkeypatch, tmp_path):
+        in_the_environment(await environment.running_command().window())
+        brain = SimpleBrainFactory().create_brain(
+            "aiko",
+            "functions/answer",
+            "en",
+            logging.getLogger("test"),
+            {"body": "Answer.", **config},
+        )
+        await brain.run("hello")
+
+    ((name, arguments),) = sent
+    assert name == "agno"
+    assert json.loads(arguments)["call"]["output_schema"]["type"] == "object"
+    for text in withheld:
+        assert text not in arguments
+
+
+@pytest.mark.asyncio
+async def test_jev_is_asked_by_the_host(tmp_path, monkeypatch, in_the_environment):
+    asked: list[Any] = []
+
+    async def request(_root, method, path, payload):
+        asked.append(payload)
+        return {"model": "jev-1", "answers": {"q": 1}}
+
+    monkeypatch.setattr(inference_host, "request", request)
+    async with _command(monkeypatch, tmp_path):
+        in_the_environment(await environment.running_command().window())
+        brain = JevBrain("aiko", "chat_decision", logging.getLogger("test"))
+        result = await brain.run(json.dumps({"state": {"s": 1}, "questions": {}}))
+
+    assert result == {"model": "jev-1", "answers": {"q": 1}}
+    assert asked == [{"state": {"s": 1}, "questions": {}, "model": "jev-latest"}]
+
+
+@pytest.mark.asyncio
+async def test_the_model_asked_for_is_only_the_grants_members(tmp_path, monkeypatch):
+    model = _Model(monkeypatch, "reply", person_id="kenji")
+    call = AgnoCall(
+        brain="functions/reply",
+        slot="default",
+        effort=ResolvedEffort(),
+        description="",
+        message="hello",
+    )
+    async with _command(monkeypatch, tmp_path) as command:
+        with pytest.raises(HostCallError) as refused:
+            await command.client.acall(
+                "agno", person_id="kenji", call=call.model_dump(mode="json")
+            )
+
+    assert refused.value.category == "refused"
+    assert model.asked == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
+    tmp_path, monkeypatch, written, in_the_environment, caplog
+):
+    """Its message may carry the key it was made with; the host records the
+    failed span."""
+    _Model(monkeypatch, RuntimeError("401 key sk-secret"), person_id="aiko")
+    async with _command(monkeypatch, tmp_path):
+        in_the_environment(await environment.running_command().window())
+        brain = SimpleBrainFactory().create_brain(
+            "aiko", "functions/reply", "en", logging.getLogger("test"), {"body": "Hi."}
+        )
+        with pytest.raises(HostCallError) as failed:
+            await brain.run("hello")
+
+    assert failed.value.category == "failed"
+    assert "sk-secret" not in json.dumps(failed.value.payload())
+    assert failed.value.details["error_type"] == "RuntimeError"
+    # Nor is it logged: the host's log is kept and shown.
+    assert "sk-secret" not in caplog.text
+    assert "span.failed" in [record["type"] for record in written]
+
+
+class _Chat:
+    """The member's chat as Slack would answer it."""
+
+    def __init__(self) -> None:
+        self.posted: list[tuple[str, str]] = []
+
+    async def resolve_channel_id(self, channel_name: str) -> str | None:
+        return {"general": "C9"}.get(channel_name)
+
+    async def post_message(self, channel_id: str, text: str, **_: Any):
+        self.posted.append((channel_id, text))
+        return ChatPostResult(channel_id, "100.1", "")
+
+
+@pytest.fixture
+def chat(monkeypatch) -> _Chat:
+    """The chat of the member the member commands resolve."""
+    from guildbotics.cli import member as member_cli
+    from guildbotics.entities.team import Person, Project, Team
+
+    service = _Chat()
+    person = Person(person_id="aiko", name="Aiko")
+    context = SimpleNamespace(
+        team=Team(project=Project(name="demo"), members=[person]),
+        logger=logging.getLogger("test"),
+        get_chat_service=lambda: service,
+    )
+    monkeypatch.setattr(
+        member_cli, "resolve_member_context", lambda _person: (context, person)
+    )
+    return service
+
+
+@pytest.mark.asyncio
+async def test_the_commands_chat_is_the_members_chat_commands(
+    tmp_path, monkeypatch, chat
+):
+    """Through the window, as the grant's member for the grant's run."""
+    lease = PersonExecutionLease("aiko")
+    lease.acquire(source="manual", command="test", work_id="work")
+    try:
+        async with _command(monkeypatch, tmp_path) as command:
+            service = WindowIntegrationFactory(command.client).create_chat_service(
+                logging.getLogger("test"), Person(person_id="aiko", name="Aiko"), None
+            )
+            general = await service.resolve_channel_id("general")
+            missing = await service.resolve_channel_id("nowhere")
+            posted = await service.post_message("C9", "Good morning!")
+    finally:
+        lease.release()
+
+    assert (general, missing) == ("C9", None)
+    assert posted == ChatPostResult("C9", "100.1", "")
+    assert chat.posted == [("C9", "Good morning!")]
+    (evidence,) = TaskRunStore().evidence(_RUN)
+    assert evidence["evidence_type"] == "chat_post"
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_command_can_read_its_chat_but_not_post(
+    tmp_path, monkeypatch, chat
+):
+    """Its member commands hold no lease, even while the member holds one."""
+    lease = PersonExecutionLease("aiko")
+    lease.acquire(source="manual", command="test", work_id="work")
+    try:
+        async with _command(
+            monkeypatch, tmp_path, access=CommandAccess(read_only=True)
+        ) as command:
+            service = WindowChatService(command.client, "aiko")
+            general = await service.resolve_channel_id("general")
+            with pytest.raises(MemberCommandError) as refused:
+                await service.post_message("C9", "Good morning!")
+    finally:
+        lease.release()
+
+    assert general == "C9"
+    assert str(refused.value).endswith(t("cli.member.lease.invalid_delegation"))
+    assert chat.posted == []

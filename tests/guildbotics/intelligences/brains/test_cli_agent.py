@@ -5,7 +5,7 @@ import pytest
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_runtime.environment import running_command
 from guildbotics.intelligences.brains import cli_agent
-from guildbotics.intelligences.brains import util as brain_util
+from guildbotics.intelligences.brains import span_summary
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
 
@@ -276,7 +276,7 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
     monkeypatch.setattr(
-        brain_util,
+        span_summary,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -322,7 +322,7 @@ async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, c
         cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
     )
     monkeypatch.setattr(
-        brain_util,
+        span_summary,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -356,7 +356,7 @@ async def test_a_failed_turn_records_a_failed_span_without_effective_values(
         {"default": cli_agent.ExecutableInfo(adapter="claude")},
     )
     monkeypatch.setattr(
-        brain_util,
+        span_summary,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
@@ -387,7 +387,7 @@ async def test_execution_details_carry_the_effective_model_and_effort(
         ),
     )
     monkeypatch.setattr(
-        brain_util,
+        span_summary,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )

@@ -51,7 +51,10 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     HostCallError,
     IoEntry,
 )
-from guildbotics.intelligences.agent_runtime.member_broker import MemberBrokerEndpoint
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MemberBrokerEndpoint,
+    member_invocation,
+)
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     ConversationKey,
@@ -59,6 +62,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
+from guildbotics.intelligences.brains.inference import AgnoCall, JevCall
 from guildbotics.observability import bind_span, correlation_fields
 from guildbotics.observability.diagnostics_events import (
     record_correlated_io,
@@ -70,6 +74,7 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     get_workspace_config_dir,
 )
+from guildbotics.utils.log_utils import get_logger
 
 #: The kinds of work only a workflow run of that kind does.
 _WORKFLOW_KINDS = frozenset({"ticket", "chat"})
@@ -86,6 +91,9 @@ _CALLS = frozenset(
         "save",
         "mark_unhealthy",
         "record",
+        "member",
+        "agno",
+        "jev",
     }
 )
 
@@ -310,6 +318,48 @@ class HostWindow:
                 self._check_conversation(entry.conversation)
         await asyncio.to_thread(self._write, entries)
 
+    @validate_call
+    async def member(self, arguments: list[str], stdin: str = "") -> dict[str, Any]:
+        """Run a member command as the grant's member, for the grant's run: what
+        the command asks of the member's services itself, as a turn of it
+        would; ``stdin`` is what ``--content-stdin`` reads."""
+        result = await running_command().member(
+            self._person_id,
+            arguments,
+            member_invocation(
+                self._work_kind,
+                self._run_id,
+                str(correlation_fields().get("trace_id") or ""),
+                command_lease(),
+            ),
+            stdin,
+        )
+        return result.model_dump()
+
+    @validate_call
+    async def agno(self, person_id: str, call: AgnoCall) -> dict[str, Any]:
+        """Have the model of the member's slot answer a brain's request."""
+        if person_id != self._person_id:
+            raise HostCallError("refused", "The model is another member's.")
+        # Imported here: only a command that asks loads what the calls need.
+        from guildbotics.intelligences.brains.inference_host import DirectInference
+
+        try:
+            answer = await DirectInference().agno(person_id, call)
+            return answer.model_dump(mode="json", fallback=str)
+        except Exception as exc:
+            raise _inference_failed(exc) from exc
+
+    @validate_call
+    async def jev(self, call: JevCall) -> dict[str, Any]:
+        """Ask Jev a brain's questions."""
+        from guildbotics.intelligences.brains.inference_host import DirectInference
+
+        try:
+            return await DirectInference().jev(call)
+        except Exception as exc:
+            raise _inference_failed(exc) from exc
+
     def _write(self, entries: list[Entry]) -> None:
         for entry in entries:
             with bind_span(entry.span) if entry.span else nullcontext():
@@ -375,3 +425,19 @@ class HostWindow:
         if key.adapter not in running_command().tools:
             raise HostCallError("refused", "The command does not run that tool.")
         self._check_run(self._run_id, key.work_kind)
+
+
+def _inference_failed(exc: Exception) -> HostCallError:
+    """How a failed inference call reaches the command's environment: by its
+    kind, never its message, which may carry the credentials it was made with
+    (the host's log is kept and shown, so it is not written there either)."""
+    kind = type(exc).__name__
+    status = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+    get_logger().warning("An inference call of a command failed (%s).", kind)
+    return HostCallError(
+        "failed",
+        f"The inference call failed ({kind}).",
+        {"error_type": kind, **({"status_code": status} if status else {})},
+    )

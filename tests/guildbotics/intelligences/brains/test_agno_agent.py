@@ -7,8 +7,8 @@ import pytest
 from agno.agent import Agent
 from pydantic import BaseModel, ValidationError
 
-from guildbotics.intelligences.brains import agno_agent
-from guildbotics.intelligences.brains import util as brain_util
+from guildbotics.intelligences.brains import agno_agent, inference_host
+from guildbotics.intelligences.brains import span_summary
 
 
 @pytest.mark.asyncio
@@ -39,19 +39,19 @@ async def test_agno_agent_records_request_response_and_span(
             return FakeResponse()
 
     monkeypatch.setattr(
-        agno_agent,
+        inference_host,
         "record_correlated_io",
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
     monkeypatch.setattr(
-        brain_util,
+        span_summary,
         "record_span_summary",
         lambda **kwargs: span_records.append(kwargs),
     )
     monkeypatch.setattr(
-        agno_agent, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host, "instantiate_class", lambda *args, **kwargs: object()
     )
-    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
     try:
         brain = agno_agent.AgnoAgentDefaultBrain(
@@ -105,12 +105,12 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
     original = agno_agent.person_model_mapping.copy()
     agno_agent.person_model_mapping.clear()
     agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
-    monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
-    monkeypatch.setattr(brain_util, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
+    monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
-        agno_agent, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host, "instantiate_class", lambda *args, **kwargs: object()
     )
-    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
     try:
         brain = agno_agent.AgnoAgentDefaultBrain(
@@ -125,8 +125,9 @@ async def test_agent_kwargs_are_accepted_by_the_installed_agno(monkeypatch) -> N
         agno_agent.person_model_mapping.clear()
         agno_agent.person_model_mapping.update(original)
 
-    # The structured-output model reaches agno under its own parameter name.
-    assert captured["output_schema"] is Reply
+    # The structured-output model reaches agno under its own parameter name,
+    # showing the provider the schema the brain's class has.
+    assert captured["output_schema"].model_json_schema() == Reply.model_json_schema()
     assert "response_model" not in captured
     inspect.signature(Agent.__init__).bind_partial(None, **captured)
 
@@ -159,12 +160,12 @@ async def test_the_runtime_context_never_reaches_the_agent(monkeypatch) -> None:
     original = agno_agent.person_model_mapping.copy()
     agno_agent.person_model_mapping.clear()
     agno_agent.person_model_mapping["p1"] = {"default": _model_config()}
-    monkeypatch.setattr(agno_agent, "record_correlated_io", lambda **kwargs: None)
-    monkeypatch.setattr(brain_util, "record_span_summary", lambda **kwargs: None)
+    monkeypatch.setattr(inference_host, "record_correlated_io", lambda **kwargs: None)
+    monkeypatch.setattr(span_summary, "record_span_summary", lambda **kwargs: None)
     monkeypatch.setattr(
-        agno_agent, "instantiate_class", lambda *args, **kwargs: object()
+        inference_host, "instantiate_class", lambda *args, **kwargs: object()
     )
-    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
     try:
         brain = agno_agent.AgnoAgentDefaultBrain(
@@ -226,16 +227,16 @@ async def _run_with_effort(
         return object()
 
     monkeypatch.setattr(
-        agno_agent,
+        inference_host,
         "record_correlated_io",
         lambda *, io_type, payload: io_records.append((io_type, payload)),
     )
     spans = span_records if span_records is not None else []
     monkeypatch.setattr(
-        brain_util, "record_span_summary", lambda **kwargs: spans.append(kwargs)
+        span_summary, "record_span_summary", lambda **kwargs: spans.append(kwargs)
     )
-    monkeypatch.setattr(agno_agent, "instantiate_class", fake_instantiate)
-    monkeypatch.setattr(agno_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(inference_host, "instantiate_class", fake_instantiate)
+    monkeypatch.setattr(inference_host, "Agent", FakeAgent)
 
     try:
         brain = agno_agent.AgnoAgentDefaultBrain(
