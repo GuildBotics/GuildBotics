@@ -33,11 +33,13 @@ from guildbotics.runtime.member_invocation import (
 )
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from tests.git_seed import WorkerGitSeed
+from tests.timeouts import REAL_DEVICE
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the agent environment.",

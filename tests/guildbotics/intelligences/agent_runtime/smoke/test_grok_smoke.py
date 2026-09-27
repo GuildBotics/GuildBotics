@@ -24,8 +24,10 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
+from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_GROK_SMOKE") != "1",
         reason="Set GUILDBOTICS_GROK_SMOKE=1 to run the real Grok Build smoke test.",

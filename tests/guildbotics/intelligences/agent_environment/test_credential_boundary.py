@@ -71,6 +71,7 @@ from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     command_at,
     settle_contract,
 )
+from tests.timeouts import REAL_DEVICE
 
 #: What every synthetic secret carries, and nothing else does.
 MARK = "SYNTH459SECRET"
@@ -85,6 +86,7 @@ _FAR = 4102444800  # 2100-01-01, in seconds.
 _ACCESS = f"{MARK}A459"
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the provider CLIs.",

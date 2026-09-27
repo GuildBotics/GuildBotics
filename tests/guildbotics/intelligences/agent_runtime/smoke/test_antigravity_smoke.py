@@ -44,8 +44,10 @@ from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     command_at,
     settle_contract,
 )
+from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_ANTIGRAVITY_SMOKE") != "1",
         reason=(
