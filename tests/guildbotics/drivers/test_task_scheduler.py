@@ -54,6 +54,7 @@ class _Context:
         self.team = SimpleNamespace(members=[member])
         self.person = member
         self.logger = _Logger()
+        self.shared_state: dict[str, object] = {}
 
     def clone_for(self, person: object) -> "_Context":
         return self

@@ -895,7 +895,12 @@ async def test_a_command_that_does_not_end_well_still_discards_its_microvm(
             await asyncio.Event().wait()
 
     task = asyncio.create_task(command())
-    await started.wait()
+    waiting = asyncio.create_task(started.wait())
+    await asyncio.wait({task, waiting}, return_when=asyncio.FIRST_COMPLETED)
+    waiting.cancel()
+    # A turn that does not start fails the test here, rather than leaving it
+    # waiting for a start that never comes.
+    assert started.is_set(), task.exception()
     if ending == "cancellation":
         task.cancel()
     with pytest.raises((RuntimeError, asyncio.CancelledError)):

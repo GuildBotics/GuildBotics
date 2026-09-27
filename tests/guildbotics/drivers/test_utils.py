@@ -29,6 +29,7 @@ class FakeContext:
     def __init__(self, person_id: str = "p1") -> None:
         self.logger = StubLogger()
         self.person = SimpleNamespace(person_id=person_id)
+        self.shared_state: dict[str, object] = {}
 
 
 @pytest.mark.asyncio

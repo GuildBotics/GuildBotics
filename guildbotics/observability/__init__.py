@@ -139,6 +139,20 @@ def span_scope(name: str) -> Iterator[SpanContext]:
         _current_span.reset(token)
 
 
+@contextlib.contextmanager
+def bind_span(span: SpanContext) -> Iterator[SpanContext]:
+    """Bind a span opened elsewhere, ids and all, for the block.
+
+    What a command's isolated environment records is sent to the host under
+    the span it opened there; the host writes it under that same span.
+    """
+    token = _current_span.set(span)
+    try:
+        yield span
+    finally:
+        _current_span.reset(token)
+
+
 def set_attributes(**values: Any) -> None:
     """Merge attributes into the current trace (``None`` values are ignored)."""
     ctx = _current_trace.get()
@@ -172,6 +186,7 @@ def correlation_fields() -> dict[str, Any]:
 __all__ = [
     "SpanContext",
     "TraceContext",
+    "bind_span",
     "correlation_fields",
     "current_span",
     "current_trace",

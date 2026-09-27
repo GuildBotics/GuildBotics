@@ -156,6 +156,11 @@ def standard_stderr_tail(value: str) -> str:
     return encoded[-STANDARD_STDERR_TAIL_BYTES:].decode("utf-8", errors="replace")
 
 
+def recorded_stderr(value: str) -> str:
+    """What of a tool's standard error the transcript keeps at its detail."""
+    return value if transcript_detail() == "full" else standard_stderr_tail(value)
+
+
 def should_record_agent_event(kind: str, name: str) -> bool:
     if transcript_detail() == "full":
         return True

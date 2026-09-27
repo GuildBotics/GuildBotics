@@ -22,8 +22,9 @@ from guildbotics.intelligences.cli_agents import cli_agent_info
 
 @pytest.fixture(autouse=True)
 def _adapter_member_broker_without_socket(request, monkeypatch) -> None:
-    """Keep adapter tests local; the broker module owns real HTTP coverage."""
-    if request.module.__name__.endswith("test_member_broker"):
+    """Keep adapter tests local; the broker and window modules own real HTTP
+    coverage."""
+    if request.module.__name__.endswith(("test_member_broker", "test_host_window")):
         return
 
     async def start(broker: MemberCapabilityBroker) -> None:

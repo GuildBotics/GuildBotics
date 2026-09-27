@@ -27,7 +27,9 @@ from guildbotics.intelligences.agent_environment.status import (
     filesystem_permission_problem,
 )
 from guildbotics.intelligences.agent_runtime.environment import command_environment
+from guildbotics.intelligences.agent_runtime.host_window import HostWindow
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
+from guildbotics.observability import current_trace
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.member_context import ensure_execution_subject, resolve_person
 from guildbotics.runtime.workflow_invocation import (
@@ -237,7 +239,9 @@ async def run_in_environment(runner: CommandRunner) -> CommandOutcome:
 
     It is shaped for every AI CLI tool the member is configured with, and
     discarded when the run ends, however it ends. A command run inside
-    another one shares that one's.
+    another one shares that one's. What its microVM asks of the host is
+    answered under the run's grant: the member it runs as, and the run it
+    records to -- its workflow run's, or else one of its own.
 
     Args:
         runner: The command to run, resolved for the member it runs as.
@@ -255,11 +259,28 @@ async def run_in_environment(runner: CommandRunner) -> CommandOutcome:
         raise CommandError(str(exc)) from exc
     tools = frozenset(info.adapter for info in mapping.values())
     workspace_root = get_workspace_root()
+    person_id = runner.context.person.person_id
+    workflow: WorkflowInvocation | None = runner.context.shared_state.get(
+        WORKFLOW_INVOCATION_KEY
+    )
+    if workflow is not None and workflow.trigger_type not in {"ticket", "chat"}:
+        workflow = None
+    trace = current_trace()
+    run_id = (str(workflow.payload.get("run_id") or "") if workflow else "") or (
+        trace.trace_id if trace is not None else uuid4().hex
+    )
     async with command_environment(
         runner.access,
         tools,
         cwd=runner.cwd,
         workspace_root=workspace_root,
-        clone=get_member_clone_path(runner.context.person.person_id, workspace_root),
+        clone=get_member_clone_path(person_id, workspace_root),
+        host=HostWindow(
+            person_id,
+            run_id,
+            workflow.trigger_type if workflow else "",
+            workspace_root=workspace_root,
+            ledger=HostRunLedger(),
+        ),
     ):
         return await runner.run()

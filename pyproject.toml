@@ -80,11 +80,19 @@ test = [
   "pytest>=8.2,!=9.1.0,!=9.1.1",
   "pytest-asyncio>=0.23",
   "pytest-cov>=5.0",
+  "pytest-timeout>=2.3",
   "pytest-xdist>=3.6",
 ]
 redis = [
   "redis>=5.0",
 ]
+
+
+[tool.pytest.ini_options]
+# A test that waits for something that never comes fails instead of stopping
+# the suite. Far above what any test takes, even on the slowest CI runner;
+# tests on the device's real agent environment say how long they may take.
+timeout = 120
 
 
 [tool.hatch.build.targets.wheel]

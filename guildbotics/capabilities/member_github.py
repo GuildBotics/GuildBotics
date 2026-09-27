@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import re
-import stat
+import tempfile
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from shutil import copyfileobj
 from typing import IO, Any
 from urllib.parse import quote, urlparse
-from zipfile import BadZipFile, ZipFile
 
 from httpx import AsyncClient
 from markdown_it import MarkdownIt
+from pydantic import TypeAdapter, ValidationError
 
+from guildbotics.capabilities.artifact_archive import (
+    MAX_ARTIFACT_BYTES,
+    ArtifactError,
+    Unpacked,
+    extract_artifact,
+    unpacked,
+)
 from guildbotics.capabilities.chat_updates import ensure_chat_current
 from guildbotics.capabilities.member_memory import MemberMemoryService
 from guildbotics.capabilities.member_reference import capability_reference_text
@@ -29,6 +36,10 @@ from guildbotics.integrations.github.github_utils import (
     normalize_login,
     paginated_items,
 )
+from guildbotics.runtime.member_invocation import (
+    GuestProcessError,
+    current_member_invocation,
+)
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -36,9 +47,6 @@ REPO_WITH_OWNER_PART_COUNT = 2
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
 GITHUB_ACTIONS_RUN_MIN_PART_COUNT = 5
 DEFAULT_LOG_TAIL_BYTES = STREAM_READ_LIMIT // 32
-# Artifacts are written to the isolated workspace instead of the broker output,
-# so they can be larger than the shared stdout boundary while remaining bounded.
-MAX_ARTIFACT_BYTES = 100 * 1024 * 1024
 PATCH_HUNK_RE = re.compile(
     r"^@@ -(?P<left>\d+)(?:,(?P<left_count>\d+))? "
     r"\+(?P<right>\d+)(?:,(?P<right_count>\d+))? @@"
@@ -669,7 +677,7 @@ class MemberGitHubCapabilityService:
                 artifact_id,
                 MAX_ARTIFACT_BYTES,
             ) as archive:
-                files = _extract_artifact(archive, destination)
+                where = _unpack(archive, destination)
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
         return {
@@ -677,8 +685,7 @@ class MemberGitHubCapabilityService:
             "run_id": run_id or (artifact.get("workflow_run") or {}).get("id"),
             "artifact_id": artifact_id,
             "artifact_name": name,
-            "destination": str(destination.resolve()),
-            "files": [str(path.resolve()) for path in files],
+            **where,
         }
 
     async def _failed_action_logs(
@@ -1879,69 +1886,56 @@ def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
     return run_ids
 
 
-def _extract_artifact(archive: IO[bytes], destination: Path) -> list[Path]:
-    destination = destination.resolve()
-    try:
-        with ZipFile(archive) as bundle:
-            members = bundle.infolist()
-            total_size = sum(member.file_size for member in members)
-            if total_size > MAX_ARTIFACT_BYTES:
-                raise MemberCapabilityError(
-                    "Expanded artifact is "
-                    f"{total_size} bytes, above the {MAX_ARTIFACT_BYTES} byte limit."
-                )
-            targets: list[tuple[Any, Path]] = []
-            seen: set[Path] = set()
-            for member in members:
-                relative = PurePosixPath(member.filename.replace("\\", "/"))
-                if (
-                    relative == PurePosixPath(".")
-                    or relative.is_absolute()
-                    or ".." in relative.parts
-                ):
-                    raise MemberCapabilityError(
-                        f"Artifact contains an unsafe path: {member.filename}"
-                    )
-                mode = member.external_attr >> 16
-                if stat.S_ISLNK(mode):
-                    raise MemberCapabilityError(
-                        f"Artifact contains an unsupported symlink: {member.filename}"
-                    )
-                target = destination.joinpath(*relative.parts)
-                if not target.resolve().is_relative_to(destination):
-                    raise MemberCapabilityError(
-                        f"Artifact contains an unsafe path: {member.filename}"
-                    )
-                if target in seen:
-                    raise MemberCapabilityError(
-                        f"Artifact contains a duplicate path: {member.filename}"
-                    )
-                seen.add(target)
-                targets.append((member, target))
-            collisions = [
-                target
-                for member, target in targets
-                if not member.is_dir() and target.exists()
-            ]
-            if collisions:
-                raise MemberCapabilityError(
-                    f"Artifact destination already exists: {collisions[0]}. "
-                    "Choose a different --dest or remove the existing file, then retry."
-                )
-            destination.mkdir(parents=True, exist_ok=True)
-            files: list[Path] = []
-            for member, target in targets:
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with bundle.open(member) as source, target.open("wb") as output:
-                    copyfileobj(source, output)
-                files.append(target)
-            return files
-    except BadZipFile as exc:
+_UNPACKED = TypeAdapter(Unpacked)
+
+
+def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
+    """Unpack ``archive`` where the command that asked for it reads it: on
+    the host, or, for a command of an isolated environment, in that
+    environment (:mod:`.artifact_archive`), which the host writes nothing of.
+
+    Raises:
+        MemberCapabilityError: When the artifact cannot be unpacked safely,
+            or the environment could not unpack it.
+    """
+    guest = current_member_invocation().guest
+    if guest is None:
+        try:
+            return unpacked(destination, extract_artifact(archive, destination))
+        except ArtifactError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
+    # A process that ran out of time may still hold the copy open (on Windows
+    # it cannot be deleted then); the failure is what the command reports.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as held:
+        copy = Path(held) / "artifact.zip"
+        with copy.open("wb") as file:
+            copyfileobj(archive, file)
+        try:
+            result = guest.run(
+                guest.python(
+                    "guildbotics.capabilities.artifact_archive",
+                    guest.path(destination),
+                ),
+                cwd="/",
+                env={},
+                stdin=copy,
+                stdout_limit=STREAM_READ_LIMIT,
+            )
+        except GuestProcessError as exc:
+            raise MemberCapabilityError(str(exc)) from exc
+    if result.returncode != 0:
         raise MemberCapabilityError(
-            "GitHub artifact is not a valid ZIP archive."
+            result.stderr.decode(errors="replace").strip()
+            or "The artifact could not be unpacked."
+        )
+    # What the environment wrote is its own to write: read as nothing more
+    # than where it says it unpacked.
+    try:
+        return _UNPACKED.validate_json(result.stdout)
+    except ValidationError as exc:
+        raise MemberCapabilityError(
+            "The environment reported the artifact unpacked in a form it cannot"
+            " have been."
         ) from exc
 
 

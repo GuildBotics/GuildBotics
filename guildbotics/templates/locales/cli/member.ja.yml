@@ -6,6 +6,7 @@ ja:
     file_help: "コマンドの自由記述本文全体を UTF-8 ファイルから読み取ります。"
     file_not_utf8: "本文ファイルが有効な UTF-8 ではありません: %{path}"
     file_read_failed: "本文ファイル %{path} を読み取れませんでした: %{error}"
+    file_in_environment: "隔離環境のコマンドは本文を --content-stdin で渡します（host はその環境のファイルを読みません）。"
   agent:
     help: native agent runtime state を管理します。
     conversation_help: 永続化された native agent conversation を管理します。

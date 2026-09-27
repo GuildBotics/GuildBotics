@@ -12,10 +12,13 @@ libraries and fonts that cover Japanese. It sends nothing off the device.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
@@ -28,13 +31,16 @@ from guildbotics.intelligences.agent_environment.snapshot import (
 )
 from guildbotics.intelligences.agent_environment.spec import build_environment_spec
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, CODE_ROOT
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from tests.timeouts import REAL_DEVICE
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the agent environment.",
@@ -174,3 +180,44 @@ async def test_to_pdf_draws_a_pdf_with_japanese_fonts(
 
     assert code == 0, out
     assert out.endswith("%PDF-"), out
+
+
+async def test_an_artifact_is_unpacked_by_the_code_in_the_microvm(
+    boot, tmp_path: Path, symlinks
+) -> None:
+    """What the host downloads for a command of the microVM, the microVM
+    unpacks with GuildBotics' own Python; a link it made where it unpacks
+    leads nowhere on the host, which writes nothing there itself."""
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (work / "linked").symlink_to(outside, target_is_directory=True)
+    archive = tmp_path / "artifact.zip"
+    with ZipFile(archive, "w") as bundle:
+        bundle.writestr("report/error.md", b"details")
+    environment = await boot(work)
+    guest = EnvironmentGuest(asyncio.get_running_loop(), lambda: environment).until(
+        time.monotonic() + 120
+    )
+
+    def unpack(destination: Path):
+        return guest.run(
+            guest.python(
+                "guildbotics.capabilities.artifact_archive", guest.path(destination)
+            ),
+            cwd="/",
+            env={},
+            stdin=archive,
+            stdout_limit=1 << 20,
+        )
+
+    unpacked = await asyncio.to_thread(unpack, work / "artifact")
+    through_link = await asyncio.to_thread(unpack, work / "linked" / "artifact")
+
+    assert unpacked.returncode == 0, unpacked.stderr
+    written = work / "artifact" / "report" / "error.md"
+    assert json.loads(unpacked.stdout)["files"] == [guest.path(written)]
+    assert written.read_bytes() == b"details"
+    assert through_link.returncode in {0, 1}, through_link.stderr
+    assert list(outside.iterdir()) == []

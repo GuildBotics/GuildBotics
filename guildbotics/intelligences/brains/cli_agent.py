@@ -50,10 +50,7 @@ from guildbotics.observability.diagnostics_events import (
     record_correlated_event,
     record_correlated_io,
 )
-from guildbotics.observability.session_transcripts import (
-    standard_stderr_tail,
-    transcript_detail,
-)
+from guildbotics.observability.session_transcripts import recorded_stderr
 from guildbotics.utils.fileio import (
     get_person_config_path,
     load_person_slot_mapping,
@@ -1077,11 +1074,7 @@ class CliAgentBrain(Brain):
         )
 
     def _write_response_io(self, result: CliAgentExecutionResult) -> None:
-        stderr = (
-            result.stderr
-            if transcript_detail() == "full"
-            else standard_stderr_tail(result.stderr)
-        )
+        stderr = recorded_stderr(result.stderr)
         record_correlated_io(
             io_type="cli_agent.response",
             payload={

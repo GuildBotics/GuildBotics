@@ -1,20 +1,27 @@
-"""Turn-scoped MCP transport for trusted member capabilities.
+"""Turn-scoped MCP transport for trusted member capabilities, and the
+command's window to the host.
 
 The native agent stays inside its provider sandbox. This broker runs beside the
 agent in the GuildBotics process and exposes exactly one authenticated tool
 which runs the fixed ``guildbotics member`` commands in that process, without a
 shell. Provider credentials therefore remain in the trusted host process.
+
+The same server, with the same token, answers what the command's isolated
+environment asks of the host (``POST /host/<call>``, JSON): the calls the
+command's grant (:meth:`MemberCapabilityBroker.serve`) answers, in the
+command's own context.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import logging
 import secrets
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -25,10 +32,16 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl, BaseModel
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from guildbotics.intelligences.agent_environment.spec import GUEST_HOST_ALIAS
 from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
-from guildbotics.intelligences.agent_runtime.models import AgentExecutionContext
+from guildbotics.intelligences.agent_runtime.host_client import HostCallError
+from guildbotics.intelligences.agent_runtime.models import (
+    AgentExecutionContext,
+    AgentRuntimeError,
+)
 from guildbotics.runtime.member_invocation import MemberInvocation
 from guildbotics.utils.loopback_server import LOOPBACK_HOST, LoopbackServer
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -41,6 +54,13 @@ _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_OUTPUT_BYTES = STREAM_READ_LIMIT
 _COMMAND_TIMEOUT_SECONDS = 300.0
 MEMBER_BROKER_TOKEN_ENV = "GUILDBOTICS_MEMBER_BROKER_TOKEN"
+#: The names a request's Host header may give this server: loopback, and the
+#: alias the agent environment reaches the host by.
+_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", GUEST_HOST_ALIAS)
+
+#: What answers the command's calls: the call's name and its arguments, to
+#: its JSON result. It raises :class:`HostCallError` for a call it refuses.
+HostCalls = Callable[[str, dict[str, Any]], Coroutine[Any, Any, Any]]
 
 _MEMBER_TOOL_INSTRUCTION = """<guildbotics_member_transport>
 A trusted MCP tool named `guildbotics_member` is available. Use it for every
@@ -70,13 +90,22 @@ class MemberBrokerEndpoint:
 
     ``url`` reaches the broker from the host; ``guest_url`` reaches it from
     inside the agent environment, whose policy opens ``port`` to the guest.
+    ``host_url`` and ``guest_host_url`` are the command's window to the host,
+    reached with the same ``token``.
     """
 
     name: str
     url: str
     guest_url: str
+    host_url: str
+    guest_host_url: str
     port: int
-    authorization: str
+    token: str
+
+    @property
+    def authorization(self) -> str:
+        """The header value every request carries."""
+        return f"Bearer {self.token}"
 
 
 class _ScopedTokenVerifier(TokenVerifier):
@@ -110,6 +139,10 @@ class MemberCapabilityBroker:
         self._turn_grant = ""
         self._context: AgentExecutionContext | None = None
         self._command_lock = asyncio.Lock()
+        self._host: HostCalls | None = None
+        self._host_context = contextvars.Context()
+        #: The calls of the command's environment being answered now.
+        self._calls: set[asyncio.Task[Any]] = set()
         self._server: LoopbackServer | None = None
         self._url = ""
         self._port = 0
@@ -124,12 +157,15 @@ class MemberCapabilityBroker:
         """Return connection details adapters serialize for their MCP client."""
         if not self._url:
             raise RuntimeError("Member capability broker is not running.")
+        host_url = self._url.removesuffix("/mcp") + "/host"
         return MemberBrokerEndpoint(
             name=self._name,
             url=self._url,
-            guest_url=self._url.replace(LOOPBACK_HOST, GUEST_HOST_ALIAS, 1),
+            guest_url=_as_guest(self._url),
+            host_url=host_url,
+            guest_host_url=_as_guest(host_url),
             port=self._port,
-            authorization=f"Bearer {self._token}",
+            token=self._token,
         )
 
     @property
@@ -163,12 +199,32 @@ class MemberCapabilityBroker:
         """Return the bearer token source required by provider MCP clients."""
         return {MEMBER_BROKER_TOKEN_ENV: self._token}
 
+    def serve(self, host: HostCalls, context: contextvars.Context) -> None:
+        """Answer the command's calls with ``host`` until the broker closes.
+
+        Each call runs in a copy of ``context``, the command's own: unlike a
+        member command, which starts from an empty one, a call is part of the
+        command that makes it.
+        """
+        self._host = host
+        self._host_context = context
+
     async def activate(self, context: AgentExecutionContext) -> None:
         """Start the broker if needed and bind it to one active turn."""
         if self._context is not None:
             raise MemberCapabilityBrokerError(
                 "Member capability broker already has an active turn."
             )
+        await self.start()
+        self._context = context
+        self._turn_grant = secrets.token_urlsafe(24)
+
+    async def start(self) -> None:
+        """Start the broker unless it runs.
+
+        Raises:
+            MemberCapabilityBrokerError: When it does not start, or stopped.
+        """
         if self._server is None:
             try:
                 await self._start()
@@ -189,8 +245,6 @@ class MemberCapabilityBroker:
             if cause is None:
                 raise error
             raise error from cause
-        self._context = context
-        self._turn_grant = secrets.token_urlsafe(24)
 
     async def deactivate(self, context: AgentExecutionContext | None = None) -> None:
         """Revoke command execution after the matching turn finishes."""
@@ -260,10 +314,78 @@ class MemberCapabilityBroker:
             exit_code=exit_code, stdout=_bounded(stdout), stderr=_bounded(stderr)
         )
 
+    async def call_host(self, request: Request) -> Response:
+        """Answer one call of the command's environment.
+
+        A call the command's grant refuses is a 403; one that fails, a 422;
+        both with what :class:`HostCallError` carries. A call has the time a
+        member command has; what it started on a worker thread may outlast it.
+        """
+        authorization = request.headers.get("authorization", "")
+        if not secrets.compare_digest(authorization, f"Bearer {self._token}"):
+            return Response(status_code=401)
+        if _host_name(request.headers.get("host", "")) not in _ALLOWED_HOSTS:
+            return Response(status_code=421)
+        try:
+            body = json.dumps({"result": await self._answer(request)})
+        except HostCallError as exc:
+            status = 403 if exc.category == "refused" else 422
+            return JSONResponse({"error": exc.payload()}, status_code=status)
+        if len(body.encode()) > _MAX_OUTPUT_BYTES:
+            error = HostCallError("failed", "The call's result is too large.")
+            return JSONResponse({"error": error.payload()}, status_code=422)
+        return Response(body, media_type="application/json")
+
+    async def _answer(self, request: Request) -> Any:
+        """What the command's grant answers to ``request``.
+
+        Raises:
+            HostCallError: With what refused or failed the call.
+        """
+        if self._host is None:
+            raise HostCallError("refused", "No GuildBotics command is running.")
+        # Read up to the limit, however the body is sent: a chunked one
+        # declares no length to check first.
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > _MAX_REQUEST_BYTES:
+                raise HostCallError("refused", "The call is too large.")
+        try:
+            arguments = json.loads(body)
+        except ValueError as exc:
+            raise HostCallError("refused", "A call takes a JSON object.") from exc
+        if not isinstance(arguments, dict):
+            raise HostCallError("refused", "A call takes a JSON object.")
+        work = asyncio.create_task(
+            self._host(request.path_params["call"], arguments),
+            context=self._host_context.copy(),
+        )
+        self._calls.add(work)
+        work.add_done_callback(self._calls.discard)
+        try:
+            return await asyncio.wait_for(work, _COMMAND_TIMEOUT_SECONDS)
+        except HostCallError:
+            raise
+        except AgentRuntimeError as exc:
+            raise HostCallError(exc.category.value, str(exc), exc.details) from exc
+        except TimeoutError as exc:
+            raise HostCallError("failed", "The host call timed out.") from exc
+        except Exception as exc:
+            raise HostCallError("failed", str(exc) or type(exc).__name__) from exc
+
+    async def settle(self) -> None:
+        """Stop answering the command's calls, and wait for those being
+        answered: each runs to its end, before what it uses is closed."""
+        self._host = None
+        await asyncio.gather(*self._calls, return_exceptions=True)
+
     async def close(self) -> None:
-        """Revoke the token and stop the loopback server."""
+        """Revoke the token, stop answering the command's calls, and stop the
+        loopback server."""
         self._context = None
         self._turn_grant = ""
+        self._host = None
         server = self._server
         self._server = None
         self._url = ""
@@ -305,6 +427,10 @@ class MemberCapabilityBroker:
                 """
                 return await self.execute(turn_grant, arguments, stdin)
 
+            # Not behind the MCP transport's bearer and Host checks: the
+            # route makes its own.
+            mcp.custom_route("/host/{call}", methods=["POST"])(self.call_host)
+
             return mcp.streamable_http_app(
                 stateless_http=True,
                 max_request_body_size=_MAX_REQUEST_BYTES,
@@ -312,12 +438,7 @@ class MemberCapabilityBroker:
                 # server; a turn inside the agent environment names this host by
                 # the gateway's alias, which is as much ours as loopback is.
                 transport_security=TransportSecuritySettings(
-                    allowed_hosts=[
-                        f"{LOOPBACK_HOST}:*",
-                        "localhost:*",
-                        "[::1]:*",
-                        f"{GUEST_HOST_ALIAS}:*",
-                    ]
+                    allowed_hosts=[f"{host}:*" for host in _ALLOWED_HOSTS]
                 ),
             )
 
@@ -344,6 +465,17 @@ def _root_logging_kept() -> Iterator[None]:
         finally:
             root.setLevel(level)
             root.handlers[:] = handlers
+
+
+def _host_name(header: str) -> str:
+    """The name a Host header gives, without its port."""
+    name, _, port = header.rpartition(":")
+    return name if name and port.isdigit() else header
+
+
+def _as_guest(url: str) -> str:
+    """``url`` as the agent environment reaches it."""
+    return url.replace(LOOPBACK_HOST, GUEST_HOST_ALIAS, 1)
 
 
 def _rejected(reason: str) -> MemberCommandResult:
