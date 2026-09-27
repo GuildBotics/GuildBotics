@@ -51,7 +51,7 @@ Do not ask the user to repeat the person ID, and do not switch to another member
 
 Treat the user's currently open repository as the shared pair-programming workspace.
 
-- Do not run `member git prepare` or clone into the member workspace unless the user explicitly asks for an isolated workspace.
+- Do not run `member git prepare` or clone into the member workspace. The member's own clones are worked on only inside the isolated environment of a running GuildBotics command, so member-mode git is refused in this session; for isolated work, delegate it as described below.
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
 - Always pass `--workspace-mode current` to `member git commit`, `member git push`, and `member git publish`.

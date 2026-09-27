@@ -62,7 +62,9 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Clone/checkout an isolated member workspace: a ticket branch "
                 "(--issue-url), a PR head (--pr-url, alone or together with "
                 "--issue-url, which checks out the PR head), or an ad-hoc branch "
-                "(--repo --branch). --repo cannot be combined with the URL options.",
+                "(--repo --branch). --repo cannot be combined with the URL options. "
+                "Member workspaces are worked on only inside a running GuildBotics "
+                "command, whose isolated environment runs every git of them.",
             ),
             (
                 "guildbotics member git commit --person <person> --repo-path <path> "

@@ -29,7 +29,8 @@ from guildbotics.utils.i18n_tool import t
 #: npm, and git, the tools the provider CLIs are installed and run with.
 #: Pinned to an exact tag so two devices building the same declaration get
 #: the same environment. An image the declaration names must give the recipe
-#: the same: Debian's apt, Node.js with npm, curl and tar.
+#: the same: Debian's apt, Node.js with npm, curl and tar; and git, which
+#: member git runs a member's clones with.
 IMAGE = "node:22.23.2-bookworm"
 #: How much of a digest a person is shown: enough to tell two apart.
 _SHORT_DIGEST = len("sha256:") + 12

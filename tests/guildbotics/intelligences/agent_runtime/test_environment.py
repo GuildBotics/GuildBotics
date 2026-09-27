@@ -5,8 +5,10 @@ import asyncio
 import base64
 import json
 import re
+import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,10 @@ import pytest
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_runtime import environment, windows_job
+from guildbotics.intelligences.agent_runtime.member_broker import (
+    MEMBER_BROKER_TOKEN_ENV,
+)
+from guildbotics.runtime.member_invocation import GuestProcessError, GuestResult
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     settle_contract,
 )
@@ -253,11 +259,56 @@ class _Relay:
         self.killed = True
 
 
+class _Program:
+    """A process GuildBotics runs in a microVM: it writes back what it read
+    once its input closes, or, ``forever``, never ends."""
+
+    def __init__(self, command, cwd, env, *, forever: bool) -> None:
+        self.command, self.cwd, self.env = command, cwd, env
+        self.forever = forever
+        self.read = bytearray()
+        self.stdin = self
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.returncode: int | None = None
+        self.killed = False
+        self._exited = asyncio.Event()
+
+    def write(self, data: bytes) -> None:
+        self.read += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        if not self.forever:
+            self.stdout.feed_data(bytes(self.read))
+            self._end(0)
+
+    def _end(self, returncode: int) -> None:
+        if self.returncode is None:
+            self.returncode = returncode
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._exited.set()
+
+    async def wait(self) -> int:
+        await self._exited.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    async def kill(self) -> None:
+        self.killed = True
+        self._end(-1)
+
+
 class _Booted:
     """A microVM as the runtime boots it: its files, what runs in it, and
     whether it was stopped."""
 
     booted: list[_Booted] = []
+    #: Whether what GuildBotics runs in it never ends.
+    forever = False
 
     def __init__(self, spec, before_stop) -> None:
         self.spec = spec
@@ -267,6 +318,7 @@ class _Booted:
             "/etc/hosts": b"127.0.0.1 localhost",
         }
         self.relays: list[tuple[tuple[str, ...], _Relay]] = []
+        self.programs: list[_Program] = []
         self.closed = False
         _Booted.booted.append(self)
 
@@ -276,7 +328,11 @@ class _Booted:
     async def read_file(self, path):
         return self.files.get(path)
 
-    async def run(self, *command, limit, **_):
+    async def run(self, *command, limit, cwd=None, env=None, **_):
+        if command[0] != "node":
+            program = _Program(command, cwd, env, forever=_Booted.forever)
+            self.programs.append(program)
+            return program
         relay = _Relay()
         self.relays.append((command, relay))
         return relay
@@ -309,6 +365,7 @@ def _device(monkeypatch, tmp_path, *logins: str, where=None):
 
     monkeypatch.setattr(provider_state, "_unsealed_login", unsealed)
     _Booted.booted = []
+    _Booted.forever = False
 
     async def start(spec, at, *, before_stop):
         assert at is where
@@ -1190,6 +1247,103 @@ async def test_the_next_turn_waits_for_the_one_holding_the_microvm(
         assert not second.done()
         await first.close()
         await (await second).close()
+
+
+async def _member_command(turn, *, seconds: float = 5.0, **options: Any):
+    """Run a process in the turn's microVM the way a member command the
+    broker runs does: from a worker thread, while the broker holds the
+    command it is running."""
+    guest = turn.broker._guest.until(time.monotonic() + seconds)
+    async with turn.broker._command_lock:
+        return await asyncio.to_thread(
+            partial(
+                guest.run,
+                **{"cwd": "/work", "env": {}, "stdout_limit": 1 << 10, **options},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_member_command_runs_in_the_microvm_the_turn_holds(
+    tmp_path, monkeypatch
+):
+    """In the middle of the turn that asked for it, holding neither the turn
+    nor the broker, with the host's facts and nothing of the turn's."""
+    _device(monkeypatch, tmp_path, "claude")
+
+    async with _command():
+        turn = await environment.start_turn_environment(
+            _turn(tmp_path), "claude", env={"TURN_ONLY": "1"}
+        )
+        source = tmp_path / "bundle"
+        source.write_bytes(b"history")
+        written = tmp_path / "written"
+        streamed = await _member_command(
+            turn, argv=["git", "fetch"], stdin=source, stdout=written
+        )
+        result = await _member_command(
+            turn,
+            argv=["git", "commit"],
+            env={"GIT_AUTHOR_NAME": "Aiko"},
+            stdin=b"message",
+        )
+        await turn.close()
+
+    [booted] = _Booted.booted
+    assert streamed == GuestResult(0, b"", b"")
+    assert written.read_bytes() == b"history"
+    assert result == GuestResult(0, b"message", b"")
+    program = booted.programs[-1]
+    assert (program.command, program.cwd) == (("git", "commit"), "/work")
+    assert program.env == {**booted.spec.env, "GIT_AUTHOR_NAME": "Aiko"}
+    assert "TURN_ONLY" not in program.env
+    assert MEMBER_BROKER_TOKEN_ENV not in program.env
+
+
+@pytest.mark.asyncio
+async def test_a_member_command_runs_nothing_it_would_have_to_wait_for_itself(
+    tmp_path, monkeypatch
+):
+    """Not from the command's own loop, which the process has to run on, and
+    not without the time the broker gives it."""
+    _device(monkeypatch, tmp_path, "claude")
+
+    async with _command():
+        turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
+        guest = turn.broker._guest
+        options = {"cwd": "/work", "env": {}, "stdout_limit": 1}
+        with pytest.raises(GuestProcessError, match="another thread"):
+            guest.until(time.monotonic() + 5).run(["git", "status"], **options)
+        with pytest.raises(GuestProcessError, match="out of time"):
+            await asyncio.to_thread(partial(guest.run, ["git", "status"], **options))
+        await turn.close()
+
+    assert _Booted.booted[0].programs == []
+
+
+@pytest.mark.asyncio
+async def test_a_member_command_the_broker_gave_up_on_leaves_nothing_running(
+    tmp_path, monkeypatch
+):
+    """Its thread returns when the broker stops waiting, and what it ran in
+    the microVM is ended; so is what writes more than it may."""
+    _device(monkeypatch, tmp_path, "claude")
+
+    async with _command():
+        turn = await environment.start_turn_environment(_turn(tmp_path), "claude")
+        with pytest.raises(GuestProcessError, match="more than 1024 bytes"):
+            await _member_command(turn, argv=["git", "bundle"], stdin=b"x" * 2048)
+        _Booted.forever = True
+        started = time.monotonic()
+        with pytest.raises(GuestProcessError, match="out of time"):
+            await _member_command(turn, seconds=0.2, argv=["git", "fetch"])
+        assert time.monotonic() - started < 2
+        for _ in range(10):
+            await asyncio.sleep(0)
+        await turn.close()
+
+    [booted] = _Booted.booted
+    assert [program.killed for program in booted.programs] == [True, True]
 
 
 @pytest.mark.asyncio

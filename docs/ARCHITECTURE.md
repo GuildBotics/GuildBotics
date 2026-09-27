@@ -536,7 +536,7 @@ the process cwd or a member working clone.
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project / member YAML, `secrets.yml` (key names and generations), transcript settings                                                                 |
 | Shared state       | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
-| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones, AI CLI sessions, work dirs, hotkeys, `debug.env`                                            |
+| Local state        | `<workspace>/.guildbotics/local`                                                                 | diagnostics, transcripts, person leases, chat message cache, member clones and the host's own repositories member git pushes from (`member_git/`), AI CLI sessions, work dirs, hotkeys, `debug.env` |
 
 Invariants:
 
