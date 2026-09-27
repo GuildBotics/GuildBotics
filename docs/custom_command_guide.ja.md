@@ -238,11 +238,15 @@ ${file}の最初のセクションを読み、その内容を${language}を用�
 コマンド呼び出し例:
 
 ```shell
-$ guildbotics run summarize file=README.md cwd=.
+$ guildbotics run summarize file=README.md
 GuildBoticsはAIエージェントとタスクボードで協働するアルファ版ツールであり、将来的な互換性崩壊や重大障害・損害の恐れがあるため利用者は隔離環境で自己責任の下検証すべきと警告している。
 ```
 
-AI CLIツールでは、`cwd` パラメータでAI CLIツールがシステムコマンドを実行する際の作業ディレクトリを指定する必要があります。
+AI CLIツールはコマンドの作業ディレクトリで動きます。作業ディレクトリは、コマンドの実行方法で決まります。
+
+- `guildbotics run`: `--cwd` で指定したディレクトリ。省略時は shell の作業ディレクトリ
+- デスクトップアプリからの手動実行: 画面で指定したディレクトリ。指定が無ければ受け渡しフォルダ（`~/Documents/GuildBotics`）
+- サブコマンド: `commands:` のエントリの `cwd:`（[5. サブコマンドの利用](#5-サブコマンドの利用)）、または `context.invoke` の `cwd=`（[7.2. コマンドの呼び出し](#72-コマンドの呼び出し)）。相対パスは呼び出し元コマンドの作業ディレクトリを基準に解決し、どちらも無ければ呼び出し元コマンドの作業ディレクトリで動きます
 
 ### 3.1. 読み取り専用の宣言
 
@@ -746,7 +750,7 @@ effort: high
 実行時に上書きする場合は、通常の `key=value` パラメータとして渡します（専用の CLI オプションはありません）。
 
 ```shell
-guildbotics run summarize file=README.md cwd=. effort=high
+guildbotics run summarize file=README.md effort=high
 ```
 
 解決順位はすべての brain（LLM API 経路・AI CLIツール経路のいずれも）で共通です。
