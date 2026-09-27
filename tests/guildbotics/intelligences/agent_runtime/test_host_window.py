@@ -96,12 +96,14 @@ def _default_contract(monkeypatch) -> None:
 
 @pytest.fixture
 def written(monkeypatch) -> list[dict[str, Any]]:
-    """What the host writes to diagnostics, in order."""
+    """What the host writes to diagnostics, in order: its log lines aside,
+    which reach the store only in a worker where the CLI has run."""
     records: list[dict[str, Any]] = []
 
     class Store:
         def record(self, record: dict[str, Any]) -> None:
-            records.append(record)
+            if record["kind"] != "log":
+                records.append(record)
 
     monkeypatch.setattr(diagnostics_events, "_store", Store)
     return records
@@ -966,7 +968,7 @@ async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
     assert failed.value.details["error_type"] == "RuntimeError"
     # Nor is it logged: the host's log is kept and shown.
     assert "sk-secret" not in caplog.text
-    assert "span.failed" in [record["type"] for record in written]
+    assert written[-1]["type"] == "span.failed"
 
 
 class _Chat:
