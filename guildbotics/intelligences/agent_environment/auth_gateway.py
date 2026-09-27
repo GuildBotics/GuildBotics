@@ -85,6 +85,11 @@ _DROPPED_REQUEST_HEADERS = _HOP_BY_HOP | {
     "accept-encoding",
 }
 
+#: What of the upstream's answer never reaches the guest: its length among
+#: it, which the gateway sets again by how it hands the answer on -- an answer
+#: cut short where its turn ends still ends as a whole one.
+_DROPPED_RESPONSE_HEADERS = _HOP_BY_HOP | {"content-length"}
+
 
 class _Client(httpx.AsyncClient):
     """httpx's client, with the token masked in the reason phrase of every
@@ -318,7 +323,8 @@ class CredentialGateway:
                     "headers": [
                         (name, value.replace(secret, mask))
                         for name, value in response.headers.raw
-                        if name.decode("latin-1").lower() not in _HOP_BY_HOP
+                        if name.decode("latin-1").lower()
+                        not in _DROPPED_RESPONSE_HEADERS
                     ],
                 }
             )
