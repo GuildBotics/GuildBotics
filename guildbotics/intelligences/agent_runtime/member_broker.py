@@ -1,8 +1,8 @@
 """Turn-scoped MCP transport for trusted member capabilities, and the
 command's window to the host.
 
-The native agent stays inside its provider sandbox. This broker runs beside the
-agent in the GuildBotics process and exposes exactly one authenticated tool
+The native agent stays inside the command's microVM. This broker runs in the
+GuildBotics process on the host and exposes exactly one authenticated tool
 which runs the fixed ``guildbotics member`` commands in that process, without a
 shell. Provider credentials therefore remain in the trusted host process.
 

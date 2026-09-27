@@ -1,6 +1,6 @@
 ---
 template_engine: jinja2
-description: Turn fetched AI news items into a Slack-ready English digest (LLM sample)
+description: Turn fetched AI news items into a Slack-ready English digest (LLM sample). Its first stage fetches the Google News RSS feed, so allow news.google.com in the workspace network (the network allowlist of agent_environment.yml) before running it.
 commands:
   - name: ai_news
     path: tools/fetch_ai_news.py

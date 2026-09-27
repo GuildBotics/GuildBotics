@@ -29,7 +29,7 @@ CommandAuthoringResultのJSONオブジェクトを1つ返してください。
 - AI promptまたはrendered text templateにはMarkdown。
 - 既存コマンドの宣言的な合成にはYAML。
 - 分岐、structured data、integration、Context accessにはPython。
-- textual outputで十分な限定的OS操作またはCLI wrapperにはShell。
+- textual outputで十分な限定的なLinux CLIのwrapperにはShell。
 
 確認が必要な場合は`action: answer`の`message`で焦点を絞った質問を1つ行ってください。
 
@@ -69,6 +69,19 @@ GuildBoticsコマンドの正しい意味を維持してください。
   呼び出し側入力を必須にしてはいけません。
 - 子コマンドは親より先に実行されます。probeする子が`Context.pipe`を置き換える場合は、
   呼び出し側入力を明示的に保持します。
+
+コマンドとそのサブコマンドは、hostではなく1つのLinuxの隔離環境の中で動きます。
+
+- hostの環境変数、PATH、認証情報は届きません。hostのOSのUI言語とタイムゾーンは`LANGUAGE`と`TZ`
+  だけで届きます。言語には`functions/get_os_ui_language`を使います。
+- 作業ディレクトリの外のファイルには、隔離環境に許可したディレクトリを通してだけ届きます。
+  受け渡しフォルダ`~/Documents/GuildBotics`は常に読み書きで許可されます。
+- ネットワークには、`intelligences/agent_environment.yml`のワークスペース共通の`network:`が許す範囲で
+  だけ届きます（省略時は拒否）。ネットワークに接続するコマンドは、そこで許可が必要な接続先を
+  `description`に書きます。
+- PythonはGuildBotics自身のPython環境で、Shellは隔離環境のベースイメージにあるツールで動きます。
+  hostにインストールしたツールやpackageに依存してはいけません。`context.get_ticket_manager()`は
+  使えません。
 
 依頼されていないcapabilityや互換コードを加えず、有効で焦点の合ったソースを生成してください。
 `available_commands`は参照・合成判断のためだけに使い、変更対象は`allowed_operations`に限定してください。

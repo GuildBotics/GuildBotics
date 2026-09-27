@@ -21,11 +21,17 @@
 //                   A small control HTTP server lets the spec bring the real
 //                   backend UP on demand, so backend-down → up is deterministic
 //                   rather than timing-flaky.
+//   * "environment"— seeded workspace given the ready isolated agent environment
+//                   of the workspace GUILDBOTICS_E2E_ENVIRONMENT_FROM names, so
+//                   a command runs in a real microVM (journey ⑪,
+//                   `environment.spec.ts`). The one stack that uses something
+//                   of the developer's device: its runtime and that snapshot.
 //
 // Each stack owns its OWN temp workspace, HOME, ports, token and stack-context
 // file, so the journeys stay fully isolated and the first-setup spec always sees
-// an empty workspace. All of them live under the OS temp dir, so a run leaves
-// nothing behind inside the repository even when it is interrupted. The backend
+// an empty workspace. All of them live under the OS temp dir (the "environment"
+// stack's under `~/.guildbotics-e2e`, see below), so a run leaves nothing behind
+// inside the repository even when it is interrupted. The backend
 // cwd is the temp workspace, so `/config/init` writes
 // `<workspace>/.guildbotics/config/...` on disk. HOME is redirected to a second
 // temp dir, and the backend's PATH starts with a stub bin dir, to keep the run
@@ -38,9 +44,17 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -74,6 +88,9 @@ const seedWithoutLlmKey = process.env.GUILDBOTICS_E2E_OFFLINE_LLM === "1";
 // through the control server on GUILDBOTICS_E2E_CONTROL_PORT.
 const deferBackend = process.env.GUILDBOTICS_E2E_DEFER_BACKEND === "1";
 const controlPort = Number(process.env.GUILDBOTICS_E2E_CONTROL_PORT ?? "0");
+// A workspace whose isolated agent environment is ready on this device; only
+// the "environment" stack is given one (see below).
+const environmentSource = process.env.GUILDBOTICS_E2E_ADOPT_ENVIRONMENT ?? "";
 const baseUrl = `http://${host}:${backendPort}`;
 const frontendOrigin = `http://${host}:${frontendPort}`;
 const authHeaders = { "X-GuildBotics-Session-Token": token, "Content-Type": "application/json" };
@@ -88,9 +105,19 @@ if (!/^[a-z][a-z0-9-]*$/.test(stackName)) {
   );
 }
 
-// Isolated, repeatable run dirs.
-const workspaceDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-ws-`));
-const homeDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-home-`));
+// Isolated, repeatable run dirs. The isolated agent environment cannot mount a
+// directory in the OS temp dir on Windows (its runtime fails to boot with "file
+// already exists"), so the "environment" stack keeps its dirs under the
+// developer's home instead, and clears what its previous run left there. What
+// that holds of the device -- the runtime and the snapshot -- is linked, and a
+// recursive removal unlinks a link without following it.
+const runRoot = environmentSource ? join(homedir(), ".guildbotics-e2e") : tmpdir();
+if (environmentSource) {
+  rmSync(runRoot, { recursive: true, force: true });
+  mkdirSync(runRoot, { recursive: true, mode: 0o700 });
+}
+const workspaceDir = mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-ws-`));
+const homeDir = mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-home-`));
 const configDir = join(workspaceDir, ".guildbotics", "config");
 const stackEnv = withEnvironment(process.env, {
   HOME: homeDir,
@@ -121,17 +148,58 @@ function backendFacts() {
 }
 const { executables: cliAgentExecutables, runtime_home: runtimeHome } = backendFacts();
 
-// Every AI CLI turn boots inside the isolated agent environment, and the
-// service keeps that environment built while it runs (`SnapshotUpkeep`). Left
-// alone, the configured stack would copy the bundled runtime into its temp HOME
-// and pull a container image over the network the moment `service.spec.ts`
-// starts the service. A device that cannot hold the runtime is a state the
-// product handles fail-closed — no build, no turn, one warning in the log — so
-// this stack is made exactly that device: a plain file sits where the runtime
-// home would be, and placing the runtime fails at its first mkdir. The SDK is
-// still imported and version-checked; nothing is written or fetched.
+// The isolated agent environment of `environmentSource`, a workspace whose
+// environment is ready on this device, as the Python side reads it there (with
+// the developer's own HOME): why it cannot run a command, where the device's
+// runtime lives, and the snapshot it would boot.
+function sourceEnvironment() {
+  const source = [
+    "import json",
+    "from guildbotics.intelligences.agent_environment.runtime import runtime_home",
+    "from guildbotics.intelligences.agent_environment.status import device_status",
+    "status = device_status()",
+    "print(json.dumps({'refusal': status.refusal, " +
+      "'runtime_home': str(runtime_home()), " +
+      "'snapshot': str(status.snapshot.path) if status.snapshot else ''}))",
+  ].join("; ");
+  const output = execFileSync("uv", ["run", "--project", repoRoot, "python", "-c", source], {
+    encoding: "utf-8",
+    env: withEnvironment(process.env, {
+      GUILDBOTICS_WORKSPACE_ROOT: environmentSource,
+      GUILDBOTICS_CONFIG_DIR: join(environmentSource, ".guildbotics", "config"),
+    }),
+  });
+  return JSON.parse(output.trim().split("\n").at(-1));
+}
+
+// Every command boots inside the isolated agent environment, and the service
+// keeps that environment built while it runs (`SnapshotUpkeep`). Left alone, a
+// stack would copy the bundled runtime into its temp HOME and pull a container
+// image over the network the moment `service.spec.ts` starts the service.
+//
+// A device that cannot hold the runtime is a state the product handles
+// fail-closed — no build, no command, one warning in the log — so every stack
+// but "environment" is made exactly that device: a plain file sits where the
+// runtime home would be, and placing the runtime fails at its first mkdir. The
+// SDK is still imported and version-checked; nothing is written or fetched.
+//
+// The "environment" stack is the device the developer runs it on instead: its
+// runtime home is linked to the device's own, and the snapshot the source
+// workspace is ready with is linked into the stack's workspace (after seeding,
+// below), so a command runs in a real microVM without building anything.
+const environment = environmentSource ? sourceEnvironment() : null;
+if (environment?.refusal) {
+  throw new Error(
+    `${tag} ${environmentSource} cannot run a command in its isolated environment: ` +
+      environment.refusal,
+  );
+}
 mkdirSync(dirname(runtimeHome), { recursive: true, mode: 0o700 });
-writeFileSync(runtimeHome, "", { mode: 0o600 });
+if (environment) {
+  symlinkSync(environment.runtime_home, runtimeHome, "junction");
+} else {
+  writeFileSync(runtimeHome, "", { mode: 0o600 });
+}
 
 // Shadow every AI CLI tool with a stub that records the call and fails at once,
 // and put the stub dir at the FRONT of the backend's PATH. No turn runs a
@@ -142,7 +210,7 @@ writeFileSync(runtimeHome, "", { mode: 0o600 });
 // staying empty is how a spec proves that whatever real binary the developer
 // has installed (a live, billed agent turn on a logged-in machine) was never
 // launched.
-const cliStubDir = mkdtempSync(join(tmpdir(), `guildbotics-e2e-${stackName}-bin-`));
+const cliStubDir = mkdtempSync(join(runRoot, `guildbotics-e2e-${stackName}-bin-`));
 const cliStubLog = join(cliStubDir, "invocations.log");
 writeFileSync(cliStubLog, "", { mode: 0o600 });
 for (const executable of cliAgentExecutables) {
@@ -405,6 +473,24 @@ async function seedWorkspace() {
   console.log(`${tag} seeded configured workspace (workspace=${workspaceDir})`);
 }
 
+// Give the "environment" stack's workspace the source workspace's declaration
+// and the snapshot the source is ready with, so the stack's environment is
+// ready without a build. The snapshot is linked rather than copied (it is a
+// multi-gigabyte disk image), and only that one: nothing in the journey builds,
+// which would remove every other snapshot of the workspace through the link.
+function adoptSourceEnvironment() {
+  const declaration = join("intelligences", "agent_environment.yml");
+  mkdirSync(dirname(join(configDir, declaration)), { recursive: true });
+  copyFileSync(
+    join(environmentSource, ".guildbotics", "config", declaration),
+    join(configDir, declaration),
+  );
+  const snapshots = join(workspaceDir, ".guildbotics", "local", "agent_environment", "snapshots");
+  mkdirSync(snapshots, { recursive: true });
+  symlinkSync(environment.snapshot, join(snapshots, basename(environment.snapshot)), "junction");
+  console.log(`${tag} adopted the isolated environment of ${environmentSource}`);
+}
+
 function startFrontend() {
   frontend = spawn(
     npm.executable,
@@ -492,6 +578,9 @@ async function main() {
 
   if (shouldSeed) {
     await seedWorkspace();
+  }
+  if (environment) {
+    adoptSourceEnvironment();
   }
 
   startFrontend();

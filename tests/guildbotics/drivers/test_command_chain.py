@@ -24,8 +24,11 @@ on native libraries.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextvars
+import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -42,6 +45,7 @@ from guildbotics.drivers.command_runner import run_command
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.context import Context
 from guildbotics.runtime.person_lease import PersonExecutionLease
+from guildbotics.utils import child_process
 from tests.guildbotics.command_environment_doubles import machinery
 from tests.guildbotics.runtime.test_context import (
     DummyBrainFactory,
@@ -124,6 +128,7 @@ async def test_chain_runs_children_before_parent_and_orders_pipe(config_dir: Pat
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_pipe_flows_as_stdin_into_each_command(config_dir: Path):
     """pipe is fed as stdin/message; each command can transform and forward it."""
     commands = config_dir / "commands"
@@ -336,6 +341,7 @@ async def test_python_main_receives_context_positional_and_keyword(config_dir: P
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_shell_runs_in_spec_cwd(config_dir: Path, tmp_path: Path):
     work = tmp_path / "work"
     work.mkdir()
@@ -358,6 +364,7 @@ async def test_shell_runs_in_spec_cwd(config_dir: Path, tmp_path: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_relative_spec_cwd_is_relative_to_the_calling_command(
     config_dir: Path, tmp_path: Path
 ):
@@ -381,6 +388,7 @@ async def test_relative_spec_cwd_is_relative_to_the_calling_command(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_shell_receives_params_as_env(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "env_echo.sh").write_text(
@@ -397,6 +405,7 @@ async def test_shell_receives_params_as_env(config_dir: Path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_unresolved_placeholder_never_reads_host_environment(
     config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -427,6 +436,7 @@ async def test_unresolved_placeholder_never_reads_host_environment(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
     commands = config_dir / "commands"
     (commands / "fail.sh").write_text(
@@ -442,6 +452,26 @@ async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
     message = str(excinfo.value)
     assert "exit code 3" in message
     assert "oops on stderr" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
+async def test_shell_ends_with_the_script_not_what_it_left_running(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A script that leaves a process running, holding its output open, ends
+    the command when it ends itself, with what it said before."""
+    monkeypatch.setattr(child_process, "_PIPES_OUTLIVE_SECONDS", 0.05)
+    (config_dir / "commands" / "leave.sh").write_text(
+        '#!/usr/bin/env bash\nsleep 60 &\necho "left $!"\n', encoding="utf-8"
+    )
+
+    ctx = _make_context()
+    await asyncio.wait_for(machinery(ctx, "leave", [], config_dir).run(), 10)
+
+    said, left = ctx.pipe.split()
+    os.kill(int(left), signal.SIGTERM)
+    assert said == "left"
 
 
 # --- inline print / to_html / to_pdf inside a chain ------------------------

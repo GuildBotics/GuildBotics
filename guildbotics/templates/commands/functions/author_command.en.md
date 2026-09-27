@@ -37,7 +37,7 @@ For a new command, choose the narrowest format that fits the behavior:
 - Markdown for an AI prompt or rendered text template.
 - YAML for declarative composition of existing commands.
 - Python for branching, structured data, integrations, or Context access.
-- Shell for a focused OS or CLI wrapper whose textual output is sufficient.
+- Shell for a focused wrapper around a Linux CLI whose textual output is sufficient.
 
 When you need clarification, return `action: answer` and ask one focused question
 in `message`.
@@ -84,6 +84,23 @@ Preserve correct GuildBotics command semantics:
   declare `routine: true` and must not require caller input.
 - Child commands run before their parent. Preserve caller input explicitly when a
   child probe would otherwise replace `Context.pipe`.
+
+Every command and its subcommands run inside one isolated Linux environment, not
+on the host:
+
+- The host's environment variables, PATH, and credentials never reach it. The
+  host's OS UI language and time zone arrive only as `LANGUAGE` and `TZ`; use
+  `functions/get_os_ui_language` for the language.
+- Files outside the working directory are reachable only through the
+  environment's granted directories; the exchange folder `~/Documents/GuildBotics`
+  is always granted read/write.
+- The network is reachable only as the workspace-wide `network:` of
+  `intelligences/agent_environment.yml` allows (deny when omitted). A command that
+  reaches the network says in its `description` which destinations must be
+  allowed there.
+- Python runs with GuildBotics' own Python environment and Shell with the tools of
+  the environment's base image; never rely on tools or packages installed on the
+  host. `context.get_ticket_manager()` is not available there.
 
 Produce valid, focused source with no unrequested capabilities or compatibility
 code. Use `available_commands` only for read-only reference and composition, and

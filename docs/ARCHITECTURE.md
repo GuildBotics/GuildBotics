@@ -91,9 +91,10 @@ workflow (orchestration)
   workspace as cwd. `CommandRunner` drives the turn (`commands/agent_turn.py`) when
   the execution context names `max_completion_attempts`: it retries the turn with a
   continuation prompt until the member records its completion and returns the
-  response. It reaches the run record only through the run ledger the host passes to
-  `CommandRunner` (`HostRunLedger` in `drivers/command_runner.py`, which locates the
-  record from the host's own workspace). The workflow never reads or writes the
+  response. It runs inside the command's isolated environment and reaches the run
+  record only through the command's window to the host (`ClientRunLedger` in the
+  environment, answered by `HostRunLedger` in `drivers/command_runner.py`, which locates
+  the record from the host's own workspace). The workflow never reads or writes the
   run record itself, and it never produces work products
   (code changes, PRs, replies, review comments) and makes no writes of its own: the
   host selection around the turn — the ticket selector (`drivers/ticket_selector.py`)
@@ -103,10 +104,11 @@ workflow (orchestration)
   receives GitHub/Slack tokens and never calls provider APIs directly; every external
   write goes through `guildbotics member ...`.
 - **Trusted member transport**: interactive skill sessions invoke the member CLI
-  directly. Every native provider session instead receives one authenticated localhost
-  MCP tool that can invoke only the fixed member CLI for the active person, workspace,
-  and turn. The broker runs each command inside the GuildBotics process that runs the
-  turn (Desktop, `guildbotics start`, or a local `guildbotics run`), on a worker
+  directly. Every native provider session instead receives one authenticated MCP tool,
+  served on the host and reached from the isolated environment, that can invoke only
+  the fixed member CLI for the active person, workspace, and turn. The broker runs each
+  command inside the host's GuildBotics process that runs the command (Desktop,
+  `guildbotics start`, or a local `guildbotics run`), on a worker
   thread with its own working directory, streams, and invocation, instead of starting
   a CLI process per call. The broker, not the provider process, holds the turn's
   execution lease and a separately rotated per-turn grant; a command that outlasts
@@ -245,10 +247,12 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   last worked on. A newer batch is delivered as new input; cursor regression,
   unorderable cursors, or a run/event identity mismatch rotate the session, record
   `continuation_rejected`, and re-feed historical context with the unread batch.
-- Rate limits from AI CLI tools are detected (`intelligences/brains/cli_agent.py`),
-  handled by shared logic (`capabilities/workflow_rate_limits.py`,
-  `commands/agent_turn.py`), surfaced as a `workflow.rate_limited`
-  diagnostics event, and never amplified by in-process retries. Ticket selection and
+- Rate limits from AI CLI tools are detected in the isolated environment
+  (`intelligences/brains/cli_agent.py`), never amplified by in-process retries
+  (`commands/agent_turn.py` raises them as they are), and recorded on the host by the
+  ticket selector and chat selection through shared logic
+  (`capabilities/workflow_rate_limits.py`) as a `workflow.rate_limited` diagnostics
+  event. Ticket selection and
   the chat pending queue defer re-entry until the provider's exact reset timestamp
   when one is available.
 - Diagnostics keep provider turn success, workflow completion evidence, and dispatch
@@ -404,9 +408,11 @@ traces stay searchable whatever model the slot resolved to.
 
 The generic execution substrate used by workflows and custom commands:
 
-- `drivers/command_runner.py` is the host entry: it resolves the target member,
-  opens the isolated environment the run's AI CLI turns share
-  (`run_in_environment()`), and runs the command there.
+- `drivers/command_runner.py` is the host entry: it resolves the target member and
+  the main command once (`prepare_command()`), opens the isolated environment the
+  command, its subcommands, and their AI CLI turns all run in
+  (`run_in_environment()`), and runs the command there through
+  `runtime/command_entry.py`.
 - `commands/runner.py` (`CommandRunner`) is the execution machinery: it builds a
   `CommandSpec` (`commands/models.py`, via `commands/spec_factory.py`), runs child
   commands (`commands:`) first, then the main command. It imports nothing only the
@@ -989,7 +995,7 @@ a monorepo on purpose.
   command returns. The command invokes its prompt with a stable `work_identity` so the
   provider resumes its own session. Both declare themselves read-only (`read_only:
   true`), and a read-only command is confined by its isolated environment, not by its
-  prompt or its provider: every turn of the run inherits the declaration, the
+  prompt or its provider: the whole run, every turn included, inherits the declaration, the
   environment spec mounts every host directory read-only with an empty working
   directory and lets the network reach only the provider's API and the member broker,
   and the run takes no member execution lease, no manual-command slot and is tracked

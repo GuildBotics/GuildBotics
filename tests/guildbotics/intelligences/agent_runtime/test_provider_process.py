@@ -31,7 +31,7 @@ from guildbotics.intelligences.agent_runtime.turn import Turn
 
 class _Process:
     """A provider process whose exit the test decides; its pipes end with it,
-    as those of a process a turn started do (``TurnProcess``)."""
+    as those of a process a turn started do (``ChildProcess``)."""
 
     def __init__(self, *, limit: int = 2**16) -> None:
         self.stdout = asyncio.StreamReader(limit=limit)

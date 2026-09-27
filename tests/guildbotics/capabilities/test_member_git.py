@@ -29,7 +29,6 @@ from guildbotics.capabilities.member_github import (
     GitHubPullRequestHead,
     MemberCapabilityError,
 )
-from guildbotics.commands.utils import find_shell
 from guildbotics.entities.team import Person, Project, Team
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -76,7 +75,8 @@ def close_test_repositories(monkeypatch: pytest.MonkeyPatch):
 class _LocalGuest:
     """The command's environment, run on this machine and marked."""
 
-    def __init__(self) -> None:
+    def __init__(self, sh: str) -> None:
+        self._sh = sh
         self.runs: list[tuple[tuple[str, ...], str, dict[str, str]]] = []
 
     def path(self, host: Path) -> str:
@@ -96,7 +96,7 @@ class _LocalGuest:
         stdout_limit: int,
     ) -> GuestResult:
         self.runs.append((tuple(argv), cwd, dict(env)))
-        program = (find_shell() or "sh") if argv[0] == "sh" else argv[0]
+        program = self._sh if argv[0] == "sh" else argv[0]
         inherited = {
             key: os.environ[key]
             for key in ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "TEMP", "TMP")
@@ -197,7 +197,10 @@ class _Member:
 
 @pytest.fixture
 def member(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, worker_git_seed: WorkerGitSeed
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    worker_git_seed: WorkerGitSeed,
+    posix_sh: str,
 ) -> _Member:
     monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", _TOKEN)
     remotes: dict[str, Path] = {}
@@ -209,7 +212,7 @@ def member(
     )
     # The command's turns work in it: it is there before any of them runs.
     service.workspace_root.mkdir(parents=True)
-    result = _Member(service, _LocalGuest(), remotes)
+    result = _Member(service, _LocalGuest(posix_sh), remotes)
 
     async def default_branch(owner, repo):
         return "main"
@@ -1030,7 +1033,7 @@ async def test_the_host_takes_only_the_branch_of_what_a_clone_sends(
     repo = member.stage()
     repo.index.commit("local")
     repo.create_tag("planted", message="planted")
-    member.guest = _TaggingGuest()
+    member.guest = _TaggingGuest(member.guest._sh)
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "push.followTags")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
