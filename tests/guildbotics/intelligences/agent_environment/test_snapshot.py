@@ -50,7 +50,15 @@ _DIGEST = "sha256:" + "c" * 64
 
 
 def _labels() -> list[str]:
-    return ["home", "uv", "pdf", "python", "npm", *snapshot.provisioned_installs()]
+    return [
+        "home",
+        "uv",
+        "pdf",
+        "python",
+        "npm",
+        *snapshot.provisioned_installs(),
+        "git",
+    ]
 
 
 def _with_image(reference: str = "local/agent:1", digest: str = _DIGEST):
@@ -215,6 +223,9 @@ def test_the_recipe_installs_only_guildbotics_and_the_providers() -> None:
     assert snapshot.REQUIREMENTS.read_text(encoding="utf-8") in scripts["python"]
     assert f"-r {snapshot.VENV}/requirements.txt" in scripts["python"]
     assert scripts["python"].endswith("-c 'import weasyprint'")
+    # Member git runs every git of a member's clone in the environment, so a
+    # snapshot without git is refused, whatever image it was built from.
+    assert steps[-1] == BuildStep("git", "git --version")
 
 
 def test_an_empty_declaration_still_installs_uv_and_the_providers() -> None:

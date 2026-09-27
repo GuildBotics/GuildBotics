@@ -114,6 +114,18 @@ NOT_SHARED = {
     "guildbotics/intelligences/agent_runtime/member_broker.py:_MAX_STDIN_BYTES": (
         "what is piped into a member command"
     ),
+    "guildbotics/capabilities/member_git.py:MAX_GIT_BUNDLE_BYTES": (
+        "history a member's clone sends the host, into a temporary file"
+    ),
+    "guildbotics/capabilities/member_git.py:_MAX_GIT_OUTPUT_BYTES": (
+        "what the host reads back from git run in a member's clone"
+    ),
+    "guildbotics/intelligences/agent_runtime/command_guest.py:_CHUNK_BYTES": (
+        "how much of a process's input or output is moved at a time"
+    ),
+    "guildbotics/intelligences/agent_runtime/command_guest.py:_MAX_STDERR_BYTES": (
+        "how much of a process's standard error is kept for its reason"
+    ),
     "guildbotics/capabilities/member_github.py:DEFAULT_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),

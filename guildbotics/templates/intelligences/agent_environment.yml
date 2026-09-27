@@ -8,7 +8,7 @@
 # A workspace may instead start from an image it built itself, for another
 # toolchain (a Python interpreter, Rust, a browser). Build it FROM the default
 # image, or from one that gives the build the same: Node.js with npm, curl and
-# tar. Do
+# tar, and git, which the member's git work runs with. Do
 # not ship bubblewrap (`bwrap`): Codex prefers it to the one it bundles and
 # cannot start a session with Debian's.
 # The image is not shared, and it is per CPU architecture (the environment

@@ -143,7 +143,8 @@ snapshot is named by the digest the device loaded, so loading the image
 again makes it stale, and it is rebuilt.
 Build the image `FROM` the default one, or from any image that gives the
 build steps what they use (Debian's `apt-get`, Node.js with `npm`, `curl` and
-`tar`), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
+`tar`) and git, which [member git](#member-git-and-the-members-clones) runs
+the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). A loaded image is used without asking a registry (pull policy
 `never`). The image for developing GuildBotics itself
@@ -593,6 +594,41 @@ isolated working directory. A command that outlasts the broker's timeout is repo
 the agent and left to finish. A read-only turn holds no lease, so the member CLI guard
 rejects every write-capable command. Every native adapter uses this same member
 capability boundary.
+
+### Member git and the member's clones
+
+The member's clones (`<workspace>/.guildbotics/local/clones/<person_id>`) are
+written by the turns, and a repository decides what its git runs (hooks,
+filters, `core.fsmonitor`), where it fetches from and pushes to, and which
+directory it works on. So the member CLI never runs git in a clone on the host.
+`member git prepare`, `commit`, `push`, and `publish` in member mode run every
+git of the clone inside the running command's microVM, which the broker hands
+each member command; that git starts with the facts of the host every
+environment gets and the member's name, and with none of the turn's variables,
+the broker's token, or a login stand-in.
+
+The member's GitHub token is used only on the host, by a bare repository of the
+host's own per `owner/repo` under
+`<workspace>/.guildbotics/local/member_git/<person_id>/` that no environment
+mounts, toward the URL the host derives. `prepare` records which of those a
+clone pushes to (a fork and its upstream share one clone directory, and the
+last `prepare` decides), and a clone `prepare` did not check out is not pushed.
+History crosses between the two as git bundles streamed over the process's
+standard streams, incrementally: the host takes of what the clone sends only
+`refs/heads/<branch>` (a name git itself accepts as a branch name; at most
+1 GiB), reads the commit it pushes back from its own repository, and pushes
+with a full refspec. `prepare` rewrites the clone's `origin` URL, the branch's
+upstream, and the member's `user.name` / `user.email` every time, and a push
+moves the clone's `origin/<branch>` to what it pushed. A member git command
+that outlasts the broker's timeout has its git in the microVM ended, and the
+member's next git command waits for it.
+
+What this means for a workspace: the project's git hooks run inside the
+environment with the tools of its image (a hook that needs Python needs an
+image that has it), Git LFS is not supported, and outside a running command
+there is no environment, so member-mode git is refused there. An interactive
+session uses `--workspace-mode current`, which runs in the user's own
+repository on the host, under the user's own hooks; a turn cannot use it.
 
 ## Exact conversation identity and resume
 

@@ -256,6 +256,7 @@ GitHub App 作成後に以下の作業を行ってください。
 
 - 各メンバーの GitHub 認証情報（PAT または GitHub App の設定値）を、デスクトップアプリのメンバー設定から GuildBotics に登録してください。GitHub / git への書き込みは、ローカルの `gh auth` ユーザーではなく、割り当てられたメンバーの認証情報で行われます
 - チケット駆動の作業は、メンバーごとの作業ディレクトリ（既定: `<workspace>/.guildbotics/local/clones/<person_id>`）で行われます。リポジトリの複製、push、PR 作成、コメントは、メンバー自身が `guildbotics member` CLI 経由で実行します
+- このディレクトリの git はすべて隔離環境の中で動き、host では動きません。メンバーのトークンを使うのは host の GuildBotics だけです（→ [member git とメンバーの clone](docs/native_agent_runtime.ja.md#member-git-とメンバーの-clone)）。そのため、プロジェクトの git hooks は環境の中で image にあるツールを使って動き、Git LFS は扱いません
 - AI CLI ツールを対話的にも使う場合は、`gh`、直接のトークン / API 書き込み、`git push` を拒否または承認必須にすることを推奨します。これは利用者自身の GitHub アカウントへフォールバックすることを避けるための防止策であり、トークン流出を完全に技術的に封じ込めるサンドボックスではありません
 - AI CLI の turn は、サービスを実行するマシンのエージェント隔離環境の中で動きます。**設定 → エージェント実行環境** で環境が **準備完了**、ツールが **この端末に認証情報保存済み** になっていることを確認してください。ターミナルからは次で確認できます:
 
@@ -891,7 +892,7 @@ Finder やエディタがどの階層に補助ファイルを作っても、「�
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/cli_agent_filesystem_grants.yml`: AI CLI ツールが作業ディレクトリの外で使うホームディレクトリ配下のディレクトリ（`documents`）。ワークスペースの全 device・全メンバーで共有します。このファイルとは別に、`Documents/GuildBotics`（受け渡しフォルダ）は常に読み書きで許可され、デスクトップから渡したファイルとエージェントの成果物はそこに置かれます。端末固有の追加パスと読み取り禁止は `local/cli_agent_filesystem_grants.yml` に置きます（[ネイティブエージェント実行基盤](docs/native_agent_runtime.ja.md) を参照）
 - `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
-- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian + Node.js。別のツールチェーンが必要なら自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
+- `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian + Node.js。別のツールチェーンが必要なら git を残して自分で build し、各マシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は全マシンで環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
 設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。

@@ -115,6 +115,35 @@ async def test_execute_runs_the_member_command_in_this_process_for_the_turn(
     assert (result.exit_code, result.stdout, result.stderr) == (3, "out", "err")
 
 
+@pytest.mark.asyncio
+async def test_each_member_command_is_handed_the_commands_environment(
+    monkeypatch, tmp_path
+) -> None:
+    """For as long as the broker waits for the command, and no longer: git
+    the command runs in the microVM ends when the broker stops waiting."""
+    handed: list[Any] = []
+
+    class Guest:
+        def until(self, deadline: float) -> tuple[str, float]:
+            return ("guest", deadline)
+
+    def run_in_process(arguments, invocation, *, cwd, stdin):
+        handed.append(invocation.guest)
+        return 0, "", ""
+
+    monkeypatch.setattr(_MEMBER_CLI, "run_in_process", run_in_process)
+    broker = _active_broker(_context(tmp_path))
+    broker._guest = cast(Any, Guest())
+    before = time.monotonic()
+
+    await broker.execute("turn-1", ["context", "--person", "aiko"])
+
+    [(guest, deadline)] = handed
+    assert guest == "guest"
+    timeout = member_broker._COMMAND_TIMEOUT_SECONDS
+    assert before + timeout <= deadline <= time.monotonic() + timeout
+
+
 _INHERITED: contextvars.ContextVar[str] = contextvars.ContextVar(
     "inherited", default=""
 )
