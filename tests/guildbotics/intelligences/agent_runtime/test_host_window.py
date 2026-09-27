@@ -674,7 +674,10 @@ async def test_a_call_being_answered_ends_before_the_command_closes_what_it_uses
 
         monkeypatch.setattr(environment, "_start", slow)
         turn = asyncio.create_task(_begin(command))
-        await booting.wait()
+        waiting = asyncio.create_task(booting.wait())
+        await asyncio.wait({turn, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        waiting.cancel()
+        assert booting.is_set(), turn.exception()
         asyncio.get_running_loop().call_later(0.2, boot.set)
 
     assert (await turn).turn_grant
