@@ -111,12 +111,6 @@ def pid_exists(pid: int) -> bool:
     return True
 
 
-def terminate_posix_process_group(pid: int, *, force: bool = False) -> None:
-    """Send the requested termination signal to a POSIX process group."""
-    signal_name = "SIGKILL" if force else "SIGTERM"
-    vars(os)["killpg"](pid, vars(signal)[signal_name])
-
-
 def force_terminate_pid(pid: int) -> None:
     """Immediately terminate ``pid`` using the native platform primitive."""
     if _WINDOWS:

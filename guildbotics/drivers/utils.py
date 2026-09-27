@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import datetime
-import shlex
 import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
 
 from guildbotics.capabilities.command_failures import command_failure_payload
-from guildbotics.commands.runner import CommandRunner
-from guildbotics.drivers.command_runner import HostRunLedger, run_main_command
+from guildbotics.drivers.command_runner import prepare_host_command, run_main_command
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.runtime import Context
 from guildbotics.runtime.workflow_invocation import WorkflowSource
@@ -112,12 +110,6 @@ async def run_command(
     """Run a command within the given context and log its execution."""
 
     async def _action() -> None:
-        words = shlex.split(command)
-        if not words:
-            raise ValueError(f"Empty or whitespace command string: {command!r}")
-        await run_main_command(
-            CommandRunner(context, words[0], words[1:], ledger=HostRunLedger()),
-            source=task_type,
-        )
+        await run_main_command(prepare_host_command(context, command), source=task_type)
 
     return await run_with_logging(context, command, task_type, _action)

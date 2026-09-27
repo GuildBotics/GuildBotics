@@ -48,8 +48,9 @@ provider-neutral `low` / `high` levels become provider settings. The shipped def
 Every AI CLI turn runs inside an isolated agent environment: a microVM
 GuildBotics boots from a snapshot it built on this device. The turns of one
 command execution share one microVM: it boots before the first of them,
-able to run every AI CLI tool the member is configured with, and is
-discarded when the command ends, whether it succeeded, failed, or was
+able to run every AI CLI tool the member is configured with, and shaped by
+the command rather than by that turn -- it works in the command's working
+directory -- and is discarded when the command ends, whether it succeeded, failed, or was
 cancelled. The turns run one at a time and see what an earlier one left in
 it, since a command and its subcommands are one isolation. No turn runs
 outside a command: the Desktop's assistants and the diagnostics screen's AI CLI
@@ -151,11 +152,23 @@ builds every architecture, loads, and declares) is the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
 
-- **Working directory**: the turn's `cwd` (the member's clone for ticket work,
-  `<workspace>/.guildbotics/local/work/...` for internal turns) is bound
-  read/write at the same path it has on the host (a read-only turn gets an
-  empty directory of the microVM's own there instead). The workspace's
-  `.guildbotics/config` and `state` are not part of it.
+- **Working directory**: the command's working directory is bound
+  read/write at the same path it has on the host (a read-only command gets an
+  empty directory of the microVM's own there instead). A command the host
+  starts on its own (a scheduled or routine command, the ticket patrol, a
+  chat dispatch) works in the exchange directory (`Documents/GuildBotics`,
+  below); a Desktop run works where the screen says (the exchange directory
+  when it says nothing), and `guildbotics run` in `--cwd` or the shell's
+  working directory. A turn works there or anywhere else the microVM
+  mounted. The workspace's `.guildbotics/config` and `state` are not part
+  of it.
+- **The member's clone**: for a command that may write, the running
+  member's clone (`<workspace>/.guildbotics/local/clones/<person_id>`), where
+  the turns of ticket and chat work run, is bound read/write at its host
+  path too, created first when missing. It is opened for its own sake, so it
+  is mounted even under the cover over the workspace's `.guildbotics` when
+  the command works in the workspace root. Only the running member's clone
+  is mounted, and a read-only command gets none.
 - **Inspected workspace state**: only for the turns of a command that
   declares it (`inspects`), parts of the workspace's own state are bound
   read-only at their host paths. `diagnostics` is the recorded runs

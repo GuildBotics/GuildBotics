@@ -24,7 +24,6 @@ async def main(context: Any) -> None:
     )
     person_id = context.person.person_id
     member_workspace = get_member_clone_path(person_id)
-    member_workspace.mkdir(parents=True, exist_ok=True)
     prompt = turn.prompt
 
     def _json(value: Any) -> str:

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import shlex
-
-from guildbotics.commands.runner import CommandRunner
-from guildbotics.drivers.command_runner import HostRunLedger, run_in_environment
+from guildbotics.drivers.command_runner import prepare_host_command, run_in_environment
 from guildbotics.entities.team import Person
 from guildbotics.observability import set_attributes
 from guildbotics.runtime.context import Context
@@ -32,11 +29,6 @@ class WorkflowDispatcher:
         context.shared_state[WORKFLOW_INVOCATION_KEY] = invocation
 
         try:
-            words = shlex.split(invocation.command)
-            if not words:
-                raise ValueError("Empty command string in workflow invocation")
-            await run_in_environment(
-                CommandRunner(context, words[0], words[1:], ledger=HostRunLedger())
-            )
+            await run_in_environment(prepare_host_command(context, invocation.command))
         finally:
             await context.aclose()

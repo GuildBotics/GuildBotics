@@ -7,6 +7,7 @@ around the run: the command execution machinery
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Sequence
 from functools import cached_property
 from pathlib import Path
@@ -21,6 +22,10 @@ from guildbotics.capabilities.workflow_completion_events import (
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.runner import CommandRunner
+from guildbotics.intelligences.agent_environment.contract import exchange_dir
+from guildbotics.intelligences.agent_environment.status import (
+    filesystem_permission_problem,
+)
 from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.brains.cli_agent import get_cli_agent_mapping
 from guildbotics.runtime.context import Context
@@ -31,10 +36,13 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowInvocation,
     WorkflowSource,
 )
+from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 
 __all__ = [
     "HostRunLedger",
+    "host_command_cwd",
     "prepare_command",
+    "prepare_host_command",
     "run_command",
     "run_in_environment",
     "run_main_command",
@@ -74,12 +82,47 @@ class HostRunLedger:
         )
 
 
+def host_command_cwd() -> Path:
+    """Where a command the host starts on its own runs, and a Desktop run
+    that names no directory: the exchange directory, the same however the
+    host was started, so what it produces lands where the user looks for it.
+
+    Raises:
+        CommandError: If this process may not create it (on macOS, until the
+            app is allowed the Documents folder), in the words the isolated
+            environment uses for the same refusal.
+    """
+    cwd = exchange_dir()
+    try:
+        cwd.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise CommandError(filesystem_permission_problem(cwd)) from exc
+    return cwd
+
+
+def prepare_host_command(context: Context, command: str) -> CommandRunner:
+    """Resolve a command line the host starts on its own (a scheduled or
+    routine command, a dispatched workflow) for the member ``context`` runs
+    as; it works in :func:`host_command_cwd`.
+
+    Raises:
+        ValueError: If ``command`` names no command.
+        CommandError: If the command cannot be resolved.
+    """
+    words = shlex.split(command)
+    if not words:
+        raise ValueError(f"Empty or whitespace command string: {command!r}")
+    return CommandRunner(
+        context, words[0], words[1:], host_command_cwd(), ledger=HostRunLedger()
+    )
+
+
 def prepare_command(
     base_context: Context,
     command_name: str,
     command_args: Sequence[str],
-    person_identifier: str | None = None,
-    cwd: Path | None = None,
+    person_identifier: str | None,
+    cwd: Path,
 ) -> CommandRunner:
     """Resolve a command for the member it runs as, once.
 
@@ -114,8 +157,8 @@ async def run_command(
     base_context: Context,
     command_name: str,
     command_args: Sequence[str],
-    person_identifier: str | None = None,
-    cwd: Path | None = None,
+    person_identifier: str | None,
+    cwd: Path,
 ) -> CommandOutcome:
     """Execute a command within the given context.
 
@@ -211,5 +254,12 @@ async def run_in_environment(runner: CommandRunner) -> CommandOutcome:
     except ValueError as exc:
         raise CommandError(str(exc)) from exc
     tools = frozenset(info.adapter for info in mapping.values())
-    async with command_environment(runner.access, tools):
+    workspace_root = get_workspace_root()
+    async with command_environment(
+        runner.access,
+        tools,
+        cwd=runner.cwd,
+        workspace_root=workspace_root,
+        clone=get_member_clone_path(runner.context.person.person_id, workspace_root),
+    ):
         return await runner.run()

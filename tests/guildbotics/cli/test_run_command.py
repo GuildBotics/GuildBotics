@@ -166,6 +166,8 @@ def test_cli_runs_locally_only_when_no_matching_desktop(
     assert result.exit_code == 0, result.output
     assert result.stdout == "local output\n"
     assert calls[-1][0] == "local"
+    # Locally, too, the command works where it was started.
+    assert calls[-1][1][-1] == Path.cwd()
     assert not any(path == "/commands/run" for path, _ in calls)
 
 
@@ -368,7 +370,9 @@ async def test_run_custom_command_returns_brain_output(tmp_path, monkeypatch):
         """,
     )
 
-    outcome = await run_command(_get_context("stdin text"), "solo", ["world"])
+    outcome = await run_command(
+        _get_context("stdin text"), "solo", ["world"], None, tmp_path
+    )
     assert outcome.text_output == "Greetings world\nstdin text"
 
 
@@ -391,7 +395,7 @@ async def test_run_command_runs_as_configured_default_person(tmp_path, monkeypat
         default_person_id="akira",
     )
 
-    outcome = await run_command(_context_for_team(team), "whoami", [])
+    outcome = await run_command(_context_for_team(team), "whoami", [], None, tmp_path)
     assert outcome.text_output == "akira"
 
 
@@ -403,10 +407,12 @@ async def test_run_command_releases_person_lease_when_discovery_fails(
     context = _get_context()
 
     with pytest.raises(CommandError):
-        await run_command(context, "missing", [])
+        await run_command(context, "missing", [], None, tmp_path)
 
     _write(tmp_path / "commands/solo.md", "---\nbrain: none\n---\ndone")
-    assert (await run_command(context, "solo", [])).text_output == "done"
+    assert (
+        await run_command(context, "solo", [], None, tmp_path)
+    ).text_output == "done"
 
 
 @pytest.mark.asyncio
@@ -415,7 +421,7 @@ async def test_run_command_releases_person_lease_when_discovery_fails(
     [("solo", "aiko"), ("solo@aiko", None)],
 )
 async def test_cli_run_rejects_human_member_without_traceback(
-    monkeypatch, command_spec: str, person_option: str | None
+    tmp_path, monkeypatch, command_spec: str, person_option: str | None
 ):
     human = Person(
         person_id="aiko",
@@ -433,7 +439,9 @@ async def test_cli_run_rejects_human_member_without_traceback(
     monkeypatch.setattr(run_module, "get_edition", lambda: FakeEdition())
 
     with pytest.raises(click.ClickException) as exc_info:
-        await run_module._run_custom_command(command_spec, (), person_option, "")
+        await run_module._run_custom_command(
+            command_spec, (), person_option, "", tmp_path
+        )
 
     assert "cannot be used as an AI execution subject" in str(exc_info.value)
 
@@ -459,7 +467,7 @@ async def test_run_custom_command_rejects_human_member(tmp_path, monkeypatch):
     context = _context_for_person(human)
 
     with pytest.raises(PersonExecutionNotAllowedError):
-        await run_command(context, "solo", [], person_identifier="aiko")
+        await run_command(context, "solo", [], "aiko", tmp_path)
 
 
 @pytest.mark.asyncio
@@ -502,7 +510,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
     )
 
     context = _get_context("initial")
-    executor = CommandRunner(context, "pipeline", ["ARG"])
+    executor = CommandRunner(context, "pipeline", ["ARG"], tmp_path)
     result = (await executor.run()).text_output
 
     runner = executor.context
@@ -553,7 +561,7 @@ async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     script_path.chmod(0o755)
 
     context = _get_context("initial")
-    executor = CommandRunner(context, "shell_driver", ["ARG"])
+    executor = CommandRunner(context, "shell_driver", ["ARG"], tmp_path)
     result = (await executor.run()).text_output
 
     runner = executor.context
@@ -591,7 +599,7 @@ async def test_python_command_can_invoke_subcommand(tmp_path, monkeypatch):
     )
 
     context = _get_context()
-    executor = CommandRunner(context, "driver", [])
+    executor = CommandRunner(context, "driver", [], tmp_path)
     await executor.run()
 
     shared = executor.context.shared_state
@@ -642,7 +650,7 @@ async def test_run_command_drives_a_turn_until_the_host_record_completes(
         """,
     )
 
-    outcome = await run_command(_get_context(), "driver", [])
+    outcome = await run_command(_get_context(), "driver", [], None, tmp_path)
 
     assert outcome.result == "attempt-2"
 
@@ -660,7 +668,7 @@ async def test_python_command_leaves_no_bytecode_cache(tmp_path, monkeypatch):
         """,
     )
 
-    executor = CommandRunner(_get_context(), "functions/cached", [])
+    executor = CommandRunner(_get_context(), "functions/cached", [], tmp_path)
     result = (await executor.run()).text_output
 
     assert result == "done"
@@ -684,7 +692,7 @@ async def test_python_command_named_like_stdlib_keeps_stdlib_import(
         """,
     )
 
-    executor = CommandRunner(_get_context(), "inspect", [])
+    executor = CommandRunner(_get_context(), "inspect", [], tmp_path)
     outcome = await executor.run()
 
     assert outcome.result != "inspect"
@@ -706,7 +714,9 @@ async def test_python_commands_sharing_a_stem_get_distinct_modules(
         )
 
     names = [
-        (await CommandRunner(_get_context(), f"{directory}/tool", []).run()).result
+        (
+            await CommandRunner(_get_context(), f"{directory}/tool", [], tmp_path).run()
+        ).result
         for directory in ("alpha", "beta")
     ]
 
@@ -736,6 +746,6 @@ async def test_python_command_supports_dataclass_with_postponed_annotations(
         """,
     )
 
-    executor = CommandRunner(_get_context(), "record", [])
+    executor = CommandRunner(_get_context(), "record", [], tmp_path)
 
     assert (await executor.run()).text_output == "ok"

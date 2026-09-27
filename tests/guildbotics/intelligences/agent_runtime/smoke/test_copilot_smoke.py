@@ -23,7 +23,6 @@ from guildbotics.intelligences.agent_environment.contract import (
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
-from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
     AgentExecutionContext,
@@ -32,6 +31,7 @@ from guildbotics.intelligences.agent_runtime.models import (
     ResumePolicy,
 )
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    command_at,
     settle_contract,
 )
 
@@ -55,7 +55,6 @@ def _context(tmp_path) -> AgentExecutionContext:
         person_id="smoke",
         run_id="smoke-run",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("smoke", "copilot", "manual", "smoke"),
         resume_policy=ResumePolicy.AUTO,
@@ -89,7 +88,7 @@ async def test_real_copilot_prompt_then_exact_reload(tmp_path) -> None:
     conversation = ConversationRecord(key=context.conversation_key)
     first_events: list[AgentEvent] = []
 
-    async with command_environment(CommandAccess(), frozenset({TOOL})):
+    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
         adapter = CopilotAcpAdapter()
         try:
             first = await adapter.run_turn(
@@ -116,7 +115,7 @@ async def test_real_copilot_prompt_then_exact_reload(tmp_path) -> None:
     # A later command, in a microVM of its own, is what makes the reload real:
     # the session id on the conversation and the state the device keeps for
     # the tool are all the next turn has to go on.
-    async with command_environment(CommandAccess(), frozenset({TOOL})):
+    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
         adapter = CopilotAcpAdapter()
         try:
             conversation.provider_session_id = first.provider_session_id
@@ -190,7 +189,9 @@ async def test_real_copilot_read_only_turn_cannot_write(tmp_path, monkeypatch) -
     conversation = ConversationRecord(key=context.conversation_key)
     events: list[AgentEvent] = []
 
-    async with command_environment(CommandAccess(read_only=True), frozenset({TOOL})):
+    async with command_at(
+        tmp_path, {TOOL}, CommandAccess(read_only=True), person_id="smoke"
+    ):
         try:
             result = await adapter.run_turn(
                 f"Create a file named {guest_path(granted)}/smoke.txt containing the "

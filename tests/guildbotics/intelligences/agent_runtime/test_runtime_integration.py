@@ -7,7 +7,6 @@ import pytest
 
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_runtime import diagnostics, registry
-from guildbotics.intelligences.agent_runtime.environment import command_environment
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
     AgentEvent,
@@ -20,6 +19,7 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
+from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
 
 
 @pytest.fixture
@@ -766,7 +766,9 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
 
 
 @pytest.mark.asyncio
-async def test_a_command_keeps_one_native_process_per_member(monkeypatch) -> None:
+async def test_a_command_keeps_one_native_process_per_member(
+    monkeypatch, tmp_path
+) -> None:
     created: list[_TrackedAdapter] = []
 
     def create_adapter(name: str):
@@ -776,7 +778,7 @@ async def test_a_command_keeps_one_native_process_per_member(monkeypatch) -> Non
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
 
-    async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
+    async with command_at(tmp_path, {"claude", "codex"}):
         first = await registry.get_native_adapter("aiko", "codex", "run-1")
         assert await registry.get_native_adapter("aiko", "codex", "run-1") is first
         second = await registry.get_native_adapter("aiko", "claude", "run-2")
@@ -794,7 +796,7 @@ async def test_a_command_keeps_one_native_process_per_member(monkeypatch) -> Non
 
 @pytest.mark.asyncio
 async def test_commands_of_one_member_never_close_each_others_adapters(
-    monkeypatch,
+    monkeypatch, tmp_path
 ) -> None:
     """A read-only command beside one that writes: each keeps its own turn."""
     monkeypatch.setattr(registry, "create_native_adapter", _TrackedAdapter)
@@ -802,7 +804,7 @@ async def test_commands_of_one_member_never_close_each_others_adapters(
     reading_done = asyncio.Event()
 
     async def writing() -> _TrackedAdapter:
-        async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
+        async with command_at(tmp_path, {"claude", "codex"}):
             adapter = await registry.get_native_adapter("aiko", "codex", "write")
             writing_started.set()
             await reading_done.wait()
@@ -811,9 +813,7 @@ async def test_commands_of_one_member_never_close_each_others_adapters(
 
     async def reading() -> _TrackedAdapter:
         await writing_started.wait()
-        async with command_environment(
-            CommandAccess(read_only=True), frozenset({"codex"})
-        ):
+        async with command_at(tmp_path, {"codex"}, CommandAccess(read_only=True)):
             adapter = await registry.get_native_adapter("aiko", "codex", "read")
         reading_done.set()
         return adapter
@@ -852,7 +852,6 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
         context_cursor="cursor-1",
@@ -903,7 +902,6 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=key,
     )
@@ -926,7 +924,7 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
 
 @pytest.mark.asyncio
 async def test_native_registry_serializes_replacement_for_same_execution(
-    monkeypatch,
+    monkeypatch, tmp_path
 ) -> None:
     class _RegistryAdapter:
         def __init__(self) -> None:
@@ -947,7 +945,7 @@ async def test_native_registry_serializes_replacement_for_same_execution(
         return adapter
 
     monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
-    async with command_environment(CommandAccess(), frozenset({"claude", "codex"})):
+    async with command_at(tmp_path, {"claude", "codex"}):
         first = await registry.get_native_adapter("aiko", "codex", "run-1")
 
         replacements = await asyncio.gather(

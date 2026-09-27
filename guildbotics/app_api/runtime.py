@@ -136,7 +136,11 @@ from guildbotics.commands.validation import (
     CommandValidationError,
     validate_command_source,
 )
-from guildbotics.drivers.command_runner import prepare_command, run_main_command
+from guildbotics.drivers.command_runner import (
+    host_command_cwd,
+    prepare_command,
+    run_main_command,
+)
 from guildbotics.drivers.execution import (
     ExecutionStatusPublisher,
     TaskRunCoordinator,
@@ -851,7 +855,7 @@ class AppRuntime:
                 command=request.command,
                 label=request.command,
                 args=request.args,
-                cwd=lambda: command_cwd(request.cwd) or _default_command_cwd(),
+                cwd=lambda: command_cwd(request.cwd) or host_command_cwd(),
                 failure_code="command_error",
             ),
             person=request.person,
@@ -2466,14 +2470,6 @@ def _workspace_switch_blocked_error(status: RuntimeStatus) -> AppApiError:
         },
         status_code=409,
     )
-
-
-def _default_command_cwd() -> Path:
-    """Where a command runs when the screen names no directory: the exchange
-    directory, so what it produces lands where the user looks for it."""
-    cwd = exchange_dir()
-    cwd.mkdir(parents=True, exist_ok=True)
-    return cwd
 
 
 def _assistant_cwd(name: str) -> Path:

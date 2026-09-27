@@ -1,6 +1,6 @@
 # Building GuildBotics Desktop on Windows
 
-GuildBotics Desktop supports Windows x86_64 through the MSVC toolchain and produces an NSIS per-user installer. Build and smoke-test the installer on a Windows machine; macOS tests cover the portable logic but cannot validate Windows Job Objects, registry changes, or NSIS execution.
+GuildBotics Desktop supports Windows x86_64 through the MSVC toolchain and produces an NSIS per-user installer. Build and smoke-test the installer on a Windows machine; macOS tests cover the portable logic but cannot validate registry changes or NSIS execution.
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ uv run --no-sync python -m pytest \
 scripts/desktop-test-rust.sh
 ```
 
-These tests must run natively on Windows. In particular, confirm that the GuildBotics process can create a nested Job Object, assign a suspended AI CLI process to it, and resume the process.
+These tests must run natively on Windows.
 The Rust test wrapper clears Tauri's `bundle.resources` only for tests, so it works before the PyInstaller programs are built. Package builds still use the normal Tauri configuration and continue to require them.
 
 ## Build

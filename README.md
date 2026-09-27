@@ -350,6 +350,8 @@ Configure two kinds of automated execution per member under **Setup → Members 
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
+Commands the service runs work in the exchange folder (`~/Documents/GuildBotics`), whether the service was started from the desktop app or with `guildbotics start`: a file a scheduled `.sh` command, or an AI CLI turn, writes to a relative path lands there.
+
 These settings are stored in the member's `person.yml`. On a server without the GUI, edit that file directly.
 
 ```yaml

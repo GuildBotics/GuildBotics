@@ -22,8 +22,8 @@ class LocalCommandExecutor:
         context: Context,
         command_name: str,
         command_args: Sequence[str],
-        person_identifier: str | None = None,
-        cwd: Path | None = None,
+        person_identifier: str | None,
+        cwd: Path,
         *,
         target_device: str | None = None,
     ) -> CommandOutcome:

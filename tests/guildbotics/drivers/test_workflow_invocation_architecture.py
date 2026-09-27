@@ -97,7 +97,8 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, *, ledger):
+        def __init__(self, context, command, args, cwd, *, ledger):
+            self.cwd = cwd
             self.context = context
             ran.append((context, command, args))
             ledgers.append(ledger)
@@ -105,9 +106,7 @@ async def test_workflow_dispatcher_dispatch(monkeypatch):
         async def run(self):
             return "ok"
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
-    )
+    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
 
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")  # type: ignore[arg-type]
@@ -476,7 +475,8 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, *, ledger):
+        def __init__(self, context, command, args, cwd, *, ledger):
+            self.cwd = cwd
             self.context = context
 
         async def run(self):
@@ -484,9 +484,7 @@ async def test_dispatcher_reuses_active_trace(monkeypatch):
             seen["trace_id"] = t.trace_id if t else None
             seen["attributes"] = dict(t.attributes) if t else {}
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
-    )
+    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")
     inv = WorkflowInvocation(
@@ -515,15 +513,14 @@ async def test_dispatcher_does_not_open_its_own_trace(monkeypatch):
     class _FakeRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, *, ledger):
+        def __init__(self, context, command, args, cwd, *, ledger):
+            self.cwd = cwd
             self.context = context
 
         async def run(self):
             seen["trace"] = current_trace()
 
-    monkeypatch.setattr(
-        "guildbotics.drivers.workflow_dispatcher.CommandRunner", _FakeRunner
-    )
+    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", _FakeRunner)
     context = _FakeContext()
     dispatcher = WorkflowDispatcher(context, service_run_id="run-123")
     inv = WorkflowInvocation(

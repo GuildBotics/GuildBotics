@@ -41,7 +41,6 @@ def _context(tmp_path: Path, *, work_kind: str = "ticket") -> AgentExecutionCont
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path / "data" / "workspaces" / "aiko",
-        workspace_root=tmp_path / "workspace",
         workspace_data_root=tmp_path / "data",
         conversation_key=ConversationKey("aiko", "grok", work_kind, "work-1"),
         lease=PersonExecutionLease("aiko", tmp_path),

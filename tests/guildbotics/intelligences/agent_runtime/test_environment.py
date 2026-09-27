@@ -14,8 +14,10 @@ import pytest
 
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_environment.contract import AccessContract
-from guildbotics.intelligences.agent_runtime import environment, windows_job
+from guildbotics.intelligences.agent_runtime import environment
+from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
+    command_at,
     settle_contract,
 )
 
@@ -27,205 +29,31 @@ def _default_contract(monkeypatch) -> None:
     settle_contract(monkeypatch, AccessContract())
 
 
-def _command(*tools: str, access: CommandAccess = CommandAccess()):
-    """A command of a member configured with ``tools`` (Claude Code by
-    default), declaring ``access``."""
-    return environment.command_environment(access, frozenset(tools or {"claude"}))
-
-
-class _Process:
-    def __init__(self, *, pid: int = 42, returncode: int | None = None) -> None:
-        self.pid = pid
-        self.returncode = returncode
-        self.killed = False
-
-    async def wait(self) -> int:
-        if self.returncode is None:
-            await asyncio.Event().wait()
-        return int(self.returncode)
-
-    def kill(self) -> None:
-        self.killed = True
-        self.returncode = 1
-
-    def terminate(self) -> None:
-        pytest.fail("Windows graceful shutdown must not call Process.terminate()")
-
-
-@pytest.mark.asyncio
-async def test_create_agent_subprocess_assigns_before_resume_on_windows(
-    monkeypatch,
-) -> None:
-    events: list[object] = []
-    process = _Process()
-
-    class Job:
-        @staticmethod
-        def create():
-            events.append("create-job")
-            return Job()
-
-        def assign_and_resume(self, pid: int) -> None:
-            events.append(("assign-resume", pid))
-
-        def close(self) -> None:
-            events.append("close")
-
-    async def create_process(*program: str, **kwargs: Any):
-        events.append(("spawn", program, kwargs))
-        return process
-
-    monkeypatch.setattr(environment, "_WINDOWS", True)
-    monkeypatch.setattr(environment, "WindowsJob", Job)
-    monkeypatch.setattr(environment.asyncio, "create_subprocess_exec", create_process)
-    monkeypatch.setattr(
-        environment,
-        "register_process_job",
-        lambda registered, job: events.append(("register", registered, job)),
+def _command(
+    *tools: str, access: CommandAccess = CommandAccess(), cwd: Path | None = None
+):
+    """A command of aiko, a member configured with ``tools`` (Claude Code by
+    default), declaring ``access`` and working in ``cwd`` (``repository`` in
+    the test's workspace by default)."""
+    return command_at(
+        cwd or get_workspace_root() / "repository", tools or {"claude"}, access
     )
 
-    created = await environment.create_agent_subprocess("agent", "run", stdin=-1)
 
-    assert created is process
-    assert events[0] == "create-job"
-    assert events[1][0] == "spawn"
-    assert events[1][2]["creationflags"] == windows_job.creation_flags()
-    assert events[2] == ("assign-resume", 42)
-    assert events[3][0] == "register"
-
-
-@pytest.mark.asyncio
-async def test_create_agent_subprocess_recovers_suspended_process_on_failure(
-    monkeypatch,
-) -> None:
-    process = _Process()
-    events: list[str] = []
-
-    class Job:
-        @staticmethod
-        def create():
-            return Job()
-
-        def assign_and_resume(self, _pid: int) -> None:
-            raise OSError("assign failed")
-
-        def terminate(self) -> None:
-            events.append("terminate-job")
-
-        def close(self) -> None:
-            events.append("close-job")
-
-    async def create_process(*_program: str, **_kwargs: Any):
-        return process
-
-    monkeypatch.setattr(environment, "_WINDOWS", True)
-    monkeypatch.setattr(environment, "WindowsJob", Job)
-    monkeypatch.setattr(environment.asyncio, "create_subprocess_exec", create_process)
-
-    with pytest.raises(OSError, match="assign failed"):
-        await environment.create_agent_subprocess("agent")
-
-    assert events == ["terminate-job", "close-job"]
-    assert process.killed is True
-
-
-@pytest.mark.asyncio
-async def test_windows_tree_shutdown_waits_then_terminates_job(monkeypatch) -> None:
-    process = _Process()
-    calls: list[object] = []
-
-    def terminate_job(owned_process) -> bool:
-        calls.append(owned_process)
-        process.returncode = 1
-        return True
-
-    monkeypatch.setattr(environment, "_WINDOWS", True)
-    monkeypatch.setattr(environment, "terminate_process_job", terminate_job)
-
-    await environment.terminate_process_tree(process, grace_seconds=0)
-
-    assert calls == [process]
-
-
-@pytest.mark.asyncio
-async def test_windows_tree_shutdown_terminates_descendants_after_root_exit(
-    monkeypatch,
-) -> None:
-    process = _Process(returncode=0)
-    calls: list[object] = []
-    monkeypatch.setattr(environment, "_WINDOWS", True)
-    monkeypatch.setattr(
-        environment,
-        "terminate_process_job",
-        lambda owned_process: calls.append(owned_process) or True,
-    )
-
-    await environment.terminate_process_tree(process)
-
-    assert calls == [process]
-
-
-@pytest.mark.asyncio
-async def test_posix_tree_shutdown_escalates_process_group(monkeypatch) -> None:
-    process = _Process()
-    calls: list[tuple[int, bool]] = []
-
-    def terminate_group(pid: int, *, force: bool = False) -> None:
-        calls.append((pid, force))
-        if force:
-            process.returncode = 1
-
-    monkeypatch.setattr(environment, "_WINDOWS", False)
-    monkeypatch.setattr(environment.os, "name", "posix")
-    monkeypatch.setattr(environment, "terminate_posix_process_group", terminate_group)
-
-    await environment.terminate_process_tree(process, grace_seconds=0)
-
-    assert calls == [(42, False), (42, True)]
-
-
-def test_windows_job_assigns_process_then_resumes_only_thread(monkeypatch) -> None:
-    events: list[object] = []
-    monkeypatch.setattr(
-        windows_job,
-        "_open_process_for_job",
-        lambda pid: events.append(("open", pid)) or 8,
-    )
-    monkeypatch.setattr(
-        windows_job,
-        "_assign_process",
-        lambda job, process: events.append(("assign", job, process)),
-    )
-    monkeypatch.setattr(
-        windows_job, "_close_handle", lambda handle: events.append(("close", handle))
-    )
-    monkeypatch.setattr(windows_job, "_thread_ids_for", lambda pid: [pid + 1])
-    monkeypatch.setattr(
-        windows_job, "_resume_thread", lambda thread: events.append(("resume", thread))
-    )
-
-    windows_job.WindowsJob(7).assign_and_resume(42)
-
-    assert events == [
-        ("open", 42),
-        ("assign", 7, 8),
-        ("close", 8),
-        ("resume", 43),
+def test_no_adapter_starts_a_process_on_the_host() -> None:
+    """A provider runs inside its turn's microVM, started through the turn;
+    nothing in the agent runtime starts a host process of its own."""
+    runtime_dir = Path(environment.__file__).parent
+    starting = [
+        path.name
+        for path in runtime_dir.glob("*.py")
+        if re.search(
+            r"create_subprocess_|\bsubprocess\.|import subprocess|\bPopen\b",
+            path.read_text(encoding="utf-8"),
+        )
     ]
 
-
-def test_agent_runtime_has_one_subprocess_creation_boundary() -> None:
-    runtime_dir = Path(environment.__file__).parent
-    direct_calls = {
-        path.name: path.read_text(encoding="utf-8").count(
-            "asyncio.create_subprocess_exec"
-        )
-        for path in runtime_dir.glob("*.py")
-    }
-
-    assert direct_calls == {
-        name: (2 if name == "environment.py" else 0) for name in direct_calls
-    }
+    assert starting == []
 
 
 def test_no_adapter_decides_what_a_read_only_turn_may_do() -> None:
@@ -329,7 +157,6 @@ def _turn(tmp_path, tool_name="claude", **overrides: Any):
             "person_id": "aiko",
             "run_id": "turn",
             "cwd": tmp_path / "repository",
-            "workspace_root": tmp_path,
             "workspace_data_root": tmp_path,
             "conversation_key": ConversationKey("aiko", tool_name, "manual", "turn"),
             **overrides,
@@ -339,8 +166,8 @@ def _turn(tmp_path, tool_name="claude", **overrides: Any):
 
 async def _claude_turn_spec(tmp_path, monkeypatch, context, access=CommandAccess()):
     """The spec a Claude Code turn run in ``context`` of a command declaring
-    ``access`` boots with."""
-    async with _command(access=access):
+    ``access``, and working where the turn does, boots with."""
+    async with _command(access=access, cwd=context.cwd):
         _device(monkeypatch, tmp_path, "claude")
         turn = await environment.start_turn_environment(context, "claude")
         await turn.close()
@@ -373,7 +200,6 @@ async def test_a_read_only_turn_resumes_its_session_but_leaves_no_trace_behind(
         person_id="aiko",
         run_id="investigate",
         cwd=tmp_path / "work",
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
     )
@@ -421,7 +247,6 @@ async def test_what_a_turn_inspects_is_mounted_read_only(
         person_id="aiko",
         run_id="investigate",
         cwd=state / "local" / "work" / "troubleshooting",
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "troubleshooting", "c1"),
     )
@@ -478,7 +303,6 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         person_id="aiko",
         run_id="r1",
         cwd=checkout,
-        workspace_root=tmp_path,
         workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "claude", "manual", "r1"),
     )
@@ -906,6 +730,56 @@ async def test_the_turns_of_a_command_share_one_microvm_until_the_command_ends(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["exchange", "workspace root"])
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_the_microvm_works_where_the_command_does_and_its_turns_in_the_clone(
+    tmp_path, monkeypatch, where, read_only
+):
+    """The microVM is shaped from the command, not from its first turn: a
+    workflow the host starts works in the exchange directory while its turn
+    works in the member's clone, which the host makes before the boot and
+    mounts read-write -- inside the cover over the workspace's own state
+    when the command works in the workspace root. A read-only command
+    changes nothing, so it has no clone to work in, nor makes one."""
+    from guildbotics.intelligences.agent_environment.contract import (
+        DeniedPath,
+        ResolvedAccess,
+    )
+    from guildbotics.intelligences.agent_environment.spec import (
+        EnvironmentMount,
+        guest_path,
+    )
+
+    state = tmp_path / ".guildbotics"
+    settle_contract(
+        monkeypatch,
+        AccessContract(
+            access=ResolvedAccess(denied=(DeniedPath(path=state, builtin=True),))
+        ),
+    )
+    _device(monkeypatch, tmp_path, "claude")
+    cwd = {"exchange": tmp_path / "exchange", "workspace root": tmp_path}[where]
+    cwd.mkdir(exist_ok=True)
+    clone = get_member_clone_path("aiko")
+    in_clone = _turn(tmp_path, cwd=clone / "src")
+    turn_context = _turn(tmp_path, cwd=cwd) if read_only else in_clone
+    async with _command(cwd=cwd, access=CommandAccess(read_only=read_only)):
+        turn = await environment.start_turn_environment(turn_context, "claude")
+        await turn.close()
+        (booted,) = _Booted.booted
+
+    assert turn.spec.cwd == guest_path(turn_context.cwd)
+    assert booted.spec.cwd == guest_path(cwd)
+    assert clone.is_dir() != read_only
+    mounted = EnvironmentMount(guest_path(clone), clone, readonly=False)
+    assert (mounted in booted.spec.mounts) != read_only
+    guests = [mount.guest for mount in booted.spec.mounts]
+    assert (guest_path(state) in guests) == (
+        where == "workspace root" and not read_only
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_workspace_settings_are_read_once_when_the_command_starts(
     tmp_path, monkeypatch
 ):
@@ -1062,16 +936,86 @@ def test_every_host_entry_runs_its_command_in_an_environment() -> None:
     assert starters == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
 
 
+def test_every_host_entry_names_the_working_directory_of_its_command() -> None:
+    """A command works where its host entry says, never where the process
+    happens to be: the process's working directory differs between the
+    Desktop and ``guildbotics start``. What the host starts on its own works
+    in the exchange directory; what a person starts works where they said.
+
+    The population is every call that makes a command to run --
+    ``CommandRunner`` and the host entries that make one -- and each is
+    listed with what it passes as the working directory, so a new entry has
+    to say where its command works.
+    """
+    import guildbotics
+
+    makers = {
+        "guildbotics.commands.runner": {"CommandRunner": 3},
+        "guildbotics.drivers.command_runner": {"prepare_command": 4, "run_command": 4},
+    }
+    package = Path(guildbotics.__file__).parent
+    sites: dict[tuple[str, str], str] = {}
+    for path in sorted(package.rglob("*.py")):
+        module = path.relative_to(package.parent).with_suffix("").as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        known = dict(makers.get(module.replace("/", "."), {}))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in makers:
+                known.update(
+                    (alias.asname or alias.name, makers[node.module][alias.name])
+                    for alias in node.names
+                    if alias.name in makers[node.module]
+                )
+        enclosing = {
+            id(node): function.name
+            for function in ast.walk(tree)
+            if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
+            for node in ast.walk(function)
+        }
+        for call in ast.walk(tree):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id in known
+            ):
+                continue
+            position = known[call.func.id]
+            cwd = next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "cwd"),
+                call.args[position] if len(call.args) > position else None,
+            )
+            sites[(f"{module}.py", enclosing.get(id(call), "<module>"))] = (
+                ast.unparse(cwd) if cwd is not None else "<none>"
+            )
+
+    assert sites == {
+        ("guildbotics/drivers/command_runner.py", "prepare_command"): "cwd",
+        ("guildbotics/drivers/command_runner.py", "run_command"): "cwd",
+        (
+            "guildbotics/drivers/command_runner.py",
+            "prepare_host_command",
+        ): "host_command_cwd()",
+        (
+            "guildbotics/app_api/runtime.py",
+            "_execute_command",
+        ): "execution.cwd()",
+        ("guildbotics/app_api/diagnostics.py", "_run_cli_agent_check"): "Path(cwd)",
+        ("guildbotics/runtime/local_command_executor.py", "run"): "cwd",
+    }
+
+
 @pytest.mark.asyncio
 async def test_a_command_inside_another_is_held_to_what_the_outer_declared():
     """A command and its subcommands are one isolation: the same declaration
-    and tools share it, and another cannot be given the one it declared."""
+    and tools share it, wherever the inner one works (its turns are held to
+    what the outer one mounted), and another cannot be given the one it
+    declared."""
     from guildbotics.commands.errors import CommandError
 
     read_only = CommandAccess(read_only=True, inspects=frozenset({"config"}))
     async with _command(access=read_only):
         outer = environment._COMMAND.get()
-        async with _command(access=read_only):
+        async with _command(access=read_only, cwd=get_workspace_root() / "other"):
             assert environment._COMMAND.get() is outer
             assert environment.current_command_access() == read_only
         with pytest.raises(CommandError):
@@ -1123,11 +1067,13 @@ async def test_a_tool_not_logged_in_is_refused_only_when_a_turn_of_it_comes(
         ("tool", "not_started_for"),
     ],
 )
+@pytest.mark.parametrize("first", [False, True], ids=["later turn", "first turn"])
 async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
-    tmp_path, monkeypatch, change, message
+    tmp_path, monkeypatch, change, message, first
 ):
     """A running microVM is not reshaped: a turn it cannot hold as it is
-    does not run, and the command's next turn still does."""
+    does not run, and the command's next turn still does. The command, not
+    its first turn, shapes it, so a first turn is held to it the same way."""
     from guildbotics.intelligences.agent_environment.contract import (
         DeniedPath,
         ResolvedAccess,
@@ -1157,8 +1103,11 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
     }[change]
 
     async with _command():
-        first = await environment.start_turn_environment(_turn(tmp_path), "claude")
-        await first.close()
+        if not first:
+            earlier = await environment.start_turn_environment(
+                _turn(tmp_path), "claude"
+            )
+            await earlier.close()
         with pytest.raises(AgentRuntimeError) as refused:
             await environment.start_turn_environment(
                 turn, turn.conversation_key.adapter

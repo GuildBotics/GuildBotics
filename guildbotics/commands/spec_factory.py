@@ -166,11 +166,11 @@ class CommandSpecFactory:
         return get_placeholders_from_args(normalized_args, kind != ".py")
 
     def _resolve_cwd(self, raw_cwd: Any, default: Path) -> Path:
+        """``raw_cwd`` against the calling command's working directory:
+        a relative one is relative to it, never to the process's."""
         if raw_cwd is None:
             return default
-        if isinstance(raw_cwd, Path):
-            return raw_cwd
-        return Path(str(raw_cwd))
+        return default / Path(str(raw_cwd))
 
     def _default_name_from_path(self, path: Path) -> str:
         if path.name.startswith(".") and path.stem:

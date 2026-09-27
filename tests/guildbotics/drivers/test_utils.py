@@ -5,7 +5,7 @@ from typing import List
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.drivers.command_runner import HostRunLedger
+from guildbotics.drivers.command_runner import HostRunLedger, host_command_cwd
 from guildbotics.drivers.utils import run_command
 
 
@@ -35,21 +35,26 @@ class FakeContext:
 async def test_run_command_success_logs_and_returns_true(monkeypatch):
     events = []
     ledgers = []
+    cwds = []
 
     class FakeCommandRunner:
         access = CommandAccess()
 
-        def __init__(self, context, command, args, cwd=None, *, ledger):
+        def __init__(self, context, command, args, cwd, *, ledger):
             self.context = context
             self.command_name = command
             self.args = args
+            self.cwd = cwd
             ledgers.append(ledger)
+            cwds.append(cwd)
 
         async def run(self):
             # Simulate successful command execution
             await asyncio.sleep(0)
 
-    monkeypatch.setattr("guildbotics.drivers.utils.CommandRunner", FakeCommandRunner)
+    monkeypatch.setattr(
+        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunner
+    )
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",
         lambda **kwargs: events.append(kwargs),
@@ -60,6 +65,8 @@ async def test_run_command_success_logs_and_returns_true(monkeypatch):
     assert ok is True
     # Completion-managed turns of a scheduled run report to the host's record.
     assert [type(ledger) for ledger in ledgers] == [HostRunLedger]
+    # A command the host starts on its own works in the exchange directory.
+    assert cwds == [host_command_cwd()]
     # Validate logs contain start and finish messages
     start_logs = [
         m for m in ctx.logger.infos if "Running scheduled command 'test'" in m
@@ -87,20 +94,21 @@ async def test_run_command_exception_logs_and_reraises(monkeypatch):
             context,
             command,
             args,
-            cwd=None,
+            cwd,
             *,
             ledger,
         ):
             self.context = context
             self.command_name = command
             self.args = args
+            self.cwd = cwd
 
         async def run(self):
             await asyncio.sleep(0)
             raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "guildbotics.drivers.utils.CommandRunner", FakeCommandRunnerError
+        "guildbotics.drivers.command_runner.CommandRunner", FakeCommandRunnerError
     )
     monkeypatch.setattr(
         "guildbotics.drivers.utils.record_correlated_event",
@@ -156,3 +164,31 @@ async def test_command_failure_preserves_structured_authentication_cause(
     assert events[-1]["payload"]["code"] == (
         "cli_agent_authentication" if category == "authentication" else ""
     )
+
+
+def test_an_exchange_directory_it_may_not_create_is_told_as_the_environment_tells_it(
+    monkeypatch, tmp_path
+):
+    """A host-started command whose exchange directory cannot be made fails
+    with the refusal the isolated environment gives for the same directory
+    (on macOS: allow the app the Documents folder), not a raw OSError."""
+    from pathlib import Path
+
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.drivers import command_runner
+    from guildbotics.intelligences.agent_environment.status import (
+        filesystem_permission_problem,
+    )
+
+    denied = tmp_path / "Documents" / "GuildBotics"
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "denied", str(self))
+
+    monkeypatch.setattr(command_runner, "exchange_dir", lambda: denied)
+    monkeypatch.setattr(Path, "mkdir", refuse)
+
+    with pytest.raises(CommandError) as refused:
+        host_command_cwd()
+
+    assert str(refused.value) == filesystem_permission_problem(denied)

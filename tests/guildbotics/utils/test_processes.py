@@ -155,25 +155,6 @@ def test_force_terminate_pid_windows_uses_terminate_process(monkeypatch) -> None
     assert closed == [9]
 
 
-@pytest.mark.parametrize(("force", "expected_signal"), [(False, 15), (True, 9)])
-def test_terminate_posix_process_group_uses_requested_signal(
-    monkeypatch, force, expected_signal
-) -> None:
-    calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(
-        processes.os,
-        "killpg",
-        lambda pid, signal_number: calls.append((pid, signal_number)),
-        raising=False,
-    )
-    monkeypatch.setattr(processes.signal, "SIGTERM", 15)
-    monkeypatch.setattr(processes.signal, "SIGKILL", 9, raising=False)
-
-    processes.terminate_posix_process_group(1234, force=force)
-
-    assert calls == [(1234, expected_signal)]
-
-
 def test_force_terminate_pid_posix_uses_sigkill(monkeypatch) -> None:
     calls: list[tuple[int, int]] = []
     monkeypatch.setattr(processes, "_WINDOWS", False)

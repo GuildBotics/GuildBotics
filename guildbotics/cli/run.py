@@ -46,7 +46,7 @@ def run(
 ) -> None:
     """Run a command through the matching Desktop when open, otherwise locally."""
     workspace = selected_workspace()
-    command_cwd = Path(cwd).expanduser().resolve(strict=False) if cwd else None
+    command_cwd = Path(cwd).expanduser().resolve(strict=False) if cwd else Path.cwd()
     message = "" if sys.stdin.isatty() else sys.stdin.read()
     command_name, inline_person = _parse_command_spec(custom_command)
     output = run_on_desktop(
@@ -55,7 +55,7 @@ def run(
         command_args,
         person_option or inline_person,
         message,
-        command_cwd or Path.cwd(),
+        command_cwd,
     )
     if output is not None:
         if output:
@@ -77,7 +77,7 @@ async def _run_custom_command(
     command_args: tuple[str, ...],
     person_option: str | None,
     message: str,
-    cwd: Path | None = None,
+    cwd: Path,
 ) -> None:
     command_name, inline_person = _parse_command_spec(command_spec)
     edition = get_edition()

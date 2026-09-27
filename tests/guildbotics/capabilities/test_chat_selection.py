@@ -1786,13 +1786,14 @@ async def test_dispatcher_consumes_one_batch_and_skips_its_queued_followers(
     class Runner:
         access = CommandAccess()
 
-        def __init__(self, context, *_args, ledger):
+        def __init__(self, context, _command, _args, cwd, *, ledger):
+            self.cwd = cwd
             self.context = context
 
         async def run(self):
             await chat_conversation_workflow.main(self.context)
 
-    monkeypatch.setattr("guildbotics.drivers.workflow_dispatcher.CommandRunner", Runner)
+    monkeypatch.setattr("guildbotics.drivers.command_runner.CommandRunner", Runner)
     dispatcher = PendingChatDispatcher(
         Parent(), state_store=store, execution_coordinator=ExecutionCoordinator()
     )
