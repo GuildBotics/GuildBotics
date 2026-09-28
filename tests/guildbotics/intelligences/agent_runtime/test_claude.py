@@ -183,6 +183,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
         ConversationRecord(
             key=_context(tmp_path).conversation_key,
             provider_session_id="session-1",
+            effective_model="claude-opus-5[1m]",
         ),
         events.append,
     )
@@ -192,6 +193,7 @@ async def test_claude_stream_json_resumes_exact_session_and_emits_tool_lifecycle
     assert result.usage == {"input_tokens": 4, "output_tokens": 3}
     run_args = calls[0]
     assert run_args[run_args.index("--resume") + 1] == "session-1"
+    assert run_args[run_args.index("--model") + 1] == "claude-opus-5[1m]"
     assert "--continue" not in run_args
     assert run_args[run_args.index("--permission-mode") + 1] == "bypassPermissions"
     assert json.loads(run_args[run_args.index("--settings") + 1]) == {
@@ -893,7 +895,9 @@ async def test_claude_empty_terminal_response_is_protocol_failure(
 # --------------------------------------------------------------------------- #
 
 
-async def _run_turn_with(monkeypatch, tmp_path, **context_overrides):
+async def _run_turn_with(
+    monkeypatch, tmp_path, *, conversation=None, **context_overrides
+):
     """Run one turn and return the (args, env) Claude Code was launched with."""
     stream = _StreamProcess(
         [
@@ -918,7 +922,7 @@ async def _run_turn_with(monkeypatch, tmp_path, **context_overrides):
     await adapter.run_turn(
         "go",
         context,
-        ConversationRecord(key=context.conversation_key),
+        conversation or ConversationRecord(key=context.conversation_key),
         lambda _event: None,
     )
     return launches[0]
@@ -1028,6 +1032,25 @@ async def test_claude_effort_model_becomes_a_model_flag(monkeypatch, tmp_path) -
         monkeypatch, tmp_path, effort="high", provider_options={"model": "opus-x"}
     )
     assert args[args.index("--model") + 1] == "opus-x"
+
+
+@pytest.mark.asyncio
+async def test_claude_configured_model_wins_when_resuming(
+    monkeypatch, tmp_path
+) -> None:
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id="session-1",
+        effective_model="claude-opus-5[1m]",
+    )
+    args, _ = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        conversation=conversation,
+        provider_options={"model": "claude-sonnet-5"},
+    )
+    assert args[args.index("--resume") + 1] == "session-1"
+    assert args[args.index("--model") + 1] == "claude-sonnet-5"
 
 
 @pytest.mark.asyncio
