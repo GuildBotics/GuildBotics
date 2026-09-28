@@ -394,8 +394,7 @@ knowledge and is carried out on the normal result path: each adapter fills
 `_x.ai/models/update.currentModelId`) or with the one it imposed itself
 (codex's validated `turn/start` settings and the catalog's advertised default
 model and `defaultReasoningEffort`, claude's and grok's `--effort` /
-`--reasoning-effort`
-launch flags, `agy`'s command line), and the brain passes
+`--reasoning-effort` launch flags, `agy`'s command line), and the brain passes
 them to `record_span_summary()` and logs one line per span. The conversation
 record retains the last reported or imposed values (`effective_model` /
 `effective_effort`, cleared on rotation). Claude re-sends the recorded model

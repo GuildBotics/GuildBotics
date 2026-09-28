@@ -145,10 +145,6 @@ class AcpAdapterBase(JsonRpcAdapter):
         )
         self._capabilities: dict[str, Any] = {}
         self._agent_version = ""
-        #: The running process's full `initialize` response. Some providers
-        #: report state here that arrives nowhere else, such as the model the
-        #: process is currently fixed to.
-        self._initialize_result: dict[str, Any] = {}
         self._auth_method = ""
         self._active_session_id = ""
         self._unhandled: dict[str, dict[str, Any]] = {}
@@ -369,7 +365,6 @@ class AcpAdapterBase(JsonRpcAdapter):
                 "Agent Client Protocol v1.",
                 details={"protocol_version": result.get("protocolVersion")},
             )
-        self._initialize_result = result
         self._capabilities = as_dict(result.get("agentCapabilities"))
         self._agent_version = self._agent_version_of(result)
         if not self._capabilities.get("loadSession") and not self._supports_resume:
@@ -827,7 +822,7 @@ class AcpAdapterBase(JsonRpcAdapter):
     # --- provider hooks ------------------------------------------------------
 
     async def _prepare_turn(self, context: AgentExecutionContext) -> None:
-        """Start provider-specific services needed while this turn is active."""
+        """Prepare provider-specific services and state for this turn."""
         mcp = as_dict(self._capabilities.get("mcpCapabilities"))
         if not mcp.get("http"):
             await self.close()
@@ -865,19 +860,19 @@ class AcpAdapterBase(JsonRpcAdapter):
     ) -> list[AgentEvent]:
         """Apply this turn's settings to a freshly created or reloaded session.
 
-        ``result`` is the ``session/new`` or ``session/load`` response, which is
-        where ACP reports the session's current model and configuration. The
-        events returned describe what the session ended up running with.
+        ``result`` is the ``session/new`` or ``session/load`` response. Providers
+        may report the session's model and configuration there; others report
+        them during the turn. The events describe confirmed session settings.
         """
         return []
 
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
         """The model and effort the finished turn really ran with.
 
-        ACP itself defines no place for them: one provider reports the values
-        back from its session configuration, another is fixed to what its launch
-        command imposed. A provider that can establish neither reports nothing,
-        because an invented effective value is worse than an absent one.
+        ACP itself defines no place for them. Providers may report them in
+        session responses or turn notifications, or impose them at launch. A
+        provider that can establish neither reports nothing, because an
+        invented effective value is worse than an absent one.
         """
         return "", ""
 
