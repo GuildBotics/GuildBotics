@@ -44,6 +44,7 @@ from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
     REAL_DEVICE,
+    pytest.mark.real_device,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_ANTIGRAVITY_SMOKE") != "1",
         reason=(

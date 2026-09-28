@@ -1,7 +1,9 @@
 import contextlib
+import ipaddress
 import json
 import logging
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -30,6 +32,7 @@ from tests.windows_shards import (
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
+_NETWORK_AUDIT: list[tuple[str, str]] = []
 _WINDOWS_BASETEMP = pytest.StashKey[Path]()
 
 
@@ -48,6 +51,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--verify-windows-shards",
         action="store_true",
         help="Verify that every collected node ID belongs to exactly one shard.",
+    )
+    parser.addoption(
+        "--network-audit",
+        action="store_true",
+        help="Report external network attempts without blocking them.",
     )
 
 
@@ -72,6 +80,7 @@ def pytest_configure(config: pytest.Config) -> None:
     value = config.getoption("phase_durations_json")
     _PHASE_DURATION_OUTPUT = Path(value) if value else None
     _PHASE_DURATIONS.clear()
+    _NETWORK_AUDIT.clear()
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -89,6 +98,10 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if report.when == "teardown":
+        for key, value in report.user_properties:
+            if key == "network_attempt":
+                _NETWORK_AUDIT.append((report.nodeid, value))
     if _PHASE_DURATION_OUTPUT is None or report.when not in {
         "setup",
         "call",
@@ -103,6 +116,15 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
             "duration_seconds": round(report.duration, 6),
         }
     )
+
+
+def pytest_terminal_summary(terminalreporter: Any) -> None:
+    if not terminalreporter.config.getoption("network_audit"):
+        return
+    terminalreporter.write_sep("=", "External network attempts")
+    for nodeid, target in sorted(_NETWORK_AUDIT):
+        terminalreporter.write_line(f"{nodeid}: {target}")
+    terminalreporter.write_line(f"Total: {len(_NETWORK_AUDIT)}")
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -185,6 +207,90 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # both are set wherever a test points the home directory somewhere.
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+    """Reject external Python sockets; child processes need their own isolation.
+
+    Real-device tests explicitly opt out. The proxy and Git protocol settings
+    cover common child-process clients, but a binary that ignores them (such as
+    bare ``ssh``) must be stubbed by its test because Python cannot intercept it.
+    """
+    if request.node.get_closest_marker("real_device"):
+        yield
+        return
+
+    attempts: set[str] = set()
+    audit = request.config.getoption("network_audit")
+
+    def check(host: object) -> None:
+        if host is None or host == "localhost":
+            return
+        try:
+            if ipaddress.ip_address(host) in (
+                ipaddress.ip_address("127.0.0.1"),
+                ipaddress.ip_address("::1"),
+            ):
+                return
+        except ValueError:
+            pass
+        attempts.add(str(host))
+        if not audit:
+            raise OSError(f"External network access from a test: {host}")
+
+    connect = socket.socket.connect
+    connect_ex = socket.socket.connect_ex
+    sendto = socket.socket.sendto
+    getaddrinfo = socket.getaddrinfo
+    gethostbyname = socket.gethostbyname
+
+    def guarded_connect(sock: socket.socket, address: object) -> None:
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            check(address[0])  # type: ignore[index]
+        connect(sock, address)
+
+    def guarded_connect_ex(sock: socket.socket, address: object) -> int:
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            check(address[0])  # type: ignore[index]
+        return connect_ex(sock, address)
+
+    def guarded_sendto(sock: socket.socket, data: bytes, *args: Any) -> int:
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            check(args[-1][0])
+        return sendto(sock, data, *args)
+
+    def guarded_getaddrinfo(host: object, *args: Any, **kwargs: Any):
+        check(host)
+        return getaddrinfo(host, *args, **kwargs)
+
+    def guarded_gethostbyname(host: str) -> str:
+        check(host)
+        return gethostbyname(host)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+    monkeypatch.setattr(socket.socket, "sendto", guarded_sendto)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+    monkeypatch.setattr(socket, "gethostbyname", guarded_gethostbyname)
+    if not audit:
+        for name in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ):
+            monkeypatch.setenv(name, "http://127.0.0.1:1")
+        monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
+        monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,::1")
+        monkeypatch.setenv("GIT_ALLOW_PROTOCOL", "file")
+    yield
+    for host in sorted(attempts):
+        request.node.user_properties.append(("network_attempt", host))
+    if attempts and not audit:
+        pytest.fail(f"External network attempts: {', '.join(attempts)}")
 
 
 @pytest.fixture(autouse=True)

@@ -20,6 +20,7 @@ TOOL = "copilot"
 
 pytestmark = [
     REAL_DEVICE,
+    pytest.mark.real_device,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_COPILOT_SMOKE") != "1",
         reason="Set GUILDBOTICS_COPILOT_SMOKE=1 to run the real Copilot smoke test.",

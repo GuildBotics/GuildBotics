@@ -56,6 +56,7 @@ _CA = "/etc/contract-probe-ca.pem"
 
 pytestmark = [
     REAL_DEVICE,
+    pytest.mark.real_device,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the provider CLIs.",

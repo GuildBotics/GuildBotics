@@ -553,6 +553,7 @@ desktop TypeScript 開発時の品質確認:
 - LLM、GitHub、Slack、外部 CLI などへの実通信は通常 CI のテストに入れない。既存抽象化、stub、mock、fixture を使い、送信 payload、判定結果、エラー処理を検証する
 - どのテストも既定で 120 秒で時間切れになり、止まらずに失敗する（`pyproject.toml` の `[tool.pytest.ini_options]` の `timeout`。pytest-timeout）。実機の隔離環境と provider CLI を使う任意実行のテストは、module の `pytestmark` に `tests/timeouts.py` の `REAL_DEVICE` を付ける
 - テストは決定論的かつ hermetic に保つ。時間・乱数・環境変数・cwd・HOME・I/O は `monkeypatch` / `tmp_path` で制御し、実 home ディレクトリや外部サービスに触れない
+- 通常の pytest は loopback（`127.0.0.1` / `::1` / `localhost`）以外の Python socket 接続と名前解決を失敗させる。子プロセスには到達不能な HTTP proxy と `GIT_ALLOW_PROTOCOL=file` を渡す。これらを無視する CLI（直接起動した `ssh` など）はテスト側で stub にする。接続試行の調査には `--network-audit` を使う。実機を使う任意実行のテストだけに `real_device` marker を付け、この制限から除外する
 - snapshot のみで品質を担保しない。ユーザーが観測する文言・状態、生成 request、保存 file/env、publish event、return value を具体的に assert する
 - テストコードも本体コードと同じ品質対象とする。重複 fixture や場当たり的 mock が増えた場合は helper / factory へ整理する
 
