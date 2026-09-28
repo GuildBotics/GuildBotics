@@ -16,7 +16,11 @@ from typing import Any
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_environment.contract import AccessContract
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    ResolvedAccess,
+    ResolvedGrant,
+)
 from guildbotics.intelligences.agent_runtime import environment
 from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
@@ -1644,3 +1648,95 @@ async def test_a_device_that_cannot_run_the_environment_refuses_the_command(
             pass
 
     assert booted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["cwd", "grant"])
+async def test_windows_temp_mount_is_refused_before_boot(
+    tmp_path, monkeypatch, fake_platform, source
+):
+    from guildbotics.commands.errors import CommandError
+
+    fake_platform(environment, "win32")
+    temporary = tmp_path / "Local" / "Temp"
+    mounted = temporary / "work"
+    mounted.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    monkeypatch.setenv("TEMP", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("TMP", str(tmp_path / "elsewhere"))
+    if source == "grant":
+        settle_contract(
+            monkeypatch,
+            AccessContract(
+                access=ResolvedAccess(
+                    paths=(ResolvedGrant(mounted, "read", str(mounted)),)
+                )
+            ),
+        )
+    _device(monkeypatch, tmp_path)
+
+    with pytest.raises(CommandError) as failed:
+        async with _command(cwd=mounted if source == "cwd" else tmp_path):
+            pass
+
+    assert str(mounted) in str(failed.value)
+    assert str(temporary) in str(failed.value)
+    assert "4096" not in str(failed.value)
+    assert _Booted.booted == []
+
+
+@pytest.mark.asyncio
+async def test_windows_temp_workdir_is_allowed_when_it_is_not_host_bound(
+    tmp_path, monkeypatch, fake_platform
+):
+    fake_platform(environment, "win32")
+    temporary = tmp_path / "Local" / "Temp"
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    _device(monkeypatch, tmp_path)
+
+    async with _command(access=CommandAccess(read_only=True), cwd=temporary / "work"):
+        pass
+
+    assert len(_Booted.booted) == 1
+
+
+@pytest.mark.asyncio
+async def test_windows_temp_workspace_config_is_refused_for_read_only_command(
+    tmp_path, monkeypatch, fake_platform
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+
+    fake_platform(environment, "win32")
+    temporary = tmp_path / "Local" / "Temp"
+    workspace = temporary / "workspace"
+    config = workspace / ".guildbotics" / "config"
+    config.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace))
+    _device(monkeypatch, tmp_path)
+
+    with pytest.raises(CommandError) as failed:
+        async with _command(
+            access=CommandAccess(read_only=True), cwd=tmp_path / "outside"
+        ):
+            pass
+
+    assert str(config) in str(failed.value)
+    assert _Booted.booted == []
+
+
+@pytest.mark.asyncio
+async def test_windows_temp_mount_is_not_rejected_on_other_platforms(
+    tmp_path, monkeypatch, fake_platform
+):
+    fake_platform(environment, "linux")
+    temporary = tmp_path / "Local" / "Temp"
+    mounted = temporary / "work"
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    _device(monkeypatch, tmp_path)
+
+    async with _command(cwd=mounted):
+        pass
+
+    assert len(_Booted.booted) == 1
