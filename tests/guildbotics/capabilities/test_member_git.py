@@ -30,6 +30,7 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
 )
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.github import repository_scope
 from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -1135,25 +1136,38 @@ async def test_publish_current_workspace_runs_the_users_hooks_on_the_host(
     [
         (lambda member: member.url("contributor"), "contributor/repo"),
         (lambda member: "https://example.com/owner/repo.git", "example.com"),
+        (
+            lambda member: "https://x-access-token:secret@example.com/owner/repo.git",
+            "example.com",
+        ),
+        (lambda member: "git@example.com:owner/repo.git", "example.com"),
     ],
-    ids=["another-owner", "another-host"],
+    ids=["another-owner", "another-host", "credential-in-url", "scp-form"],
 )
 @pytest.mark.asyncio
 async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote(
-    member, tmp_path, worker_git_seed, host_git, origin, refused
+    member, tmp_path, worker_git_seed, host_git, monkeypatch, origin, refused
 ):
     """Another owner's repository, or a host that is not the configured one,
-    is refused before git is given the member's credential."""
+    is refused before git is given the member's credential, and the refusal
+    names no credential the remote's URL carries."""
+    recorded = []
+    monkeypatch.setattr(
+        repository_scope,
+        "record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
     repo_path = tmp_path / "current" / "repo"
     worker_git_seed.copy(worker_git_seed.member_worktree, repo_path)
     repo = git.Repo(repo_path)
     repo.remote("origin").set_url(origin(member))
     repo.index.commit("local")
 
-    with pytest.raises(RepositoryScopeError, match=refused):
+    with pytest.raises(RepositoryScopeError, match=refused) as refusal:
         await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
 
     assert not [call for call in host_git if {"fetch", "push"} & set(call.args)]
+    assert "secret" not in f"{refusal.value} {recorded}"
 
 
 @pytest.mark.asyncio

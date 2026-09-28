@@ -432,7 +432,7 @@ class MemberGitWorkspaceService:
             )
             # The member's credential goes only where its writes may go.
             owner, repo = self.github.repository_from_remote(remote_url) or (
-                remote_url,
+                self.github.remote_host(remote_url),
                 "",
             )
             check_repository(self.github.owner, owner, repo)

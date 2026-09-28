@@ -1072,6 +1072,10 @@ class MemberGitHubCapabilityService:
             return ""
         return f"{web_url}/commit/{sha}"
 
+    def remote_host(self, remote_url: str) -> str:
+        """The host a remote names, without a credential its URL may carry."""
+        return urlparse(_remote_web_url(remote_url)).hostname or "unrecognized remote"
+
     def repository_from_remote(self, remote_url: str) -> tuple[str, str] | None:
         """The ``(owner, repo)`` a remote names on the configured code host."""
         web_url = _remote_web_url(remote_url)
