@@ -1,5 +1,4 @@
 import contextlib
-import ipaddress
 import json
 import logging
 import os
@@ -227,16 +226,8 @@ def _isolate_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureReq
     audit = request.config.getoption("network_audit")
 
     def check(host: object) -> None:
-        if host is None or host == "localhost":
+        if host in (None, "localhost", "127.0.0.1", "::1"):
             return
-        try:
-            if ipaddress.ip_address(host) in (
-                ipaddress.ip_address("127.0.0.1"),
-                ipaddress.ip_address("::1"),
-            ):
-                return
-        except ValueError:
-            pass
         attempts.add(str(host))
         if not audit:
             raise OSError(f"External network access from a test: {host}")

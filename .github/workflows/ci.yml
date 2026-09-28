@@ -64,7 +64,7 @@ jobs:
         run: uv run --no-sync pylint guildbotics
 
       - name: Run tests
-        run: uv run --no-sync python -m pytest tests/ -n auto --durations=30 --network-audit
+        run: uv run --no-sync python -m pytest tests/ -n auto --durations=30
 
   test-windows:
     # Windows in parallel with the Linux job, because a change that only breaks
@@ -113,7 +113,6 @@ jobs:
         # long tail on the four-core hosted runner.
         run: >-
           uv run --no-sync python -m pytest tests/ -n 8 --durations=30
-          --network-audit
           --windows-shard=${{ matrix.shard }}
           --basetemp=${{ runner.temp }}/gb
           --junitxml=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
