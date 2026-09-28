@@ -154,6 +154,8 @@ builds every architecture, loads, and declares) is the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
 
+On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into the isolated environment ([microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)). If a writable command's working directory or a filesystem grant points there, the command is refused at startup with the reason. Move the directory outside the OS temporary directory and try again.
+
 - **Working directory**: the command's working directory is bound
   read/write at the same path it has on the host (a read-only command gets an
   empty directory of the microVM's own there instead). A command the host

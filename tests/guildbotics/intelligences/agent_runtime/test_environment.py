@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import re
+import sys
 import time
 from collections.abc import Callable
 from contextlib import AsyncExitStack
@@ -16,7 +17,11 @@ from typing import Any
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_environment.contract import AccessContract
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContract,
+    ResolvedAccess,
+    ResolvedGrant,
+)
 from guildbotics.intelligences.agent_runtime import environment
 from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
@@ -1644,3 +1649,51 @@ async def test_a_device_that_cannot_run_the_environment_refuses_the_command(
             pass
 
     assert booted == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mount limitation")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["cwd", "grant"])
+async def test_windows_temp_mount_is_refused_before_boot(tmp_path, monkeypatch, source):
+    from guildbotics.commands.errors import CommandError
+
+    temporary = tmp_path / "Local" / "Temp"
+    mounted = temporary / "work"
+    mounted.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    monkeypatch.setenv("TEMP", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("TMP", str(tmp_path / "elsewhere"))
+    if source == "grant":
+        settle_contract(
+            monkeypatch,
+            AccessContract(
+                access=ResolvedAccess(
+                    paths=(ResolvedGrant(mounted, "read", str(mounted)),)
+                )
+            ),
+        )
+    _device(monkeypatch, tmp_path)
+
+    with pytest.raises(CommandError) as failed:
+        async with _command(cwd=mounted if source == "cwd" else tmp_path):
+            pass
+
+    assert str(mounted) in str(failed.value)
+    assert str(temporary) in str(failed.value)
+    assert "4096" not in str(failed.value)
+    assert _Booted.booted == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows mount limitation")
+@pytest.mark.asyncio
+async def test_windows_temp_workdir_is_allowed_when_it_is_not_host_bound(
+    tmp_path, monkeypatch
+):
+    temporary = tmp_path / "Local" / "Temp"
+    monkeypatch.setenv("LOCALAPPDATA", str(temporary.parent))
+    _device(monkeypatch, tmp_path)
+
+    async with _command(access=CommandAccess(read_only=True), cwd=temporary / "work"):
+        pass
+
+    assert len(_Booted.booted) == 1

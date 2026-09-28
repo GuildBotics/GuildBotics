@@ -4,6 +4,7 @@ ja:
     not_placed: "microsandbox ランタイムを %{home} に配置できませんでした: %{error}"
     not_installed: "microsandbox ランタイム（msb と libkrunfw）がインストールされていません。"
     start_failed: "環境を起動できませんでした（宣言: %{memory_mib} MiB・%{cpus} vCPU）。この端末に割り当てられない場合は、設定 → エージェント実行環境 → ワークスペース共通設定の宣言を見直してください: %{error}"
+    windows_temp_mount: "Windows では %{path} を隔離環境にマウントできません。マウント元が OS の一時ディレクトリ %{temporary} の中にあります。一時ディレクトリの外へ移してから再実行してください。"
     ipv4_only_failed: "環境を IPv4 のみにできませんでした: %{error}"
     exit_code: "終了コード %{code}"
     exec_failed: "環境の中で '%{command}' を起動できませんでした: %{error}"

@@ -30,12 +30,14 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import os
 import re
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -610,6 +612,7 @@ class _SharedEnvironment:
             nameservers=self._where.nameservers,
             mounts=binds,
         )
+        _reject_windows_temp_mounts(spec)
         # Work happens only inside what the contract opened, backed by the
         # host or the microVM's own working directory; never in what
         # GuildBotics bound for itself, nor under a cover over a deny.
@@ -904,6 +907,26 @@ def _login_environment(status: DeviceStatus) -> LoginEnvironment:
         cpus=resources.cpus,
         nameservers=status.dns.nameservers,
     )
+
+
+def _reject_windows_temp_mounts(spec: AgentEnvironmentSpec) -> None:
+    """Reject bind sources under the Windows temp tree that microsandbox cannot mount."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if sys.platform != "win32" or not local_app_data:
+        return
+    temporary = (Path(local_app_data) / "Temp").resolve()
+    temporary_path = PureWindowsPath(temporary)
+    for mount in spec.mounts:
+        if mount.host is not None and PureWindowsPath(
+            mount.host.resolve()
+        ).is_relative_to(temporary_path):
+            raise CommandError(
+                t(
+                    "intelligences.agent_environment.runtime.windows_temp_mount",
+                    path=mount.host,
+                    temporary=temporary,
+                )
+            )
 
 
 async def _start(
