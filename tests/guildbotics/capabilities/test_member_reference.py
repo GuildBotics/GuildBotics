@@ -60,9 +60,14 @@ def test_reference_includes_standard_work_procedure():
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
     assert (
-        "add `--closes-issue` only when merging this PR into the default "
-        "branch completes the whole issue"
+        "add `--closes-issue` when merging this PR into the branch that receives "
+        "the issue's work completes the whole issue"
     ) in text
+    assert "A child issue can therefore use `Closes`" in text
+    assert "`--issue-url <child> --closes-issue`" in text
+    assert "`Refs #<parent>` on a standalone line" in text
+    assert "feature branch to the default branch uses `Closes` for the parent" in text
+    assert "issues that the merge does not complete" in text
     assert "files[].commentable_lines" in text
     assert "path`, `line`, `side`" in text
     assert "--start-line" in text
@@ -144,6 +149,15 @@ def test_reference_states_which_github_writes_stay_human_decisions():
     # must not take on its own; the reference is where a member learns that.
     assert "--human-approved" in text
     assert "never on the member's own judgment" in text
+    assert "merging a PR that declares `Closes`" in text
+    assert (
+        "If GitHub does not close it because the PR merged outside the default branch"
+        in text
+    )
+    assert "verify the merge, post a completion comment, and close the issue" in text
+    assert (
+        "issue update --state closed --state-reason completed --human-approved" in text
+    )
     assert "Priority is a human triage decision" in text
     assert (
         "do not express urgency by adding a label or setting a project or issue field"
