@@ -100,14 +100,12 @@ def _default_contract(monkeypatch) -> None:
 
 @pytest.fixture
 def written(monkeypatch) -> list[dict[str, Any]]:
-    """What the host writes to diagnostics, in order: its log lines aside,
-    which reach the store only in a worker where the CLI has run."""
+    """What the host writes to diagnostics, in order."""
     records: list[dict[str, Any]] = []
 
     class Store:
         def record(self, record: dict[str, Any]) -> None:
-            if record["kind"] != "log":
-                records.append(record)
+            records.append(record)
 
     monkeypatch.setattr(diagnostics_events, "_store", Store)
     return records

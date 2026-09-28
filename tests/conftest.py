@@ -244,6 +244,37 @@ def english_locale():
     yield
 
 
+def _restore_logger_handlers(
+    logger: logging.Logger, before: list[logging.Handler]
+) -> None:
+    """Put ``logger``'s handlers back to the objects in ``before``.
+
+    ``logging.Handler`` has no equality, so membership is identity. Handlers
+    the test attached are dropped; handlers it removed are attached again.
+    """
+    extras = [handler for handler in logger.handlers if handler not in before]
+    missing = [handler for handler in before if handler not in logger.handlers]
+    for handler in extras:
+        logger.removeHandler(handler)
+    for handler in missing:
+        logger.addHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _restore_guildbotics_log_handlers():
+    """Drop log handlers a test left on the process-wide ``guildbotics`` logger.
+
+    ``cli.main`` installs a ``DiagnosticsLogHandler`` and never removes it.
+    A later test on the same worker that replaces the diagnostics store then
+    records that handler's ``kind: "log"`` lines, so the record sequence
+    depends on which test ran earlier.
+    """
+    logger = logging.getLogger("guildbotics")
+    before = list(logger.handlers)
+    yield
+    _restore_logger_handlers(logger, before)
+
+
 @pytest.fixture(autouse=True)
 def fake_keyring():
     """Keep tests off the developer's real OS keychain."""
