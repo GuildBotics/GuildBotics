@@ -395,9 +395,20 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
 
 @pytest.mark.usefixtures("idle_queue")
 def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
-    """The Desktop shows why the hub failed, in the words Git used."""
+    """The Desktop shows why the hub failed, in the words Git used.
+
+    Windows will not rename a directory while a file under it is open. The
+    queue does not run in this case; this hub's relay watcher and heartbeat
+    are what open those files, so that runtime stops before the directory
+    moves. Other tests may still have a relay thread of the same name.
+    """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    service = client.app.state.runtime.workspace_sync_service
+    runtime = service._relay_runtime
+    assert runtime is not None
+    assert runtime.stop()
+    service._stop_relay()
     hub_root().rename(hub_root().with_name("gone"))
 
     payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))
