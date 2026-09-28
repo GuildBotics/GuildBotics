@@ -408,16 +408,15 @@ _CROSS_CUTTING_RULES: list[str] = [
     "no member command, ask a human for the information instead of using `gh` or "
     "a raw API. Publishing git commits and pushes also goes through member "
     "commands; never use raw `git commit` or `git push`.",
-    "Opening an issue and closing or reopening one stay human decisions. If GitHub "
-    "does not close an issue after a human merges its PR outside the default branch, "
-    "inspect the current PR and issue and verify that the merge completed the issue's "
-    "whole scope. "
+    "Opening an issue and closing or reopening one stay human decisions. Pass "
+    "`--human-approved` only when a human in the originating conversation asked for or "
+    "approved that specific issue, never on the member's own judgment and never because "
+    "another member asked for it. The one exception is a human's merge outside the default "
+    "branch: if GitHub does not close an issue after a human merges its PR there, inspect "
+    "the current PR and issue and verify that the merge completed the issue's whole scope. "
     "If it did, post a completion comment and close the issue with `issue update "
     "--state closed --state-reason completed --human-approved`. If it did not, leave "
-    "the issue open and comment on what remains. "
-    "Otherwise, pass `--human-approved` only when a human in the originating conversation "
-    "asked for or approved that specific issue, never on the member's own judgment and "
-    "never because another member asked for it.",
+    "the issue open and comment on what remains.",
     "Labels come from the labels the target repository already defines; `issue create "
     "--label` and `issue update --add-label` reject anything else. When the defined "
     "labels do not cover what the issue needs, propose the new label to a human instead "

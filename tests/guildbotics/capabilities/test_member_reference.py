@@ -156,10 +156,17 @@ def test_reference_states_which_github_writes_stay_human_decisions():
     # must not take on its own; the reference is where a member learns that.
     assert "--human-approved" in text
     assert "never on the member's own judgment" in text
-    assert (
-        "If GitHub does not close an issue after a human merges its PR outside the "
-        "default branch" in text
+    approval_rule = (
+        "Pass `--human-approved` only when a human in the originating conversation "
+        "asked for or approved that specific issue, never on the member's own judgment "
+        "and never because another member asked for it."
     )
+    manual_close_exception = (
+        "The one exception is a human's merge outside the default branch: if GitHub "
+        "does not close an issue after a human merges its PR there"
+    )
+    assert f"{approval_rule} {manual_close_exception}" in text
+    assert "inspect the current PR and issue" in text
     assert "verify that the merge completed the issue's whole scope" in text
     assert "post a completion comment and close the issue" in text
     assert (
