@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import posixpath
-import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +11,11 @@ from guildbotics.commands.arguments import (
 )
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.errors import CommandError
+from guildbotics.commands.metadata import (
+    command_entries,
+    command_output_name,
+    normalize_command_entry,
+)
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.registry import find_command_class, get_command_types
 from guildbotics.intelligences.agent_runtime.host_client import admits
@@ -57,10 +61,10 @@ class CommandSpecFactory:
         return spec
 
     def build_from_entry(self, anchor: CommandSpec, entry: Any) -> CommandSpec:
-        config = self._normalize_entry(entry)
+        config = normalize_command_entry(entry)
         anchor.command_index += 1
 
-        name = self._resolve_name(config, anchor)
+        name = command_output_name(config, anchor.name, anchor.command_index)
         path = None
         inline_command = self._is_inline_command(config, anchor)
         if inline_command:
@@ -92,34 +96,6 @@ class CommandSpecFactory:
             class_resolver=anchor.class_resolver,
         )
         return spec
-
-    def _normalize_entry(self, entry: Any) -> dict[str, Any]:
-        if isinstance(entry, str):
-            return self._parse_command(entry)
-        if isinstance(entry, dict):
-            normalized = dict(entry)
-            if "command" in normalized:
-                command = self._parse_command(str(normalized.pop("command")))
-                normalized = {**command, **normalized}
-            return normalized
-        raise CommandError("Command entry must be a mapping or string.")
-
-    def _parse_command(self, entry: str) -> dict[str, Any]:
-        words = shlex.split(entry)
-        if not words:
-            raise CommandError("Command entry string cannot be empty.")
-        return {"path": words[0], "args": words[1:]}
-
-    def _resolve_name(self, data: dict[str, Any], anchor: CommandSpec) -> str:
-        name = data.get("name")
-        if name:
-            return str(name)
-
-        path_value = data.get("path")
-        if path_value:
-            return self._default_name_from_path(Path(path_value))
-
-        return f"{anchor.name}__{anchor.command_index}"
 
     def _resolve_path(
         self, data: dict[str, Any], anchor: CommandSpec
@@ -194,11 +170,6 @@ class CommandSpecFactory:
             )
         return cwd
 
-    def _default_name_from_path(self, path: Path) -> str:
-        if path.name.startswith(".") and path.stem:
-            return path.stem
-        return path.stem or path.name
-
     def populate_spec(
         self,
         spec: CommandSpec,
@@ -213,16 +184,6 @@ class CommandSpecFactory:
         spec.class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         spec.children = []
 
-        raw_commands = config.get("commands")
-        if raw_commands is None:
-            entries: list[Any] = []
-        elif isinstance(raw_commands, Sequence) and not isinstance(
-            raw_commands, (str, bytes)
-        ):
-            entries = list(raw_commands)
-        else:
-            entries = [str(raw_commands)]
-
-        for entry in entries:
+        for entry in command_entries(config):
             child = self.build_from_entry(spec, entry)
             spec.children.append(child)

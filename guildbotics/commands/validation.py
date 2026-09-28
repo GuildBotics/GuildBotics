@@ -21,6 +21,7 @@ from guildbotics.commands.arguments import parse_command_argument_definitions
 from guildbotics.commands.brains import is_brain_disabled
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
+    command_entries,
     find_main_function,
     parse_command_access,
     parse_command_input_policy,
@@ -246,11 +247,7 @@ def _jinja_consumes_context_pipe(config: dict[str, Any], body: str) -> bool:
 
 
 def _validate_commands_shape(config: dict[str, Any]) -> None:
-    raw = config.get("commands")
-    if raw is None:
-        return
-    entries = raw if isinstance(raw, (list, tuple)) else [raw]
-    for entry in entries:
+    for entry in command_entries(config):
         _validate_command_entry(entry)
 
 

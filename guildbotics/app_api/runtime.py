@@ -125,6 +125,7 @@ from guildbotics.commands.errors import (
 from guildbotics.commands.formats import EXTENSION_BY_FORMAT
 from guildbotics.commands.metadata import (
     CommandAccess,
+    command_entries,
     default_command_label,
     load_command_metadata,
     parse_command_arguments,
@@ -1966,7 +1967,9 @@ def _command_option(
     requirements = _command_requirements(path, metadata, facts, context)
     description = str(metadata.get("description", ""))
     try:
-        arguments = to_command_arguments(parse_command_arguments(path, metadata))
+        arguments = to_command_arguments(
+            parse_command_arguments(path, metadata, command)
+        )
     except CommandError:
         arguments = []
     try:
@@ -2115,12 +2118,8 @@ def _child_command_requirement_kinds(
     context: Context,
     seen: set[Path],
 ) -> set[_Need]:
-    raw_commands = metadata.get("commands")
-    if raw_commands is None:
-        return set()
-    entries = raw_commands if isinstance(raw_commands, list) else [raw_commands]
     kinds: set[_Need] = set()
-    for entry in entries:
+    for entry in command_entries(metadata):
         kinds.update(
             _command_entry_requirement_kinds(path.parent, entry, context, seen)
         )

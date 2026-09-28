@@ -70,6 +70,19 @@ def test_list_read_and_empty(env: SimpleNamespace) -> None:
     assert detail.label == "Greet"
 
 
+def test_read_hides_subcommand_output_from_caller_arguments(
+    env: SimpleNamespace,
+) -> None:
+    _write(
+        env.commands / "system.md",
+        "---\nbrain: none\ncommands:\n  - name: os\n    script: uname -s\n---\n{os}\n",
+    )
+
+    detail = _service().read_file(encode_file_id("system.md"))
+
+    assert detail.arguments == []
+
+
 def test_list_excludes_member_commands(env: SimpleNamespace) -> None:
     _write(env.commands / "shared.md", "---\nname: Shared\n---\nBody\n")
     _write(
