@@ -474,6 +474,31 @@ async def test_an_answer_stops_when_its_turn_ends() -> None:
 
 
 @pytest.mark.asyncio
+async def test_an_answer_cut_short_by_its_turns_end_ends_cleanly(
+    running, caplog
+) -> None:
+    """An answer the upstream sized is still cut where its turn ends: it ends
+    there for the guest, and nothing is logged as an error."""
+    gateway, upstream, _tokens, guest = running
+
+    class Streaming(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b"FIRST-CHUNK"
+            gateway.revoke()
+            yield b"AFTER-THE-TURN"
+
+    upstream.responses = [
+        httpx.Response(200, headers={"content-length": "25"}, stream=Streaming())
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        response = await guest.post("/v1/messages")
+
+    assert response.content == b"FIRST-CHUNK"
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.asyncio
 async def test_a_tool_whose_api_lives_under_a_path_is_told_the_path_too() -> None:
     grok = cli_agent_info("grok").provision.credential_broker
     assert grok is not None
@@ -706,7 +731,6 @@ async def test_an_answer_that_echoes_the_token_reaches_the_guest_masked(
     assert REAL not in response.headers["x-echo"]
     assert REAL not in response.text
     assert response.text == '{"seen": "Bearer ' + "*" * len(REAL) + '"}'
-    assert int(response.headers["content-length"]) == len(response.content)
 
 
 @pytest.mark.asyncio

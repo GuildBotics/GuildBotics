@@ -11,11 +11,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
     parse_network_policy,
 )
-from guildbotics.intelligences.agent_environment.spec import (
-    AgentEnvironmentSpec,
-    EnvironmentMount,
-    EnvironmentNetwork,
-)
 from guildbotics.intelligences.agent_runtime import codex as codex_module
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
@@ -25,7 +20,8 @@ from guildbotics.intelligences.agent_runtime.codex import (
     _sandbox_overrides,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
-from guildbotics.intelligences.agent_runtime.member_broker import (
+from guildbotics.intelligences.agent_runtime.turn import TurnSpec
+from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.agent_runtime.models import (
@@ -231,7 +227,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         resume_policy=ResumePolicy.AUTO,
         **overrides,
@@ -1077,57 +1072,22 @@ def test_overrides_are_spelled_as_toml_values() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_codex_is_told_the_working_directory_as_the_guest_spells_it(
-    monkeypatch, tmp_path
-) -> None:
-    """``thread/start`` and ``turn/start`` name the directory inside the
-    environment (``/c/...`` on Windows), never the host's own spelling."""
-    monkeypatch.setattr(
-        codex_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
-    )
-    process = _Process()
-
-    async def create_process(*_args, **_kwargs):
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter()
-    context = _context(tmp_path)
-
-    await adapter.run_turn(
-        "go", context, ConversationRecord(key=context.conversation_key), lambda _e: None
-    )
-    await adapter.close()
-
-    started = next(
-        message["params"]
-        for message in process.messages
-        if message.get("method") == "thread/start"
-    )
-    assert started["cwd"] == f"/guest{tmp_path.as_posix()}"
-    assert _turn_start(process)["cwd"] == f"/guest{tmp_path.as_posix()}"
-
-
 def test_the_permission_profile_mirrors_the_environment_and_hides_codex_state() -> None:
     """Every directory the environment bound is readable or writable for
     Codex's commands exactly as it was mounted; the whole guest is readable;
     only Codex's own state is hidden, and its bound entries are never named."""
     home = "/home/u"
-    spec = AgentEnvironmentSpec(
+    spec = TurnSpec(
         cwd="/work/repo",
         home=home,
-        mounts=(
-            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
-            EnvironmentMount(
-                "/home/u/Documents/GuildBotics", Path("/x"), readonly=False
-            ),
-            EnvironmentMount("/home/u/notes", Path("/y"), readonly=True),
-            EnvironmentMount("/work/repo/private", None, readonly=False),
-            EnvironmentMount("/home/u/.codex/auth.json", Path("/z"), readonly=False),
-            EnvironmentMount("/home/u/.codex/sessions", Path("/w"), readonly=False),
-        ),
-        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        mounts={
+            "/work/repo": False,
+            "/home/u/Documents/GuildBotics": False,
+            "/home/u/notes": True,
+            "/work/repo/private": False,
+            "/home/u/.codex/auth.json": False,
+            "/home/u/.codex/sessions": False,
+        },
         env={},
     )
 
@@ -1153,11 +1113,10 @@ def test_a_read_only_working_directory_is_not_a_workspace_root() -> None:
     session on one mounted read-only (measured on 0.153.4: bwrap cannot
     mkdir `.codex`), so a turn working in a `read` grant has the profile
     mirror that mount as read, and no more."""
-    spec = AgentEnvironmentSpec(
+    spec = TurnSpec(
         cwd="/work/assist",
         home="/home/u",
-        mounts=(EnvironmentMount("/work/assist", Path("/x"), readonly=True),),
-        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        mounts={"/work/assist": True},
         env={},
     )
 
@@ -1183,14 +1142,13 @@ def test_a_turn_working_deeper_than_its_mount_is_judged_by_that_mount(
     """The turns of a command share one environment, each in its own working
     directory: one under a writable mount is a workspace root, one under a
     read-only corner of it is not."""
-    spec = AgentEnvironmentSpec(
+    spec = TurnSpec(
         cwd=cwd,
         home="/home/u",
-        mounts=(
-            EnvironmentMount("/work/repo", Path("/work/repo"), readonly=False),
-            EnvironmentMount("/work/repo/private", Path("/x"), readonly=True),
-        ),
-        network=EnvironmentNetwork(False, (), (), local_network=False, nameservers=()),
+        mounts={
+            "/work/repo": False,
+            "/work/repo/private": True,
+        },
         env={},
     )
 

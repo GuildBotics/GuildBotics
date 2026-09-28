@@ -236,9 +236,11 @@ def test_verify_cli_agent_can_start_in_the_isolated_environment(
     assert check not in response.errors
 
 
-def test_verify_cli_agent_reports_the_environments_refusal(
+def test_verify_reports_the_environments_refusal_whatever_the_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_environment
 ) -> None:
+    """Every command runs in the environment, so its refusal is its own check;
+    the tool's check says only what the tool itself refuses."""
     _isolated_config_env(tmp_path, monkeypatch)
     config = _config_status(tmp_path)
     _write_model_mapping(tmp_path, "models/openai/gpt-5-mini.yml")
@@ -251,11 +253,12 @@ def test_verify_cli_agent_reports_the_environments_refusal(
 
     response = VerifyService().verify(config=config, team=team)
 
-    check = _checks_by_code(response)["cli_agent_environment"]
-    assert check.status == "error"
-    assert check.target == "codex"
-    assert check.message == "no hypervisor"
-    assert check in response.errors
+    checks = _checks_by_code(response)
+    assert checks["agent_environment"].status == "error"
+    assert checks["agent_environment"].message == "no hypervisor"
+    assert checks["agent_environment"] in response.errors
+    assert checks["cli_agent_environment"].status == "ok"
+    assert checks["cli_agent_environment"].target == "codex"
 
 
 def test_verify_cli_agent_reports_the_tools_own_refusal(
@@ -300,6 +303,8 @@ def test_verify_cli_agent_mapping_missing_warns(
     checks = _checks_by_code(response)
     assert "cli_agent_environment" not in checks
     assert checks["cli_agent_mapping"].status == "warning"
+    # Commands still need the environment, whether or not a tool is named.
+    assert checks["agent_environment"].status == "ok"
 
 
 def test_verify_github_disabled_skips_credentials(
@@ -534,5 +539,6 @@ def test_verify_checks_env_keys_and_github_credentials(
     assert response.ok is True
     assert checks["llm_api_key"].status == "ok"
     assert checks["github_credential"].status == "ok"
+    assert checks["agent_environment"].status == "ok"
     assert checks["cli_agent_environment"].status == "ok"
     assert response.errors == []

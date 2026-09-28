@@ -7,6 +7,15 @@ class CommandError(RuntimeError):
     """Base error raised when a custom command cannot be executed."""
 
 
+class CommandFailedError(RuntimeError):
+    """A command failed in its isolated environment otherwise than as a
+    command: with an error of its code's own, of the type ``error_type``."""
+
+    def __init__(self, error_type: str, message: str) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
 class PersonSelectionRequiredError(CommandError):
     """Raised when no person could be inferred for a command."""
 

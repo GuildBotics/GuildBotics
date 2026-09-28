@@ -6,7 +6,7 @@ import json
 import pytest
 
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_runtime import diagnostics, registry
+from guildbotics.intelligences.agent_runtime import diagnostics
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_TURN,
     AgentEvent,
@@ -19,20 +19,20 @@ from guildbotics.intelligences.agent_runtime.models import (
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 from guildbotics.intelligences.brains import cli_agent
-from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
+from tests.guildbotics.intelligences.agent_runtime.window_doubles import (
+    WindowDouble,
+    enter_command,
+)
 
 
 @pytest.fixture
-def in_a_command(monkeypatch):
-    """The brain's turns run inside a command, as every turn does; the
-    adapter they speak through is the test's own."""
-    from types import SimpleNamespace
-
-    from guildbotics.intelligences.agent_environment.contract import AccessContract
-    from guildbotics.intelligences.agent_runtime import environment
-
-    running = SimpleNamespace(contract=AccessContract())
-    monkeypatch.setattr(environment, "running_command", lambda: running)
+def in_a_command(monkeypatch, tmp_path) -> WindowDouble:
+    """The brain's turns run inside a command's environment, as every turn
+    does, whose window answers the conversations from the test's workspace;
+    the adapter they speak through is the test's own."""
+    window = WindowDouble(tmp_path)
+    enter_command(monkeypatch, window)
+    return window
 
 
 class _Logger:
@@ -52,6 +52,9 @@ class _Adapter:
 
     def applied_settings(self, context):
         return dict(context.provider_options)
+
+    async def close(self) -> None:
+        self.closed = True
 
     async def run_turn(self, prompt, context, conversation, emit):
         self.prompts.append(prompt)
@@ -95,11 +98,10 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     }
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     snapshot = [
         {
@@ -124,7 +126,6 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     state = {
         "agent_execution_context": {
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "chat",
             "work_identity": "slack:bot:C1:100.1",
             "resume_policy": "auto",
@@ -162,59 +163,11 @@ async def test_native_chat_context_is_full_then_incremental_without_duplicates(
     assert 'mode="continuation"' in adapter.prompts[2]
     assert "continue-only" in adapter.prompts[2]
     assert "duplicate-second-turn" not in adapter.prompts[2]
-    assert all(context.lease is not None for context in adapter.contexts)
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
-async def test_native_brain_releases_run_binding_between_calls(
-    monkeypatch, tmp_path
-) -> None:
-    from guildbotics.runtime.person_lease import PersonExecutionLease
-
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
-    adapter = _Adapter()
-
-    async def get_adapter(*_args):
-        return adapter
-
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
-    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
-    lease = PersonExecutionLease("aiko", tmp_path)
-    lease.acquire(source="routine", command="ticket", work_id="work-1")
-    try:
-        for run_id in ("run-1", "run-2"):
-            await brain.run_with_execution_details(
-                "turn",
-                cwd=tmp_path,
-                session_state={
-                    "agent_execution_context": {
-                        "run_id": run_id,
-                        "workspace_data_root": str(tmp_path),
-                        "work_kind": "ticket",
-                        "work_identity": "issue-300",
-                        "resume_policy": "fresh",
-                    }
-                },
-            )
-            assert lease.metadata.run_id == ""
-    finally:
-        lease.release()
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
-
-    assert [context.run_id for context in adapter.contexts] == ["run-1", "run-2"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, in_a_command
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -223,16 +176,10 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
     }
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    recorded_events: list[AgentEvent] = []
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(
-        diagnostics,
-        "record_agent_event",
-        lambda event, *_args: recorded_events.append(event),
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     try:
         await brain.run_with_execution_details(
@@ -241,7 +188,6 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
             session_state={
                 "agent_execution_context": {
                     "run_id": "run-1",
-                    "workspace_data_root": str(tmp_path),
                     "work_kind": "chat",
                     "work_identity": "slack:bot:C1:100.1",
                     "resume_policy": "auto",
@@ -258,7 +204,7 @@ async def test_native_chat_requires_live_inspection_when_snapshot_is_incomplete(
     assert 'mode="inspect_required"' in adapter.prompts[0]
     assert any(
         event.kind is AgentEventKind.TURN and event.name == "started"
-        for event in recorded_events
+        for event in in_a_command.events()
     )
 
     async def interrupt(self):
@@ -335,16 +281,6 @@ class _CompactingAdapter(_Adapter):
         )
 
 
-class _TrackedAdapter(_Adapter):
-    def __init__(self, name: str) -> None:
-        super().__init__()
-        self.name = name
-        self.closed = False
-
-    async def close(self):
-        self.closed = True
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("in_a_command")
 async def test_native_brain_persists_cursor_only_after_terminal_success(
@@ -357,16 +293,14 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
     }
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     state = {
         "agent_execution_context": {
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "ticket",
             "work_identity": "issue-300",
             "resume_policy": "auto",
@@ -410,16 +344,14 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
     adapter.model = "gpt-established"
     adapter.effort = "high"
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     state = {
         "agent_execution_context": {
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "ticket",
             "work_identity": "issue-363",
             "resume_policy": "auto",
@@ -461,11 +393,10 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     }
     adapter = _RateLimitedOnceAdapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     key = ConversationKey("aiko", "codex", "chat", "slack:bot:C1:100.1")
     record = ConversationStore(tmp_path).resolve(key, ResumePolicy.AUTO)
     record.provider_session_id = "thread-1"
@@ -474,7 +405,6 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     execution_context = {
         "run_id": "run-1",
-        "workspace_data_root": str(tmp_path),
         "work_kind": "chat",
         "work_identity": "slack:bot:C1:100.1",
         "resume_policy": "auto",
@@ -509,52 +439,6 @@ async def test_native_chat_retries_event_not_sent_by_rate_limit_preflight(
     assert persisted.context_cursor == "100.1"
 
 
-@pytest.mark.asyncio
-async def test_native_brain_does_not_contact_provider_when_person_lease_conflicts(
-    monkeypatch, tmp_path
-) -> None:
-    from guildbotics.runtime import person_lease
-
-    original = cli_agent.person_cli_agent_mapping.copy()
-    cli_agent.person_cli_agent_mapping.clear()
-    cli_agent.person_cli_agent_mapping["aiko"] = {
-        "default": cli_agent.ExecutableInfo(adapter="codex")
-    }
-    held = person_lease.PersonExecutionLease("aiko", tmp_path)
-    held.acquire(source="routine", command="ticket", work_id="other-work")
-    provider_calls = 0
-
-    async def get_adapter(*_args):
-        nonlocal provider_calls
-        provider_calls += 1
-        return _Adapter()
-
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(person_lease, "current_person_lease", lambda: None)
-    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
-    try:
-        result = await brain.run_with_execution_details(
-            "hello",
-            cwd=tmp_path,
-            session_state={
-                "agent_execution_context": {
-                    "run_id": "run-1",
-                    "workspace_data_root": str(tmp_path),
-                    "work_kind": "ticket",
-                    "work_identity": "issue-300",
-                    "resume_policy": "fresh",
-                }
-            },
-        )
-    finally:
-        held.release()
-        cli_agent.person_cli_agent_mapping.clear()
-        cli_agent.person_cli_agent_mapping.update(original)
-
-    assert result.error_category == "lease_unavailable"
-    assert provider_calls == 0
-
-
 class _CrashedAdapter(_Adapter):
     async def run_turn(self, prompt, context, conversation, emit):
         raise AgentRuntimeError(
@@ -576,11 +460,10 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
         "default": cli_agent.ExecutableInfo(adapter="codex")
     }
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return _CrashedAdapter()
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     try:
         result = await brain.run_with_execution_details(
@@ -589,7 +472,6 @@ async def test_native_brain_failure_carries_what_the_tool_said_last(
             session_state={
                 "agent_execution_context": {
                     "run_id": "run-1",
-                    "workspace_data_root": str(tmp_path),
                     "work_kind": "ticket",
                     "work_identity": "issue-300",
                     "resume_policy": "auto",
@@ -619,11 +501,10 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
         "default": cli_agent.ExecutableInfo(adapter="codex")
     }
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return _CancelledAdapter()
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     try:
         with pytest.raises(asyncio.CancelledError):
@@ -633,7 +514,6 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
                 session_state={
                     "agent_execution_context": {
                         "run_id": "run-1",
-                        "workspace_data_root": str(tmp_path),
                         "work_kind": "ticket",
                         "work_identity": "issue-300",
                         "resume_policy": "auto",
@@ -653,9 +533,8 @@ async def test_native_brain_rotates_after_cancelled_turn(monkeypatch, tmp_path) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
 async def test_native_authentication_notification_identifies_member_and_cli(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, in_a_command
 ) -> None:
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
@@ -663,17 +542,10 @@ async def test_native_authentication_notification_identifies_member_and_cli(
         "default": cli_agent.ExecutableInfo(adapter="codex")
     }
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return _AuthenticationAdapter()
 
-    recorded: list[dict] = []
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
-    monkeypatch.setattr(
-        cli_agent,
-        "record_correlated_event",
-        lambda **kwargs: recorded.append(kwargs),
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     try:
         with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
@@ -683,7 +555,6 @@ async def test_native_authentication_notification_identifies_member_and_cli(
                 session_state={
                     "agent_execution_context": {
                         "run_id": "run-1",
-                        "workspace_data_root": str(tmp_path),
                         "work_kind": "ticket",
                         "work_identity": "issue-300",
                         "resume_policy": "fresh",
@@ -694,14 +565,11 @@ async def test_native_authentication_notification_identifies_member_and_cli(
         cli_agent.person_cli_agent_mapping.clear()
         cli_agent.person_cli_agent_mapping.update(original)
 
+    # The host records it for the member the command runs as.
     assert excinfo.value.cli_agent == "codex"
-    assert recorded[0]["person_id"] == "aiko"
-    assert recorded[0]["payload"] == {
-        "provider": "cli_agent",
-        "cli_agent": "codex",
-        "person_id": "aiko",
-        "code": "authentication",
-    }
+    assert [(entry.tool, entry.failed) for entry in in_a_command.credentials()] == [
+        ("codex", True)
+    ]
 
 
 @pytest.mark.asyncio
@@ -716,16 +584,14 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
     }
     adapter = _CompactingAdapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     state = {
         "agent_execution_context": {
             "run_id": "run-1",
-            "workspace_data_root": str(tmp_path),
             "work_kind": "chat",
             "work_identity": "slack:bot:C1:100.1",
             "resume_policy": "auto",
@@ -765,74 +631,6 @@ async def test_native_brain_rebuilds_chat_after_context_compaction(
     assert "rebuild-me" in adapter.prompts[1]
 
 
-@pytest.mark.asyncio
-async def test_a_command_keeps_one_native_process_per_member(
-    monkeypatch, tmp_path
-) -> None:
-    created: list[_TrackedAdapter] = []
-
-    def create_adapter(name: str):
-        adapter = _TrackedAdapter(name)
-        created.append(adapter)
-        return adapter
-
-    monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
-
-    async with command_at(tmp_path, {"claude", "codex"}):
-        first = await registry.get_native_adapter("aiko", "codex", "run-1")
-        assert await registry.get_native_adapter("aiko", "codex", "run-1") is first
-        second = await registry.get_native_adapter("aiko", "claude", "run-2")
-
-        assert first.closed is True
-        assert second.closed is False
-        other_person = await registry.get_native_adapter("yuki", "codex", "run-3")
-        assert second.closed is False
-        assert other_person.closed is False
-
-    # The command's adapters end with it.
-    assert second.closed is True
-    assert other_person.closed is True
-
-
-@pytest.mark.asyncio
-async def test_commands_of_one_member_never_close_each_others_adapters(
-    monkeypatch, tmp_path
-) -> None:
-    """A read-only command beside one that writes: each keeps its own turn."""
-    monkeypatch.setattr(registry, "create_native_adapter", _TrackedAdapter)
-    writing_started = asyncio.Event()
-    reading_done = asyncio.Event()
-
-    async def writing() -> _TrackedAdapter:
-        async with command_at(tmp_path, {"claude", "codex"}):
-            adapter = await registry.get_native_adapter("aiko", "codex", "write")
-            writing_started.set()
-            await reading_done.wait()
-            assert adapter.closed is False
-            return adapter
-
-    async def reading() -> _TrackedAdapter:
-        await writing_started.wait()
-        async with command_at(tmp_path, {"codex"}, CommandAccess(read_only=True)):
-            adapter = await registry.get_native_adapter("aiko", "codex", "read")
-        reading_done.set()
-        return adapter
-
-    written, read = await asyncio.gather(writing(), reading())
-
-    assert written is not read
-    assert written.closed is True
-    assert read.closed is True
-
-
-@pytest.mark.asyncio
-async def test_no_native_adapter_outside_a_command() -> None:
-    with pytest.raises(AgentRuntimeError) as refused:
-        await registry.get_native_adapter("aiko", "codex", "run-1")
-
-    assert refused.value.category is AgentRuntimeErrorCategory.CONFIGURATION
-
-
 def test_agent_diagnostics_redact_credentials_and_keep_correlation(
     monkeypatch, tmp_path
 ) -> None:
@@ -852,7 +650,6 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         context_cursor="cursor-1",
     )
@@ -902,7 +699,6 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
     )
     conversation = ConversationRecord(key=key)
@@ -920,42 +716,6 @@ def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None
 
     assert len(recorded) == 1
     assert recorded[0]["payload"]["message"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_native_registry_serializes_replacement_for_same_execution(
-    monkeypatch, tmp_path
-) -> None:
-    class _RegistryAdapter:
-        def __init__(self) -> None:
-            self.closed = False
-
-        async def close(self) -> None:
-            await asyncio.sleep(0)
-            self.closed = True
-
-        async def interrupt(self) -> None:
-            return None
-
-    created: list[_RegistryAdapter] = []
-
-    def create_adapter(*_args):
-        adapter = _RegistryAdapter()
-        created.append(adapter)
-        return adapter
-
-    monkeypatch.setattr(registry, "create_native_adapter", create_adapter)
-    async with command_at(tmp_path, {"claude", "codex"}):
-        first = await registry.get_native_adapter("aiko", "codex", "run-1")
-
-        replacements = await asyncio.gather(
-            registry.get_native_adapter("aiko", "codex", "run-2"),
-            registry.get_native_adapter("aiko", "codex", "run-2"),
-        )
-
-        assert replacements[0] is replacements[1]
-        assert len(created) == 2
-        assert first.closed is True
 
 
 @pytest.fixture
@@ -996,7 +756,6 @@ async def _run_chat_turn(
         session_state={
             "agent_execution_context": {
                 "run_id": run_id,
-                "workspace_data_root": str(tmp_path),
                 "work_kind": "chat",
                 "work_identity": _CHAT_IDENTITY,
                 "resume_policy": "auto",
@@ -1012,22 +771,15 @@ async def _run_chat_turn(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
-    monkeypatch, tmp_path, native_aiko
+    monkeypatch, tmp_path, native_aiko, in_a_command
 ) -> None:
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    recorded_events: list[AgentEvent] = []
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(
-        diagnostics,
-        "record_agent_event",
-        lambda event, *_args: recorded_events.append(event),
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     key = _seed_chat_record(
         tmp_path, cursor="200.1", last_run_id="run-B", last_event_id="EB"
     )
@@ -1043,7 +795,7 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
     assert "continue-only" not in adapter.prompts[0]
     rejections = [
         event
-        for event in recorded_events
+        for event in in_a_command.events()
         if event.kind is AgentEventKind.TURN and event.name == "continuation_rejected"
     ]
     assert len(rejections) == 1
@@ -1062,22 +814,15 @@ async def test_native_chat_cursor_regression_rotates_instead_of_continuing(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_same_cursor_same_run_event_uses_continuation(
-    monkeypatch, tmp_path, native_aiko
+    monkeypatch, tmp_path, native_aiko, in_a_command
 ) -> None:
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    recorded_events: list[AgentEvent] = []
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(
-        diagnostics,
-        "record_agent_event",
-        lambda event, *_args: recorded_events.append(event),
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-A", last_event_id="EA")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
@@ -1086,26 +831,21 @@ async def test_native_chat_same_cursor_same_run_event_uses_continuation(
     assert result.returncode == 0
     assert 'mode="continuation"' in adapter.prompts[0]
     assert "continue-only" in adapter.prompts[0]
-    assert not any(event.name == "continuation_rejected" for event in recorded_events)
+    assert not any(
+        event.name == "continuation_rejected" for event in in_a_command.events()
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("in_a_command")
 async def test_native_chat_same_cursor_different_run_is_not_continuation(
-    monkeypatch, tmp_path, native_aiko
+    monkeypatch, tmp_path, native_aiko, in_a_command
 ) -> None:
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    recorded_events: list[AgentEvent] = []
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(
-        diagnostics,
-        "record_agent_event",
-        lambda event, *_args: recorded_events.append(event),
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     _seed_chat_record(tmp_path, cursor="100.1", last_run_id="run-B", last_event_id="EB")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
@@ -1114,7 +854,7 @@ async def test_native_chat_same_cursor_different_run_is_not_continuation(
     assert result.returncode == 0
     assert 'mode="full"' in adapter.prompts[0]
     assert "continue-only" not in adapter.prompts[0]
-    rejections = [e for e in recorded_events if e.name == "continuation_rejected"]
+    rejections = [e for e in in_a_command.events() if e.name == "continuation_rejected"]
     assert len(rejections) == 1
     assert rejections[0].details["reason"] == "identity_mismatch"
 
@@ -1126,11 +866,10 @@ async def test_native_chat_legacy_record_without_identity_rotates_to_full_contex
 ) -> None:
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     key = _seed_chat_record(tmp_path, cursor="100.1")
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
 
@@ -1161,16 +900,14 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     )
     adapter = _Adapter()
 
-    async def get_adapter(*_args):
+    def get_adapter(*_args):
         return adapter
 
-    monkeypatch.setattr(registry, "get_native_adapter", get_adapter)
-    monkeypatch.setattr(diagnostics, "record_agent_event", lambda *args: None)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", get_adapter)
     brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
     configured = {
         "run_id": "batch-1",
         "resume_policy": "auto",
-        "workspace_data_root": str(tmp_path),
         "work_kind": "chat",
         "work_identity": "slack:bot:C1:100.1",
         "context_cursor": "100.1",
@@ -1211,3 +948,58 @@ async def test_resumed_chat_receives_whole_unread_batch_and_intervening_context(
     assert "additional context" in prompt
     assert "already delivered" not in prompt
     assert "future request" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_each_turn_speaks_through_an_adapter_of_its_own(
+    monkeypatch, tmp_path, in_a_command, native_aiko
+) -> None:
+    """A provider starts with its turn and ends with it; the adapter it is
+    spoken to through is the turn's, closed when the turn ends however it
+    ends."""
+    adapters: list[_Adapter] = []
+
+    def create_adapter(_name):
+        adapters.append(_CrashedAdapter() if adapters else _Adapter())
+        return adapters[-1]
+
+    monkeypatch.setattr(cli_agent, "create_native_adapter", create_adapter)
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    for _ in range(2):
+        await brain.run_with_execution_details("go", cwd=tmp_path)
+
+    assert len(adapters) == 2
+    assert all(adapter.closed for adapter in adapters)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_runs_only_inside_a_command(tmp_path, native_aiko) -> None:
+    """Every turn runs in the environment of the command it belongs to; with
+    no window to the host there is no command to run it in."""
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    with pytest.raises(AgentRuntimeError) as refused:
+        await brain.run_with_execution_details("go", cwd=tmp_path)
+
+    assert refused.value.category is AgentRuntimeErrorCategory.CONFIGURATION
+
+
+@pytest.mark.asyncio
+async def test_a_turn_works_for_the_commands_run_unless_its_workflow_names_one(
+    monkeypatch, tmp_path, in_a_command, native_aiko
+) -> None:
+    """The host holds every turn of a command to the command's run: a turn
+    the command asks for without a workflow run of its own works for it, and
+    its answer points at the command's trace."""
+    adapter = _Adapter()
+    monkeypatch.setattr(cli_agent, "create_native_adapter", lambda _name: adapter)
+    brain = cli_agent.CliAgentBrain("aiko", "native", _Logger())
+
+    await brain.run_with_execution_details("go", cwd=tmp_path)
+
+    (context,) = adapter.contexts
+    assert context.run_id == "command-run"
+    assert context.trace_id == "command-trace"
+    assert context.conversation_key.work_kind == "manual"
+    assert context.conversation_key.work_identity == "command-run"

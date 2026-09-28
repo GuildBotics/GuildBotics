@@ -12,10 +12,13 @@ libraries and fonts that cover Japanese. It sends nothing off the device.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 import pytest_asyncio
@@ -28,13 +31,16 @@ from guildbotics.intelligences.agent_environment.snapshot import (
 )
 from guildbotics.intelligences.agent_environment.spec import build_environment_spec
 from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, CODE_ROOT
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from tests.timeouts import REAL_DEVICE
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the agent environment.",
@@ -174,3 +180,173 @@ async def test_to_pdf_draws_a_pdf_with_japanese_fonts(
 
     assert code == 0, out
     assert out.endswith("%PDF-"), out
+
+
+async def test_an_artifact_is_unpacked_by_the_code_in_the_microvm(
+    boot, tmp_path: Path, symlinks
+) -> None:
+    """What the host downloads for a command of the microVM, the microVM
+    unpacks with GuildBotics' own Python; a link it made where it unpacks
+    leads nowhere on the host, which writes nothing there itself."""
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (work / "linked").symlink_to(outside, target_is_directory=True)
+    archive = tmp_path / "artifact.zip"
+    with ZipFile(archive, "w") as bundle:
+        bundle.writestr("report/error.md", b"details")
+    environment = await boot(work)
+    guest = EnvironmentGuest(asyncio.get_running_loop(), lambda: environment).until(
+        time.monotonic() + 120
+    )
+
+    def unpack(destination: Path):
+        return guest.run(
+            guest.python(
+                "guildbotics.capabilities.artifact_archive", guest.path(destination)
+            ),
+            cwd="/",
+            env={},
+            stdin=archive,
+            stdout_limit=1 << 20,
+        )
+
+    unpacked = await asyncio.to_thread(unpack, work / "artifact")
+    through_link = await asyncio.to_thread(unpack, work / "linked" / "artifact")
+
+    assert unpacked.returncode == 0, unpacked.stderr
+    written = work / "artifact" / "report" / "error.md"
+    assert json.loads(unpacked.stdout)["files"] == [guest.path(written)]
+    assert written.read_bytes() == b"details"
+    assert through_link.returncode in {0, 1}, through_link.stderr
+    assert list(outside.iterdir()) == []
+
+
+@pytest.fixture
+def workspace(monkeypatch: pytest.MonkeyPatch) -> Path:
+    """This device's workspace (``GUILDBOTICS_CONFIG_DIR``), whose snapshot
+    the commands below boot from, as the host selects it."""
+    monkeypatch.setenv("HOME", str(_REAL_HOME))
+    monkeypatch.setenv("USERPROFILE", str(_REAL_HOME))
+    config = Path(os.environ["GUILDBOTICS_CONFIG_DIR"])
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(config.parent.parent))
+    status = device_status()
+    if status.refusal:
+        pytest.skip(f"The agent environment is not ready here: {status.refusal}")
+    return config
+
+
+#: What a command sees of where it runs, as one line.
+_WHERE = """
+import logging, os, platform
+from pathlib import Path
+
+def main(context):
+    logging.getLogger("guildbotics").warning("from inside")
+    config = Path(os.environ["GUILDBOTICS_CONFIG_DIR"])
+    try:
+        (config / "probe").write_text("x")
+        writes = "writes"
+    except OSError:
+        writes = "read-only"
+    return "|".join([
+        platform.system(),
+        context.person.person_id,
+        str(os.environ.get("GUILDBOTICS_PROBE_HOST_ONLY")),
+        os.getcwd(),
+        context.pipe,
+        str((config / "team" / "project.yml").is_file()),
+        writes,
+    ])
+"""
+
+
+async def test_a_command_runs_in_the_microvm_the_host_boots_for_it(
+    workspace, tmp_path, monkeypatch, caplog
+):
+    """The whole command runs in its microVM: Linux, working where it was
+    asked to with its input, reading the workspace's configuration it cannot
+    change, and nothing of the host's environment; what it logs is logged on
+    the host."""
+    import logging
+
+    from tests.guildbotics.product_path import run_file, workspace_member
+
+    monkeypatch.setenv("GUILDBOTICS_PROBE_HOST_ONLY", "host")
+    (tmp_path / "where.py").write_text(_WHERE, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="guildbotics"):
+        outcome = await run_file(tmp_path / "where.py", "the input")
+
+    assert outcome.text_output.split("|") == [
+        "Linux",
+        workspace_member(),
+        "None",
+        str(tmp_path),
+        "the input",
+        "True",
+        "read-only",
+    ]
+    assert "from inside" in caplog.text
+    assert not (workspace / "probe").exists()
+
+
+async def test_what_a_command_prints_or_leaves_running_does_not_hold_its_end(
+    workspace, tmp_path, caplog
+):
+    """The command's reply is the entry's alone: what the command prints is
+    logged, and a process it leaves running ends with the microVM rather
+    than holding the command open until it exits."""
+    import logging
+
+    from tests.guildbotics.product_path import run_file
+
+    (tmp_path / "leaves.py").write_text(
+        "import subprocess\n"
+        "def main():\n"
+        "    print('printed')\n"
+        "    subprocess.Popen(['sleep', '60'])\n"
+        "    return 'done'\n",
+        encoding="utf-8",
+    )
+    started = time.monotonic()
+
+    with caplog.at_level(logging.INFO, logger="guildbotics"):
+        outcome = await run_file(tmp_path / "leaves.py")
+
+    assert outcome.text_output == "done"
+    assert "printed" in caplog.text
+    assert time.monotonic() - started < 30
+
+
+async def test_a_subcommand_outside_what_the_command_mounted_is_refused(
+    workspace, tmp_path
+):
+    """Nothing of the host is there, so a subcommand is not run there."""
+    from guildbotics.commands.errors import CommandError
+    from tests.guildbotics.product_path import run_file
+
+    (tmp_path / "outer.yml").write_text(
+        "commands:\n  - script: pwd\n    cwd: /etc\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CommandError, match="/etc"):
+        await run_file(tmp_path / "outer.yml")
+
+
+async def test_a_template_reaches_only_what_the_microvm_holds(workspace, tmp_path):
+    """A template evaluates in the command's microVM: the context it is given
+    reaches the member's services through the command's window, never the
+    host's objects."""
+    from tests.guildbotics.product_path import run_file
+
+    (tmp_path / "reach.md").write_text(
+        "---\nbrain: none\ntemplate_engine: jinja2\n---\n"
+        "{{ context.integration_factory.__class__.__module__ }}\n",
+        encoding="utf-8",
+    )
+
+    outcome = await run_file(tmp_path / "reach.md")
+
+    assert outcome.text_output.strip() == "guildbotics.integrations.window"

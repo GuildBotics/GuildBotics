@@ -11,7 +11,7 @@ from guildbotics.intelligences.agent_runtime.antigravity import (
 from guildbotics.intelligences.agent_runtime.claude import ClaudeStreamJsonAdapter
 from guildbotics.intelligences.agent_runtime.codex import CodexAppServerAdapter
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
+from guildbotics.intelligences.agent_runtime.turn import start_turn
 from guildbotics.intelligences.agent_runtime.factory import (
     NATIVE_ADAPTERS,
     create_native_adapter,
@@ -58,9 +58,9 @@ def test_unknown_adapter_is_rejected() -> None:
 
 def test_every_registered_provider_uses_only_its_turns_member_broker() -> None:
     """Keep new registry entries inside the same untrusted-provider boundary:
-    a provider runs only in its turn's environment, and reaches the member
-    commands only through the broker that environment binds to the turn --
-    one broker per environment, whose port was opened when it booted."""
+    a provider runs only as its turn's process, and reaches the member
+    commands only through the broker the host binds to the turn -- one broker
+    per command, whose port was opened when its environment booted."""
     for adapter_name in set(NATIVE_ADAPTERS.values()):
         modules = [
             sys.modules[cls.__module__]
@@ -68,11 +68,10 @@ def test_every_registered_provider_uses_only_its_turns_member_broker() -> None:
             if cls.__module__.startswith("guildbotics.")
         ]
         assert any(
-            start_turn_environment.__name__ in inspect.getsource(module)
-            for module in modules
+            start_turn.__name__ in inspect.getsource(module) for module in modules
         )
         for module in modules:
-            assert "MemberCapabilityBroker(" not in inspect.getsource(module)
+            assert "TurnBroker(" not in inspect.getsource(module)
 
 
 @pytest.mark.asyncio
@@ -93,7 +92,6 @@ async def test_every_provider_ends_its_turn_however_the_turn_fails(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", tool, "manual", "turn"),
     )
 
@@ -114,23 +112,19 @@ async def test_every_provider_ends_its_turn_however_the_turn_fails(
 async def test_every_provider_revokes_the_member_grant_when_interrupted(
     adapter_name: str, fake_environment, tmp_path
 ) -> None:
-    """An interrupted turn loses the member commands at once, before its
-    process is stopped and its turn ends."""
+    """An interrupted turn is ended at once -- the host revokes its member
+    grant and the login it was lent -- before its process is stopped."""
     adapter = create_native_adapter(adapter_name)
     tool = adapter_name.split("-", 1)[0]
     context = AgentExecutionContext(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", tool, "manual", "turn"),
     )
     environment = await fake_environment.start(context, tool)
     adapter._environment = environment
-    assert environment.broker.turn_grant
 
     await adapter.interrupt()
 
-    with pytest.raises(RuntimeError, match="no active turn"):
-        environment.broker.turn_grant
-    await environment.close()
+    assert environment.closed

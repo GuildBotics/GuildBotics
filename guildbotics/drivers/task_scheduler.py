@@ -273,7 +273,13 @@ class TaskScheduler:
         start_time: datetime.datetime,
         consecutive_errors: int,
     ) -> tuple[int, bool]:
-        """Check and execute scheduled tasks."""
+        """Check and execute scheduled tasks.
+
+        While this device cannot run a command, none is due: each stays due
+        until it can run, rather than failing the worker.
+        """
+        if self._environment_unavailable():
+            return consecutive_errors, False
         for scheduled_task in scheduled_tasks:
             if self._stop_event.is_set():
                 break
@@ -341,10 +347,10 @@ class TaskScheduler:
             # Any other routine, one naming the ticket workflow with arguments
             # included, runs as a command whose entry selects its ticket.
             ticket_patrol = routine_command == TICKET_WORKFLOW_COMMAND
-            if ticket_patrol and self._environment_unavailable():
-                # The AI CLI turn the patrol would dispatch cannot start here
-                # yet (the environment is being built, or is not set up). It
-                # is deferred, not failed: the worker stays up and the ticket
+            if self._environment_unavailable():
+                # The command cannot start here yet (the environment is being
+                # built, or is not set up). It is deferred, not failed: the
+                # worker stays up and the routine -- a ticket, for the patrol --
                 # is picked again once the device is ready.
                 self._ticket_patrol_candidates.pop(person.person_id, None)
                 ok = True
@@ -630,7 +636,8 @@ class TaskScheduler:
             await asyncio.sleep(0.2)
 
     def _environment_unavailable(self) -> bool:
-        """Whether AI CLI work must wait for this device's environment.
+        """Whether work must wait for this device's environment, where every
+        command runs.
 
         The reason is the one the status shows; it is logged once per change
         rather than once per poll.
@@ -640,7 +647,7 @@ class TaskScheduler:
             self._environment_refusal = reason
             if reason:
                 self.context.logger.warning(
-                    f"AI CLI work is deferred on this device: {reason}"
+                    f"Work is deferred on this device: {reason}"
                 )
             else:
                 self.context.logger.info("The agent environment is ready; resuming.")

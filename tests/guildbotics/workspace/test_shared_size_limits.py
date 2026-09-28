@@ -126,10 +126,16 @@ NOT_SHARED = {
     "guildbotics/intelligences/agent_runtime/command_guest.py:_MAX_STDERR_BYTES": (
         "how much of a process's standard error is kept for its reason"
     ),
+    "guildbotics/intelligences/agent_runtime/environment.py:_CHUNK_BYTES": (
+        "how much of a command's reply or log is read at a time"
+    ),
+    "guildbotics/intelligences/agent_runtime/environment.py:_MAX_LOG_LINE_BYTES": (
+        "one line of a command's log, logged on the host"
+    ),
     "guildbotics/capabilities/member_github.py:DEFAULT_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),
-    "guildbotics/capabilities/member_github.py:MAX_ARTIFACT_BYTES": (
+    "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (
         "a temporary GitHub Actions artifact outside shared workspace state"
     ),
     "guildbotics/observability/diagnostics_store.py:DEFAULT_DIAGNOSTICS_MAX_BYTES": (

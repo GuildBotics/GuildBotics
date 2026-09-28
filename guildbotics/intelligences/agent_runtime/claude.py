@@ -10,11 +10,8 @@ from datetime import UTC, datetime
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_environment.runtime import AgentEnvironmentError
-from guildbotics.intelligences.agent_runtime.environment import start_turn_environment
-from guildbotics.intelligences.agent_runtime.member_broker import (
+from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
-    MemberCapabilityBroker,
 )
 from guildbotics.intelligences.agent_runtime.models import (
     SETTINGS_SCOPE_SESSION,
@@ -33,6 +30,11 @@ from guildbotics.intelligences.agent_runtime.provider_process import (
     StreamJsonAdapter,
     StreamJsonProcess,
     turn_deadline,
+)
+from guildbotics.intelligences.agent_runtime.turn import (
+    TurnBroker,
+    TurnError,
+    start_turn,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -85,9 +87,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
         conversation: ConversationRecord,
         emit: EventSink,
     ) -> AgentTerminalResult:
-        self._environment = await start_turn_environment(
-            context, "claude", env=_ENVIRONMENT
-        )
+        self._environment = await start_turn(context, "claude", env=_ENVIRONMENT)
         broker = self._environment.broker
         args = [
             self._executable,
@@ -113,7 +113,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             args.extend(("--resume", conversation.provider_session_id))
         try:
             self._process = await self._environment.run(*args, limit=STREAM_READ_LIMIT)
-        except AgentEnvironmentError as exc:
+        except TurnError as exc:
             await self._close_environment()
             raise AgentRuntimeError(
                 AgentRuntimeErrorCategory.PROCESS,
@@ -245,15 +245,14 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
         )
 
 
-def _claude_mcp_config(broker: MemberCapabilityBroker) -> str:
+def _claude_mcp_config(broker: TurnBroker) -> str:
     """Build the only MCP configuration Claude may load for this process."""
-    endpoint = broker.endpoint
     return json.dumps(
         {
             "mcpServers": {
-                endpoint.name: {
+                broker.name: {
                     "type": "http",
-                    "url": endpoint.guest_url,
+                    "url": broker.url,
                     "headers": {
                         "Authorization": f"Bearer ${{{MEMBER_BROKER_TOKEN_ENV}}}"
                     },

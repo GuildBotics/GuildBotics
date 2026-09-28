@@ -61,7 +61,7 @@ GuildBotics は、Claude Code や Codex などの AI CLI ツールを、開発�
 - **OpenSSH**（1 つのワークスペースを複数マシンで共有する場合のみ）:
   - 参加する各マシンに OpenSSH **クライアント**が必要です。Windows 10 1809 以降は標準搭載のため追加インストールは不要です
   - Hub 役のマシンには OpenSSH **サーバー**も必要です。Windows はオプション機能「OpenSSH サーバー」、macOS はリモートログイン、Linux は `openssh-server` を有効にしてください
-- **ハードウェア仮想化**（エージェント隔離環境のため）。AI CLI の turn はすべて、turn を実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
+- **ハードウェア仮想化**（エージェント隔離環境のため）。コマンドはすべて、サブコマンドや AI CLI の turn も含めて、コマンドを実行するマシン上で GuildBotics が起動する microVM の中で動きます。そのマシンに必要なのは、macOS では Apple Silicon（Intel Mac は対象外）、Windows 11 ではオプション機能「**Windows ハイパーバイザー プラットフォーム**」、Linux では KVM（`/dev/kvm` をユーザーが読めること）です。runtime（[microsandbox](https://microsandbox.dev/)）は GuildBotics に同梱され、初回利用時に `~/.guildbotics/data/msb` へ配置されるので、追加のインストールは不要です
 - **AI CLI ツールのアカウント**。ツール自体は GuildBotics が隔離環境の中にインストールするので、turn のためにマシンへ入れるものはありません。必要なのはアカウントで、セットアップ後にマシンごとに 1 回、ターミナルで `guildbotics environment login <tool>` を実行してログインします（**エージェント実行環境** 画面にそのコマンドが表示されます）。GuildBotics が隔離環境に導入するツールは次のとおりです:
   - [OpenAI Codex CLI](https://github.com/openai/codex/)
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（Claude Pro または Max サブスクリプションが必要）
@@ -422,7 +422,7 @@ commands:
 翻訳結果だけを返してください。
 ```
 
-`functions/get_os_ui_language` は組み込みコマンドのため、ワークスペースに補助ファイルを配置する必要はありません。
+`functions/get_os_ui_language` は組み込みコマンドのため、ワークスペースに補助ファイルを配置する必要はありません。コマンドはエージェント隔離環境の中で動き、実行するマシンの OS の UI 言語は環境変数 `LANGUAGE` で隔離環境に渡ります（[コマンドが動く場所](docs/custom_command_guide.ja.md#14-コマンドが動く場所)を参照）。
 
 **実行方法**:
 

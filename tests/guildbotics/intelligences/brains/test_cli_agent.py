@@ -2,12 +2,34 @@ import logging
 
 import pytest
 
-from guildbotics.commands.metadata import CommandAccess
-from guildbotics.intelligences.agent_runtime.environment import running_command
+from guildbotics.intelligences.agent_runtime.host_client import (
+    TURN_WORKING_DIRECTORY,
+    IoEntry,
+    SummaryEntry,
+)
 from guildbotics.intelligences.brains import cli_agent
-from guildbotics.intelligences.brains import util as brain_util
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
+from tests.guildbotics.intelligences.agent_runtime.window_doubles import (
+    WindowDouble,
+    enter_command,
+)
+
+
+@pytest.fixture(autouse=True)
+def window(monkeypatch, tmp_path) -> WindowDouble:
+    """Every turn here runs inside a command's environment, whose window to
+    the host keeps what the turn records."""
+    double = WindowDouble(tmp_path)
+    enter_command(monkeypatch, double, person_id="p1")
+    return double
+
+
+def _io(window: WindowDouble) -> list[IoEntry]:
+    return [entry for entry in window.entries if isinstance(entry, IoEntry)]
+
+
+def _spans(window: WindowDouble) -> list[SummaryEntry]:
+    return [entry for entry in window.entries if isinstance(entry, SummaryEntry)]
 
 
 def _test_logger():
@@ -50,15 +72,8 @@ def _native_brain(monkeypatch, result: cli_agent.CliAgentExecutionResult, **kwar
 
 
 def _read_only_state(tmp_path) -> dict:
-    """Session state for a turn that takes no lease and touches no real home."""
-    return {
-        "agent_execution_context": {
-            "run_id": "run-1",
-            "work_kind": "manual",
-            "workspace_data_root": str(tmp_path),
-            "read_only": True,
-        }
-    }
+    """Session state for a turn of the command's own run."""
+    return {"agent_execution_context": {"run_id": "command-run", "work_kind": "manual"}}
 
 
 @pytest.mark.parametrize(
@@ -193,7 +208,7 @@ async def test_cli_agent_run_raises_rate_limit_error_carrying_retry_after(
 
 @pytest.mark.asyncio
 async def test_cli_agent_authentication_failure_records_credential_failure(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ):
     _native_brain(
         monkeypatch,
@@ -205,27 +220,15 @@ async def test_cli_agent_authentication_failure_records_credential_failure(
             error_details={"cli_agent": "claude"},
         ),
     )
-    recorded: list[dict] = []
-    monkeypatch.setattr(
-        cli_agent,
-        "record_correlated_event",
-        lambda **kwargs: recorded.append(kwargs),
-    )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     with pytest.raises(cli_agent.CliAgentExecutionError) as excinfo:
         await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
 
     assert excinfo.value.category == "authentication"
-    assert recorded[0]["event_type"] == "credential.failed"
-    assert recorded[0]["payload"] == {
-        "provider": "cli_agent",
-        "cli_agent": "claude",
-        "person_id": "p1",
-        "code": "authentication",
-    }
-    assert recorded[0]["attributes"]["credential.provider"] == "cli_agent"
-    assert recorded[0]["attributes"]["credential.cli_agent"] == "claude"
+    assert [(entry.tool, entry.failed) for entry in window.credentials()] == [
+        ("claude", True)
+    ]
 
 
 def test_normalize_retry_after_handles_composite_relative_duration():
@@ -255,11 +258,10 @@ def test_normalize_native_retry_after_handles_provider_text():
 
 
 @pytest.mark.asyncio
-async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path):
-    io_records: list[tuple[str, dict]] = []
-    span_records: list[dict] = []
+async def test_cli_agent_records_request_response_and_span(
+    monkeypatch, tmp_path, window
+):
     multibyte_stderr = "あ" * 2731
-    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(
@@ -269,16 +271,6 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
             model="claude-sonnet-5",
             effort="high",
         ),
-    )
-    monkeypatch.setattr(
-        cli_agent,
-        "record_correlated_io",
-        lambda *, io_type, payload: io_records.append((io_type, payload)),
-    )
-    monkeypatch.setattr(
-        brain_util,
-        "record_span_summary",
-        lambda **kwargs: span_records.append(kwargs),
     )
 
     brain = cli_agent.CliAgentBrain(
@@ -292,60 +284,77 @@ async def test_cli_agent_records_request_response_and_span(monkeypatch, tmp_path
     state["context"] = type("C", (), {"person": type("P", (), {"name": "Alice"})()})()
     await brain.run("hello", cwd=tmp_path, session_state=state)
 
-    assert [record[0] for record in io_records] == [
+    request, response = _io(window)
+    assert (request.io_type, response.io_type) == (
         "cli_agent.request",
         "cli_agent.response",
-    ]
-    assert io_records[0][1]["person_id"] == "p1"
-    assert io_records[0][1]["brain"] == "functions/handle_chat_event"
-    assert "Reply as Alice." in io_records[0][1]["prompt"]
-    assert io_records[1][1]["stdout"] == "done"
-    assert io_records[1][1]["stderr"] != multibyte_stderr
-    assert io_records[1][1]["stderr_truncated"] is True
-    assert span_records[0]["status"] == "finished"
-    # The span names what the turn really ran with, and keeps the slot name on
-    # an attribute so traces stay searchable by slot.
-    assert span_records[0]["model"] == "claude-sonnet-5"
-    assert span_records[0]["effort"] == "high"
-    assert span_records[0]["attributes"] == {
-        "agent.kind": "cli_agent",
-        "agent.slot": "default",
-    }
+    )
+    assert request.payload["person_id"] == "p1"
+    assert request.payload["brain"] == "functions/handle_chat_event"
+    assert "Reply as Alice." in request.payload["prompt"]
+    assert response.payload["stdout"] == "done"
+    # The whole stderr goes to the host, which keeps what it records of it.
+    assert response.payload["stderr"] == multibyte_stderr
+    (span,) = _spans(window)
+    assert span.status == "finished"
+    # The span names what the turn really ran with, and keeps the slot name
+    # apart so traces stay searchable by slot.
+    assert (span.model, span.effort, span.slot) == (
+        "claude-sonnet-5",
+        "high",
+        "default",
+    )
+    # Each record is sent under the turn's span.
+    assert request.span == response.span == span.span is not None
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, caplog):
+async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, window):
     """The slot name lives on ``agent.slot``; it must not pose as the model."""
-    span_records: list[dict] = []
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
     )
-    monkeypatch.setattr(
-        brain_util,
-        "record_span_summary",
-        lambda **kwargs: span_records.append(kwargs),
+
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+    await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+
+    (span,) = _spans(window)
+    assert (span.model, span.effort, span.slot) == ("", "", "default")
+
+
+@pytest.mark.asyncio
+async def test_a_record_the_host_refuses_does_not_undo_the_turn(
+    monkeypatch, tmp_path, window, caplog
+):
+    """The turn's work is what it did: a record the host refuses (one too
+    large to take, say) is logged, and the turn's result stands."""
+    from guildbotics.intelligences.agent_runtime.host_client import HostCallError
+
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
     )
 
-    brain = cli_agent.CliAgentBrain("p1", "x", logger=logging.getLogger("test"))
-    with caplog.at_level(logging.INFO, logger="test"):
-        await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
+    def refuse(name, **arguments):
+        raise HostCallError("refused", "The call is too large.")
 
-    assert span_records[0]["model"] == ""
-    assert span_records[0]["effort"] == ""
-    assert span_records[0]["attributes"]["agent.slot"] == "default"
-    # The log line states only what is known, so an unknown model is absent
-    # rather than reported as the slot name.
-    assert "cli_agent 'default' finished:" in caplog.text
-    assert "model=" not in caplog.text
+    monkeypatch.setattr(window, "call", refuse)
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+
+    with caplog.at_level(logging.WARNING, logger="guildbotics"):
+        result = await brain.run_with_execution_details(
+            "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+        )
+
+    assert (result.returncode, result.stdout) == (0, "done")
+    assert "The call is too large." in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_a_failed_turn_records_a_failed_span_without_effective_values(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ):
-    span_records: list[dict] = []
-
     async def failing_turn(self, *, input, **_kwargs):
         raise RuntimeError("provider is unreachable")
 
@@ -355,27 +364,24 @@ async def test_a_failed_turn_records_a_failed_span_without_effective_values(
         "p1",
         {"default": cli_agent.ExecutableInfo(adapter="claude")},
     )
-    monkeypatch.setattr(
-        brain_util,
-        "record_span_summary",
-        lambda **kwargs: span_records.append(kwargs),
-    )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     with pytest.raises(RuntimeError):
         await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
 
-    assert span_records[0]["status"] == "failed"
-    assert span_records[0]["model"] == ""
-    assert span_records[0]["effort"] == ""
-    assert span_records[0]["attributes"]["agent.slot"] == "default"
+    (span,) = _spans(window)
+    assert (span.status, span.model, span.effort, span.slot) == (
+        "failed",
+        "",
+        "",
+        "default",
+    )
 
 
 @pytest.mark.asyncio
 async def test_execution_details_carry_the_effective_model_and_effort(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ):
-    span_records: list[dict] = []
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(
@@ -386,11 +392,6 @@ async def test_execution_details_carry_the_effective_model_and_effort(
             effort="low",
         ),
     )
-    monkeypatch.setattr(
-        brain_util,
-        "record_span_summary",
-        lambda **kwargs: span_records.append(kwargs),
-    )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     result = await brain.run_with_execution_details(
@@ -398,16 +399,21 @@ async def test_execution_details_carry_the_effective_model_and_effort(
     )
 
     assert (result.model, result.effort) == ("gpt-5-codex", "low")
-    assert span_records[0]["model"] == "gpt-5-codex"
-    assert span_records[0]["effort"] == "low"
+    (span,) = _spans(window)
+    assert (span.model, span.effort) == ("gpt-5-codex", "low")
 
 
 @pytest.mark.asyncio
-async def test_asking_response_omits_log_reference_when_output_dir_unset(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("trace_id", ["", "trace-7"])
+async def test_an_asking_response_points_at_the_commands_trace(
+    monkeypatch, tmp_path, window, trace_id
 ):
+    """A member who asks back leaves the command's trace for the reader to
+    look into, when the command has one."""
     from guildbotics.intelligences.common import AgentResponse
+    from guildbotics.utils.i18n_tool import t
 
+    enter_command(monkeypatch, window, person_id="p1", trace_id=trace_id)
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(
@@ -426,8 +432,12 @@ async def test_asking_response_omits_log_reference_when_output_dir_unset(
 
     assert isinstance(output, AgentResponse)
     assert output.status == AgentResponse.ASKING
-    assert output.message == "need input"
-    assert "See:" not in output.message
+    reference = (
+        "\n\n" + t("intelligences.cli_agent.trace_reference", trace_id=trace_id)
+        if trace_id
+        else ""
+    )
+    assert output.message == f"need input{reference}"
 
 
 @pytest.mark.parametrize(
@@ -451,104 +461,9 @@ def test_cursor_relation_orders_numeric_and_rejects_unorderable(
 
 
 @pytest.mark.asyncio
-async def test_read_only_native_turn_takes_no_person_execution_lease(
-    monkeypatch, tmp_path
+async def test_a_default_effort_turn_states_no_settings(
+    monkeypatch, tmp_path, window
 ) -> None:
-    from guildbotics.runtime.person_lease import PersonExecutionLease
-
-    captured: dict = {}
-
-    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
-        captured["context"] = context
-        captured["command"] = running_command()
-        return cli_agent.CliAgentExecutionResult(
-            stdout="answer", stderr="", returncode=0
-        )
-
-    monkeypatch.setattr(
-        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
-    )
-    workspace_root = tmp_path / "workspace"
-    isolated_cwd = tmp_path / "data" / "workspaces" / "p1"
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(workspace_root))
-    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
-    brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
-
-    # A routine already owns this member. A read-only assistant turn has to stay
-    # usable anyway: that is exactly when its logs are worth asking about.
-    lease = PersonExecutionLease("p1", tmp_path)
-    lease.acquire(source="routine", command="ticket", work_id="work-1")
-    declared = CommandAccess(read_only=True, inspects=frozenset({"diagnostics"}))
-    try:
-        async with command_at(isolated_cwd, {"claude"}, declared, person_id="p1"):
-            result = await brain._execute(
-                input="why did it fail?",
-                cwd=isolated_cwd,
-                kwargs={
-                    "session_state": {
-                        "agent_execution_context": {
-                            "run_id": "run-9",
-                            "work_kind": "troubleshooting",
-                            "workspace_data_root": str(tmp_path),
-                        }
-                    }
-                },
-                effort=cli_agent.EffortDecision(),
-            )
-    finally:
-        lease.release()
-
-    assert not result.error_category
-    assert result.stdout == "answer"
-    assert captured["command"].contract.read_only is True
-    assert captured["command"].access.inspects == frozenset({"diagnostics"})
-    assert captured["context"].lease is None
-    assert captured["context"].cwd == isolated_cwd
-
-
-@pytest.mark.asyncio
-async def test_a_turn_cannot_declare_itself_read_only(monkeypatch, tmp_path) -> None:
-    """Read-only is what the command declares, not what a turn asks for: a
-    turn of a command that declares nothing takes the lease and may write."""
-    captured: dict = {}
-
-    async def fake_execute_native_turn(self, *, input, configured, context, **_kwargs):
-        captured["context"] = context
-        captured["command"] = running_command()
-        return cli_agent.CliAgentExecutionResult(
-            stdout="answer", stderr="", returncode=0
-        )
-
-    monkeypatch.setattr(
-        cli_agent.CliAgentBrain, "_execute_native_turn", fake_execute_native_turn
-    )
-    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
-    brain.executable_info = cli_agent.ExecutableInfo(adapter="claude-stream-json")
-
-    async with command_at(tmp_path, {"claude"}, person_id="p1"):
-        await brain._execute(
-            input="hello",
-            cwd=tmp_path,
-            kwargs={
-                "session_state": {
-                    "agent_execution_context": {
-                        "run_id": "run-9",
-                        "workspace_data_root": str(tmp_path),
-                        "read_only": True,
-                        "inspects": ["diagnostics"],
-                    }
-                }
-            },
-            effort=cli_agent.EffortDecision(),
-        )
-
-    assert captured["command"].contract.read_only is False
-    assert captured["command"].access.inspects == frozenset()
-    assert captured["context"].lease is not None
-
-
-@pytest.mark.asyncio
-async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -> None:
     """`default` cancels the frontmatter but still imposes nothing downstream.
 
     Stating the level here would give the turn a non-empty fingerprint, which
@@ -572,36 +487,30 @@ async def test_a_default_effort_turn_states_no_settings(monkeypatch, tmp_path) -
         effort={"high": {"model": "big-model"}},
     )
 
-    async with command_at(
-        tmp_path, {"claude"}, CommandAccess(read_only=True), person_id="p1"
-    ):
-        await brain._execute(
-            input="hello",
-            cwd=tmp_path,
-            kwargs={
-                "session_state": {
-                    "effort": "default",
-                    "agent_execution_context": {
-                        "run_id": "run-9",
-                        "work_kind": "troubleshooting",
-                        "workspace_data_root": str(tmp_path),
-                    },
-                }
-            },
-            effort=brain._resolve_provider_effort(
-                {"session_state": {"effort": "default"}}
-            ),
-        )
+    await brain._execute(
+        input="hello",
+        cwd=tmp_path,
+        kwargs={
+            "session_state": {
+                "effort": "default",
+                "agent_execution_context": {
+                    "run_id": "run-9",
+                    "work_kind": "troubleshooting",
+                },
+            }
+        },
+        effort=brain._resolve_provider_effort({"session_state": {"effort": "default"}}),
+        records=cli_agent._TurnRecords(window),
+    )
 
     context = captured["context"]
     assert context.effort == ""
     assert context.provider_options == {}
-    assert captured["context"].lease is None
 
 
 @pytest.mark.asyncio
 async def test_an_unmapped_effort_level_is_not_claimed_as_the_turns_effort(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ) -> None:
     """A level with an empty overlay imposed nothing of its own.
 
@@ -633,12 +542,11 @@ async def test_an_unmapped_effort_level_is_not_claimed_as_the_turns_effort(
                 "agent_execution_context": {
                     "run_id": "run-9",
                     "work_kind": "troubleshooting",
-                    "workspace_data_root": str(tmp_path),
-                    "read_only": True,
                 },
             }
         },
         effort=brain._resolve_provider_effort({"session_state": {}}),
+        records=cli_agent._TurnRecords(window),
     )
 
     context = captured["context"]
@@ -805,24 +713,18 @@ async def test_frontmatter_effort_reaches_the_adapter_settings(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_request_diagnostics_record_effort_keys_not_values(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ) -> None:
-    io_records: list[tuple[str, dict]] = []
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
         effort={"high": {"token": "secret-value"}},
     )
-    monkeypatch.setattr(
-        cli_agent,
-        "record_correlated_io",
-        lambda *, io_type, payload: io_records.append((io_type, payload)),
-    )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger(), effort="high")
     await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
 
-    effort_payload = io_records[0][1]["effort"]
+    effort_payload = _io(window)[0].payload["effort"]
     assert effort_payload["resolved"] == "high"
     assert effort_payload["applied_keys"] == ["token"]
     assert "secret-value" not in str(effort_payload)
@@ -925,40 +827,30 @@ def test_a_tool_definition_network_block_is_ignored(monkeypatch, tmp_path) -> No
 
 @pytest.mark.asyncio
 async def test_a_turn_the_provider_answered_records_the_credential_as_verified(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ):
-    """The counterpart of the refusal: the same member and tool, so the
-    credential alert the refusal opened closes on the next successful turn."""
+    """The counterpart of the refusal: the same tool, so the credential alert
+    the refusal opened closes on the next successful turn."""
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
-    )
-    recorded: list[dict] = []
-    monkeypatch.setattr(
-        cli_agent, "record_correlated_event", lambda **kwargs: recorded.append(kwargs)
     )
 
     brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
     await brain.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
 
-    verified = [r for r in recorded if r["event_type"] == "credential.verified"]
-    assert [r["payload"] for r in verified] == [
-        {"provider": "cli_agent", "cli_agent": "claude", "person_id": "p1"}
+    assert [(entry.tool, entry.failed) for entry in window.credentials()] == [
+        ("claude", False)
     ]
-    assert verified[0]["person_id"] == "p1"
 
 
 @pytest.mark.asyncio
 async def test_the_workflow_path_records_the_credential_outcome_too(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, window
 ):
     """`run_with_execution_details` leaves the judgement to the workflow but
     still records what the turn proved, so a Slack or ticket turn opens and
     closes the credential alert like a command does."""
-    recorded: list[dict] = []
-    monkeypatch.setattr(
-        cli_agent, "record_correlated_event", lambda **kwargs: recorded.append(kwargs)
-    )
     _native_brain(
         monkeypatch,
         cli_agent.CliAgentExecutionResult(
@@ -972,83 +864,49 @@ async def test_the_workflow_path_records_the_credential_outcome_too(
     await brain.run_with_execution_details(
         "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
     )
-    assert [
-        r["event_type"] for r in recorded if r["event_type"].startswith("credential.")
-    ] == ["credential.failed"]
-
-    recorded.clear()
-    _native_brain(
-        monkeypatch,
-        cli_agent.CliAgentExecutionResult(stdout="", stderr="boom", returncode=2),
-    )
-    await brain.run_with_execution_details(
-        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
-    )
-    # A failure that is not a refusal says nothing about the credentials.
-    assert [r for r in recorded if r["event_type"].startswith("credential.")] == []
+    assert [entry.failed for entry in window.credentials()] == [True]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "category,returncode,expected",
     [
-        ("authentication", 1, True),
-        ("network", 1, False),
-        ("rate_limited", 1, False),
-        ("", 2, False),
-        ("", 0, False),
+        ("authentication", 1, [True]),
+        ("network", 1, []),
+        ("rate_limited", 1, []),
+        ("", 2, []),
+        ("", 0, [False]),
     ],
 )
-async def test_structured_outcomes_are_shared_across_members(
-    monkeypatch, tmp_path, category, returncode, expected
+async def test_only_what_a_turn_proves_of_its_login_is_recorded(
+    monkeypatch, tmp_path, window, category, returncode, expected
 ):
-    from guildbotics.intelligences.agent_environment import provider_state
-    from guildbotics.intelligences.cli_agents import cli_agent_info
-
-    tool = cli_agent_info("claude")
-    result = cli_agent.CliAgentExecutionResult(
-        stdout="done", stderr="", returncode=returncode, error_category=category
-    )
-    _native_brain(monkeypatch, result)
-    first = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
-    await first.run_with_execution_details(
-        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
-    )
-    assert provider_state.authentication_failed(tool) is expected
-    assert not provider_state.authentication_failed(cli_agent_info("codex"))
-
-    # Unrelated errors do not erase a known failure either.
-    provider_state.record_authentication_outcome(tool, failed=True)
-    await first.run_with_execution_details(
-        "again", cwd=tmp_path, session_state=_read_only_state(tmp_path)
-    )
-    assert provider_state.authentication_failed(tool) is (returncode != 0)
-
-    # A successful turn by another member clears the device/tool outcome.
-    monkeypatch.setitem(
-        cli_agent.person_cli_agent_mapping,
-        "p2",
-        {"default": cli_agent.ExecutableInfo(adapter="claude")},
-    )
+    """A refused login fails the tool's login, an answer verifies it, and any
+    other failure says nothing about it."""
     _native_brain(
         monkeypatch,
-        cli_agent.CliAgentExecutionResult(stdout="ok", stderr="", returncode=0),
+        cli_agent.CliAgentExecutionResult(
+            stdout="done", stderr="", returncode=returncode, error_category=category
+        ),
     )
-    second = cli_agent.CliAgentBrain("p2", "x", logger=_test_logger())
-    await second.run("hello", cwd=tmp_path, session_state=_read_only_state(tmp_path))
-    assert not provider_state.authentication_failed(tool)
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger())
+
+    await brain.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state=_read_only_state(tmp_path)
+    )
+
+    assert [entry.failed for entry in window.credentials()] == expected
 
 
 @pytest.mark.asyncio
-async def test_a_turn_records_what_its_environment_confines_it_to(
-    tmp_path, monkeypatch
+async def test_a_turn_says_where_it_works_for_the_host_to_record_its_confinement(
+    tmp_path, monkeypatch, window
 ):
-    """Whatever provider runs it, the turn's start names its command's
-    contract, so a read-only turn is recorded as one without asking the
-    adapter."""
+    """The turn's start names where it works; what the environment confines
+    it to there is the host's to record, whatever provider runs it."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
-    from guildbotics.intelligences.agent_runtime import diagnostics, registry
+
     from guildbotics.intelligences.agent_runtime.models import (
         AgentTerminalResult,
         ConversationKey,
@@ -1062,45 +920,37 @@ async def test_a_turn_records_what_its_environment_confines_it_to(
                 output="answer", events=(), provider_session_id="s"
             )
         ),
+        close=AsyncMock(),
     )
-
-    async def native_adapter(*_args):
-        return adapter
-
-    monkeypatch.setattr(registry, "get_native_adapter", native_adapter)
-    recorded = []
-    monkeypatch.setattr(
-        diagnostics, "record_agent_event", lambda event, *_: recorded.append(event)
-    )
+    monkeypatch.setattr(cli_agent, "create_native_adapter", lambda _name: adapter)
     brain = cli_agent.CliAgentBrain("aiko", "troubleshoot", _test_logger())
     context = cli_agent.AgentExecutionContext(
         person_id="aiko",
         run_id="turn",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("aiko", "grok", "troubleshooting", "c1"),
     )
 
-    async with command_at(tmp_path, {"grok"}, CommandAccess(read_only=True)):
-        await brain._execute_native_turn(
-            input="why?",
-            configured={},
-            context=context,
-            adapter_name="grok",
-            run_id="t",
-        )
+    records = cli_agent._TurnRecords(window)
+    await brain._execute_native_turn(
+        input="why?",
+        configured={},
+        context=context,
+        adapter_name="grok",
+        records=records,
+    )
+    await records.flush()
 
-    started = next(event for event in recorded if event.name == "started")
-    policy = started.details["requested_policy"]
-    assert policy["read_only"] is True
-    assert policy["filesystem"]["working_directory"] == "<workspace>"
+    started = next(event for event in window.events() if event.name == "started")
+    assert started.details[TURN_WORKING_DIRECTORY] == str(tmp_path)
+    assert "requested_policy" not in started.details
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refused", ["", "log in again"])
 @pytest.mark.parametrize("tool_says", ["answer", "failure", "crash"])
 async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
-    tmp_path, monkeypatch, refused, tool_says
+    tmp_path, monkeypatch, window, refused, tool_says
 ):
     """The tool meets a refused login only in what the gateway answers, and
     reports it as it likes -- as an answer, or as some other failure, or
@@ -1109,7 +959,6 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     goes along with it."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
-    from guildbotics.intelligences.agent_runtime import registry
     from guildbotics.intelligences.agent_runtime.models import (
         AgentRuntimeError,
         AgentRuntimeErrorCategory,
@@ -1140,32 +989,27 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         applied_settings=lambda _: {}, run_turn=run_turn, close=AsyncMock()
     )
 
-    async def native_adapter(*_args):
-        return adapter
-
-    monkeypatch.setattr(registry, "get_native_adapter", native_adapter)
+    monkeypatch.setattr(cli_agent, "create_native_adapter", lambda _name: adapter)
     brain = cli_agent.CliAgentBrain("judge", "chat_decision", _test_logger())
     context = cli_agent.AgentExecutionContext(
         person_id="judge",
         run_id="turn",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
     )
 
-    async with command_at(tmp_path, {"copilot"}, person_id="judge"):
-        turn = brain._execute_native_turn(
-            input="work",
-            configured={},
-            context=context,
-            adapter_name="copilot",
-            run_id="t",
-        )
-        if tool_says == "crash" and not refused:
-            with pytest.raises(TimeoutError):
-                await turn
-            return
-        result = await turn
+    turn = brain._execute_native_turn(
+        input="work",
+        configured={},
+        context=context,
+        adapter_name="copilot",
+        records=cli_agent._TurnRecords(window),
+    )
+    if tool_says == "crash" and not refused:
+        with pytest.raises(TimeoutError):
+            await turn
+        return
+    result = await turn
 
     said = {
         "answer": "Error: Execution failed",

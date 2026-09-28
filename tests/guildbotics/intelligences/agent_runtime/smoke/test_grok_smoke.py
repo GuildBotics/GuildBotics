@@ -2,7 +2,8 @@
 
 Skipped unless ``GUILDBOTICS_GROK_SMOKE=1``. Each turn runs the Grok Build CLI
 pinned in the snapshot with the login saved here, in the microVM of a command
-started as the host starts one (see ``conftest.py`` for what that takes). The
+started as the host starts one, driven from inside it (``turns.py``; see
+``conftest.py`` for what the device takes). The
 turns send minimal prompts, so they consume account quota and never run in
 normal CI. Nothing they observe is written to a fixture: prompts, responses,
 credentials and session history stay in the run output only.
@@ -16,16 +17,12 @@ import os
 import pytest
 
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
-from guildbotics.intelligences.agent_runtime.models import (
-    AgentEvent,
-    AgentExecutionContext,
-    ConversationKey,
-    ConversationRecord,
-    ResumePolicy,
-)
-from tests.guildbotics.intelligences.agent_runtime.contract_doubles import command_at
+from guildbotics.intelligences.agent_runtime.models import AgentEvent
+from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
+from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_GROK_SMOKE") != "1",
         reason="Set GUILDBOTICS_GROK_SMOKE=1 to run the real Grok Build smoke test.",
@@ -35,17 +32,6 @@ pytestmark = [
 
 TOOL = "grok"
 PROMPT = "Reply with the single word OK and nothing else."
-
-
-def _context(tmp_path) -> AgentExecutionContext:
-    return AgentExecutionContext(
-        person_id="smoke",
-        run_id="smoke-run",
-        cwd=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("smoke", "grok", "manual", "smoke"),
-        resume_policy=ResumePolicy.AUTO,
-    )
 
 
 def _report(title: str, events: list[AgentEvent]) -> None:
@@ -65,67 +51,50 @@ def _report(title: str, events: list[AgentEvent]) -> None:
         )
 
 
-async def test_real_grok_prompt_then_exact_reload(tmp_path) -> None:
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    first_events: list[AgentEvent] = []
-
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = GrokAcpAdapter()
-        try:
-            first = await adapter.run_turn(
-                PROMPT, context, conversation, first_events.append
-            )
-            _report("first turn", first_events)
-            print("stop/finish:", first.finish_reason, "usage:", first.usage)
-            # The reply is the answer stream only: reasoning must not leak into it.
-            assert first.output.strip() == "OK", first.output
-            assert first.provider_session_id
-            assert first.usage["input_tokens"] > 0
-            assert first.usage["output_tokens"] > 0
-        finally:
-            await adapter.close()
+async def test_real_grok_prompt_then_exact_reload(tmp_path, monkeypatch) -> None:
+    ((first, first_events),) = await run_turns(
+        monkeypatch, tmp_path, TOOL, GrokAcpAdapter, [PROMPT]
+    )
+    _report("first turn", first_events)
+    assert not isinstance(first, Exception), first
+    print("stop/finish:", first.finish_reason, "usage:", first.usage)
+    # The reply is the answer stream only: reasoning must not leak into it.
+    assert first.output.strip() == "OK", first.output
+    assert first.provider_session_id
+    assert first.usage["input_tokens"] > 0
+    assert first.usage["output_tokens"] > 0
 
     # A later command, in a microVM of its own, is what makes the reload real:
     # the session id on the conversation and the state the device keeps for
     # the tool are all the next turn has to go on.
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = GrokAcpAdapter()
-        try:
-            conversation.provider_session_id = first.provider_session_id
-            second_events: list[AgentEvent] = []
-            second = await adapter.run_turn(
-                "Reply with the single word AGAIN.",
-                context,
-                conversation,
-                second_events.append,
-            )
-            _report("second turn (session/load)", second_events)
-            assert second.output.strip() == "AGAIN", second.output
-            assert second.provider_session_id == first.provider_session_id
-            replayed = [
-                event for event in second_events if event.name == "history_rehydrated"
-            ]
-            print("rehydration:", [event.details for event in replayed])
-            assert replayed, "session/load must report the replay it absorbed"
-            unhandled = [
-                event.details["unhandled"]
-                for event in second_events
-                if event.name == "protocol_extensions"
-            ]
-            print("unhandled extension channels:", unhandled)
-            # A channel that carries token usage must be handled, not summarized.
-            assert not [
-                key for entry in unhandled for key in entry if "turn_completed" in key
-            ]
-            # Nothing from the first answer may be re-emitted on the second turn.
-            # Reasoning is left out: it streams in tokens, and this turn's own
-            # may well name the word the first one answered.
-            assert not [
-                event
-                for event in second_events
-                if event.name != "thinking"
-                and event.message.strip() == first.output.strip()
-            ]
-        finally:
-            await adapter.close()
+    ((second, second_events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        GrokAcpAdapter,
+        ["Reply with the single word AGAIN."],
+        session=first.provider_session_id,
+    )
+    _report("second turn (session/load)", second_events)
+    assert not isinstance(second, Exception), second
+    assert second.output.strip() == "AGAIN", second.output
+    assert second.provider_session_id == first.provider_session_id
+    replayed = [event for event in second_events if event.name == "history_rehydrated"]
+    print("rehydration:", [event.details for event in replayed])
+    assert replayed, "session/load must report the replay it absorbed"
+    unhandled = [
+        event.details["unhandled"]
+        for event in second_events
+        if event.name == "protocol_extensions"
+    ]
+    print("unhandled extension channels:", unhandled)
+    # A channel that carries token usage must be handled, not summarized.
+    assert not [key for entry in unhandled for key in entry if "turn_completed" in key]
+    # Nothing from the first answer may be re-emitted on the second turn.
+    # Reasoning is left out: it streams in tokens, and this turn's own
+    # may well name the word the first one answered.
+    assert not [
+        event
+        for event in second_events
+        if event.name != "thinking" and event.message.strip() == first.output.strip()
+    ]

@@ -9,7 +9,10 @@ from guildbotics.integrations.github.github_utils import (
     GitHubAppAuth,
     get_github_account_type,
 )
-from guildbotics.intelligences.agent_environment.status import device_status
+from guildbotics.intelligences.agent_environment.status import (
+    DeviceStatus,
+    device_status,
+)
 from guildbotics.intelligences.cli_agents import resolve_default_cli_agent
 from guildbotics.intelligences.llm_providers import provider_env_keys
 from guildbotics.utils.env_loader import workspace_secret_store
@@ -52,8 +55,10 @@ class VerifyService:
             *self._check_team(team, team_error),
         ]
         if team is not None:
+            device = device_status()
             checks.extend(self._check_llm_provider(team, env))
-            checks.extend(self._check_cli_agent())
+            checks.append(self._check_environment(device))
+            checks.extend(self._check_cli_agent(device))
             checks.extend(self._check_github_credentials(team, env))
 
         errors = [check for check in checks if check.status == "error"]
@@ -169,7 +174,17 @@ class VerifyService:
             )
         ]
 
-    def _check_cli_agent(self) -> list[VerifyCheck]:
+    def _check_environment(self, device: DeviceStatus) -> VerifyCheck:
+        # Every command runs in the isolated agent environment, whether or
+        # not it runs an AI CLI tool.
+        return self._check(
+            "agent_environment",
+            not device.refusal,
+            "The isolated agent environment can run commands on this device.",
+            device.refusal,
+        )
+
+    def _check_cli_agent(self, device: DeviceStatus) -> list[VerifyCheck]:
         tool = resolve_default_cli_agent()
         if not tool:
             return [
@@ -181,8 +196,9 @@ class VerifyService:
             ]
 
         # The tool runs inside the isolated agent environment, so what decides
-        # is whether a turn of it can start there, not the host PATH.
-        refusal = device_status().turn_refusal(tool)
+        # is whether it can start a turn there, not the host PATH; what the
+        # device refuses is the environment check's to say.
+        refusal = device.tool(tool).refusal
         return [
             self._check(
                 "cli_agent_environment",

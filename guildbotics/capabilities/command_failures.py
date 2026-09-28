@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from guildbotics.commands.errors import CommandFailedError
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 
 #: What ends a command run without the run being defective: stopping the
@@ -36,4 +37,8 @@ def command_failure_payload(exc: BaseException) -> dict[str, str]:
         code = "cli_agent_authentication"
     else:
         code = ""
-    return {"error_type": type(exc).__name__, "code": code}
+    # A failure in the command's environment is named by what it raised there.
+    error_type = (
+        exc.error_type if isinstance(exc, CommandFailedError) else type(exc).__name__
+    )
+    return {"error_type": error_type, "code": code}

@@ -35,7 +35,9 @@ from guildbotics.intelligences.agent_environment.toolchain import (
     EnvironmentResources,
     ToolchainDeclaration,
 )
-from guildbotics.intelligences.agent_runtime.usage import CliAgentUsageSnapshot
+from guildbotics.intelligences.agent_runtime.usage_snapshots import (
+    CliAgentUsageSnapshot,
+)
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
@@ -406,11 +408,12 @@ class CommandRequirement(BaseModel):
     """What a command needs, and whether this device has it.
 
     ``message`` is why it is not met when the backend knows a reason more
-    specific than the kind (for ``cli_agent``, the agent environment's
-    refusal), and "" otherwise.
+    specific than the kind (for ``environment``, the device's refusal; for
+    ``cli_agent``, the tool's), and "" otherwise. Every command needs the
+    ``environment``: it runs there.
     """
 
-    kind: Literal["github", "slack", "cli_agent", "llm"]
+    kind: Literal["environment", "github", "slack", "cli_agent", "llm"]
     satisfied: bool
     message: str = ""
 

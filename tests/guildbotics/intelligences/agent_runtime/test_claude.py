@@ -12,7 +12,7 @@ from guildbotics.intelligences.agent_runtime.claude import (
     _decode_events,
     _session_limit_error,
 )
-from guildbotics.intelligences.agent_runtime.member_broker import (
+from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.agent_runtime.models import (
@@ -99,7 +99,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         **overrides,
     )

@@ -43,6 +43,11 @@ class CommandGuest(Protocol):
         """Where the host ``host`` path is inside the environment."""
         ...
 
+    def python(self, module: str, *args: str) -> list[str]:
+        """The command line that runs GuildBotics' own ``module`` with
+        ``args`` in the environment, with its own Python and code."""
+        ...
+
     def remaining(self) -> float:
         """Seconds the invocation has left.
 

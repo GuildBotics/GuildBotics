@@ -678,7 +678,7 @@ async def test_usage_result_is_shared_by_card_and_alerts(
 
     from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.runtime import AppRuntime
-    from guildbotics.intelligences.agent_runtime import usage
+    from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
     from guildbotics.observability.diagnostics_store import DiagnosticsStore
     from guildbotics.utils.i18n_tool import set_language
 
@@ -702,8 +702,8 @@ async def test_usage_result_is_shared_by_card_and_alerts(
             raise usage.CliAgentUsageError(
                 "provider detail belongs only in diagnostics"
             )
-        return usage.CliAgentUsageSnapshot(
-            agent=agent, windows=[usage.CliAgentUsageWindow("primary", 12)]
+        return usage_snapshots.CliAgentUsageSnapshot(
+            agent=agent, windows=[usage_snapshots.CliAgentUsageWindow("primary", 12)]
         )
 
     monkeypatch.setitem(usage.CLI_AGENT_USAGE_READERS, agent, read)
@@ -763,7 +763,7 @@ async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
     from guildbotics.app_api.events import EventBus
     from guildbotics.app_api.errors import AppApiError
     from guildbotics.app_api.runtime import AppRuntime
-    from guildbotics.intelligences.agent_runtime import usage
+    from guildbotics.intelligences.agent_runtime import usage, usage_snapshots
 
     runtime = AppRuntime(EventBus())
     monkeypatch.setattr(
@@ -774,8 +774,8 @@ async def test_recheck_only_refreshes_the_selected_tool(monkeypatch, home):
 
         async def read(name=name):
             calls.append(name)
-            return usage.CliAgentUsageSnapshot(
-                agent=name, windows=[usage.CliAgentUsageWindow("primary", 12)]
+            return usage_snapshots.CliAgentUsageSnapshot(
+                agent=name, windows=[usage_snapshots.CliAgentUsageWindow("primary", 12)]
             )
 
         monkeypatch.setitem(usage.CLI_AGENT_USAGE_READERS, name, read)

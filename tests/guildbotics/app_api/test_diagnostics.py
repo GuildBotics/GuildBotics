@@ -448,6 +448,41 @@ async def test_llm_live_call_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_llm_live_call_asks_the_members_model_through_its_brain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The check is the brain's own ``run()``: the model of the member's slot
+    is asked, on the host."""
+    from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
+    from tests.guildbotics.intelligences.brains.test_inference import _Model
+
+    _patch_provider(monkeypatch, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    model = _Model(
+        monkeypatch,
+        {"content": "OK", "author": "alice", "author_type": "AI"},
+        person_id="alice",
+    )
+    stub = _StubBrain(_CliResult())
+
+    def get_brain(self: _StubContext, name: str, config: Any, extra: Any) -> Any:
+        if name != "functions/talk_as":
+            return stub
+        return SimpleBrainFactory().create_brain(
+            self.person.person_id, name, "en", self.logger, config, extra
+        )
+
+    monkeypatch.setattr(_StubContext, "get_brain", get_brain)
+    context = _StubContext(team=_team([_person("alice", is_active=True)]))
+
+    response = await _run(context)
+
+    assert _by_code(response)["llm_live_call"].status == "ok"
+    (asked,) = model.asked
+    assert "Reply with exactly OK." in asked["description"]
+
+
+@pytest.mark.asyncio
 async def test_llm_live_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_provider(monkeypatch, "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")

@@ -107,19 +107,29 @@ npm run e2e
 
 `npm run e2e` は最初に Chromium の起動と page 作成を preflight し、成功した場合だけ backend（temp workspace）と Vite を自動起動 → headless chromium で以下の journey を実行 → プロセスを停止します（preflight は `desktop/e2e/preflight.mjs`、ライフサイクルは `desktop/e2e/start-stack.mjs`、構成は `desktop/playwright.config.ts`）。Chromium を起動できない sandbox では、journey を開始せず infrastructure failure として報告します。
 
-| spec                      | journey                                                                                                                                                                                       |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `e2e/setup.spec.ts`       | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み                                                                                                                                   |
-| `e2e/service.spec.ts`     | ③ scheduler / events を start → running → stop                                                                                                                                                |
-| `e2e/commands.spec.ts`    | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタント Drawer の開閉、自力作成 → source 編集 → 保存して実行（`/commands/files` + `/commands/run`）→ 実 file 反映 + `/events` ストリーム |
-| `e2e/members.spec.ts`     | ② member 追加 → `person.yml` 実永続                                                                                                                                                           |
-| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                               |
-| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                               |
+| spec                      | journey                                                                                                                                                                                                                                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `e2e/setup.spec.ts`       | ① 初回 setup → 作成 → backend が `project.yml` を実書き込み                                                                                                                                                                                                                                    |
+| `e2e/service.spec.ts`     | ③ scheduler / events を start → running → stop                                                                                                                                                                                                                                                 |
+| `e2e/commands.spec.ts`    | ④ コマンド編集: 新規作成ダイアログのAI／自力切替、AIアシスタント Drawer の開閉、自力作成 → source 編集 → 保存（`/commands/files`）→ 実 file 反映。隔離環境を持てないこのスタックの端末では、要件「隔離環境」が理由つきで実行を止める                                                           |
+| `e2e/members.spec.ts`     | ② member 追加 → `person.yml` 実永続                                                                                                                                                                                                                                                            |
+| `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                                                                                                                                |
+| `e2e/decisions.spec.ts`   | チャット判定の共通 brain 割り当て → 保存 → reload 後も復元                                                                                                                                                                                                                                     |
+| `e2e/sync.spec.ts`        | ⑦ 既存ワークスペースの同期を有効化 → 複製の取得、⑧ Hub に先に届いた変更が勝ち後着は退避、⑨ 別の場所に再構築した Hub への再接続、⑩ Hub へ直接 push された変更の取り込み                                                                                                                         |
+| `e2e/environment.spec.ts` | ⑪ 実 microVM でコマンドを実行: 自力作成 → source 保存 → 画像の貼り付け（隔離環境の綴りのパス）→ 実行 → `/events` で成功と出力が届く。`.sh` の step は貼り付けたファイルを読み、出力を握ったままのプロセスを残してもコマンドは終わる。`GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ走る |
+| `e2e/failure.spec.ts`     | ⑥ backend down → Bootstrap error → 復帰 → retry                                                                                                                                                                                                                                                |
 
 補足:
 
 - レポート / 成果物は `desktop/playwright-report/` と `desktop/test-results/`（いずれも `.gitignore` 済み）。
 - 各スタックの backend は temp workspace / temp HOME で動きます。harness は temp HOME のエージェント隔離環境の runtime 置き場（`~/.guildbotics/data/msb`）にただのファイルを置き、その端末を「runtime を置けない端末」にします。製品はこの状態を fail-closed に扱うので、service を start しても snapshot の build（container image の取得）は始まらず、`brain: agent` の journey（⑤のトラブルシューティングAI）は turn の開始前に端末の拒否として失敗します。加えて harness は AI CLIツール（`codex` など）を即失敗するスタブで置き換えた bin ディレクトリを PATH 先頭に置き、その呼び出しログが空のままであることで実バイナリが一度も起動していないことを spec が確認します。
+- コマンドはすべて隔離環境の中で動くので、コマンドを実際に実行する ⑪ だけは、隔離環境を持てる端末で、ready なワークスペースを指定して走らせます。harness は `environment` スタックの temp HOME の runtime 置き場をその端末の runtime へ、temp workspace の snapshot をそのワークスペースの ready な snapshot へリンクし、宣言（`intelligences/agent_environment.yml`）を複製します。build はしません。Windows では隔離環境が OS の一時ディレクトリの中をマウントできないため、このスタックの temp workspace / temp HOME は `~/.guildbotics-e2e` に置き、次の実行の開始時に消します（リンク先はたどりません）。指定しなければスタックを起動せず、journey は理由つきで skip します（CI はこの形）。
+
+  ```bash
+  cd desktop
+  GUILDBOTICS_E2E_ENVIRONMENT_FROM=/path/to/workspace npm run e2e
+  ```
+
 - E2E は通常 push CI には含めません。`.github/workflows/desktop-e2e.yml` の専用 workflow が、関連ファイル（`desktop/**`、`guildbotics/**`、`pyproject.toml`、`uv.lock`、workflow 自体）を変更する pull request、手動実行、nightly で実行します。workflow はすべての pull request で起動し、関連ファイルの変更が無ければ Playwright を省略します。required check は常に報告される `Desktop E2E gate` だけで、E2E が不要なら成功、必要なら head/base の両方が成功した場合だけ成功します。pull request と手動実行では head/base を別ジョブで検証するため、同一 workflow 上で結果を比較できます。手動実行では `head_ref` と `base_ref` に branch、tag、または commit SHA を指定します（テスト戦略の全体は `AGENTS.md`「テスト実装の考え方」参照）。
 - 接続先 host / ポートは `GUILDBOTICS_E2E_*` 環境変数で上書き可能（既定値は `playwright.config.ts`）。
 - 各スタックの Local API token は harness が起動ごとにランダム生成し、stack context file（`<OS tmpdir>/guildbotics-e2e/<stack>.json`、0600）経由で spec へ渡します。CORS は各スタックの Vite origin だけを許可します。
@@ -331,13 +341,12 @@ CI（[../.github/workflows/desktop-macos.yml](../.github/workflows/desktop-macos
 
 ## 6. トラブルシュート
 
-| 症状                                                                  | 原因 / 対処                                                                                                                                                                                                                                  |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。                                                                                                                                                                                     |
-| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics/` に `guildbotics-app-api` / `guildbotics` / `build-id` が存在するか確認。                                                                                                            |
+| 症状                                                                  | 原因 / 対処                                                                                                                                              |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `feature 'edition2024' is required` / `idna_adapter` の download 失敗 | Cargo が古い。rustup の stable 1.88+ を使う（§1 参照）。                                                                                                 |
+| `tauri build` で sidecar が見つからない                               | §2.1 を実行し、`desktop/src-tauri/binaries/guildbotics/` に `guildbotics-app-api` / `guildbotics` / `build-id` が存在するか確認。                        |
 | PyInstaller 実行時に `ModuleNotFoundError`                            | 動的 import されるモジュールが収集されていない。[sidecar/guildbotics.spec](sidecar/guildbotics.spec) の `hiddenimports` / `collect_all` 対象に追加する。 |
-| GUI で PDF 変換（`to_pdf`）が使えない                                 | v1 既知の制約。sidecar は `weasyprint` を同梱しない。PDF が必要な場合は native dependency を入れた CLI を使う。                                                                                                                              |
-| 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                                                                                                        |
-| Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                                                                                                            |
-| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/programs` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                                                                                                                                          |
-| `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                                                                                                             |
+| 「開発元を確認できません」で起動できない                              | §4 の初回起動手順（右クリック → 開く / `xattr` で quarantine 解除）。                                                                                    |
+| Linux で WebKitGTK が見つからず build / 起動できない                  | §1 の Linux 依存を導入し、利用しているディストリビューション用の Tauri prerequisites を確認する。                                                        |
+| 初回起動が遅い                                                        | 同梱 program の `~/.guildbotics/programs` への配置と、OS による同梱ライブラリの初回検査のため。しばらく待つ。                                            |
+| `guildbotics` が PATH で古い CLI を指す                               | `~/.guildbotics/bin/guildbotics` を直接使う。`~/.local/bin/guildbotics` は既存の手動インストールを上書きしない。                                         |

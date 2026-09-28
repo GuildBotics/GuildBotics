@@ -1,14 +1,16 @@
 """The Desktop assistants and the diagnostics check run as bundled commands.
 
-Each is run here through the real ``CommandRunner``, from the packaged
-template down to the brain its prompt resolves to, so what reaches the agent
-is what the command sends: the message, the resumable conversation, the
-working directory, and the access every turn of the run is held to.
+Each is read by the host as the Desktop reads it and run here through the
+real ``CommandRunner``, from the packaged template down to the brain its
+prompt resolves to, so what reaches the agent is what the command sends: the
+message, the resumable conversation, the working directory; and the host
+holds the run to the access the command declares.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +22,9 @@ from guildbotics.commands.authoring import (
 )
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess
-from guildbotics.commands.runner import CommandRunner
 from guildbotics.commands.validation import CommandValidationError
-from guildbotics.drivers.command_runner import run_in_environment
+from guildbotics.drivers import command_runner
+from guildbotics.drivers.command_runner import PreparedCommand, prepare_command
 from guildbotics.intelligences.troubleshooting import TroubleshootingResult
 from tests.guildbotics.templates.commands.assistant_doubles import (
     AgentContext,
@@ -46,6 +48,12 @@ def _config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path / "config"))
 
 
+@pytest.fixture(autouse=True)
+def ran(commands_in_process: list[PreparedCommand]) -> list[PreparedCommand]:
+    """The commands run, as the host read them."""
+    return commands_in_process
+
+
 def _context(agent: ScriptedAgent, message: dict[str, Any]) -> AgentContext:
     context = AgentContext(agent)
     context.pipe = json.dumps(message, ensure_ascii=False)
@@ -55,13 +63,16 @@ def _context(agent: ScriptedAgent, message: dict[str, Any]) -> AgentContext:
 async def _run(
     tmp_path: Path, command: str, brain: ScriptedAgent, message: dict[str, Any]
 ) -> Any:
-    runner = CommandRunner(
+    prepared = prepare_command(
         _context(brain, message),
         command,
         ["conversation_id=conv-1"],
-        cwd=tmp_path / "work",
+        "bot",
+        tmp_path / "work",
     )
-    return (await run_in_environment(runner)).result
+    # The Desktop reads the result as the type the assistant answers with.
+    command = replace(prepared, result_type=brain.response_class)
+    return (await command_runner.run_in_environment(command)).result
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +82,7 @@ async def _run(
 
 @pytest.mark.asyncio
 async def test_troubleshooting_is_one_read_only_turn_that_inspects_the_workspace(
-    tmp_path: Path,
+    tmp_path: Path, ran: list[PreparedCommand]
 ) -> None:
     answer = TroubleshootingResult(message="The token expired.", trace_ids=["abc123"])
     brain = ScriptedAgent(TroubleshootingResult, answer)
@@ -95,7 +106,7 @@ async def test_troubleshooting_is_one_read_only_turn_that_inspects_the_workspace
     }
     assert turn["cwd"] == tmp_path / "work"
     # It changes nothing, and reads the recorded runs and what they ran with.
-    assert turn["access"] == CommandAccess(
+    assert ran[-1].access == CommandAccess(
         read_only=True, inspects=frozenset({"diagnostics", "config"})
     )
 
@@ -139,7 +150,9 @@ async def _author(
 
 
 @pytest.mark.asyncio
-async def test_authoring_sends_its_scope_in_one_read_only_turn(tmp_path: Path) -> None:
+async def test_authoring_sends_its_scope_in_one_read_only_turn(
+    tmp_path: Path, ran: list[PreparedCommand]
+) -> None:
     change = CommandAuthoringChange(
         operation="update",
         command="reports/weekly",
@@ -167,7 +180,7 @@ async def test_authoring_sends_its_scope_in_one_read_only_turn(tmp_path: Path) -
         "resume_policy": "auto",
     }
     assert turn["cwd"] == tmp_path / "work"
-    assert turn["access"] == CommandAccess(read_only=True)
+    assert ran[-1].access == CommandAccess(read_only=True)
 
 
 @pytest.mark.asyncio
@@ -294,7 +307,7 @@ async def test_a_second_invalid_proposal_fails_the_command(tmp_path: Path) -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
 async def test_the_cli_agent_check_is_one_read_only_turn_of_its_command(
-    tmp_path: Path, fails: bool
+    tmp_path: Path, fails: bool, ran: list[PreparedCommand]
 ) -> None:
     """What the tool did reaches the check through the command that ran it."""
     from guildbotics.app_api.diagnostics import _run_cli_agent_check
@@ -320,4 +333,4 @@ async def test_the_cli_agent_check_is_one_read_only_turn_of_its_command(
     )
     (turn,) = agent.turns
     assert turn["message"] == "Reply with exactly OK."
-    assert turn["access"] == CommandAccess(read_only=True)
+    assert ran[-1].access == CommandAccess(read_only=True)

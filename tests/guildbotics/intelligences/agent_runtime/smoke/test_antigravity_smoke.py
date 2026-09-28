@@ -29,10 +29,6 @@ from guildbotics.intelligences.agent_runtime.antigravity import (
 )
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
-    AgentExecutionContext,
-    ConversationKey,
-    ConversationRecord,
-    ResumePolicy,
 )
 from guildbotics.intelligences.agent_runtime.usage import (
     _print_output,
@@ -41,11 +37,13 @@ from guildbotics.intelligences.agent_runtime.usage import (
 )
 from guildbotics.intelligences.cli_agents import ANTIGRAVITY_USAGE_COMMAND
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
-    command_at,
     settle_contract,
 )
+from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
+from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_ANTIGRAVITY_SMOKE") != "1",
         reason=(
@@ -62,18 +60,6 @@ PROMPT = "Reply with the single word OK and nothing else."
 #: can while still proving the model option is really applied. `--effort` is
 #: deliberately absent: `agy` refuses it alongside an explicit model.
 SMOKE_OPTIONS = {"model": "gemini-3.6-flash-low"}
-
-
-def _context(tmp_path) -> AgentExecutionContext:
-    return AgentExecutionContext(
-        person_id="smoke",
-        run_id="smoke-run",
-        cwd=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("smoke", "antigravity", "manual", "smoke"),
-        resume_policy=ResumePolicy.AUTO,
-        provider_options=dict(SMOKE_OPTIONS),
-    )
 
 
 def _report(title: str, events: list[AgentEvent]) -> None:
@@ -97,79 +83,71 @@ def _named(events: list[AgentEvent], name: str) -> dict:
     return next(event for event in events if event.name == name).details
 
 
-async def test_real_antigravity_prompt_then_exact_resume(tmp_path) -> None:
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    first_events: list[AgentEvent] = []
-
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = AntigravityStreamJsonAdapter()
-        try:
-            first = await adapter.run_turn(
-                PROMPT, context, conversation, first_events.append
-            )
-            _report("first turn", first_events)
-            print("finish:", first.finish_reason, "usage:", first.usage)
-            assert first.output.strip() == "OK", first.output
-            assert first.provider_session_id
-            assert _named(first_events, "settings")["model"] == SMOKE_OPTIONS["model"]
-            # `init` reports the model back only because it was named explicitly.
-            assert (
-                _named(first_events, "initialized")["model"] == SMOKE_OPTIONS["model"]
-            )
-            # Token usage arrives on the stream-json `result` event.
-            assert first.usage.get("input_tokens", 0) > 0, first.usage
-        finally:
-            await adapter.close()
+async def test_real_antigravity_prompt_then_exact_resume(tmp_path, monkeypatch) -> None:
+    ((first, first_events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        AntigravityStreamJsonAdapter,
+        [PROMPT],
+        options=SMOKE_OPTIONS,
+    )
+    _report("first turn", first_events)
+    assert not isinstance(first, Exception), first
+    print("finish:", first.finish_reason, "usage:", first.usage)
+    assert first.output.strip() == "OK", first.output
+    assert first.provider_session_id
+    assert _named(first_events, "settings")["model"] == SMOKE_OPTIONS["model"]
+    # `init` reports the model back only because it was named explicitly.
+    assert _named(first_events, "initialized")["model"] == SMOKE_OPTIONS["model"]
+    # Token usage arrives on the stream-json `result` event.
+    assert first.usage.get("input_tokens", 0) > 0, first.usage
 
     # A later command, in a microVM of its own, is what makes the resume real:
     # the conversation id on the record and the state the device keeps for the
     # tool are all the next turn has to go on.
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = AntigravityStreamJsonAdapter()
-        try:
-            conversation.provider_session_id = first.provider_session_id
-            second_events: list[AgentEvent] = []
-            second = await adapter.run_turn(
-                "Reply with the single word AGAIN and nothing else.",
-                context,
-                conversation,
-                second_events.append,
-            )
-            _report("second turn (--conversation)", second_events)
-            assert second.output.strip() == "AGAIN", second.output
-            assert second.provider_session_id == first.provider_session_id
-            # Nothing from the first answer may be replayed on the second turn.
-            assert not [
-                event
-                for event in second_events
-                if event.message and event.message.strip() == first.output.strip()
-            ]
-        finally:
-            await adapter.close()
+    ((second, second_events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        AntigravityStreamJsonAdapter,
+        ["Reply with the single word AGAIN and nothing else."],
+        session=first.provider_session_id,
+        options=SMOKE_OPTIONS,
+    )
+    _report("second turn (--conversation)", second_events)
+    assert not isinstance(second, Exception), second
+    assert second.output.strip() == "AGAIN", second.output
+    assert second.provider_session_id == first.provider_session_id
+    # Nothing from the first answer may be replayed on the second turn.
+    assert not [
+        event
+        for event in second_events
+        if event.message and event.message.strip() == first.output.strip()
+    ]
 
 
-async def test_real_antigravity_reaches_the_working_directory(tmp_path) -> None:
+async def test_real_antigravity_reaches_the_working_directory(
+    tmp_path, monkeypatch
+) -> None:
     """Tools must act in the member's workspace, not in the CLI's own scratch."""
     (tmp_path / "marker.txt").write_text("guildbotics-marker\n")
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    events: list[AgentEvent] = []
 
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = AntigravityStreamJsonAdapter()
-        try:
-            result = await adapter.run_turn(
-                "Read the file marker.txt in the current directory and reply with "
-                "its contents only.",
-                context,
-                conversation,
-                events.append,
-            )
-            _report("workspace turn", events)
-            assert "guildbotics-marker" in result.output, result.output
-        finally:
-            await adapter.close()
+    ((result, events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        AntigravityStreamJsonAdapter,
+        [
+            "Read the file marker.txt in the current directory and reply with "
+            "its contents only."
+        ],
+        options=SMOKE_OPTIONS,
+    )
+
+    _report("workspace turn", events)
+    assert not isinstance(result, Exception), result
+    assert "guildbotics-marker" in result.output, result.output
 
 
 async def test_real_antigravity_read_only_turn_cannot_write_or_reach_out(
@@ -193,30 +171,28 @@ async def test_real_antigravity_read_only_turn_cannot_write_or_reach_out(
             ),
         ),
     )
-    adapter = AntigravityStreamJsonAdapter()
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    events: list[AgentEvent] = []
 
-    async with command_at(
-        tmp_path, {TOOL}, CommandAccess(read_only=True), person_id="smoke"
-    ):
-        try:
-            result = await adapter.run_turn(
-                "Run these two shell commands and do not work around a failure: "
-                f"`touch {guest_path(granted)}/smoke.txt` and "
-                "`curl -sS -o /dev/null -w '%{http_code}' https://example.com`. "
-                "Reply with exactly two lines: `WRITE=<ok or failed>` and "
-                "`HTTP=<the status code curl printed, or failed>`.",
-                context,
-                conversation,
-                events.append,
-            )
-            _report("read-only turn", events)
-            assert not (granted / "smoke.txt").exists(), result.output
-            assert "HTTP=200" not in result.output, result.output
-        finally:
-            await adapter.close()
+    ((result, events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        AntigravityStreamJsonAdapter,
+        [
+            "Run these two shell commands and do not work around a failure: "
+            f"`touch {guest_path(granted)}/smoke.txt` and "
+            "`curl -sS -o /dev/null -w '%{http_code}' https://example.com`. "
+            "Reply with exactly two lines: `WRITE=<ok or failed>` and "
+            "`HTTP=<the status code curl printed, or failed>`."
+        ],
+        options=SMOKE_OPTIONS,
+        access=CommandAccess(read_only=True),
+        held=granted,
+    )
+
+    _report("read-only turn", events)
+    assert not (granted / "smoke.txt").exists(), result
+    output = result.output if not isinstance(result, Exception) else str(result)
+    assert "HTTP=200" not in output, output
 
 
 async def test_real_antigravity_usage_probe_is_read_only() -> None:

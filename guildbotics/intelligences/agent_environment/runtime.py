@@ -312,10 +312,13 @@ class EnvironmentProcess:
         return self.returncode
 
     async def kill(self) -> None:
+        """End the process now, waiting a while for it to have ended: one the
+        runtime could not kill ends with the environment."""
         if self.returncode is None:
             with suppress(Exception):
                 await self._handle.kill()
-        await self.wait()
+        with suppress(TimeoutError):
+            await asyncio.wait_for(self.wait(), _STOP_TIMEOUT)
 
     async def communicate(self) -> tuple[bytes, bytes]:
         """Close stdin, read both streams to their end, and wait; as asyncio does."""

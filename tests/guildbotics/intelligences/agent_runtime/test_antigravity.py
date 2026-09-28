@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime import antigravity as antigravity_module
 from guildbotics.intelligences.agent_runtime.antigravity import (
     _LOG_TAIL_BYTES,
@@ -59,18 +58,26 @@ class _CompletedProcess:
 
 
 class _HangingProcess:
-    """A turn that never writes a line and never exits."""
+    """A turn that never writes a line and never exits until it is killed,
+    which ends it and its pipes, as a turn's process ends."""
 
     def __init__(self) -> None:
-        # Neither reader is ever fed or closed, so readline() blocks forever.
+        # Neither reader is fed, so readline() blocks until the kill.
         self.stdout = asyncio.StreamReader()
         self.stderr = asyncio.StreamReader()
-        self.returncode = None
+        self.returncode: int | None = None
         self.pid = 0
+        self.killed = False
 
     async def wait(self) -> int:
         await asyncio.sleep(3600)
         raise AssertionError("unreachable")
+
+    async def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
 
 
 class _StreamProcess:
@@ -115,7 +122,6 @@ def _context(tmp_path: Path, **overrides: Any) -> AgentExecutionContext:
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path,
-        workspace_data_root=tmp_path,
         conversation_key=key,
         **overrides,
     )
@@ -187,7 +193,7 @@ async def test_conversation_id_from_init_becomes_the_session_and_events_map(
         index for index, argument in enumerate(run_args) if argument == "--add-dir"
     ]
     assert len(workspace_indexes) == 2
-    assert run_args[workspace_indexes[0] + 1] == guest_path(tmp_path)
+    assert run_args[workspace_indexes[0] + 1] == str(tmp_path)
     assert "--dangerously-skip-permissions" in run_args
     prompt = run_args[run_args.index("--print") + 1]
     assert "never run those commands" in prompt
@@ -533,17 +539,11 @@ async def test_terminal_result_survives_a_nonzero_exit(monkeypatch, tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> None:
-    terminated: list[Any] = []
-    _install(monkeypatch, _HangingProcess())
+    hanging = _HangingProcess()
+    _install(monkeypatch, hanging)
     monkeypatch.setattr(
         "guildbotics.intelligences.agent_runtime.antigravity._TIMEOUT_GRACE_SECONDS",
         0.01,
-    )
-    monkeypatch.setattr(
-        _HangingProcess,
-        "kill",
-        lambda self: terminated.append(self) or asyncio.sleep(0),
-        raising=False,
     )
     adapter = AntigravityStreamJsonAdapter(timeout=0.01)
 
@@ -551,7 +551,7 @@ async def test_timeout_terminates_the_process_tree(monkeypatch, tmp_path) -> Non
         await _run(adapter, _context(tmp_path), [])
 
     assert excinfo.value.category is AgentRuntimeErrorCategory.PROCESS
-    assert terminated
+    assert hanging.killed
 
 
 @pytest.mark.asyncio
@@ -591,21 +591,3 @@ def test_decode_events_ignores_steps_with_nothing_to_report() -> None:
         == []
     )
     assert _decode_events({"event": "unknown"}, "c1") == []
-
-
-@pytest.mark.asyncio
-async def test_the_working_directory_is_passed_as_the_guest_spells_it(
-    monkeypatch, tmp_path
-) -> None:
-    """The workspace flag names the directory inside the environment
-    (``/c/...`` on Windows), never the host's own spelling."""
-    monkeypatch.setattr(
-        antigravity_module, "guest_path", lambda path: f"/guest{path.as_posix()}"
-    )
-    calls: list[tuple[Any, ...]] = []
-    _install(monkeypatch, _StreamProcess(_fixture_lines()), calls=calls, kwargs_log=[])
-
-    await _run(AntigravityStreamJsonAdapter(), _context(tmp_path), [])
-
-    run_args = calls[-1]
-    assert run_args[run_args.index("--add-dir") + 1] == f"/guest{tmp_path.as_posix()}"

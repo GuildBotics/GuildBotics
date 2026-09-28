@@ -487,7 +487,7 @@ export type CommandArgumentOption = {
 };
 
 export type CommandRequirement = {
-  kind: "github" | "slack" | "cli_agent" | "llm";
+  kind: "environment" | "github" | "slack" | "cli_agent" | "llm";
   satisfied: boolean;
   message: string;
 };

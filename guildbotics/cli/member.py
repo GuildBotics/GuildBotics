@@ -165,7 +165,9 @@ def _content_option(
 
         with_file = click.option(
             "--content-file",
-            type=_HostPath(exists=True, dir_okay=False, readable=True),
+            type=_HostPath(
+                read_on_host=True, exists=True, dir_okay=False, readable=True
+            ),
             help=t("cli.member.content.file_help"),
         )(wrapped)
         return click.option(
@@ -208,15 +210,27 @@ def _call(ctx: click.Context | None = None) -> MemberCall:
 
 
 class _HostPath(click.Path):
-    """A path read from the command's working directory, then checked as usual."""
+    """A path read from the command's working directory, then checked as usual.
 
-    def __init__(self, **kwargs: Any) -> None:
+    For a command of an isolated environment it is only a name, checked by
+    nothing on the host: the host touches nothing that environment can write,
+    which it could swap for a link to anywhere between a check and a use. So
+    such a command names no ``read_on_host`` file, one the host itself reads.
+    """
+
+    def __init__(self, *, read_on_host: bool = False, **kwargs: Any) -> None:
         super().__init__(path_type=Path, **kwargs)
+        self._read_on_host = read_on_host
 
     def convert(
         self, value: Any, param: click.Parameter | None, ctx: click.Context | None
     ) -> Any:
-        return super().convert(_call(ctx).cwd / value, param, ctx)
+        path = _call(ctx).cwd / value
+        if current_member_invocation().guest is None:
+            return super().convert(path, param, ctx)
+        if self._read_on_host:
+            self.fail(t("cli.member.content.file_in_environment"), param, ctx)
+        return path
 
 
 def _show_help(ctx: click.Context, _param: click.Parameter, value: bool) -> None:
@@ -941,6 +955,38 @@ async def _chat_inspect_channel(
         await service.aclose()
 
 
+@chat.command(name="resolve-channel")
+@_read_only_member_command
+@_person_option
+@_service_option
+@click.option("--channel-name", required=True, help="Channel name to resolve.")
+@_json_format_option
+def chat_resolve_channel(
+    person: str, service_name: str, channel_name: str, output_format: str
+) -> None:
+    _run(
+        _chat_resolve_channel(person, service_name, channel_name),
+        output_format=output_format,
+    )
+
+
+async def _chat_resolve_channel(
+    person: str, service_name: str, channel_name: str
+) -> dict[str, Any]:
+    context, member_person = _resolve(person)
+    service = MemberChatCapabilityService(
+        member_person,
+        context.team,
+        context.logger,
+        context.get_chat_service(),
+        service_name=service_name,
+    )
+    try:
+        return await service.resolve_channel(channel_name)
+    finally:
+        await service.aclose()
+
+
 @chat_inspect.command(name="thread")
 @_read_only_member_command
 @_person_option
@@ -1550,10 +1596,15 @@ async def _git_publish(
 def _reject_current_workspace_mode_in_task_run(
     workspace_mode: str, task_run_id: str | None
 ) -> None:
-    if workspace_mode == "current" and task_run_id:
+    # A command of an isolated environment, run or not: the current mode runs
+    # git on the host in a repository that environment can write.
+    if workspace_mode == "current" and (
+        task_run_id or current_member_invocation().guest is not None
+    ):
         raise click.ClickException(
             "workspace-mode=current is only for interactive use and cannot be "
-            "used inside a workflow task run."
+            "used inside a workflow task run or a command of an isolated "
+            "environment."
         )
 
 

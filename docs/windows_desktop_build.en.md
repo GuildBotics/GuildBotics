@@ -81,10 +81,10 @@ Open a new cmd, PowerShell, or Git Bash session before testing bare `guildbotics
 - Open **Setup → Agent execution environment**. **Status on this device** must report the runtime as available with `%USERPROFILE%\.guildbotics\data\msb` as its home (`guildbotics environment status` prints the same). Press **Build**; the first build accepts one elevation prompt that creates the firewall rule `GuildBotics agent environment (msb)` for `...\data\msb\bin\msb.exe`, and no further Windows Defender Firewall dialog appears on later launches. Run `guildbotics environment login codex` in a terminal, then run an AI CLI turn and confirm it reports a Linux guest (`/c/...` working directory) rather than the host.
 - Force-stop an AI CLI and verify no descendant process remains in Task Manager.
 - Run an AI CLI workflow that commits and pushes with a multiline commit message containing spaces, Japanese text, `$`, and backticks. This validates the UTF-8 `--content-file` path.
-- Run `to_pdf` and confirm the existing `PDF conversion requires WeasyPrint native dependencies.` error. The bundled CLI intentionally excludes WeasyPrint; only a normal Python installation with GTK/Pango/Cairo can provide it.
+- Run a command that uses `to_pdf` and a `.sh` command, and confirm both succeed. Commands run in the isolated agent environment, whose snapshot has WeasyPrint's native libraries and whose base image has `bash`, so the bundle needs neither.
 - Uninstall. The app, shortcuts, and installer-owned PATH entry must disappear. `%USERPROFILE%\.guildbotics`, AI CLI skills, workspaces, and Credential Manager entries must remain because they are user data.
 
-Native `.sh` custom commands still require Bash and are not supported by the native Windows command path. Windows ARM64 and Windows code signing are also outside this build target.
+Windows ARM64 and Windows code signing are outside this build target.
 
 ## Moving an existing setup
 

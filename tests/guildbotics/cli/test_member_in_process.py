@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import re
 import threading
 from pathlib import Path
@@ -258,3 +259,107 @@ def test_a_workflow_command_writes_only_under_its_turns_lease(
     else:
         assert (exit_code, stdout) == (1, "")
         assert t("cli.member.lease.invalid_delegation") in stderr
+
+
+def test_a_command_of_an_environment_has_the_host_read_none_of_its_files(
+    monkeypatch, tmp_path
+) -> None:
+    """What the environment can write it can swap for a link to any of the
+    host's files between a check and the read, so the host reads none of
+    it, whether or not it is there: the content comes on standard input."""
+    _record_git_commit(monkeypatch)
+    (tmp_path / "message.txt").write_text("the host's own", encoding="utf-8")
+    base = ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
+    of_an_environment = MemberInvocation(task_run_id="run-1", guest=SimpleNamespace())
+
+    refused = [
+        _run([*base, "--content-file", name], of_an_environment, cwd=tmp_path)
+        for name in ("message.txt", str(tmp_path / "message.txt"), "missing.txt")
+    ]
+    from_stdin = _run(
+        [*base, "--content-stdin"], of_an_environment, cwd=tmp_path, stdin="given"
+    )
+
+    for exit_code, stdout, stderr in refused:
+        assert (exit_code, stdout) == (2, "")
+        assert t("cli.member.content.file_in_environment") in " ".join(stderr.split())
+        assert "the host's own" not in stderr
+    assert member_module.json.loads(from_stdin[1])["message"] == "given"
+
+
+def test_a_command_of_an_environment_names_paths_the_host_does_not_look_at(
+    monkeypatch, tmp_path
+) -> None:
+    """Checking one on the host would look at what the environment can
+    write; what it names goes on as a name, for the environment to use."""
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    seen: list[Path] = []
+
+    async def github(person, operation):
+        return operation(
+            SimpleNamespace(artifact_download=lambda _u, _n, d: seen.append(d) or {})
+        )
+
+    monkeypatch.setattr(member_module, "_github", github)
+    looked: list[str] = []
+    for name in ("stat", "lstat"):
+        original = getattr(os, name)
+
+        def look(path, *args, original=original, **kwargs):
+            if str(path).startswith(str(tmp_path)):
+                looked.append(str(path))
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, name, look)
+
+    exit_code, _stdout, stderr = _run(
+        ["github", "run", "artifact", "download", "--person", "aiko"]
+        + ["--url", "https://example.test/pr/1", "--name", "logs"]
+        + ["--dest", "a-file"],
+        MemberInvocation(task_run_id="run-1", guest=SimpleNamespace()),
+        cwd=tmp_path,
+    )
+
+    assert (exit_code, stderr, seen) == (0, "", [tmp_path / "a-file"])
+    assert looked == []
+
+
+def test_outside_a_turn_a_command_opens_what_it_is_named(monkeypatch, tmp_path) -> None:
+    _record_git_commit(monkeypatch)
+    (tmp_path / "message.txt").write_text("the user's own", encoding="utf-8")
+
+    exit_code, stdout, _stderr = _run(
+        ["git", "commit", "--person", "aiko", "--repo-path", "repo"]
+        + ["--content-file", str(tmp_path / "message.txt")],
+        MemberInvocation(task_run_id="run-1"),
+        cwd=tmp_path / "elsewhere",
+    )
+
+    assert exit_code == 0
+    assert member_module.json.loads(stdout)["message"] == "the user's own"
+
+
+@pytest.mark.parametrize("invocation", ["task run", "chat run", "no run"])
+def test_a_command_of_an_environment_runs_no_git_on_the_host(
+    monkeypatch, tmp_path, invocation
+) -> None:
+    """The current mode runs git on the host in a repository the command's
+    environment can write, whatever run the command belongs to, if any."""
+    monkeypatch.setattr(member_module, "_member_command_needs_lease", lambda: False)
+    guest = SimpleNamespace()
+    of_an_environment = {
+        "task run": MemberInvocation(task_run_id="run-1", guest=guest),
+        "chat run": MemberInvocation(run_id="run-1", guest=guest),
+        "no run": MemberInvocation(guest=guest),
+    }[invocation]
+
+    exit_code, _stdout, stderr = _run(
+        ["git", "commit", "--person", "aiko", "--repo-path", "."]
+        + ["--content-stdin", "--workspace-mode", "current"],
+        of_an_environment,
+        cwd=tmp_path,
+        stdin="message",
+    )
+
+    assert exit_code == 1
+    assert "only for interactive use" in stderr

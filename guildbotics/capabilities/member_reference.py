@@ -200,6 +200,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "Read recent channel messages.",
             ),
             (
+                "guildbotics member chat resolve-channel --person <person> --service slack "
+                "--channel-name <name>",
+                "Resolve a channel name to its channel id without reading or posting; "
+                "the id is empty when no channel has that name.",
+            ),
+            (
                 "guildbotics member chat reply --person <person> --service slack "
                 "(--message-url <url> | (--channel-id <id> | --channel-name <name>) "
                 "--thread-ts <ts>) "

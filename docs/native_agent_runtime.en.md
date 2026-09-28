@@ -45,13 +45,14 @@ provider-neutral `low` / `high` levels become provider settings. The shipped def
 
 ## Isolated agent environment: access permissions
 
-Every AI CLI turn runs inside an isolated agent environment: a microVM
-GuildBotics boots from a snapshot it built on this device. The turns of one
-command execution share one microVM: it boots before the first of them,
-able to run every AI CLI tool the member is configured with, and shaped by
-the command rather than by that turn -- it works in the command's working
+Every command runs inside an isolated agent environment: a microVM
+GuildBotics boots from a snapshot it built on this device. A command, its
+subcommands, and the AI CLI turns among them share one microVM: it boots when
+the command starts, able to run every AI CLI tool the member is configured
+with, and shaped by the command -- it works in the command's working
 directory -- and is discarded when the command ends, whether it succeeded, failed, or was
-cancelled. The turns run one at a time and see what an earlier one left in
+cancelled. The adapters and the provider CLIs run inside it, so a provider's
+output is read there, not on the host. The turns run one at a time and see what an earlier one left in
 it, since a command and its subcommands are one isolation. No turn runs
 outside a command: the Desktop's assistants and the diagnostics screen's AI CLI
 tool check run as bundled commands too. A running microVM is never reshaped: a turn whose working
@@ -106,8 +107,8 @@ from `uv.lock` without `microsandbox`, which only the host uses (export it
 again after changing `uv.lock`; the drift test `test_requirements.py`
 prints the command when it fails). The snapshot is named after the content
 of every build step, so a changed list makes it stale and it is rebuilt;
-turns cannot start during the rebuild (tens of seconds to minutes). The code
-itself is not in the snapshot: every turn's microVM binds the running process's own
+commands cannot start during the rebuild (tens of seconds to minutes). The code
+itself is not in the snapshot: every command's microVM binds the running process's own
 `guildbotics` package (the checkout when running from source, the process's
 own build when packaged) read-only at `/opt/guildbotics/code/guildbotics`.
 It is not bound at its host path so that a turn working in the GuildBotics
@@ -220,7 +221,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
   ```
 
 - **Resources**: `resources:` in `intelligences/agent_environment.yml` assigns
-  memory in MiB and virtual CPUs to every turn and snapshot build. Omitting it
+  memory in MiB and virtual CPUs to every command's microVM and every snapshot build. Omitting it
   uses 4096 MiB and 2 vCPUs. This declaration is workspace-wide and the same
   values are used on every device, so choose values that fit the device with
   the least memory and fewest CPU cores.
@@ -237,8 +238,10 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 - **Network**: one workspace-wide `network:` block in
   `intelligences/agent_environment.yml` states what every member and slot may
-  reach, whether through a shell command and its child processes or through
-  the tool's built-in web search / URL fetch. `mode` is `deny`, `allowlist`, or
+  reach, whether through the command's own code, a turn's shell command and its
+  child processes, or the tool's built-in web search / URL fetch. A command
+  that reaches the network itself needs its destinations allowed here before
+  it runs. `mode` is `deny`, `allowlist`, or
   `unrestricted` (`off` would read as a YAML boolean). `allowed_domains` is
   used only with `allowlist`; `allow_local_network` also opens localhost and
   the LAN. Omitting `network:` means `deny`. The shipped declaration uses an
@@ -272,8 +275,9 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 - **Read-only turns**: a command that may change nothing declares so
   (`read_only: true`; among the bundled commands, the Desktop's troubleshooting
   and command-authoring assistants and the diagnostics screen's AI CLI tool
-  check). The declaration is the command's: every turn of its run, its
-  subcommands' included, is held to it, and no turn can make itself read-only.
+  check). The declaration is the command's: its whole run, its own code, its
+  subcommands, and every turn among them included, is held to it, and no turn
+  can make itself read-only.
   The contract (`AccessContract.read_only`) states it, and the environment
   confines it the same way whatever provider runs it. Every directory bound from the host is
   read-only, the exchange directory and `read_write` grants included, and the
@@ -455,7 +459,7 @@ and `-p no:xdist`). Nothing is sent off the device.
   short to be a credential. A refresh gives it the login marked
   as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
   the environment is stopped. A login within five minutes of its expiry is refreshed before
-  the turn (and, for a command's first turn, its microVM) and the tool start: a tool reaches its API as soon as it starts, and
+  the turn and the tool start: a tool reaches its API as soon as it starts, and
   Antigravity gives up on its sign-in after ten seconds, so the first request never waits
   for a refresh. During a turn, the gateway asks for a refresh five minutes before expiry
   or when the upstream refuses the token, and that request waits for it (every tool that refreshes
@@ -553,24 +557,18 @@ that does not answer promptly -- the terminal login waiting for a user who is no
 -- all fail the turn as an authentication error pointing at `copilot login`. Only the
 method id is recorded; the contents of the Copilot credential store are never read.
 
-GitHub, Git, and SSH write credentials are deliberately removed from native
-agent process environments. Every inherited variable whose name contains `TOKEN`,
-`SECRET`, `PASSWORD`, `PRIVATE_KEY`, or `API_KEY` is dropped; the rule is a name
-pattern rather than a list because a list only ever keeps the secrets nobody
-remembered to add to it. Keys stored in the workspace SecretStore are dropped
-regardless of their name: `guildbotics secrets set` accepts any key name
-(say, `DATABASE_URL`), so the fact that a key was stored is itself the
-classification, and the name pattern remains as a safety net for credentials
-the operator's shell exports outside GuildBotics. That covers the member's own
-`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN` and the LLM
-provider API keys (`OPENAI_API_KEY` and friends): all of them are consumed inside the
-GuildBotics process, and the member CLI loads its own from the OS keychain, so removing
-them changes nothing a member can legitimately do. The helpers and sockets that hand out
-a credential on demand (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`) are removed too,
-together with the parent process's workspace root.
+GitHub, Git, and SSH write credentials never reach a provider process: the
+environment inherits none of the host's environment variables. The member's own
+`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN`, the LLM
+provider API keys (`OPENAI_API_KEY` and friends), and the helpers and sockets that hand
+out a credential on demand (`GIT_ASKPASS`, `SSH_ASKPASS`, `SSH_AUTH_SOCK`) are all
+absent inside. They are consumed in the GuildBotics process on the host, and the member
+CLI loads its own from the OS keychain, so their absence changes nothing a member can
+legitimately do.
 
-Codex, Claude Code, Grok Build, GitHub Copilot, and Antigravity each receive a
-per-adapter HTTP MCP endpoint bound to `127.0.0.1` and an unguessable bearer grant.
+Codex, Claude Code, Grok Build, GitHub Copilot, and Antigravity each receive the
+command's HTTP MCP endpoint, which listens on the host's loopback and is reached from
+the microVM as `host.microsandbox.internal`, and an unguessable bearer grant.
 Grok Build and GitHub Copilot attach the endpoint through ACP `mcpServers`; Codex and
 Claude Code receive process-local MCP configuration. Codex reads the raw token from a
 dedicated environment variable through `bearer_token_env_var`, so Codex itself adds the
@@ -580,12 +578,12 @@ workspace remain the member's actual working directory. The single
 `guildbotics_member` tool accepts
 only tokenized arguments for the fixed `guildbotics member` entrypoint; it cannot choose
 an executable, invoke a shell, override the workspace, or act as another person. The
-endpoint runs in the GuildBotics process outside the provider sandbox, is usable only
+endpoint runs in the GuildBotics process on the host, outside the microVM, is usable only
 while a turn is active, requires a second grant rotated on every turn, and is stopped
-with the adapter. Provider processes never receive the member execution lease.
+when the command ends. Provider processes never receive the member execution lease.
 
-The broker runs the member CLI inside the trusted GuildBotics process that runs the
-turn, where OS Keychain and other SecretStore backends remain available, instead of
+The broker runs the member CLI inside the trusted GuildBotics process on the host that
+runs the command, where OS Keychain and other SecretStore backends remain available, instead of
 starting a CLI process per call. Each command runs on a worker thread of its own with
 its own working directory, standard streams, and invocation, so commands running at
 once never see each other's. It acts under the execution lease the turn holds, in the

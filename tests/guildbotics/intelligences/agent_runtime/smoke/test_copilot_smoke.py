@@ -2,7 +2,8 @@
 
 Skipped unless ``GUILDBOTICS_COPILOT_SMOKE=1``. Each turn runs the Copilot CLI
 pinned in the snapshot with the login saved here, in the microVM of a command
-started as the host starts one (see ``conftest.py`` for what that takes). The
+started as the host starts one, driven from inside it (``turns.py``; see
+``conftest.py`` for what the device takes). The
 turns send minimal prompts, so they consume account quota and never run in
 normal CI. Nothing they observe is written to a fixture: prompts, responses,
 credentials and session history stay in the run output only.
@@ -23,19 +24,15 @@ from guildbotics.intelligences.agent_environment.contract import (
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
-from guildbotics.intelligences.agent_runtime.models import (
-    AgentEvent,
-    AgentExecutionContext,
-    ConversationKey,
-    ConversationRecord,
-    ResumePolicy,
-)
+from guildbotics.intelligences.agent_runtime.models import AgentEvent
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
-    command_at,
     settle_contract,
 )
+from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
+from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
+    REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_COPILOT_SMOKE") != "1",
         reason="Set GUILDBOTICS_COPILOT_SMOKE=1 to run the real Copilot smoke test.",
@@ -48,18 +45,6 @@ PROMPT = "Reply with the single word OK and nothing else."
 #: The cheapest model this account offers, so the smoke costs as little as it
 #: can while still proving the model option is really applied.
 SMOKE_OPTIONS = {"model": "gpt-5-mini", "reasoning_effort": "low"}
-
-
-def _context(tmp_path) -> AgentExecutionContext:
-    return AgentExecutionContext(
-        person_id="smoke",
-        run_id="smoke-run",
-        cwd=tmp_path,
-        workspace_data_root=tmp_path,
-        conversation_key=ConversationKey("smoke", "copilot", "manual", "smoke"),
-        resume_policy=ResumePolicy.AUTO,
-        provider_options=dict(SMOKE_OPTIONS),
-    )
 
 
 def _report(title: str, events: list[AgentEvent]) -> None:
@@ -83,92 +68,71 @@ def _settings(events: list[AgentEvent]) -> dict:
     return next(event for event in events if event.name == "settings").details
 
 
-async def test_real_copilot_prompt_then_exact_reload(tmp_path) -> None:
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    first_events: list[AgentEvent] = []
-
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = CopilotAcpAdapter()
-        try:
-            first = await adapter.run_turn(
-                PROMPT, context, conversation, first_events.append
-            )
-            _report("first turn", first_events)
-            print("stop/finish:", first.finish_reason, "usage:", first.usage)
-            # The reply is the answer stream only: reasoning must not leak into it.
-            assert first.output.strip() == "OK", first.output
-            assert first.provider_session_id
-            # The effective settings come from Copilot's own answer, not from the
-            # request, and the approval policy must really be on for a normal turn.
-            assert _settings(first_events) == {
-                "model": "gpt-5-mini",
-                "reasoning_effort": "low",
-                "allow_all": "on",
-                "requested": {**SMOKE_OPTIONS, "allow_all": "on"},
-                "rejected": [],
-            }
-
-        finally:
-            await adapter.close()
+async def test_real_copilot_prompt_then_exact_reload(tmp_path, monkeypatch) -> None:
+    ((first, first_events),) = await run_turns(
+        monkeypatch, tmp_path, TOOL, CopilotAcpAdapter, [PROMPT], options=SMOKE_OPTIONS
+    )
+    _report("first turn", first_events)
+    assert not isinstance(first, Exception), first
+    print("stop/finish:", first.finish_reason, "usage:", first.usage)
+    # The reply is the answer stream only: reasoning must not leak into it.
+    assert first.output.strip() == "OK", first.output
+    assert first.provider_session_id
+    # The effective settings come from Copilot's own answer, not from the
+    # request, and the approval policy must really be on for a normal turn.
+    assert _settings(first_events) == {
+        "model": "gpt-5-mini",
+        "reasoning_effort": "low",
+        "allow_all": "on",
+        "requested": {**SMOKE_OPTIONS, "allow_all": "on"},
+        "rejected": [],
+    }
 
     # A later command, in a microVM of its own, is what makes the reload real:
     # the session id on the conversation and the state the device keeps for
-    # the tool are all the next turn has to go on.
-    async with command_at(tmp_path, {TOOL}, person_id="smoke"):
-        adapter = CopilotAcpAdapter()
-        try:
-            conversation.provider_session_id = first.provider_session_id
-            second_events: list[AgentEvent] = []
-            second = await adapter.run_turn(
-                "Reply with the single word AGAIN.",
-                context,
-                conversation,
-                second_events.append,
-            )
-            _report("second turn (session/load)", second_events)
-            assert second.output.strip() == "AGAIN", second.output
-            assert second.provider_session_id == first.provider_session_id
-            replayed = [
-                event for event in second_events if event.name == "history_rehydrated"
-            ]
-            print("rehydration:", [event.details for event in replayed])
-            assert replayed, "session/load must report the replay it absorbed"
-            # A reloaded session keeps its settings, so nothing has to be re-sent.
-            assert _settings(second_events)["reasoning_effort"] == "low"
-            unhandled = [
-                event.details["unhandled"]
-                for event in second_events
-                if event.name == "protocol_extensions"
-            ]
-            print("unhandled extension channels:", unhandled)
-            # Nothing from the first answer may be re-emitted on the second turn.
-            # Reasoning is left out: it streams in tokens, and this turn's own
-            # may well name the word the first one answered.
-            assert not [
-                event
-                for event in second_events
-                if event.name != "thinking"
-                and event.message.strip() == first.output.strip()
-            ]
+    # the tool are all the next turn has to go on. Its second turn shares the
+    # command's microVM but starts a process of its own, so it reloads the
+    # session as the first one did.
+    (second, second_events), (third, third_events) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        CopilotAcpAdapter,
+        ["Reply with the single word AGAIN.", "Reply with the single word THIRD."],
+        session=first.provider_session_id,
+        options=SMOKE_OPTIONS,
+    )
+    _report("second turn (session/load)", second_events)
+    assert not isinstance(second, Exception), second
+    assert second.output.strip() == "AGAIN", second.output
+    assert second.provider_session_id == first.provider_session_id
+    replayed = [event for event in second_events if event.name == "history_rehydrated"]
+    print("rehydration:", [event.details for event in replayed])
+    assert replayed, "session/load must report the replay it absorbed"
+    # A reloaded session keeps its settings, so nothing has to be re-sent.
+    assert _settings(second_events)["reasoning_effort"] == "low"
+    unhandled = [
+        event.details["unhandled"]
+        for event in second_events
+        if event.name == "protocol_extensions"
+    ]
+    print("unhandled extension channels:", unhandled)
+    # Nothing from the first answer may be re-emitted on the second turn.
+    # Reasoning is left out: it streams in tokens, and this turn's own
+    # may well name the word the first one answered.
+    assert not [
+        event
+        for event in second_events
+        if event.name != "thinking" and event.message.strip() == first.output.strip()
+    ]
 
-            # A third turn shares the command's microVM but starts a process of
-            # its own, so it reloads the session as the second one did.
-            third_events: list[AgentEvent] = []
-            third = await adapter.run_turn(
-                "Reply with the single word THIRD.",
-                context,
-                conversation,
-                third_events.append,
-            )
-            _report("third turn (same command)", third_events)
-            assert third.output.strip() == "THIRD", third.output
-            assert third.provider_session_id == first.provider_session_id
-            assert [
-                event for event in third_events if event.name == "history_rehydrated"
-            ], "the third turn's process must reload the session too"
-        finally:
-            await adapter.close()
+    _report("third turn (same command)", third_events)
+    assert not isinstance(third, Exception), third
+    assert third.output.strip() == "THIRD", third.output
+    assert third.provider_session_id == first.provider_session_id
+    assert [event for event in third_events if event.name == "history_rehydrated"], (
+        "the third turn's process must reload the session too"
+    )
 
 
 async def test_real_copilot_read_only_turn_cannot_write(tmp_path, monkeypatch) -> None:
@@ -184,24 +148,21 @@ async def test_real_copilot_read_only_turn_cannot_write(tmp_path, monkeypatch) -
             )
         ),
     )
-    adapter = CopilotAcpAdapter()
-    context = _context(tmp_path)
-    conversation = ConversationRecord(key=context.conversation_key)
-    events: list[AgentEvent] = []
 
-    async with command_at(
-        tmp_path, {TOOL}, CommandAccess(read_only=True), person_id="smoke"
-    ):
-        try:
-            result = await adapter.run_turn(
-                f"Create a file named {guest_path(granted)}/smoke.txt containing the "
-                "word HELLO, then reply with exactly DONE or FAILED.",
-                context,
-                conversation,
-                events.append,
-            )
-            _report("read-only turn", events)
-            assert _settings(events)["allow_all"] == "on"
-            assert not (granted / "smoke.txt").exists(), result.output
-        finally:
-            await adapter.close()
+    ((result, events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        CopilotAcpAdapter,
+        [
+            f"Create a file named {guest_path(granted)}/smoke.txt containing the "
+            "word HELLO, then reply with exactly DONE or FAILED."
+        ],
+        options=SMOKE_OPTIONS,
+        access=CommandAccess(read_only=True),
+        held=granted,
+    )
+
+    _report("read-only turn", events)
+    assert _settings(events)["allow_all"] == "on"
+    assert not (granted / "smoke.txt").exists(), result

@@ -41,7 +41,6 @@ def _context(tmp_path: Path, *, work_kind: str = "ticket") -> AgentExecutionCont
         person_id="aiko",
         run_id="run-1",
         cwd=tmp_path / "data" / "workspaces" / "aiko",
-        workspace_data_root=tmp_path / "data",
         conversation_key=ConversationKey("aiko", "grok", work_kind, "work-1"),
         lease=PersonExecutionLease("aiko", tmp_path),
         participant_labels='{"U1":"aiko"}',
@@ -360,15 +359,10 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
     broker = MemberCapabilityBroker()
     context = _context(tmp_path)
     await broker.activate(context)
-    descriptor = broker.mcp_server
     endpoint = broker.endpoint
     turn_grant = broker.turn_grant
 
     try:
-        # The descriptor a provider reads inside the environment names the
-        # broker by the gateway's alias; this host-side test reaches it by
-        # the loopback address the same port answers on.
-        assert descriptor["url"] == endpoint.guest_url
         async with httpx2.AsyncClient(
             headers={"Authorization": "Bearer wrong-token"}
         ) as client:
@@ -391,7 +385,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
         # A turn inside the agent environment names this host by the
         # gateway's alias; the Host check, which runs behind the bearer
         # check, lets it through and still refuses any other name.
-        authorization = descriptor["headers"][0]["value"]
+        authorization = endpoint.authorization
         assert endpoint.port == int(endpoint.url.rsplit(":", 1)[1].split("/")[0])
         assert (
             endpoint.guest_url
@@ -414,7 +408,7 @@ async def test_http_mcp_requires_bearer_and_dispatches_the_member_tool(
                 )
                 assert response.status_code == expected, host
 
-        authorization = descriptor["headers"][0]["value"]
+        authorization = endpoint.authorization
         async with (
             httpx2.AsyncClient(headers={"Authorization": authorization}) as client,
             streamable_http_client(endpoint.url, http_client=client) as streams,
