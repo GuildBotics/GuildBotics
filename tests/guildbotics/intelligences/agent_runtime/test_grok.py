@@ -86,6 +86,7 @@ class _Peer(AcpPeerBase):
         turn_usage: dict[str, Any] | None = None,
         usage_channel: str = "_x.ai/session_notification",
         replay_extensions: list[dict[str, Any]] | None = None,
+        model_updates: list[str] | None = None,
     ) -> None:
         super().__init__()
         self.initialize = initialize if initialize is not None else _initialize()
@@ -104,6 +105,7 @@ class _Peer(AcpPeerBase):
         self.turn_usage = turn_usage
         self.usage_channel = usage_channel
         self.replay_extensions = replay_extensions or []
+        self.model_updates = model_updates or []
 
     def handle(self, message: dict[str, Any]) -> None:
         self.messages.append(message)
@@ -154,6 +156,14 @@ class _Peer(AcpPeerBase):
             if self.prompt_error:
                 self.send_error(request_id, self.prompt_error)
                 return
+            for model in self.model_updates:
+                self.feed(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "_x.ai/models/update",
+                        "params": {"currentModelId": model, "availableModels": []},
+                    }
+                )
             if self.prompt_delay:
                 # A real turn answers session/prompt only when the work is done.
                 asyncio.get_running_loop().create_task(self._answer_later(request_id))
@@ -340,56 +350,71 @@ async def test_a_turn_without_effort_adds_no_launch_options(
 
 
 @pytest.mark.asyncio
-async def test_terminal_result_carries_the_launch_settings_as_effective(
+async def test_reported_model_overrides_initialize_and_launch_settings(
     monkeypatch, tmp_path
 ) -> None:
-    """The process is fixed to its launch options, so those are what it ran on."""
-    peer = _Peer(updates=[text_chunk("ok")])
+    peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.7"])
     install(monkeypatch, peer)
 
     result, _ = await _run(
         GrokAcpAdapter(),
         tmp_path,
         effort="high",
-        provider_options={"model": "grok-4.5", "reasoning_effort": "high"},
+        provider_options={"model": "grok-4.6", "reasoning_effort": "high"},
     )
 
-    assert (result.model, result.effort) == ("grok-4.5", "high")
+    assert (result.model, result.effort) == ("grok-4.7", "high")
 
 
 @pytest.mark.asyncio
-async def test_the_initialize_reported_model_covers_a_turn_that_imposed_none(
+async def test_reported_model_covers_a_turn_that_imposed_none(
     monkeypatch, tmp_path
 ) -> None:
-    """Grok names the process's current model in `initialize` `_meta.modelState`
-    (observed on 0.2.114), so even a turn on the account default knows its
-    model. The reasoning effort is reported nowhere and stays empty."""
-    peer = _Peer(updates=[text_chunk("ok")])
+    peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.7"])
     install(monkeypatch, peer)
 
     result, _ = await _run(GrokAcpAdapter(), tmp_path)
 
-    assert (result.model, result.effort) == ("grok-4.5", "")
+    assert (result.model, result.effort) == ("grok-4.7", "")
 
 
 @pytest.mark.asyncio
-async def test_launch_options_stand_in_when_initialize_names_no_model(
-    monkeypatch, tmp_path
-) -> None:
+async def test_unreported_model_is_left_empty(monkeypatch, tmp_path) -> None:
     peer = _Peer(
-        initialize=_initialize(_meta={"agentVersion": "0.2.114"}),
         updates=[text_chunk("ok")],
     )
     install(monkeypatch, peer)
 
+    adapter = GrokAcpAdapter()
+    adapter._turn_model = "grok-previous"
     result, _ = await _run(
-        GrokAcpAdapter(),
+        adapter,
         tmp_path,
         effort="high",
         provider_options={"model": "grok-code", "reasoning_effort": "low"},
     )
 
-    assert (result.model, result.effort) == ("grok-code", "low")
+    assert (result.model, result.effort) == ("", "low")
+
+
+@pytest.mark.asyncio
+async def test_latest_model_update_is_used_after_session_reload(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(
+        replay=[text_chunk("previous")],
+        updates=[text_chunk("fresh")],
+        model_updates=["grok-4.6", "grok-4.7"],
+    )
+    install(monkeypatch, peer)
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id=_Peer.SESSION_ID,
+    )
+
+    result, _ = await _run(GrokAcpAdapter(), tmp_path, conversation)
+
+    assert result.model == "grok-4.7"
 
 
 @pytest.mark.asyncio

@@ -54,7 +54,6 @@ _KNOWN_EXTENSION_NOISE = frozenset(
         "_x.ai/announcements/update",
         "_x.ai/mcp/servers_updated",
         "_x.ai/mcp_initialized",
-        "_x.ai/models/update",
         "_x.ai/queue/changed",
         "_x.ai/session/prompt_complete",
         "_x.ai/sessions/changed",
@@ -85,6 +84,7 @@ class GrokAcpAdapter(AcpAdapterBase):
         timeout: float = 3600.0,
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
+        self._turn_model = ""
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         return _launch_argv(self._executable, self.applied_settings(context))
@@ -92,23 +92,29 @@ class GrokAcpAdapter(AcpAdapterBase):
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
         return {"sandbox": _SANDBOX_PROFILE}
 
+    async def _prepare_turn(self, context: AgentExecutionContext) -> None:
+        await super()._prepare_turn(context)
+        self._turn_model = ""
+
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
-        # Grok Build names the model the process is fixed to in its
-        # `initialize` response (`_meta.modelState.currentModelId`, observed on
-        # 0.2.114), which also covers a launch that imposed none and ran on the
-        # account default. The reasoning effort is reported nowhere, so only a
-        # launch option that imposed it is known.
-        applied = self.applied_settings(context)
-        reported = str(
-            as_dict(
-                as_dict(self._initialize_result.get("_meta")).get("modelState")
-            ).get("currentModelId", "")
-            or ""
-        )
+        # Grok Build 1.0.34 reports the current model during the turn on
+        # `_x.ai/models/update.currentModelId`. The initialize modelState can
+        # differ from it, even when a model was supplied at launch.
+        # Reasoning effort is not reported, so only an imposed value is known.
         return (
-            reported or str(applied.get("model", "") or ""),
-            str(applied.get("reasoning_effort", "") or ""),
+            self._turn_model,
+            str(self.applied_settings(context).get("reasoning_effort", "") or ""),
         )
+
+    def _decode(
+        self, method: str, params: dict[str, Any], session_id: str
+    ) -> list[AgentEvent]:
+        if method == "_x.ai/models/update":
+            model = params.get("currentModelId")
+            if isinstance(model, str) and model:
+                self._turn_model = model
+            return []
+        return super()._decode(method, params, session_id)
 
     def _agent_version_of(self, result: dict[str, Any]) -> str:
         # Grok Build reports its version privately rather than in `agentInfo`.
