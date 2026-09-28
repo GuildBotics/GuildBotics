@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import tempfile
 from contextlib import suppress
@@ -10,35 +9,20 @@ from typing import ClassVar
 from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.commands.utils import find_shell, stringify_output
-
-_WINDOWS = os.name == "nt"
+from guildbotics.commands.utils import stringify_output
+from guildbotics.utils.child_process import ChildProcess
 
 
 def _runs_itself(path: Path) -> bool:
-    """Return whether the operating system can execute the script directly.
+    """Return whether the script runs itself, so that its shebang is honored.
 
-    Windows has no execute bit -- ``os.access(..., os.X_OK)`` answers yes for
-    every file that exists -- and ``CreateProcess`` refuses a ``.sh`` whatever
-    its shebang says, so the interpreter runs it there, as it does for a file
-    without the bit elsewhere.
+    The execute bit alone does not say so: a file mounted from a Windows host
+    has every bit set, and a script without a shebang cannot be executed.
     """
-    return not _WINDOWS and os.access(str(path), os.X_OK)
-
-
-def _shell_executable() -> str:
-    """Return the shell to run a script with.
-
-    Raises:
-        CommandError: When this machine has no ``bash``.
-    """
-    found = find_shell()
-    if found is None:
-        raise CommandError(
-            "No 'bash' was found to run shell script commands with. "
-            "Install a POSIX shell and put 'bash' on PATH."
-        )
-    return found
+    if not os.access(str(path), os.X_OK):
+        return False
+    with path.open("rb") as script:
+        return script.read(2) == b"#!"
 
 
 class ShellScriptCommand(CommandBase):
@@ -54,19 +38,10 @@ class ShellScriptCommand(CommandBase):
         temp_file_name: str | None = None
         script = self.spec.get_config_value("script")
         if script is not None:
-            # The shell reads bytes, and the output is decoded as UTF-8 further
-            # down, so the script is written the same way on every platform.
-            # Line endings are pinned for the same reason: a carriage return
-            # translated in here reaches the shell as part of the command.
             with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".sh",
-                delete=False,
-                encoding="utf-8",
-                newline="\n",
+                mode="w", suffix=".sh", delete=False, encoding="utf-8"
             ) as tmp_file:
                 tmp_file.write(script)
-                tmp_file.flush()
                 temp_file_name = tmp_file.name
             executable_path = Path(temp_file_name)
 
@@ -75,41 +50,32 @@ class ShellScriptCommand(CommandBase):
                 f"Shell command '{self.spec.name}' is missing a script or executable path."
             )
 
-        args = (
-            [str(executable_path)]
-            if _runs_itself(executable_path)
-            else [_shell_executable(), str(executable_path)]
-        )
-        args.extend(str(item) for item in self.options.args)
-
         try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.spec.cwd,
-                env=env,
+            args = (
+                [str(executable_path)]
+                if _runs_itself(executable_path)
+                else ["bash", str(executable_path)]
             )
-
-            stdin_data = self.options.message.encode("utf-8")
-            stdout_data, stderr_data = await process.communicate(stdin_data)
-
-            if process.returncode != 0:
-                error_text = stderr_data.decode("utf-8", errors="replace").strip()
-                message = f"Shell command '{self.spec.name}' failed with exit code {process.returncode}."
-                if error_text:
-                    message = f"{message} {error_text}"
-                raise CommandError(message)
-
-            text_output = stdout_data.decode("utf-8", errors="replace")
-            return CommandOutcome(result=text_output, text_output=text_output)
-
-        except FileNotFoundError as exc:  # pragma: no cover - defensive guard
+            args.extend(str(item) for item in self.options.args)
+            process = await ChildProcess.start(*args, cwd=str(self.spec.cwd), env=env)
+            stdout_data, stderr_data = await process.communicate(
+                self.options.message.encode("utf-8")
+            )
+        except OSError as exc:
             raise CommandError(
-                f"Shell command '{executable_path}' could not be executed."
+                f"Shell command '{self.spec.name}' could not be executed: {exc}"
             ) from exc
         finally:
             if temp_file_name is not None:
                 with suppress(OSError):
                     os.remove(temp_file_name)
+
+        if process.returncode != 0:
+            error_text = stderr_data.decode("utf-8", errors="replace").strip()
+            message = f"Shell command '{self.spec.name}' failed with exit code {process.returncode}."
+            if error_text:
+                message = f"{message} {error_text}"
+            raise CommandError(message)
+
+        text_output = stdout_data.decode("utf-8", errors="replace")
+        return CommandOutcome(result=text_output, text_output=text_output)

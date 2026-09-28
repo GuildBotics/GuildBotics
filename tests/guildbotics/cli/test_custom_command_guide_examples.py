@@ -226,6 +226,7 @@ async def test_agent_brain_passes_cwd_and_params(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_builtin_command_in_pipeline_identify_item_args_passed(
     tmp_path, monkeypatch
 ):
@@ -252,6 +253,7 @@ async def test_builtin_command_in_pipeline_identify_item_args_passed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
@@ -287,6 +289,7 @@ async def test_subcommand_naming_and_reference_with_jinja2(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_external_shell_script_arguments_and_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     # Reference script by logical name without extension
@@ -459,6 +462,7 @@ async def test_print_command_basic(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
     """docs 5.3: `print` supports Jinja and previous outputs."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -492,6 +496,7 @@ async def test_print_command_with_pipeline_and_jinja(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_external_shell_script_called_by_command_name(tmp_path, monkeypatch):
     """docs 6: reference external script via `command: <name>`."""
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
@@ -567,6 +572,7 @@ async def test_member_selection_with_person_identifier(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_schema_defined_prompt_pipeline(tmp_path, monkeypatch):
     """docs 5.2: schema + response_class in subcommands runs and stores named result.
 

@@ -39,10 +39,11 @@ AI CLIツールごとの設定へ翻訳するためのもの。書式は[カス�
 
 ## エージェント隔離環境のアクセス許可
 
-AI CLIツールのターンはすべてエージェント隔離環境の中で実行します。この端末でビルドした
-snapshotからGuildBoticsが起動するmicroVMです。1回のコマンド実行の中のターンは1つのmicroVMを
-共有します。microVMは最初のターンの前に、メンバーに設定されているAI CLIツールをどれでも動かせる形で、
-そのターンではなくコマンドから決まる形（コマンドの作業ディレクトリで動く）で起動し、コマンド実行が終わると（成功・失敗・キャンセルを問わず）破棄します。ターンは1つずつ順に
+コマンドはすべてエージェント隔離環境の中で実行します。この端末でビルドした
+snapshotからGuildBoticsが起動するmicroVMです。コマンドとそのサブコマンド、その中のAI CLIツールのターンは
+1つのmicroVMを共有します。microVMはコマンドの開始時に、メンバーに設定されているAI CLIツールをどれでも動かせる形で、
+コマンドから決まる形（コマンドの作業ディレクトリで動く）で起動し、コマンド実行が終わると（成功・失敗・キャンセルを問わず）破棄します。
+adapterとプロバイダのCLIはその中で動くので、プロバイダの出力もhostではなくその中で読みます。ターンは1つずつ順に
 動き、先のターンが残したものが見えます（コマンドとそのサブコマンドは同じ隔離の範囲です）。
 コマンド実行の外ではターンを起動しません（Desktopのアシスタントと診断画面のAI CLIツールの確認も、
 同梱のコマンドとして動きます）。起動後のmicroVMの構成は変えません。起動時にマウントした範囲の外を作業ディレクトリに
@@ -83,9 +84,9 @@ GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコー�
 `microsandbox`を除いて書き出したものです（`uv.lock`を変えたら書き出し直します。書き出しの
 コマンドは、ずれを検出するテスト`test_requirements.py`が失敗時に表示します）。snapshotの名前は
 各ビルド手順の中身から作るので、依存の一覧を変えるとsnapshotは古い扱いになり、再ビルドされます。
-再ビルドの間（数十秒〜数分）はturnを起動できません。コードそのものはsnapshotに入れず、動いている
+再ビルドの間（数十秒〜数分）はコマンドを起動できません。コードそのものはsnapshotに入れず、動いている
 プロセス自身の`guildbotics`パッケージ（ソースから動かしているときはチェックアウト、配布版では自分の
-build）を、どのturnのmicroVMにも`/opt/guildbotics/code/guildbotics`へ読み取り専用でbindします。hostと
+build）を、どのコマンドのmicroVMにも`/opt/guildbotics/code/guildbotics`へ読み取り専用でbindします。hostと
 同じパスにしないのは、GuildBoticsのチェックアウト自身を作業ディレクトリにしたturnで、その中の
 `guildbotics/`が読み取り専用で覆われないようにするためです。
 
@@ -172,7 +173,7 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
     - Documents/shared-documents/private
   ```
 
-- **リソース**: `intelligences/agent_environment.yml`の`resources:`で、すべてのturnと
+- **リソース**: `intelligences/agent_environment.yml`の`resources:`で、すべてのコマンドのmicroVMと
   snapshot buildへ割り当てるメモリ（MiB）と仮想CPU数を指定します。省略時は4096 MiB・
   2 vCPUです。この宣言はワークスペース共通で、全端末に同じ値を使います。メモリが最も
   小さく、CPUコア数が最も少ない端末に収まる値を指定してください。
@@ -188,8 +189,9 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
   表示します。
 
 - **ネットワーク**: `intelligences/agent_environment.yml`のworkspace共通`network:`ブロックで、
-  全メンバー・全スロットの接続先を1つの規則として決めます。シェルコマンドとその子プロセス、
-  ツール組み込みのweb検索・URL取得のどちらにも同じ規則が効きます。`mode`は`deny` /
+  全メンバー・全スロットの接続先を1つの規則として決めます。コマンド自身のコード、ターンのシェルコマンドと
+  その子プロセス、ツール組み込みのweb検索・URL取得のどれにも同じ規則が効きます。自分でネットワークに
+  接続するコマンドは、実行する前に接続先をここで許可しておく必要があります。`mode`は`deny` /
   `allowlist` / `unrestricted`のいずれか（`off`はYAMLの真偽値として読まれるため使いません）。
   `allowed_domains`は`allowlist`でのみ使い、`allow_local_network`はlocalhostとLANも開きます。
   `network:`省略時は`deny`です。同梱の宣言は一般的なcoding作業の出発点として、主要なGitHub・
@@ -217,8 +219,8 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
 
 - **読み取り専用ターン**: 何も変更してはいけないコマンドは、そう宣言します（`read_only: true`。
   同梱のコマンドではDesktopのトラブルシューティングとコマンド作成アシスタント、診断画面のAI CLIツールの
-  確認）。宣言はコマンドのもので、そのコマンドの実行のターンはサブコマンドのものも含めてすべてそれに
-  従い、ターンが自分で読み取り専用を名乗ることはできません。契約（`AccessContract.read_only`）が
+  確認）。宣言はコマンドのもので、そのコマンドの実行は、コマンド自身のコード、サブコマンド、その中の
+  ターンも含めてすべてそれに従い、ターンが自分で読み取り専用を名乗ることはできません。契約（`AccessContract.read_only`）が
   それを表し、どのプロバイダが動かしても隔離環境が同じ形で閉じ込めます。hostからbindするディレクトリはすべて読み取り専用
   （受け渡しフォルダと`read_write`のgrantを含む）で、作業ディレクトリはmicroVM自身の空のディレクトリです。
   denyで閉じた場所を覆う空のディレクトリと同じく、書き込めますがhostのものは何も無く、microVMと一緒に捨てます。
@@ -365,8 +367,8 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   ログインの値（turnに渡してよいフィールドと、認証値にはなり得ない短い値を除く全部）を伏せ字にしてから
   ログや画面に渡します。
   更新では期限切れと伝えたログインを渡して`claude -p /usage`を実行し、更新されたログインを
-  環境を止める前に取り出して暗号化保存します。期限まで5分を切ったログインは、turn（コマンド実行の
-  最初のturnではそのmicroVMも）とツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があり、Antigravityはその認証を
+  環境を止める前に取り出して暗号化保存します。期限まで5分を切ったログインは、turnと
+  ツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があり、Antigravityはその認証を
   10秒で打ち切るため、最初の要求の中で更新を待たせません）。turnの途中では、ゲートウェイが期限の
   5分前、またはupstreamに拒否されたときに更新を要求し、その要求は更新を待ちます（refreshするツールはすべて、
   turnの途中の待ちのあともturnを続けることを実アカウントで確認済みです）。この環境はprocessをまたいで端末に1つだけ動くように
@@ -454,22 +456,17 @@ GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、�
 いる状態）は、いずれも認証エラーとして停止し、`copilot login`の実行を案内します。診断記録に
 残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
-GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ渡しません。
-親プロセスの環境変数のうち、名前に`TOKEN`、`SECRET`、`PASSWORD`、`PRIVATE_KEY`、`API_KEY`を
-含むものはすべて取り除きます。除外する名前を列挙するのではなくパターンで判定するのは、列挙は
-「追加を忘れた秘密」だけを残す形になるためです。さらに、ワークスペースのSecretStoreに保存された
-キーは名前に関係なく取り除きます。`guildbotics secrets set`は任意のキー名を受け付けるため
-（例: `DATABASE_URL`）、「秘密ストアに保存された」という出所そのものを判定根拠にします。
-名前パターンは、シェルからexportされたGuildBotics管理外の認証情報を拾う保険として機能します。
-これにより、メンバー自身の
-`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN`と、
-LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）も渡りません。いずれもGuildBoticsのプロセス内で
-消費するものであり、member CLIは自分でOSキーチェーンから読み込むため、この除去の影響を
-受けません。認証情報を渡す代わりに呼び出させる`git`/`ssh`のhelperとsocket
-（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）と、親プロセスのworkspace rootも取り除きます。
+GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ届きません。
+隔離環境はhostの環境変数を一切引き継がないためです。メンバー自身の
+`{PERSON_ID}_GITHUB_ACCESS_TOKEN` / `_SLACK_BOT_TOKEN` / `_SLACK_APP_TOKEN`、
+LLMプロバイダのAPIキー（`OPENAI_API_KEY`など）、認証情報を渡す代わりに呼び出させる`git`/`ssh`の
+helperとsocket（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）は、どれも中に存在しません。
+いずれもhostのGuildBoticsのプロセス内で消費するものであり、member CLIは自分でOSキーチェーンから
+読み込むため、存在しないことの影響を受けません。
 
-Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityには、`127.0.0.1`にbindした
-adapter専用のHTTP MCP endpointと、推測困難なbearer grantを渡します。ACPを使うGrok Buildと
+Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityには、hostのloopbackでlistenし、
+microVMからは`host.microsandbox.internal`として届くコマンドのHTTP MCP endpointと、
+推測困難なbearer grantを渡します。ACPを使うGrok Buildと
 GitHub Copilotはsessionの`mcpServers`、CodexとClaude Codeはprocess単位のMCP設定を使います。
 Codexは生のtokenを専用環境変数から`bearer_token_env_var`で読み、必要な
 `Authorization: Bearer` prefixをCodex自身が付けます。Antigravityは`--add-dir`で追加した専用の
@@ -477,12 +474,12 @@ Codexは生のtokenを専用環境変数から`bearer_token_env_var`で読み、
 memberの実作業ディレクトリのまま維持します。
 唯一の`guildbotics_member` toolが受け取るのは、固定された
 `guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、
-workspaceを上書きすること、別personとして動くことはできません。endpointはproviderのsandbox外に
-あるGuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
-adapterとともに停止します。各provider processへmember execution leaseを渡しません。
+workspaceを上書きすること、別personとして動くことはできません。endpointはmicroVMの外、host
+のGuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
+コマンドの終了とともに停止します。各provider processへmember execution leaseを渡しません。
 
-brokerは呼び出しごとにCLI processを起動せず、turnを動かしているtrustedなGuildBotics processの
-中でmember CLIを実行するため、OS KeychainなどのSecretStore backendをそのまま利用できます。
+brokerは呼び出しごとにCLI processを起動せず、コマンドを動かしているhostのtrustedなGuildBotics
+processの中でmember CLIを実行するため、OS KeychainなどのSecretStore backendをそのまま利用できます。
 各commandは専用のworker threadで、専用の作業ディレクトリ・標準入出力・呼び出し情報を持って
 動くため、同時に動くcommand同士がそれらを見ることはありません。commandはturnが保持する
 execution leaseのもとで、そのprocessが選択中のworkspaceに対して動き、相対パスはmemberの

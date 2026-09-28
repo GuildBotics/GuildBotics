@@ -2,6 +2,7 @@ import contextlib
 import json
 import logging
 import os
+import subprocess
 import sys
 import tempfile
 import warnings
@@ -353,6 +354,38 @@ def weasyprint_libraries() -> None:
         importlib.import_module("weasyprint")
     except (ImportError, OSError) as exc:
         pytest.skip(f"WeasyPrint's native libraries are not available: {exc}")
+
+
+@pytest.fixture
+def shell_commands() -> None:
+    """Skip on a device that cannot run a ``.sh`` command as its environment does.
+
+    A command runs in its isolated environment, which is Linux, and a ``.sh``
+    command there runs itself or ``bash``. Windows can do neither: every file
+    passes ``os.access(..., os.X_OK)``, ``CreateProcess`` refuses a script, and
+    ``bash`` there may be the WSL launcher.
+    """
+    if os.name == "nt":
+        pytest.skip("A .sh command runs in the Linux environment, not on Windows.")
+
+
+@pytest.fixture(scope="session")
+def posix_sh() -> str:
+    """A POSIX ``sh`` for what stands in for a command's isolated environment.
+
+    Windows has none on PATH, but Git for Windows ships one under the root of
+    its installation, which ``git --exec-path`` (``<root>/mingw64/libexec/
+    git-core``) leads to; an installation without it (MinGit) skips.
+    """
+    if os.name != "nt":
+        return "sh"
+    exec_path = subprocess.run(
+        ["git", "--exec-path"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    sh = Path(exec_path).parents[2] / "bin" / "sh.exe"
+    if not sh.is_file():
+        pytest.skip(f"This Git installation ships no sh at {sh}.")
+    return str(sh)
 
 
 class FakeProject:

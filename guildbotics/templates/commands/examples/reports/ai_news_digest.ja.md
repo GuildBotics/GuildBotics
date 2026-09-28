@@ -1,6 +1,6 @@
 ---
 template_engine: jinja2
-description: 前段で取得したAIニュース一覧を、Slack投稿向けの日本語ダイジェストに整形する（LLM利用サンプル）
+description: 前段で取得したAIニュース一覧を、Slack投稿向けの日本語ダイジェストに整形する（LLM利用サンプル）。前段は Google News の RSS を取得するため、実行前にワークスペースのネットワーク（agent_environment.yml の network の allowlist）で news.google.com を許可してください。
 commands:
   - name: ai_news
     path: tools/fetch_ai_news.py

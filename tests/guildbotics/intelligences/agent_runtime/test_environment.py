@@ -56,7 +56,8 @@ def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
         path.name
         for path in runtime_dir.glob("*.py")
         if re.search(
-            r"create_subprocess_|\bsubprocess\.|import subprocess|\bPopen\b",
+            r"create_subprocess_|\bsubprocess\.|import subprocess|\bPopen\b"
+            r"|\bchild_process\b",
             path.read_text(encoding="utf-8"),
         )
     ]

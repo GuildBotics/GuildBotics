@@ -21,6 +21,11 @@ import { defineConfig, devices } from "@playwright/test";
 //   * "down"        — frontend booted against a NOT-yet-serving backend; the
 //                     spec brings the real backend up on demand via a control
 //                     server (critical-failure journey ⑥, `failure.spec.ts`).
+//   * "environment" — pre-seeded workspace given the ready isolated agent
+//                     environment of the workspace GUILDBOTICS_E2E_ENVIRONMENT_FROM
+//                     names, so a command runs in a real microVM (journey ⑪,
+//                     `environment.spec.ts`). Started only when that is set; a
+//                     device without one (CI) skips the journey.
 // Each stack owns its own backend port, frontend port and on-disk workspace, so
 // the journeys never share state. The harness mints the Local API token per run
 // and publishes it through the stack context file.
@@ -48,6 +53,13 @@ const SYNC_FRONTEND_PORT = Number(process.env.GUILDBOTICS_E2E_SYNC_FRONTEND_PORT
 const DOWN_BACKEND_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_BACKEND_PORT ?? "8770");
 const DOWN_FRONTEND_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_FRONTEND_PORT ?? "1425");
 const DOWN_CONTROL_PORT = Number(process.env.GUILDBOTICS_E2E_DOWN_CONTROL_PORT ?? "8771");
+const ENVIRONMENT_BACKEND_PORT = Number(
+  process.env.GUILDBOTICS_E2E_ENVIRONMENT_BACKEND_PORT ?? "8773",
+);
+const ENVIRONMENT_FRONTEND_PORT = Number(
+  process.env.GUILDBOTICS_E2E_ENVIRONMENT_FRONTEND_PORT ?? "1427",
+);
+const ENVIRONMENT_FROM = process.env.GUILDBOTICS_E2E_ENVIRONMENT_FROM;
 
 const SETUP_BASE_URL = `http://${HOST}:${SETUP_FRONTEND_PORT}`;
 const CONFIGURED_BASE_URL = `http://${HOST}:${CONFIGURED_FRONTEND_PORT}`;
@@ -55,6 +67,7 @@ const MEMBERS_BASE_URL = `http://${HOST}:${MEMBERS_FRONTEND_PORT}`;
 const DIAGNOSTICS_BASE_URL = `http://${HOST}:${DIAGNOSTICS_FRONTEND_PORT}`;
 const SYNC_BASE_URL = `http://${HOST}:${SYNC_FRONTEND_PORT}`;
 const DOWN_BASE_URL = `http://${HOST}:${DOWN_FRONTEND_PORT}`;
+const ENVIRONMENT_BASE_URL = `http://${HOST}:${ENVIRONMENT_FRONTEND_PORT}`;
 
 export default defineConfig({
   testDir: "e2e",
@@ -100,6 +113,11 @@ export default defineConfig({
       name: "down",
       testMatch: /failure\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"], baseURL: DOWN_BASE_URL },
+    },
+    {
+      name: "environment",
+      testMatch: /environment\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], baseURL: ENVIRONMENT_BASE_URL },
     },
   ],
   webServer: [
@@ -201,5 +219,25 @@ export default defineConfig({
         GUILDBOTICS_E2E_CONTROL_PORT: String(DOWN_CONTROL_PORT),
       },
     },
+    ...(ENVIRONMENT_FROM
+      ? [
+          {
+            command: "node e2e/start-stack.mjs",
+            url: `${ENVIRONMENT_BASE_URL}/`,
+            reuseExistingServer: false,
+            timeout: 120_000,
+            stdout: "pipe" as const,
+            stderr: "pipe" as const,
+            env: {
+              GUILDBOTICS_E2E_STACK: "environment",
+              GUILDBOTICS_E2E_SEED: "1",
+              GUILDBOTICS_E2E_ADOPT_ENVIRONMENT: ENVIRONMENT_FROM,
+              GUILDBOTICS_E2E_HOST: HOST,
+              GUILDBOTICS_E2E_BACKEND_PORT: String(ENVIRONMENT_BACKEND_PORT),
+              GUILDBOTICS_E2E_FRONTEND_PORT: String(ENVIRONMENT_FRONTEND_PORT),
+            },
+          },
+        ]
+      : []),
   ],
 });

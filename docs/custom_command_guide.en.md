@@ -7,6 +7,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
     - [1.1. Create a prompt file](#11-create-a-prompt-file)
     - [1.2. Invoke the command](#12-invoke-the-command)
     - [1.3. Select a member](#13-select-a-member)
+    - [1.4. Where a command runs](#14-where-a-command-runs)
   - [2. Variations of variable expansion](#2-variations-of-variable-expansion)
     - [2.1. Named arguments](#21-named-arguments)
     - [2.2. Jinja2 examples](#22-jinja2-examples)
@@ -56,7 +57,7 @@ Return only the translated text.
 
 Notes:
 
-- The built-in Python command `functions/get_os_ui_language` supplies the OS UI language and preserves the input text as structured data.
+- The built-in Python command `functions/get_os_ui_language` supplies the OS UI language of the machine running the command (passed into the isolated environment as `LANGUAGE`; see [1.4. Where a command runs](#14-where-a-command-runs)) and preserves the input text as structured data.
 - When the OS UI language is English, the command uses Japanese as the other language.
 - You do not need to provide languages as invocation arguments.
 - Use `brain: default` for semantic processing such as translation, proofreading, rewriting, or summarization. Use `brain: agent` when the command needs AI CLI file or tool access. Use `brain: none` only for deterministic rendering; it does not receive the caller's input message. A Markdown command with `inputs.message: required`, `brain: none`, and no child command is therefore invalid. Omitting `brain` still resolves to `default` at runtime, but generated commands and examples declare it explicitly to make the intended execution mode unambiguous.
@@ -92,6 +93,17 @@ Specify the member that runs a command with the `<command>@<person_id>` form (or
 Example: `guildbotics run translate@yuki`
 
 When no member is named, the command runs as the team default: the member stored in `default_person_id` of `team/project.yml` (set it from the Members screen of the GuildBotics Desktop app). Without that setting, the first active agent member in person ID order is used, so a command runs even before anything is configured. Only a team with no member that can execute commands asks you to select one.
+
+### 1.4. Where a command runs
+
+A command and all of its subcommands (Markdown, YAML, Python, shell scripts, and the AI CLI turns among them) run inside one isolated agent environment: a Linux microVM that GuildBotics boots on the machine running the command when the command starts, and discards when it ends. Write commands with these rules in mind:
+
+- Nothing of the host's environment reaches the command: not its environment variables, its PATH, or its credentials. What the command is told of the host arrives as two environment variables: `LANGUAGE` (the OS UI language in gettext form, such as `ja_JP`) and `TZ` (the time zone by its IANA name). `functions/get_os_ui_language` reads the former.
+- Files outside the working directory are reached only through the directories granted to the environment. The exchange folder `~/Documents/GuildBotics` is always granted, read/write unless the command declares `read_only` ([3.1](#31-declaring-a-command-read-only)).
+- The network is reached only as the workspace-wide `network:` block of `intelligences/agent_environment.yml` allows, and it denies everything when omitted. A command that talks to the network (a web API, a feed) needs its destinations allowed there before it runs.
+- Python commands run with GuildBotics' own Python environment (Python 3.12 with GuildBotics and its dependencies), and shell scripts with the tools of the environment's base image.
+
+For grants and `network:`, see [Isolated agent environment: access permissions](native_agent_runtime.en.md#isolated-agent-environment-access-permissions).
 
 
 ## 2. Variations of variable expansion
@@ -247,7 +259,7 @@ The AI CLI tool works in the command's working directory, which is decided by ho
 
 ### 3.1. Declaring a command read-only
 
-A command that changes nothing can declare `read_only: true` in its metadata (`"read_only": True` in a Python command's `COMMAND_METADATA`). The declaration is the command's: every AI CLI turn of its run, its subcommands' included, is confined read-only in the isolated environment (everything visible from the host is read-only, the working directory included, and the network reaches only the provider's API). In exchange, it can run alongside a running manual command and that member's scheduled work.
+A command that changes nothing can declare `read_only: true` in its metadata (`"read_only": True` in a Python command's `COMMAND_METADATA`). The declaration is the command's: its whole run, its subcommands and AI CLI turns included, is confined read-only in the isolated environment (everything bound from the host is read-only, the working directory is an empty directory of the environment's own, and the network reaches only the provider's API). In exchange, it can run alongside a running manual command and that member's scheduled work.
 
 Declaring `inspects` lets its turns read the workspace's own state, read-only: `diagnostics` is the recorded runs, `config` the workspace configuration and the bundled templates.
 
@@ -260,7 +272,7 @@ inspects: [diagnostics]
 Read the records of the most recent failed run and explain its cause in one paragraph.
 ```
 
-Only the declaration of the command you run counts; a subcommand's own declaration is not consulted. A read-only command cannot run a command that declares otherwise (through `run_command` or the like); that run is refused. The isolated environment confines only the AI CLI turns: the command's own shell scripts and Python code run on the host, so a command that declares `read_only: true` must keep them from changing anything too.
+Only the declaration of the command you run counts; a subcommand's own declaration is not consulted. The command's own shell scripts and Python code run in the same environment, so the declaration confines them too.
 
 
 ## 4. Using built-in commands
@@ -274,9 +286,9 @@ You can use [built-in commands](../guildbotics/templates/commands/) shipped with
 
 On Windows, use `guildbotics` and pipe the file's UTF-8 text to stdin. Delete the temporary file after the command exits, including on failure. In a skill session, the active member handles this invocation for you.
 
-`ask` uses `brain: agent` and requires a message. It reads uncommitted changes in the same working tree and returns text on stdout. A review request permits reading only; a fix request permits the requested edits and verification. Publishing must be part of the request. Select the GuildBotics workspace first (`--cwd` selects the working tree, not the workspace configuration), and prepare the receiving member's isolated agent environment and AI CLI login on this machine. Run from the host, allow several minutes with a longer caller timeout or background execution, and wait for the result. Environment/login failures return the existing runtime refusal reason.
+`ask` uses `brain: agent` and requires a message. It reads uncommitted changes in the same working tree and returns text on stdout. A review request permits reading only; a fix request permits the requested edits and verification. Publishing must be part of the request. Select the GuildBotics workspace first (`--cwd` selects the working tree, not the workspace configuration), and prepare the receiving member's isolated agent environment and AI CLI login on this machine. Start it from the host (the command itself runs in the isolated environment, with `--cwd` as its working directory), allow several minutes with a longer caller timeout or background execution, and wait for the result. Environment/login failures return the existing runtime refusal reason.
 
-Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs or the calling shell's environment variables.
+Open GuildBotics Desktop with the same workspace before making the request. Host `guildbotics run` commands execute there when it is available; if Desktop is closed or has a different workspace selected, they run locally. Once Desktop receives a command, an error or lost connection ends the request without repeating it locally. If the member is busy, its refusal reason is returned. Desktop execution returns output only when the command finishes and does not forward progress logs.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders**. During development (`tauri dev`), this is the terminal or Visual Studio Code that started it. GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and Desktop if access is denied.
 
@@ -533,7 +545,7 @@ commands:
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
 
-Shell commands require Bash. They are not supported by the native Windows command path; use a Python command for portable logic, or run the workflow in an environment where Bash is explicitly available.
+Shell scripts run on the Linux of the isolated environment, whatever OS the host runs, Windows included: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash` (a file mounted from a Windows host is always executable).
 
 For example, create `current-time.sh`:
 
@@ -614,7 +626,7 @@ Python commands support three types of arguments:
 - context: If the first parameter of `main` is named `context` / `ctx` / `c`, you can access the execution context. Typical use cases:
   - Retrieve team and person information
   - Invoke other commands
-  - Access ticket management services or code hosting services
+  - Post and react in chat as the member (`context.get_chat_service()`, which runs the member's chat commands; the ticket manager is not available in the isolated environment)
 - positional arguments: Define as positional parameters of `main`.
 - keyword arguments: Define as keyword parameters of `main`.
 

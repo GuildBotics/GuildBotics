@@ -528,6 +528,7 @@ async def test_executor_runs_markdown_with_subcommands(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_executor_runs_shell_command(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     _write(
