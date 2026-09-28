@@ -64,9 +64,8 @@ _SESSION_LIMIT_PATTERN = re.compile(
 
 class ClaudeStreamJsonAdapter(StreamJsonAdapter):
     name = "claude-stream-json"
-    # Claude Code fixes its model and effort when the session starts; a resumed
-    # session cannot be reconfigured, so a settings change rotates the
-    # conversation.
+    # Differing non-empty settings fingerprints rotate the conversation. Claude
+    # Code does not retain the model on resume, so re-send the last recorded one.
     settings_scope = SETTINGS_SCOPE_SESSION
 
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
@@ -108,7 +107,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             "--strict-mcp-config",
         ]
         _warn_unusable_effort_settings(context)
-        args.extend(_effort_arguments(context))
+        args.extend(_effort_arguments(context, conversation))
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -239,8 +238,8 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             stderr=output.stderr,
             returncode=returncode,
             model=reported_model,
-            # A turn that imposed nothing left the session on the settings it
-            # already ran with, which the conversation remembers.
+            # Claude does not report effort; carry forward the last recorded
+            # value when this turn supplied no effort flag.
             effort=_applied_effort(context) or conversation.effective_effort,
         )
 
@@ -278,8 +277,7 @@ def _applied_effort(context: AgentExecutionContext) -> str:
 
     Claude Code reports no effort of its own, so the only honest value is the
     level the adapter actually put on the command line, in Claude Code's own
-    vocabulary. A turn that imposes nothing leaves the session on the settings
-    it already has, and must not claim a level it never applied.
+    vocabulary. A turn with no effort flag does not establish a new level.
     """
     return str(_applied_effort_settings(context).get("effort", ""))
 
@@ -291,11 +289,16 @@ def _reported_model(raw: dict[str, Any]) -> str:
     return str(raw.get("model", "") or "")
 
 
-def _effort_arguments(context: AgentExecutionContext) -> list[str]:
-    """Translate the turn's effort settings into Claude Code CLI flags."""
+def _effort_arguments(
+    context: AgentExecutionContext, conversation: ConversationRecord
+) -> list[str]:
+    """Build model and effort flags, reusing the recorded model on resume."""
     settings = _applied_effort_settings(context)
     args: list[str] = []
-    if model := str(settings.get("model", "")):
+    model = str(settings.get("model", ""))
+    if not model and conversation.provider_session_id:
+        model = conversation.effective_model
+    if model:
         args.extend(("--model", model))
     if effort := str(settings.get("effort", "")):
         args.extend(("--effort", effort))

@@ -672,7 +672,8 @@ adapters leave it empty rather than persisting a transport-local JSON-RPC reques
 GuildBotics never uses a provider's “latest” or implicit continuation mode. A missing
 or unhealthy session fails exact `resume`; `auto` starts a new generation and rebuilds
 context. Rotation also occurs after cancellation, malformed or incomplete streams,
-process failure, provider context compaction, TTL/turn/usage limits, or a model change.
+process failure, provider context compaction, TTL/turn/usage limits, or a change
+to session-scoped model settings.
 Codex `contextCompaction` and Claude `compact_boundary` events are normalized to the
 same runtime event; the completed turn remains successful, while the next dispatch
 starts a new generation and rebuilds the Slack snapshot.

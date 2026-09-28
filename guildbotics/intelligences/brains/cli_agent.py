@@ -779,9 +779,8 @@ class CliAgentBrain(Brain):
             context_cursor=str(configured.get("context_cursor") or ""),
             event_id=str(configured.get("event_id") or ""),
             model=effort.model or str(configured.get("model") or ""),
-            # `default` and unspecified state nothing: the turn imposes no
-            # settings, which leaves a resumed session on the ones it
-            # already has instead of rotating it back to provider defaults.
+            # `default` and unspecified request no effort overlay or rotation.
+            # Whether resumed settings persist depends on the adapter and provider.
             # A level whose overlay is empty also imposed nothing of its
             # own, so it must not be reported as the turn's effort.
             effort=(
@@ -933,8 +932,9 @@ class CliAgentBrain(Brain):
             conversation.provider_session_id = terminal.provider_session_id
             conversation.provider_turn_id = terminal.provider_turn_id
             conversation.provider = adapter_name
-            # A continued session keeps its settings when a turn states none, so
-            # only a turn that established a value may overwrite what is known.
+            # Retain the last known values when the turn reports none. Claude
+            # re-sends the recorded model on resume; effort is only carried
+            # forward here for reporting when no new value is available.
             conversation.effective_model = (
                 terminal.model or conversation.effective_model
             )

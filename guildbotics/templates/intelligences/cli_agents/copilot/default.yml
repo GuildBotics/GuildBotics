@@ -4,8 +4,8 @@
 # to translate the provider-neutral effort labels (low / high) into settings the
 # Copilot adapter can apply.
 #
-# `default` is deliberately absent, and is rejected if written: it means "do not
-# intervene", which leaves a resumed session on the settings it already has.
+# `default` is deliberately absent, and is rejected if written: it requests no
+# effort overlay, so there is no mapping to apply for that level.
 #
 # `copilot --acp` exposes these as session configuration options rather than as
 # launch flags, so the adapter re-applies them on every turn instead of starting

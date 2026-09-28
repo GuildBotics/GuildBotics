@@ -76,8 +76,8 @@ class ConversationStore:
                     record.rotate(reason)
             if model:
                 record.model = model
-            # An empty fingerprint means "keep the session's current settings",
-            # so it must not erase what the session is already running with.
+            # An empty fingerprint requests no settings change or rotation;
+            # retain the last non-empty settings request for future comparisons.
             if settings_fingerprint:
                 record.settings_fingerprint = settings_fingerprint
             return record

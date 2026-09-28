@@ -334,7 +334,7 @@ async def test_native_brain_persists_cursor_only_after_terminal_success(
 async def test_native_brain_remembers_the_sessions_effective_settings(
     monkeypatch, tmp_path
 ) -> None:
-    """A turn that reports no values keeps what the session is known to run on."""
+    """A turn that reports no values retains the last known values in the record."""
     original = cli_agent.person_cli_agent_mapping.copy()
     cli_agent.person_cli_agent_mapping.clear()
     cli_agent.person_cli_agent_mapping["aiko"] = {
@@ -375,7 +375,7 @@ async def test_native_brain_remembers_the_sessions_effective_settings(
     assert (first.model, first.effort) == ("gpt-established", "high")
     # The second turn itself reported nothing ...
     assert (second.model, second.effort) == ("", "")
-    # ... but the conversation still knows what the session runs on.
+    # ... but the conversation retains the last values it observed.
     assert persisted is not None
     assert persisted.effective_model == "gpt-established"
     assert persisted.effective_effort == "high"

@@ -15,9 +15,9 @@ Resolution order (identical for every brain):
 3. unspecified
 
 ``default`` is not the same as unspecified: a runtime ``effort=default``
-explicitly cancels a frontmatter ``effort: high``. Both mean "do not intervene",
-but for a continued native CLI session that means "keep the settings the session
-already has", never "restore the model default".
+explicitly cancels a frontmatter ``effort: high``. Both request no effort
+overlay. A native CLI session may continue, but whether its settings persist
+depends on the adapter and provider.
 """
 
 from __future__ import annotations
