@@ -367,13 +367,14 @@ and a provider without a declaration simply falls back to editing raw JSON.
 Descriptors resolve from the packaged definition when the workspace copy is
 silent: they describe the provider, not the scope that happens to hold a file.
 
-`default` and unspecified both mean "do not intervene", but for a *continued*
-native session that means "keep the settings this session already has", not
-"restore the provider defaults". Session rotation therefore compares a
-fingerprint of the settings the adapter will really impose — taken from its own
-`applied_settings`, not from the request — so a setting a provider cannot act on
-never reads as a change. An empty fingerprint on either side is a request to
-keep the session, and only two differing non-empty fingerprints rotate it.
+`default` and unspecified both request no effort overlay. A native session may
+continue, but the adapter and provider determine which settings persist;
+Claude explicitly re-sends the last recorded model on resume. Session rotation
+compares a fingerprint of settings the adapter accepts from this turn's request —
+taken from its own `applied_settings`, not directly from the request — so a
+setting a provider cannot act on never reads as a change. An empty fingerprint
+on either side requests no rotation, and only two differing non-empty
+fingerprints rotate the session.
 Adapters declare how far a settings change reaches through `settings_scope` —
 `turn` (codex re-sends `model` / `effort` on every `turn/start`, so it never
 rotates) or `session` (claude, grok).
@@ -394,12 +395,14 @@ knowledge and is carried out on the normal result path: each adapter fills
 `turn/start` settings and the catalog's advertised default model and
 `defaultReasoningEffort`, claude's and grok's `--effort` / `--reasoning-effort`
 launch flags, `agy`'s command line), and the brain passes
-them to `record_span_summary()` and logs one line per span. A continued session
-keeps its settings when a turn imposes none, so the conversation record
-remembers the last established values (`effective_model` / `effective_effort`,
-cleared on rotation) and a claude turn that imposed no effort, or a codex turn
-that omitted a setting on a resumed thread, reports what the session still runs
-under. A provider that reports nothing and was given nothing leaves both empty
+them to `record_span_summary()` and logs one line per span. The conversation
+record retains the last reported or imposed values (`effective_model` /
+`effective_effort`, cleared on rotation). Claude re-sends the recorded model
+when resuming without a configured one; a turn that reports no value retains
+the last known value in the record. Claude's unreported effort and an omitted
+Codex setting on a resumed thread are therefore reported from that record,
+without independently verifying that the provider retained them. A provider
+that reports nothing and was given nothing leaves both empty
 rather than inventing an effective value; the span's model then stays empty
 too, while the `agent.slot` / `model.slot` attribute always names the slot so
 traces stay searchable whatever model the slot resolved to.
