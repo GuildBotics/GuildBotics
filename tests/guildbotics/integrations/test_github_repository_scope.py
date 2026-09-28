@@ -153,6 +153,32 @@ async def test_other_writes_are_refused_before_they_are_sent(
     assert refusal["payload"]["target"].startswith(f"{method} /")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example.com/repos/acme/demo",
+        "http://api.github.com/repos/acme/demo",
+        "https://api.github.com:8443/repos/acme/demo",
+    ],
+)
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.asyncio
+async def test_nothing_is_sent_to_another_host_than_the_api(
+    monkeypatch, sent, refusals, method, url
+):
+    """The path is judged below the API's own host; the member's credential
+    goes nowhere else, not even to read."""
+    client = _client(monkeypatch, sent)
+    try:
+        with pytest.raises(RepositoryScopeError):
+            await client.request(method, url, json={})
+    finally:
+        await client.aclose()
+
+    assert sent == []
+    assert len(refusals) == 1
+
+
 @pytest.mark.asyncio
 async def test_without_a_configured_owner_every_repository_write_is_refused(
     monkeypatch, sent, refusals

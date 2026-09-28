@@ -58,10 +58,10 @@ def get_async_client(base_url: str, auth: httpx.Auth, owner: str) -> httpx.Async
     Returns:
         httpx.AsyncClient: An instance of AsyncClient configured with the provided base URL and headers.
     """
-    base_path = httpx.URL(base_url).raw_path.decode("ascii").rstrip("/")
+    base = httpx.URL(base_url)
 
     async def request_hook(request: httpx.Request) -> None:
-        check_request(owner, base_path, request)
+        check_request(owner, base, request)
 
     async def response_hook(response: httpx.Response) -> None:
         await raise_for_status_with_text(

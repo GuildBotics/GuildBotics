@@ -7,7 +7,8 @@ only to repositories of the owner the project is configured with, and every
 request of a member's GitHub client passes the judgment here before it is
 sent (``get_async_client``), as does every push of a member's git.
 
-Reads are not limited. What is not recognized as a read or as a write to the
+Reads are not limited by owner, but nothing is sent to a host other than the
+client's API. What is not recognized as a read or as a write to the
 configured owner is refused, so a new kind of write is refused until it is
 classified here.
 """
@@ -126,21 +127,26 @@ def check_repository(scope: str, owner: str, repository: str) -> None:
         _refuse(scope, "/".join(name for name in (owner, repository) if name))
 
 
-def check_request(scope: str, base_path: str, request: httpx.Request) -> None:
+def check_request(scope: str, base_url: httpx.URL, request: httpx.Request) -> None:
     """Refuse ``request`` unless it reads or writes within ``scope``.
 
     Args:
         scope: The configured owner.
-        base_path: The path of the client's API base URL (``/api/v3`` on
-            GitHub Enterprise Server), which the request's path starts with.
+        base_url: The client's API base URL. Only its host is sent to, and the
+            request's path starts with its path (``/api/v3`` on GitHub
+            Enterprise Server).
         request: The request about to be sent.
 
     Raises:
-        RepositoryScopeError: If the request writes outside the configured owner.
+        RepositoryScopeError: If the request goes to another host or writes
+            outside the configured owner.
     """
+    if (request.url.scheme, request.url.netloc) != (base_url.scheme, base_url.netloc):
+        _refuse(scope, f"{request.method} {request.url.scheme}://{request.url.host}")
     if request.method in _READ_METHODS:
         return
     path = request.url.raw_path.decode("ascii").split("?", 1)[0]
+    base_path = base_url.raw_path.decode("ascii").rstrip("/")
     if base_path and path.startswith(f"{base_path}/"):
         path = path.removeprefix(base_path)
     if path == "/graphql":
