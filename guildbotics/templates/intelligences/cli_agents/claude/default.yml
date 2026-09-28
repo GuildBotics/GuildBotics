@@ -7,8 +7,10 @@
 # `default` is deliberately absent, and is rejected if written: it means "do not
 # intervene", so a mapping for it could never be applied.
 #
-# Claude Code fixes these when the session starts and a resumed session cannot be
-# reconfigured, so changing them starts a fresh session (see `settings_scope`).
+# GuildBotics currently rotates the conversation when two non-empty settings
+# fingerprints differ (see `settings_scope`). Claude can accept --model on
+# resume, and the adapter re-sends the last recorded model when no model is
+# configured.
 effort:
   low:
     effort: low

@@ -354,7 +354,7 @@ def test_two_different_stated_settings_rotate_the_session(tmp_path) -> None:
 
 
 def test_dropping_to_no_stated_settings_keeps_the_session(tmp_path) -> None:
-    """`default` / unspecified means "keep the current settings", not "reset"."""
+    """An empty fingerprint preserves the session and its last fingerprint."""
     store = ConversationStore(tmp_path)
     record = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-high")
     record.provider_session_id = "thread-1"

@@ -992,8 +992,7 @@ async def test_claude_terminal_result_carries_the_model_the_session_reported(
 async def test_claude_terminal_result_claims_no_effort_when_it_imposed_none(
     monkeypatch, tmp_path
 ) -> None:
-    """A turn that imposes nothing leaves the session as it was, so it reports
-    no effort of its own -- Claude Code never names one."""
+    """A turn with no effort flag reports no effort of its own."""
     terminal = await _terminal_of(
         monkeypatch, tmp_path, init_model="claude-sonnet-5", effort="high"
     )
@@ -1002,11 +1001,10 @@ async def test_claude_terminal_result_claims_no_effort_when_it_imposed_none(
 
 
 @pytest.mark.asyncio
-async def test_a_continued_session_keeps_reporting_the_effort_it_runs_under(
+async def test_a_continued_session_reports_the_last_recorded_effort(
     monkeypatch, tmp_path
 ) -> None:
-    """Imposing nothing keeps the session's settings, so the effort the session
-    was established with is still the effective one."""
+    """Without an effort flag, Claude reports the last recorded effort."""
     context_key_source = _context(tmp_path)
     conversation = ConversationRecord(
         key=context_key_source.conversation_key,

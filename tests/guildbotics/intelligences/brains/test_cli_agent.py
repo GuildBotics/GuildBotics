@@ -467,8 +467,8 @@ async def test_a_default_effort_turn_states_no_settings(
     """`default` cancels the frontmatter but still imposes nothing downstream.
 
     Stating the level here would give the turn a non-empty fingerprint, which
-    rotates a session-scoped provider's session -- the opposite of the "keep the
-    session's current settings" meaning `default` carries.
+    rotates a session-scoped provider's session instead of leaving this turn
+    without an effort overlay.
     """
     captured: dict = {}
 

@@ -100,7 +100,7 @@ class AgentExecutionContext:
     lease: PersonExecutionLease | None = None
     model: str = ""
     #: Resolved provider-neutral effort level (``low`` / ``high``), or ``""``
-    #: when the turn must not intervene in the session's current settings.
+    #: when the turn requests no effort override.
     effort: str = ""
     #: Provider-specific settings for that level. Each adapter allowlists the
     #: keys it understands and warns about the rest instead of ignoring them.
@@ -129,14 +129,14 @@ class AgentExecutionContext:
 
 
 def settings_fingerprint(applied: Mapping[str, Any]) -> str:
-    """Stable hash of the settings an adapter will actually impose on a session.
+    """Stable hash of the settings an adapter accepts from this turn's request.
 
     This is deliberately computed from the adapter's own normalized view rather
     than from the requested effort: a request the adapter cannot act on changes
     nothing about the session, so it must not read as a change. An empty mapping
-    gives ``""``, which means "keep whatever the session already has" rather
-    than "restore the provider default", and a session-scoped adapter therefore
-    only rotates when two *non-empty* fingerprints differ.
+    gives ``""``, which requests no settings change or session rotation. It
+    does not guarantee that the provider preserves settings on resume. A
+    session-scoped adapter only rotates when two *non-empty* fingerprints differ.
     """
     import hashlib
     import json
@@ -161,10 +161,9 @@ class ConversationRecord:
     #: Fingerprint of the settings last imposed on this session. Only sessions
     #: whose adapter applies settings per session record one.
     settings_fingerprint: str = ""
-    #: What the session is known to really run with: the last non-empty
-    #: effective values a finished turn reported. A continued session keeps its
-    #: settings when a turn imposes none, so these let such a turn report what
-    #: the session still runs under instead of claiming nothing.
+    #: Last non-empty model and effort values a finished turn reported or
+    #: imposed. Adapters may reapply them on resume (Claude re-sends the model);
+    #: when a turn reports no value, the brain retains the last known one.
     effective_model: str = ""
     effective_effort: str = ""
     healthy: bool = True
