@@ -36,6 +36,7 @@ from guildbotics.capabilities.member_github import (
 )
 from guildbotics.entities.team import Person, Team
 from guildbotics.integrations.github.github_utils import get_person_github_token
+from guildbotics.integrations.github.repository_scope import NAME, check_repository
 from guildbotics.runtime.member_invocation import (
     CommandGuest,
     GuestProcessError,
@@ -53,8 +54,6 @@ from guildbotics.utils.git_tool import (
 MAX_GIT_BUNDLE_BYTES = 1 << 30
 #: The most output of any other git run in a member's clone that is read.
 _MAX_GIT_OUTPUT_BYTES = 1 << 24
-#: An owner or repository name as a URL of the code host carries it.
-_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 #: A full object name, SHA-1 or SHA-256.
 _OBJECT_NAME = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 #: What the host fetches of a repository it pushes to.
@@ -428,13 +427,19 @@ class MemberGitWorkspaceService:
             repo_path = self._current_repo(repo_path, cwd or Path.cwd())
             git = _HostGit(repo_path)
             branch = _current_branch(git)
+            remote_url = (
+                git("config", "--get", "remote.origin.url").stdout.decode().strip()
+            )
+            # The member's credential goes only where its writes may go.
+            owner, repo = self.github.repository_from_remote(remote_url) or (
+                remote_url,
+                "",
+            )
+            check_repository(self.github.owner, owner, repo)
             ensure_chat_current(self.person.person_id)
             token = await get_person_github_token(self.person, self.github.base_url)
             with _git_auth_environment(token) as env:
                 git("fetch", "-q", "origin", env=env)
-            remote_url = (
-                git("config", "--get", "remote.origin.url").stdout.decode().strip()
-            )
             pushed, commits = self._push(git, "origin", remote_url, branch, token)
         else:
             guest = self._guest()
@@ -442,6 +447,7 @@ class MemberGitWorkspaceService:
             clone = _GuestGit(guest, guest.path(repo_path))
             with self._locked(guest):
                 owner, repo = self._checkout_of(guest, clone)
+                check_repository(self.github.owner, owner, repo)
                 origin = await self._origin(guest, owner, repo)
                 branch = self._branch_name(guest, _current_branch(clone))
                 ensure_chat_current(self.person.person_id)
@@ -586,7 +592,7 @@ class MemberGitWorkspaceService:
         if (
             common.name != ".git"
             or common.parent.parent != root
-            or not _NAME.fullmatch(common.parent.name)
+            or not NAME.fullmatch(common.parent.name)
             or common.parent.name in {".", ".."}
             or not record.is_file()
         ):
@@ -728,7 +734,7 @@ def _name(value: str, what: str) -> str:
     Raises:
         MemberCapabilityError: If it is not one.
     """
-    if not _NAME.fullmatch(value) or value in {".", ".."}:
+    if not NAME.fullmatch(value) or value in {".", ".."}:
         raise MemberCapabilityError(f"Invalid {what} name: {value!r}")
     return value
 

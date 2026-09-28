@@ -31,6 +31,7 @@ _GITHUB_LABELS = {
 }
 _EXACT_EVENT_LABELS = {
     "decision.evaluated": "decision_evaluated",
+    "github.scope_refused": "github_scope_refused",
     "agent_environment.network_egress_candidate": "network_egress_candidate",
     "scheduler.worker.failed": "scheduler_worker_failed",
     "workflow.completed": "workflow_completed",
@@ -113,6 +114,13 @@ def normalize_trace_presentation(item: dict[str, Any]) -> TracePresentation:
         )
     if event_type in _GITHUB_LABELS:
         return _github_presentation(payload, attributes, event_type)
+    if event_type == "github.scope_refused":
+        return _presentation(
+            label_key=_event_key("github_scope_refused"),
+            label=event_type,
+            message=_first_text(payload, "target") or event_type,
+            tone="danger",
+        )
     if event_type.startswith("workflow."):
         return _workflow_presentation(item, payload, event_type)
     if event_type.startswith("chat_dispatch."):

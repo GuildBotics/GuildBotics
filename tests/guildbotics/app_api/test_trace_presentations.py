@@ -203,6 +203,22 @@ def test_cli_agent_credential_failure_uses_agent_name_as_provider() -> None:
     }
 
 
+def test_github_scope_refusal_names_the_refused_target() -> None:
+    presentation = normalize_trace_presentation(
+        _event(
+            "github.scope_refused",
+            payload={
+                "target": "POST /repos/other/demo/issues",
+                "scope_owner": "acme",
+            },
+        )
+    )
+
+    assert presentation.label_key.endswith("github_scope_refused")
+    assert presentation.message == "POST /repos/other/demo/issues"
+    assert presentation.tone == "danger"
+
+
 def test_all_index_event_types_have_intentional_presentations() -> None:
     unsupported = sorted(
         event_type

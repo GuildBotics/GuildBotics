@@ -10,6 +10,7 @@ from guildbotics.integrations.github.github_utils import (
     create_github_client,
     paginated_items,
 )
+from guildbotics.integrations.github.repository_scope import configured_owner
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
@@ -40,7 +41,9 @@ class GitHubActivityEventPoller:
             return 0
         config = self._team.project.get_service_config(Service.TICKET_MANAGER)
         client = await create_github_client(
-            self._person, str(config.get("base_url", "https://api.github.com"))
+            self._person,
+            str(config.get("base_url", "https://api.github.com")),
+            configured_owner(self._team.project),
         )
         try:
             items = await self._project_items(client, config)

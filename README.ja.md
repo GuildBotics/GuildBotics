@@ -179,7 +179,7 @@ GitHub Projects のチケットでメンバーに作業を依頼し、調査・�
 
 **注**: GitHub 統合は任意です。GitHub 統合なしでも、Slack チャットワークフローやスケジュール実行によるコマンド自動化は利用できます。
 
-**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とし、リポジトリ単位の境界を GitHub 側の認可で作ります。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
+**前提**: GitHub 統合は **organization（組織）** が所有するリポジトリと Project でのみ運用します。メンバーの認証情報は、対象リポジトリだけに絞った fine-grained PAT か GitHub App とします。GitHub 側の認可は、その認証情報で push や変更ができるリポジトリを限定しますが、**Only select repositories** を選んでも、公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。そのため GuildBotics は、メンバーの GitHub への書き込み（`git push` を含む）のうち、書き込み先リポジトリの owner がプロジェクトに設定した owner（`team/project.yml` の `services.code_hosting_service.owner`、未設定なら `services.ticket_manager.owner`）と異なるものを、送信する前に拒否します。読み取りは制限しません（フォークからの Pull Request はチェックアウトしてレビューできますが、フォークへは push しません）。個人アカウントが所有するリポジトリ / Project は対象外です（個人アカウント所有の Projects v2 は fine-grained PAT からも GitHub App からも操作できません）。
 
 ### できること
 
@@ -220,7 +220,7 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
    - **Token name**: 任意（例: `guildbotics-alice`）
    - **Expiration**: 任意（期限が切れたら再発行し、デスクトップアプリに再登録してください）
    - **Resource owner**: マシンアカウント自身ではなく、対象の **organization** を選択します
-   - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します
+   - **Repository access**: **Only select repositories** を選び、そのメンバーに担当させるリポジトリだけを選択します（これだけでは公開リポジトリへの Issue・コメント・レビュー・リアクションの書き込みは止まりません。上記の「前提」のとおり、設定した owner の外へは GuildBotics が書き込ませません）
    - **Repository permissions**:
      - **Actions**: Read-only（workflow run・失敗 job のログ・artifact の読み取り）
      - **Checks**: Read-only（pull request の commit に対する check run の読み取り）
@@ -908,7 +908,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | `guildbotics` コマンドが見つからない         | macOS / Linux では `~/.guildbotics/bin/guildbotics` を実行し、`~/.local/bin` の PATH を確認します。Windows では install 後に新しい shell を開き、user PATH の `%USERPROFILE%\.guildbotics\bin` を確認します                                                                                                                                                                                                                  |
 | どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
 | メンバーが動作しない・設定に不安がある       | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
-| GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます |
+| GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます。`GitHub writes are limited to repositories of '<owner>'` というエラーは、書き込み先リポジトリの owner がプロジェクトに設定した owner と異なるため、GuildBotics が送信せずに拒否したことを表します |
 | Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください                                                                                                                                                                                                                                       |
 | コマンド実行が失敗した                       | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
 | スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |

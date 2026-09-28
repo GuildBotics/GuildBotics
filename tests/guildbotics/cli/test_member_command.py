@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from datetime import UTC, datetime
 
 import click
+import httpx
 import pytest
 from click.testing import CliRunner
 
@@ -13,6 +14,7 @@ from guildbotics.capabilities.member_memory_audit import MemoryAuditStore
 from guildbotics.capabilities.member_reference import command_summaries
 from guildbotics.capabilities.task_runs import TaskRunStore
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.github import async_client
 from guildbotics.observability.activity_event_store import ActivityEventStore
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -1453,6 +1455,59 @@ def test_member_github_issue_api_failures_do_not_record_activity(monkeypatch):
     assert create.exit_code != 0
     assert "GitHub API failed" in create.output
     assert activity_calls == []
+
+
+def test_member_github_write_outside_the_configured_owner_is_never_sent(monkeypatch):
+    """#679: a public repository of another owner took an issue in the
+    member's name, because the token alone does not stop that."""
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    context = FakeContext(person)
+    context.team = Team(
+        project=Project(
+            name="demo",
+            services={"code_hosting_service": {"name": "GitHub", "owner": "acme"}},
+        ),
+        members=[person],
+    )
+    monkeypatch.setenv("AIKO_GITHUB_ACCESS_TOKEN", "token")
+    monkeypatch.setattr(
+        member_module, "resolve_member_context", lambda _identifier: (context, person)
+    )
+    sent = []
+    client_type = httpx.AsyncClient
+    monkeypatch.setattr(
+        async_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_type(
+            **kwargs,
+            transport=httpx.MockTransport(
+                lambda request: sent.append(request) or httpx.Response(201, json={})
+            ),
+        ),
+    )
+
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "github",
+            "issue",
+            "create",
+            "--person",
+            "aiko",
+            "--repo",
+            "superradcompany/microsandbox",
+            "--title",
+            "Issue title",
+            "--human-approved",
+            "--no-add-to-project",
+            "--content-stdin",
+        ],
+        input="Issue body\n",
+    )
+
+    assert result.exit_code != 0
+    assert "refused POST /repos/superradcompany/microsandbox/issues" in result.output
+    assert sent == []
 
 
 def test_member_git_publish_current_mode_uses_current_workspace_service(

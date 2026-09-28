@@ -30,6 +30,7 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
 )
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
@@ -207,8 +208,12 @@ def member(
     for owner in ("owner", "contributor"):
         remotes[owner] = tmp_path / "remotes" / owner / "repo.git"
         worker_git_seed.copy(worker_git_seed.member_remote, remotes[owner])
+    project = Project(
+        name="demo",
+        services={"code_hosting_service": {"name": "GitHub", "owner": "owner"}},
+    )
     service = MemberGitWorkspaceService(
-        _person(), Team(project=Project(name="demo"), members=[_person()])
+        _person(), Team(project=project, members=[_person()])
     )
     # The command's turns work in it: it is there before any of them runs.
     service.workspace_root.mkdir(parents=True)
@@ -220,11 +225,22 @@ def member(
     async def clone_url(owner, repo):
         return result.url(owner)
 
+    def repository_from_remote(url):
+        owners = [owner for owner in remotes if result.url(owner) == url]
+        return (owners[0], "repo") if owners else None
+
     async def pr_head(url):
         return result.heads[url]
 
+    async def no_pull_requests(remote_url, branch):
+        return []
+
     monkeypatch.setattr(service.github, "default_branch", default_branch)
+    monkeypatch.setattr(service.github, "open_pr_checks", no_pull_requests)
     monkeypatch.setattr(service.github, "get_clone_url", clone_url)
+    monkeypatch.setattr(
+        service.github, "repository_from_remote", repository_from_remote
+    )
     monkeypatch.setattr(service.github, "get_pr_head", pr_head)
     return result
 
@@ -729,22 +745,24 @@ async def test_prepare_rejects_malformed_repo(member):
 
 
 @pytest.mark.asyncio
-async def test_a_fork_and_its_upstream_push_where_each_was_prepared(member, tmp_path):
+async def test_a_fork_is_prepared_but_only_its_upstream_is_pushed_to(member, tmp_path):
     """Both are the same clone directory; the last ``prepare`` decides where
-    it pushes."""
+    it pushes, and only the configured owner's repository takes the push."""
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
+    before = fork.commit("feature").hexsha
     pr_url = "https://github.com/owner/repo/pull/7"
     member.heads[pr_url] = GitHubPullRequestHead("contributor", "repo", "feature")
 
     await member.prepare(pr_url=pr_url)
-    feature = member.stage(content="fork\n").index.commit("to the fork").hexsha
-    await member.run(lambda s: s.push(member.clone))
+    member.stage(content="fork\n").index.commit("to the fork")
+    with pytest.raises(RepositoryScopeError, match="contributor/repo"):
+        await member.run(lambda s: s.push(member.clone))
     await member.prepare()
     ticket = member.stage(content="upstream\n").index.commit("upstream").hexsha
     await member.run(lambda s: s.push(member.clone))
 
-    assert member.remote("contributor").commit("feature").hexsha == feature
+    assert member.remote("contributor").commit("feature").hexsha == before
     assert member.remote("owner").commit("ticket/1").hexsha == ticket
     assert "ticket/1" not in [head.name for head in member.remote("contributor").heads]
     assert "feature" not in [head.name for head in member.remote("owner").heads]
@@ -1088,7 +1106,7 @@ async def test_publish_current_workspace_runs_the_users_hooks_on_the_host(
     repo_path = tmp_path / "current" / "repo"
     worker_git_seed.copy(worker_git_seed.member_worktree, repo_path)
     repo = git.Repo(repo_path)
-    repo.remote("origin").set_url(str(member.remotes["owner"]))
+    repo.remote("origin").set_url(member.url("owner"))
     ran = tmp_path / "hook-ran"
     _hook(
         repo_path,
@@ -1110,6 +1128,32 @@ async def test_publish_current_workspace_runs_the_users_hooks_on_the_host(
     assert member.remote().commit("main").hexsha == result.commit_sha
     assert repo.commit(result.commit_sha).author.email == "aiko@example.com"
     assert ran.read_text(encoding="utf-8").strip() == "host"
+
+
+@pytest.mark.parametrize(
+    ("origin", "refused"),
+    [
+        (lambda member: member.url("contributor"), "contributor/repo"),
+        (lambda member: "https://example.com/owner/repo.git", "example.com"),
+    ],
+    ids=["another-owner", "another-host"],
+)
+@pytest.mark.asyncio
+async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote(
+    member, tmp_path, worker_git_seed, host_git, origin, refused
+):
+    """Another owner's repository, or a host that is not the configured one,
+    is refused before git is given the member's credential."""
+    repo_path = tmp_path / "current" / "repo"
+    worker_git_seed.copy(worker_git_seed.member_worktree, repo_path)
+    repo = git.Repo(repo_path)
+    repo.remote("origin").set_url(origin(member))
+    repo.index.commit("local")
+
+    with pytest.raises(RepositoryScopeError, match=refused):
+        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+    assert not [call for call in host_git if {"fetch", "push"} & set(call.args)]
 
 
 @pytest.mark.asyncio
