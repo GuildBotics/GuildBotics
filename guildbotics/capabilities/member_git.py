@@ -279,10 +279,49 @@ class _Origin:
         self.git = _HostGit(path, timeout, ("fetch.fsckObjects=true",))
 
     def fetch(self, token: str) -> None:
+        self._connected(
+            "fetch", "-q", "--prune", "--", self.url, *_FETCH_REFSPECS, token=token
+        )
+
+    def push(self, refspec: str, token: str) -> GuestResult:
+        return self._connected(
+            "push",
+            "--porcelain",
+            "--no-follow-tags",
+            "--",
+            self.url,
+            refspec,
+            token=token,
+            ok=range(256),
+        )
+
+    def _connected(
+        self, *args: str, token: str, ok: Iterable[int] = (0,)
+    ) -> GuestResult:
+        """Run git that connects to :attr:`url` with the member's credential.
+
+        git's configuration stays the user's own (a proxy, a CA, the TLS
+        backend), but a ``url.<base>.insteadOf`` or ``pushInsteadOf`` of it
+        -- system, global, or passed in the environment -- would send the
+        credential to wherever the rule says. Where a rule applies to the URL,
+        nothing is connected to.
+
+        Raises:
+            MemberCapabilityError: If git's configuration rewrites the URL.
+        """
+        rules = self.git(
+            "config", "-z", "--get-regexp", r"^url\..*\.(push)?insteadof$", ok=(0, 1)
+        )
+        for entry in rules.stdout.decode(errors="replace").split("\0"):
+            _, _, prefix = entry.partition("\n")
+            if prefix and self.url.startswith(prefix):
+                raise MemberCapabilityError(
+                    f"git's configuration rewrites {self.url} (a url.<base>.insteadOf"
+                    " or pushInsteadOf rule), so the member's credential is not"
+                    " sent: it goes only to the configured code host."
+                )
         with _git_auth_environment(token) as env:
-            self.git(
-                "fetch", "-q", "--prune", "--", self.url, *_FETCH_REFSPECS, env=env
-            )
+            return self.git(*args, env=env, ok=ok)
 
     def refs(self, *prefixes: str) -> dict[str, str]:
         """Its references under ``prefixes`` (all of them without), by name."""
@@ -745,18 +784,7 @@ class MemberGitWorkspaceService:
                 line.partition("\0") for line in listed.stdout.decode().splitlines()
             )
         ]
-        refspec = f"refs/heads/{branch}:refs/heads/{branch}"
-        with _git_auth_environment(token) as env:
-            result = git(
-                "push",
-                "--porcelain",
-                "--no-follow-tags",
-                "--",
-                origin.url,
-                refspec,
-                env=env,
-                ok=range(256),
-            )
+        result = origin.push(f"refs/heads/{branch}:refs/heads/{branch}", token)
         if result.returncode != 0:
             reason = (result.stdout + result.stderr).decode(errors="replace").strip()
             raise MemberCapabilityError(

@@ -1252,6 +1252,73 @@ async def test_push_current_workspace_of_a_branch_without_commits_is_refused(
         await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
 
 
+def _rewrite_in_environment(monkeypatch, tmp_path, key, prefix, to) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{to}.{key}")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", prefix)
+
+
+def _rewrite_in_global_config(monkeypatch, tmp_path, key, prefix, to) -> None:
+    config = tmp_path / "global.gitconfig"
+    config.write_text(f'[url "{to}"]\n\t{key} = {prefix}\n', encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+
+
+@pytest.mark.parametrize("key", ["insteadOf", "pushInsteadOf"])
+@pytest.mark.parametrize(
+    "rewrite", [_rewrite_in_environment, _rewrite_in_global_config]
+)
+@pytest.mark.asyncio
+async def test_a_url_rewrite_in_gits_own_configuration_is_never_given_the_token(
+    member, tmp_path, worker_git_seed, host_git, monkeypatch, rewrite, key
+):
+    """The host's repository connects only to the URL the host derived: a
+    rewrite of it in the configuration git reads outside that repository
+    (system, global, the environment) would take the credential elsewhere."""
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    repo.index.commit("local")
+    contributor = member.remote("contributor").commit("main").hexsha
+    # ``.../remotes/owner/`` is rewritten to ``.../remotes/contributor/``.
+    prefix = member.url("owner").rsplit("/", 2)[0] + "/"
+    to = member.url("contributor").rsplit("/", 2)[0] + "/"
+    rewrite(monkeypatch, tmp_path, key, prefix, to)
+
+    with pytest.raises(MemberCapabilityError, match="rewrites"):
+        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+    assert _credentialed(host_git) == []
+    assert member.remote("contributor").commit("main").hexsha == contributor
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_of_another_url_leaves_the_push_alone(
+    member, tmp_path, worker_git_seed, host_git, monkeypatch
+):
+    """Only a rule that applies to the host's URL stops the push; the rest of
+    git's configuration stays the user's."""
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    sha = repo.index.commit("local").hexsha
+    _rewrite_in_environment(
+        monkeypatch,
+        tmp_path,
+        "insteadOf",
+        "https://elsewhere.example/",
+        "https://x.example/",
+    )
+
+    result = await member.service.push(
+        repo_path, workspace_mode="current", cwd=repo_path
+    )
+
+    assert result.pushed is True
+    assert member.remote().commit("main").hexsha == sha
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
 @pytest.mark.parametrize(
     ("config", "refused"),
     [

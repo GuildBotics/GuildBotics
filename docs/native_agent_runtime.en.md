@@ -635,7 +635,10 @@ member's credential never enters the user's repository (whose configuration --
 `pushurl`, `pushInsteadOf`, `core.sshCommand`, hooks -- would decide where it
 goes). Where to push is still read from the user's `origin` as git resolves it,
 and must be one repository of the configured owner; a `pre-push` hook does not
-run.
+run. In both modes git's own configuration (system, global, the environment)
+still applies -- a proxy, a CA, the TLS backend -- but where a
+`url.<base>.insteadOf` or `pushInsteadOf` rule rewrites the URL the host
+derived, the credential is not sent and the fetch or push is refused.
 
 ## Exact conversation identity and resume
 

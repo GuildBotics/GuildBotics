@@ -225,6 +225,18 @@ def test_every_git_push_is_checked_before_git_is_given_the_token() -> None:
     assert uses == set(TOKEN_USES)
 
 
+def test_git_is_given_the_token_only_where_its_destination_is_checked() -> None:
+    """``_Origin._connected`` refuses a URL git's configuration rewrites; a
+    credential handed to git anywhere else would go wherever that says."""
+    tree = ast.parse((PACKAGE / "capabilities/member_git.py").read_text("utf-8"))
+
+    assert [
+        function
+        for function, call, _ in _calls(tree)
+        if _callee(call) == "_git_auth_environment"
+    ] == ["_connected"]
+
+
 def _checked_before(call: ast.Call, ancestors: list[ast.AST]) -> bool:
     """Whether ``check_repository`` runs in a statement before ``call``'s,
     in its block or a block around it."""

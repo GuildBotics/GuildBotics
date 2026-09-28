@@ -518,7 +518,9 @@ hooksに従います。turnからは使えません。pushはmember modeと同�
 repositoryへ取り込み、そこからhostが組み立てたURLへ送ります。メンバーの認証情報は利用者の
 repository（その設定の`pushurl`・`pushInsteadOf`・`core.sshCommand`・hooksが送り先を決める）には
 入りません。送り先はgitが解決した利用者の`origin`のpush先から読み、設定のownerのrepository
-1つでなければ拒否します。`pre-push` hookは実行されません。
+1つでなければ拒否します。`pre-push` hookは実行されません。どちらのモードでも、gitの設定（system・global・
+環境変数）のproxy・CA・TLS backendなどはそのまま使います。ただし、`url.<base>.insteadOf`か
+`pushInsteadOf`がhostの組み立てたURLを書き換える場合は、認証情報を渡さずにfetch・pushを拒否します。
 
 ## Slackスレッド・チケットとセッションの対応付け
 
