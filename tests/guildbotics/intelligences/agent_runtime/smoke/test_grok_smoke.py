@@ -16,8 +16,12 @@ import os
 
 import pytest
 
+from guildbotics.intelligences.agent_environment.provider_state import (
+    provider_state_dir,
+)
 from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import AgentEvent
+from guildbotics.intelligences.cli_agents import cli_agent_info
 from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
 from tests.timeouts import REAL_DEVICE
 
@@ -32,6 +36,17 @@ pytestmark = [
 
 TOOL = "grok"
 PROMPT = "Reply with the single word OK and nothing else."
+
+
+def _session_model(session_id: str) -> str:
+    sessions = provider_state_dir(cli_agent_info(TOOL)) / "sessions"
+    matches = [
+        path
+        for path in sessions.rglob("signals.json")
+        if path.parent.name == session_id
+    ]
+    assert len(matches) == 1, f"Expected one signals.json for {session_id}"
+    return str(json.loads(matches[0].read_text())["primaryModelId"])
 
 
 def _report(title: str, events: list[AgentEvent]) -> None:
@@ -63,6 +78,7 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path, monkeypatch) -> None
     assert first.provider_session_id
     assert first.usage["input_tokens"] > 0
     assert first.usage["output_tokens"] > 0
+    assert first.model == _session_model(first.provider_session_id)
 
     # A later command, in a microVM of its own, is what makes the reload real:
     # the session id on the conversation and the state the device keeps for
@@ -79,6 +95,7 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path, monkeypatch) -> None
     assert not isinstance(second, Exception), second
     assert second.output.strip() == "AGAIN", second.output
     assert second.provider_session_id == first.provider_session_id
+    assert second.model == _session_model(second.provider_session_id)
     replayed = [event for event in second_events if event.name == "history_rehydrated"]
     print("rehydration:", [event.details for event in replayed])
     assert replayed, "session/load must report the replay it absorbed"
@@ -98,3 +115,16 @@ async def test_real_grok_prompt_then_exact_reload(tmp_path, monkeypatch) -> None
         for event in second_events
         if event.name != "thinking" and event.message.strip() == first.output.strip()
     ]
+
+    ((selected, selected_events),) = await run_turns(
+        monkeypatch,
+        tmp_path,
+        TOOL,
+        GrokAcpAdapter,
+        [PROMPT],
+        options={"model": first.model},
+    )
+    _report("turn with an explicit model", selected_events)
+    assert not isinstance(selected, Exception), selected
+    assert selected.output.strip() == "OK", selected.output
+    assert selected.model == _session_model(selected.provider_session_id)
