@@ -456,6 +456,29 @@ async def test_shell_nonzero_exit_includes_stderr(config_dir: Path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("shell_commands")
+@pytest.mark.parametrize(
+    ("source", "said"),
+    [
+        # Every file mounted from a Windows host is executable.
+        ("echo by-bash\n", "by-bash"),
+        ('#!/usr/bin/env python3\nprint("by-its-shebang")\n', "by-its-shebang"),
+    ],
+    ids=["no-shebang", "shebang"],
+)
+async def test_executable_script_runs_itself_only_with_a_shebang(
+    config_dir: Path, source: str, said: str
+):
+    script = config_dir / "commands" / "exec.sh"
+    script.write_text(source, encoding="utf-8")
+    script.chmod(0o755)
+
+    ctx = await _run_main(config_dir, "exec")
+
+    assert ctx.pipe.strip() == said
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("shell_commands")
 async def test_shell_ends_with_the_script_not_what_it_left_running(
     config_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):

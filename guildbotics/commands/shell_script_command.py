@@ -13,6 +13,18 @@ from guildbotics.commands.utils import stringify_output
 from guildbotics.utils.child_process import ChildProcess
 
 
+def _runs_itself(path: Path) -> bool:
+    """Return whether the script runs itself, so that its shebang is honored.
+
+    The execute bit alone does not say so: a file mounted from a Windows host
+    has every bit set, and a script without a shebang cannot be executed.
+    """
+    if not os.access(str(path), os.X_OK):
+        return False
+    with path.open("rb") as script:
+        return script.read(2) == b"#!"
+
+
 class ShellScriptCommand(CommandBase):
     extensions: ClassVar[list[str]] = [".sh"]
     inline_key: ClassVar[str] = "script"
@@ -38,15 +50,13 @@ class ShellScriptCommand(CommandBase):
                 f"Shell command '{self.spec.name}' is missing a script or executable path."
             )
 
-        # A script that may execute itself does, so that its shebang is honored.
-        args = (
-            [str(executable_path)]
-            if os.access(str(executable_path), os.X_OK)
-            else ["bash", str(executable_path)]
-        )
-        args.extend(str(item) for item in self.options.args)
-
         try:
+            args = (
+                [str(executable_path)]
+                if _runs_itself(executable_path)
+                else ["bash", str(executable_path)]
+            )
+            args.extend(str(item) for item in self.options.args)
             process = await ChildProcess.start(*args, cwd=str(self.spec.cwd), env=env)
             stdout_data, stderr_data = await process.communicate(
                 self.options.message.encode("utf-8")

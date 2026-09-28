@@ -75,7 +75,7 @@ GuildBoticsコマンドの正しい意味を維持してください。
 - hostの環境変数、PATH、認証情報は届きません。hostのOSのUI言語とタイムゾーンは`LANGUAGE`と`TZ`
   だけで届きます。言語には`functions/get_os_ui_language`を使います。
 - 作業ディレクトリの外のファイルには、隔離環境に許可したディレクトリを通してだけ届きます。
-  受け渡しフォルダ`~/Documents/GuildBotics`は常に読み書きで許可されます。
+  受け渡しフォルダ`~/Documents/GuildBotics`は常に許可され、`read_only`を宣言していなければ読み書きできます。
 - ネットワークには、`intelligences/agent_environment.yml`のワークスペース共通の`network:`が許す範囲で
   だけ届きます（省略時は拒否）。ネットワークに接続するコマンドは、そこで許可が必要な接続先を
   `description`に書きます。

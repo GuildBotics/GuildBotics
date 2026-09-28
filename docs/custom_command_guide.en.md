@@ -99,7 +99,7 @@ When no member is named, the command runs as the team default: the member stored
 A command and all of its subcommands (Markdown, YAML, Python, shell scripts, and the AI CLI turns among them) run inside one isolated agent environment: a Linux microVM that GuildBotics boots on the machine running the command when the command starts, and discards when it ends. Write commands with these rules in mind:
 
 - Nothing of the host's environment reaches the command: not its environment variables, its PATH, or its credentials. What the command is told of the host arrives as two environment variables: `LANGUAGE` (the OS UI language in gettext form, such as `ja_JP`) and `TZ` (the time zone by its IANA name). `functions/get_os_ui_language` reads the former.
-- Files outside the working directory are reached only through the directories granted to the environment. The exchange folder `~/Documents/GuildBotics` is always granted read/write.
+- Files outside the working directory are reached only through the directories granted to the environment. The exchange folder `~/Documents/GuildBotics` is always granted, read/write unless the command declares `read_only` ([3.1](#31-declaring-a-command-read-only)).
 - The network is reached only as the workspace-wide `network:` block of `intelligences/agent_environment.yml` allows, and it denies everything when omitted. A command that talks to the network (a web API, a feed) needs its destinations allowed there before it runs.
 - Python commands run with GuildBotics' own Python environment (Python 3.12 with GuildBotics and its dependencies), and shell scripts with the tools of the environment's base image.
 
@@ -545,7 +545,7 @@ commands:
 ## 6. Using shell scripts
 In addition to writing inline under the `script` key as above, you can also implement an external shell script and invoke it as a command.
 
-Shell scripts run on the Linux of the isolated environment, whatever OS the host runs, Windows included: a script with the execute bit runs itself (so its shebang is honored), and any other script runs with `bash`.
+Shell scripts run on the Linux of the isolated environment, whatever OS the host runs, Windows included: a script that is executable and starts with a shebang (`#!`) runs itself, so its shebang is honored, and any other script runs with `bash` (a file mounted from a Windows host is always executable).
 
 For example, create `current-time.sh`:
 

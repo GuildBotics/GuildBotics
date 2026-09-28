@@ -476,8 +476,8 @@ async function seedWorkspace() {
 // Give the "environment" stack's workspace the source workspace's declaration
 // and the snapshot the source is ready with, so the stack's environment is
 // ready without a build. The snapshot is linked rather than copied (it is a
-// multi-gigabyte disk image), and only that one: nothing in the journey builds,
-// which would remove every other snapshot of the workspace through the link.
+// multi-gigabyte disk image), and only that one: nothing in the journey builds
+// (the service's upkeep does, and this stack's journey never starts it).
 function adoptSourceEnvironment() {
   const declaration = join("intelligences", "agent_environment.yml");
   mkdirSync(dirname(join(configDir, declaration)), { recursive: true });

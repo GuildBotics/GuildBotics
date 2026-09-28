@@ -375,14 +375,17 @@ def posix_sh() -> str:
 
     Windows has none on PATH, but Git for Windows ships one under the root of
     its installation, which ``git --exec-path`` (``<root>/mingw64/libexec/
-    git-core``) leads to.
+    git-core``) leads to; an installation without it (MinGit) skips.
     """
     if os.name != "nt":
         return "sh"
     exec_path = subprocess.run(
         ["git", "--exec-path"], capture_output=True, text=True, check=True
     ).stdout.strip()
-    return str(Path(exec_path).parents[2] / "bin" / "sh.exe")
+    sh = Path(exec_path).parents[2] / "bin" / "sh.exe"
+    if not sh.is_file():
+        pytest.skip(f"This Git installation ships no sh at {sh}.")
+    return str(sh)
 
 
 class FakeProject:

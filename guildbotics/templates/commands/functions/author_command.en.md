@@ -93,7 +93,7 @@ on the host:
   `functions/get_os_ui_language` for the language.
 - Files outside the working directory are reachable only through the
   environment's granted directories; the exchange folder `~/Documents/GuildBotics`
-  is always granted read/write.
+  is always granted, read/write unless the command declares `read_only`.
 - The network is reachable only as the workspace-wide `network:` of
   `intelligences/agent_environment.yml` allows (deny when omitted). A command that
   reaches the network says in its `description` which destinations must be
