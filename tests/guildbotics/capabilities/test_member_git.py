@@ -497,11 +497,8 @@ async def test_publish_commits_pushes_and_preserves_worktree(member, host_git):
     # The clone knows it is pushed.
     assert repo.commit("refs/remotes/origin/ticket/1").hexsha == result.commit_sha
     push = next(call for call in host_git if "push" in call.args)
-    assert push.args[-3:] == (
-        "--",
-        member.url("owner"),
-        "refs/heads/ticket/1:refs/heads/ticket/1",
-    )
+    assert push.args[-2:] == ("origin", "refs/heads/ticket/1:refs/heads/ticket/1")
+    _connects_to(push, member.url("owner"))
 
 
 @pytest.mark.asyncio
@@ -999,7 +996,7 @@ async def test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token(
         )
         if call.env.get("GIT_PASSWORD"):
             assert call.cwd == member.origin / "owner" / "repo.git"
-            assert member.url("owner") in call.args
+            _connects_to(call, member.url("owner"))
     assert any(call.env.get("GIT_PASSWORD") for call in host_git)
 
 
@@ -1112,6 +1109,16 @@ def _current_repo(
         replace = "--replace-all" if key == "remote.origin.url" else "--add"
         repo.git.config(replace, key, value)
     return repo, repo_path
+
+
+def _connects_to(call: _HostCall, url: str) -> None:
+    """``call`` connects to ``origin`` of its repository, and git resolves
+    both of that remote's destinations to ``url`` alone."""
+    assert "origin" in call.args, call
+    repo = git.Repo(call.cwd)
+    for direction in ((), ("--push",)):
+        listed = repo.git.remote("get-url", *direction, "--all", "origin")
+        assert listed.splitlines() == [url]
 
 
 def _credentialed(host_git: list[_HostCall]) -> list[_HostCall]:
@@ -1252,43 +1259,79 @@ async def test_push_current_workspace_of_a_branch_without_commits_is_refused(
         await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
 
 
-def _rewrite_in_environment(monkeypatch, tmp_path, key, prefix, to) -> None:
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{to}.{key}")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", prefix)
+def _in_environment(monkeypatch, tmp_path, settings) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", str(len(settings)))
+    for index, (key, value) in enumerate(settings):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{index}", key)
+        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{index}", value)
 
 
-def _rewrite_in_global_config(monkeypatch, tmp_path, key, prefix, to) -> None:
+def _in_global_config(monkeypatch, tmp_path, settings) -> None:
+    lines = []
+    for key, value in settings:
+        section, rest = key.split(".", 1)
+        subsection, name = rest.rsplit(".", 1)
+        lines.append(f'[{section} "{subsection}"]\n\t{name} = {value}\n')
     config = tmp_path / "global.gitconfig"
-    config.write_text(f'[url "{to}"]\n\t{key} = {prefix}\n', encoding="utf-8")
+    config.write_text("".join(lines), encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
 
 
-@pytest.mark.parametrize("key", ["insteadOf", "pushInsteadOf"])
+def _owner_dir(member: _Member, owner: str) -> str:
+    """``file:///.../remotes/<owner>/``, which the repository is under."""
+    return member.url(owner).rsplit("/", 1)[0] + "/"
+
+
 @pytest.mark.parametrize(
-    "rewrite", [_rewrite_in_environment, _rewrite_in_global_config]
+    "settings",
+    [
+        lambda m: [
+            (f"url.{_owner_dir(m, 'contributor')}.insteadOf", _owner_dir(m, "owner"))
+        ],
+        lambda m: [
+            (
+                f"url.{_owner_dir(m, 'contributor')}.pushInsteadOf",
+                _owner_dir(m, "owner"),
+            )
+        ],
+        # An empty value is a rule git applies to every URL.
+        lambda m: [(f"url.{_owner_dir(m, 'contributor')}.insteadOf", "")],
+        lambda m: [(f"url.{_owner_dir(m, 'contributor')}.pushInsteadOf", "")],
+        lambda m: [("remote.origin.pushurl", m.url("contributor"))],
+        # The fetch moves while the push stays: each destination is checked.
+        lambda m: [
+            (f"url.{_owner_dir(m, 'contributor')}.insteadOf", _owner_dir(m, "owner")),
+            (f"url.{m.url('owner')}.pushInsteadOf", m.url("owner")),
+        ],
+    ],
+    ids=[
+        "insteadOf",
+        "pushInsteadOf",
+        "empty-insteadOf",
+        "empty-pushInsteadOf",
+        "pushurl",
+        "fetch-only",
+    ],
 )
+@pytest.mark.parametrize("source", [_in_environment, _in_global_config])
 @pytest.mark.asyncio
-async def test_a_url_rewrite_in_gits_own_configuration_is_never_given_the_token(
-    member, tmp_path, worker_git_seed, host_git, monkeypatch, rewrite, key
+async def test_git_configuration_that_moves_origin_is_never_given_the_token(
+    member, tmp_path, host_git, monkeypatch, source, settings
 ):
-    """The host's repository connects only to the URL the host derived: a
-    rewrite of it in the configuration git reads outside that repository
-    (system, global, the environment) would take the credential elsewhere."""
-    repo, repo_path = _current_repo(
-        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
-    )
-    repo.index.commit("local")
+    """The host's repository connects only to the URL the host derived. What
+    the configuration git reads outside that repository (system, global, the
+    environment) says of where ``origin`` is would take the credential
+    elsewhere, so git's own resolution of it is what is checked."""
+    await member.prepare()
+    member.stage().index.commit("local")
     contributor = member.remote("contributor").commit("main").hexsha
-    # ``.../remotes/owner/`` is rewritten to ``.../remotes/contributor/``.
-    prefix = member.url("owner").rsplit("/", 2)[0] + "/"
-    to = member.url("contributor").rsplit("/", 2)[0] + "/"
-    rewrite(monkeypatch, tmp_path, key, prefix, to)
+    source(monkeypatch, tmp_path, settings(member))
+    already = len(host_git)
 
-    with pytest.raises(MemberCapabilityError, match="rewrites"):
-        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+    with pytest.raises(MemberCapabilityError, match="elsewhere"):
+        await member.run(lambda s: s.push(member.clone))
 
-    assert _credentialed(host_git) == []
+    assert _credentialed(host_git[already:]) == []
     assert member.remote("contributor").commit("main").hexsha == contributor
 
 
@@ -1302,12 +1345,10 @@ async def test_a_rewrite_of_another_url_leaves_the_push_alone(
         tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
     )
     sha = repo.index.commit("local").hexsha
-    _rewrite_in_environment(
+    _in_environment(
         monkeypatch,
         tmp_path,
-        "insteadOf",
-        "https://elsewhere.example/",
-        "https://x.example/",
+        [("url.https://x.example/.insteadOf", "https://elsewhere.example/")],
     )
 
     result = await member.service.push(

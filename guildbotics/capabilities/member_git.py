@@ -277,10 +277,11 @@ class _Origin:
         # Checked on every fetch rather than stored: what it takes in is
         # history a clone sent, and nothing may leave it unchecked.
         self.git = _HostGit(path, timeout, ("fetch.fsckObjects=true",))
+        self.git("config", "--replace-all", "remote.origin.url", url)
 
     def fetch(self, token: str) -> None:
         self._connected(
-            "fetch", "-q", "--prune", "--", self.url, *_FETCH_REFSPECS, token=token
+            "fetch", "-q", "--prune", "origin", *_FETCH_REFSPECS, token=token
         )
 
     def push(self, refspec: str, token: str) -> GuestResult:
@@ -288,8 +289,7 @@ class _Origin:
             "push",
             "--porcelain",
             "--no-follow-tags",
-            "--",
-            self.url,
+            "origin",
             refspec,
             token=token,
             ok=range(256),
@@ -298,27 +298,26 @@ class _Origin:
     def _connected(
         self, *args: str, token: str, ok: Iterable[int] = (0,)
     ) -> GuestResult:
-        """Run git that connects to :attr:`url` with the member's credential.
+        """Run git that connects to ``origin`` with the member's credential.
 
         git's configuration stays the user's own (a proxy, a CA, the TLS
-        backend), but a ``url.<base>.insteadOf`` or ``pushInsteadOf`` of it
-        -- system, global, or passed in the environment -- would send the
-        credential to wherever the rule says. Where a rule applies to the URL,
+        backend), but what it says of where ``origin`` is -- an ``insteadOf``,
+        a ``pushInsteadOf``, a ``pushurl``, from the system, the user, or the
+        environment -- would take the credential there. git itself resolves
+        both of its destinations, and unless each is exactly :attr:`url`,
         nothing is connected to.
 
         Raises:
-            MemberCapabilityError: If git's configuration rewrites the URL.
+            MemberCapabilityError: If git would connect anywhere else.
         """
-        rules = self.git(
-            "config", "-z", "--get-regexp", r"^url\..*\.(push)?insteadof$", ok=(0, 1)
-        )
-        for entry in rules.stdout.decode(errors="replace").split("\0"):
-            _, _, prefix = entry.partition("\n")
-            if prefix and self.url.startswith(prefix):
+        for direction in ((), ("--push",)):
+            listed = self.git("remote", "get-url", *direction, "--all", "origin")
+            if listed.stdout.decode(errors="replace").splitlines() != [self.url]:
                 raise MemberCapabilityError(
-                    f"git's configuration rewrites {self.url} (a url.<base>.insteadOf"
-                    " or pushInsteadOf rule), so the member's credential is not"
-                    " sent: it goes only to the configured code host."
+                    f"git's configuration sends {self.url} elsewhere (a url.<base>"
+                    ".insteadOf, pushInsteadOf, or remote.origin setting), so the"
+                    " member's credential is not sent: it goes only to the"
+                    " configured code host."
                 )
         with _git_auth_environment(token) as env:
             return self.git(*args, env=env, ok=ok)
