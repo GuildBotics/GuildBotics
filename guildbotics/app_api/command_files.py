@@ -435,16 +435,18 @@ class CommandFileService:
             format=FORMAT_BY_EXTENSION[path.suffix.lower()],
             content=data.decode("utf-8", errors="replace"),
             revision=file_revision(data),
-            arguments=_safe_arguments(path, metadata),
+            arguments=_safe_arguments(path, metadata, command),
             inputs=_safe_inputs(metadata),
         )
 
 
 def _safe_arguments(
-    path: Path, metadata: dict[str, Any]
+    path: Path, metadata: dict[str, Any], command_name: str
 ) -> list[CommandArgumentOption]:
     try:
-        return to_command_arguments(parse_command_arguments(path, metadata))
+        return to_command_arguments(
+            parse_command_arguments(path, metadata, command_name)
+        )
     except CommandError:
         return []
 

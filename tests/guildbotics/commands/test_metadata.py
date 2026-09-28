@@ -70,6 +70,30 @@ def test_extract_placeholders_supports_all_syntaxes() -> None:
     assert extract_placeholders(metadata) == {"one", "two", "three"}
 
 
+@pytest.mark.parametrize(
+    "placeholder",
+    ["${name}", "{{ name }}", "{name}"],
+)
+@pytest.mark.parametrize("named", [True, False])
+def test_subcommand_outputs_are_not_caller_arguments(
+    placeholder: str, named: bool
+) -> None:
+    entry = {"script": "uname -s"}
+    if named:
+        output_name = "output"
+        entry["name"] = output_name
+    else:
+        output_name = "system__1"
+    metadata = {
+        "commands": [entry],
+        "body": f"{placeholder.replace('name', output_name)} ${{caller_input}}",
+    }
+
+    arguments = parse_metadata_arguments(metadata, "system")
+
+    assert [argument.name for argument in arguments] == ["caller_input"]
+
+
 def test_python_arguments_from_signature() -> None:
     source = (
         "def main(context, path, language='English', *, verbose=False):\n"

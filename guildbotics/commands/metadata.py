@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -158,7 +160,7 @@ def _validate_choice(
 
 
 def parse_command_arguments(
-    path: Path | None, metadata: dict[str, Any]
+    path: Path | None, metadata: dict[str, Any], command_name: str = ""
 ) -> list[CommandArgumentMetadata]:
     """Return caller-visible arguments for a command.
 
@@ -167,14 +169,16 @@ def parse_command_arguments(
     """
     if path is not None and path.suffix == ".py":
         return parse_python_arguments_from_source(_safe_read_text(path))
-    return parse_metadata_arguments(metadata)
+    return parse_metadata_arguments(metadata, command_name)
 
 
 def parse_metadata_arguments(
-    metadata: dict[str, Any],
+    metadata: dict[str, Any], command_name: str = ""
 ) -> list[CommandArgumentMetadata]:
     """Parse declared and placeholder-discovered arguments from metadata."""
-    placeholders = extract_placeholders(metadata)
+    placeholders = extract_placeholders(metadata) - command_output_names(
+        metadata, command_name
+    )
     definitions = parse_command_argument_definitions(metadata)
     declared_names = {definition.name for definition in definitions}
     positional = sorted(
@@ -202,6 +206,57 @@ def parse_metadata_arguments(
         for name in keywords
     ]
     return declared + discovered
+
+
+def normalize_command_entry(entry: Any) -> dict[str, Any]:
+    """Normalize a declarative subcommand entry into its mapping form."""
+    if isinstance(entry, str):
+        words = shlex.split(entry)
+        if not words:
+            raise CommandError("Command entry string cannot be empty.")
+        return {"path": words[0], "args": words[1:]}
+    if isinstance(entry, dict):
+        normalized = dict(entry)
+        if "command" in normalized:
+            command = normalize_command_entry(str(normalized.pop("command")))
+            normalized = {**command, **normalized}
+        return normalized
+    raise CommandError("Command entry must be a mapping or string.")
+
+
+def command_output_name(
+    config: dict[str, Any], anchor_name: str, command_index: int
+) -> str:
+    """Return the runtime output name for a normalized subcommand entry."""
+    name = config.get("name")
+    if name:
+        return str(name)
+
+    path_value = config.get("path")
+    if path_value:
+        path = Path(path_value)
+        if path.name.startswith(".") and path.stem:
+            return path.stem
+        return path.stem or path.name
+
+    return f"{anchor_name}__{command_index}"
+
+
+def command_output_names(metadata: dict[str, Any], command_name: str) -> set[str]:
+    """Return names populated by the command's declared subcommands."""
+    raw_commands = metadata.get("commands")
+    if raw_commands is None:
+        return set()
+    if isinstance(raw_commands, Sequence) and not isinstance(
+        raw_commands, (str, bytes)
+    ):
+        entries = list(raw_commands)
+    else:
+        entries = [str(raw_commands)]
+    return {
+        command_output_name(normalize_command_entry(entry), command_name, index)
+        for index, entry in enumerate(entries, start=1)
+    }
 
 
 def extract_placeholders(metadata: dict[str, Any]) -> set[str]:
