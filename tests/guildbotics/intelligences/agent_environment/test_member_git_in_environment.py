@@ -39,7 +39,7 @@ from tests.timeouts import REAL_DEVICE
 _REAL_HOME = Path.home()
 
 pytestmark = [
-    REAL_DEVICE,
+    *REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
         reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the agent environment.",

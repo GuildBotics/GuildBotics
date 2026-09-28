@@ -43,8 +43,7 @@ from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
 from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
-    REAL_DEVICE,
-    pytest.mark.real_device,
+    *REAL_DEVICE,
     pytest.mark.skipif(
         os.environ.get("GUILDBOTICS_ANTIGRAVITY_SMOKE") != "1",
         reason=(
