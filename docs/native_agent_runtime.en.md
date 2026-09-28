@@ -627,8 +627,20 @@ What this means for a workspace: the project's git hooks run inside the
 environment with the tools of its image (a hook that needs Python needs an
 image that has it), Git LFS is not supported, and outside a running command
 there is no environment, so member-mode git is refused there. An interactive
-session uses `--workspace-mode current`, which runs in the user's own
-repository on the host, under the user's own hooks; a turn cannot use it.
+session uses `--workspace-mode current`, whose commit runs in the user's own
+repository on the host, under the user's own hooks; a turn cannot use it. Its
+push takes the branch's history into a repository of the host's own and pushes
+from there toward the URL the host derives, as member mode does, so the
+member's credential never enters the user's repository (whose configuration --
+`pushurl`, `pushInsteadOf`, `core.sshCommand`, hooks -- would decide where it
+goes). Where to push is still read from the user's `origin` as git resolves it,
+and must be one repository of the configured owner; a `pre-push` hook does not
+run. In both modes git's own configuration (system, global, the environment)
+still applies -- a proxy, a CA, the TLS backend -- but unless git itself
+resolves the host's repository's `origin` to exactly the URL the host derived,
+for both fetch and push (an `insteadOf`, a `pushInsteadOf`, or a
+`remote.origin` setting would move it), the credential is not sent and the
+fetch or push is refused.
 
 ## Exact conversation identity and resume
 

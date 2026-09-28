@@ -36,6 +36,10 @@ from guildbotics.integrations.github.github_utils import (
     normalize_login,
     paginated_items,
 )
+from guildbotics.integrations.github.repository_scope import (
+    ADD_PROJECT_ITEM,
+    configured_owner,
+)
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     current_member_invocation,
@@ -114,7 +118,7 @@ class MemberGitHubCapabilityService:
             or ticket_config.get("base_url")
             or "https://api.github.com"
         ).rstrip("/")
-        self.owner = str(code_config.get("owner") or ticket_config.get("owner") or "")
+        self.owner = configured_owner(team.project)
         self.project_owner = str(ticket_config.get("owner") or self.owner)
         self.project_id = str(ticket_config.get("project_id") or "")
         self.project_url = str(ticket_config.get("url") or "")
@@ -558,7 +562,7 @@ class MemberGitHubCapabilityService:
         self, remote_url: str, branch: str
     ) -> list[dict[str, Any]]:
         """Return readiness for open PRs whose head is the pushed branch."""
-        repository = self._repository_from_remote(remote_url)
+        repository = self.repository_from_remote(remote_url)
         if repository is None:
             return []
         owner, repo = repository
@@ -1068,7 +1072,12 @@ class MemberGitHubCapabilityService:
             return ""
         return f"{web_url}/commit/{sha}"
 
-    def _repository_from_remote(self, remote_url: str) -> tuple[str, str] | None:
+    def remote_host(self, remote_url: str) -> str:
+        """The host a remote names, without a credential its URL may carry."""
+        return urlparse(_remote_web_url(remote_url)).hostname or "unrecognized remote"
+
+    def repository_from_remote(self, remote_url: str) -> tuple[str, str] | None:
+        """The ``(owner, repo)`` a remote names on the configured code host."""
         web_url = _remote_web_url(remote_url)
         if not web_url:
             return None
@@ -1294,16 +1303,9 @@ class MemberGitHubCapabilityService:
         if not self.project_id:
             return None
         project_node_id = await self._project_node()
-        mutation = """
-        mutation($proj: ID!, $content: ID!) {
-          addProjectV2ItemById(input:{ projectId: $proj, contentId: $content }) {
-            item { id }
-          }
-        }
-        """
         ensure_chat_current(self.person.person_id)
         data = await self._graphql(
-            mutation, {"proj": project_node_id, "content": issue_node_id}
+            ADD_PROJECT_ITEM, {"proj": project_node_id, "content": issue_node_id}
         )
         return data["addProjectV2ItemById"]["item"]["id"]
 
@@ -1344,7 +1346,9 @@ class MemberGitHubCapabilityService:
 
     async def _get_client(self) -> AsyncClient:
         if self._client is None:
-            self._client = await create_github_client(self.person, self.base_url)
+            self._client = await create_github_client(
+                self.person, self.base_url, self.owner
+            )
         return self._client
 
     async def _paginated_rest_items(

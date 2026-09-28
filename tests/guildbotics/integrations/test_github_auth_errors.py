@@ -60,7 +60,7 @@ async def test_token_auth_unauthorized_records_member_id(monkeypatch) -> None:
     auth = github_utils.GitHubTokenAuth("expired", person_id="alice")
     request = httpx.Request("GET", "https://api.github.com/rate_limit")
     response = httpx.Response(401, request=request, text="unauthorized")
-    client = async_client.get_async_client("https://api.github.com", auth)
+    client = async_client.get_async_client("https://api.github.com", auth, "acme")
 
     try:
         with pytest.raises(httpx.HTTPStatusError):
@@ -161,6 +161,8 @@ async def test_invalid_github_app_key_records_credential_failure(monkeypatch) ->
     )
 
     with pytest.raises(ValueError):
-        await github_utils.create_github_client(person, "https://api.github.com")
+        await github_utils.create_github_client(
+            person, "https://api.github.com", "acme"
+        )
 
     assert recorded == [{"person_id": "alice", "code": "invalid_app_credential"}]

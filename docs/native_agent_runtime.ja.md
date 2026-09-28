@@ -513,8 +513,16 @@ cloneから受け取るもののうち`refs/heads/<branch>`（gitがブランチ
 ワークスペースから見た変化: プロジェクトのgit hooksは、環境の中でimageにあるツールを使って動きます
 （Pythonが要るhookには、Pythonを入れたimageが要ります）。Git LFSは扱いません。実行中のコマンドの
 外には環境が無いので、そこではmember modeのgitを拒否します。対話セッションは
-`--workspace-mode current`を使い、これは利用者自身のrepositoryでhostが実行し、利用者のhooksに
-従います。turnからは使えません。
+`--workspace-mode current`を使い、そのcommitは利用者自身のrepositoryでhostが実行し、利用者の
+hooksに従います。turnからは使えません。pushはmember modeと同じく、branchの履歴をhost自身の
+repositoryへ取り込み、そこからhostが組み立てたURLへ送ります。メンバーの認証情報は利用者の
+repository（その設定の`pushurl`・`pushInsteadOf`・`core.sshCommand`・hooksが送り先を決める）には
+入りません。送り先はgitが解決した利用者の`origin`のpush先から読み、設定のownerのrepository
+1つでなければ拒否します。`pre-push` hookは実行されません。どちらのモードでも、gitの設定（system・global・
+環境変数）のproxy・CA・TLS backendなどはそのまま使います。ただし、host自身のrepositoryの`origin`を
+git自身が解決した送り先が、fetchとpushのどちらもhostの組み立てたURLちょうど1つでなければ
+（`insteadOf`・`pushInsteadOf`・`remote.origin`の設定が動かしうる）、認証情報を渡さずにfetch・pushを
+拒否します。
 
 ## Slackスレッド・チケットとセッションの対応付け
 

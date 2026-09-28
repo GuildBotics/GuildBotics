@@ -179,7 +179,7 @@ This is the flow where you ask a member for work through a GitHub Projects ticke
 
 **Note**: GitHub integration is optional. Without it you can still use the Slack chat workflow and automate commands on a schedule.
 
-**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App, so that the per-repository boundary is enforced by GitHub's own authorization. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
+**Prerequisite**: GitHub integration is operated only on repositories and Projects owned by an **organization**. A member's credential is either a fine-grained PAT scoped to the repositories that member works on, or a GitHub App. GitHub's own authorization limits which repositories that credential can push to and change, but **Only select repositories** does not stop it from creating issues, comments, reviews, or reactions on any public repository. So GuildBotics refuses, before sending anything, every GitHub write of a member (including `git push`) to a repository whose owner is not the owner configured for the project (`services.code_hosting_service.owner` in `team/project.yml`, or `services.ticket_manager.owner` when that is not set). Reads are not limited: a pull request from a fork can be checked out and reviewed, but its fork is not pushed to. Repositories and Projects owned by a personal account are out of scope (a personal-account Projects v2 board cannot be operated by a fine-grained PAT or by a GitHub App).
 
 ### What It Does
 
@@ -221,7 +221,7 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
    - **Token name**: anything (for example `guildbotics-alice`)
    - **Expiration**: your choice (when it expires, reissue the token and re-register it in the desktop app)
    - **Resource owner**: select the target **organization**, not the machine account itself
-   - **Repository access**: choose **Only select repositories** and select only the repositories that member works on
+   - **Repository access**: choose **Only select repositories** and select only the repositories that member works on (this does not keep the token from writing issues, comments, reviews, or reactions to public repositories; GuildBotics keeps members inside the configured owner, as described in the Prerequisite above)
    - **Repository permissions**:
      - **Actions**: Read-only (reading workflow runs, failed job logs, and artifacts)
      - **Checks**: Read-only (reading check runs for pull request commits)
@@ -933,7 +933,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | `guildbotics` command not found | On macOS/Linux, run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. On Windows, open a new shell after installation and check `%USERPROFILE%\.guildbotics\bin` in the user PATH |
 | Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
-| Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this |
+| Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |

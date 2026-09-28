@@ -216,12 +216,16 @@ async def get_person_github_token(person: Person, base_url: str) -> str:
     return person.get_secret("github_access_token")
 
 
-async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClient:
+async def create_github_client(
+    person: Person, base_url: str, owner: str
+) -> httpx.AsyncClient:
     """
     Create an authenticated GitHub API client.
     Args:
         person (Person): The person object with GitHub credentials.
         base_url (str): The base URL for the GitHub API.
+        owner (str): The configured owner, the only one whose repositories
+            the client writes to (``repository_scope.configured_owner``).
     Returns:
         AsyncClient: An authenticated httpx.AsyncClient.
     """
@@ -247,7 +251,7 @@ async def create_github_client(person: Person, base_url: str) -> httpx.AsyncClie
             person.get_secret("github_access_token"), person_id=person.person_id
         )
 
-    client = get_async_client(base_url=base_url, auth=auth)
+    client = get_async_client(base_url=base_url, auth=auth, owner=owner)
     client.headers.update(
         {
             "Accept": "application/vnd.github.v3+json",
