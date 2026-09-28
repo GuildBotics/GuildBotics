@@ -128,6 +128,8 @@ def pytest_terminal_summary(terminalreporter: Any) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
+    if session.config.getoption("network_audit") and _NETWORK_AUDIT:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
     if _PHASE_DURATION_OUTPUT is None:
         return
     _PHASE_DURATION_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
