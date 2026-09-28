@@ -550,6 +550,8 @@ class _SharedEnvironment:
         stopped.
 
         Raises:
+            CommandError: A host directory cannot be mounted into the
+                environment.
             AgentRuntimeError: ``process`` when the microVM or the broker
                 does not start.
         """
@@ -910,7 +912,10 @@ def _login_environment(status: DeviceStatus) -> LoginEnvironment:
 
 
 def _reject_windows_temp_mounts(spec: AgentEnvironmentSpec) -> None:
-    """Reject bind sources under the Windows temp tree that microsandbox cannot mount."""
+    """Reject Windows temporary directories that microsandbox cannot mount.
+
+    See https://github.com/superradcompany/microsandbox/issues/1692.
+    """
     local_app_data = os.environ.get("LOCALAPPDATA")
     if sys.platform != "win32" or not local_app_data:
         return
