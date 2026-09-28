@@ -28,6 +28,13 @@ from guildbotics.integrations.github.pull_request_patrol import (
     parse_pull_request,
     pull_request_work,
 )
+from guildbotics.integrations.github.repository_scope import (
+    ADD_PROJECT_ITEM,
+    CREATE_PROJECT_FIELD,
+    UPDATE_PROJECT_FIELD_OPTIONS,
+    UPDATE_PROJECT_ITEM_STATUS,
+    configured_owner,
+)
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.integrations.workflow_status_comment import (
     parse_workflow_status_comment,
@@ -125,7 +132,9 @@ class GitHubTicketManager(TicketManager):
     async def login(self) -> AsyncClient:
         """Authenticate and create an HTTPX AsyncClient."""
         if not self.client:
-            self.client = await create_github_client(self.person, self.base_url)
+            self.client = await create_github_client(
+                self.person, self.base_url, configured_owner(self.team.project)
+            )
         return self.client
 
     # --------------------------------------------------------------------- #
@@ -395,18 +404,9 @@ class GitHubTicketManager(TicketManager):
         self, field_id: str, options: list[dict[str, str]]
     ) -> None:
         """Overwrite a single-select field's option set (must include existing ids)."""
-        mutation = """
-        mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]) {
-          updateProjectV2Field(
-            input: {fieldId: $field, singleSelectOptions: $options}
-          ) {
-            projectV2Field {
-              ... on ProjectV2SingleSelectField { id }
-            }
-          }
-        }
-        """
-        await self._graphql(mutation, {"field": field_id, "options": options})
+        await self._graphql(
+            UPDATE_PROJECT_FIELD_OPTIONS, {"field": field_id, "options": options}
+        )
 
     async def get_column_id(self, column_name: str) -> str | None:
         """
@@ -1103,20 +1103,8 @@ class GitHubTicketManager(TicketManager):
     async def _get_project_item_id(self, issue_node_id: str) -> str:
 
         project_id = await self._project_node()
-
-        mutation = """
-        mutation($proj: ID!, $content: ID!) {
-        addProjectV2ItemById(
-            input:{ projectId: $proj, contentId: $content }
-        ) {
-            item { id }
-        }
-        }
-
-        """
-
         data = await self._graphql(
-            mutation, {"proj": project_id, "content": issue_node_id}
+            ADD_PROJECT_ITEM, {"proj": project_id, "content": issue_node_id}
         )
         return data["addProjectV2ItemById"]["item"]["id"]
 
@@ -1142,20 +1130,8 @@ class GitHubTicketManager(TicketManager):
         if not option_id:
             return False
 
-        mutation = """
-        mutation($proj:ID!,$item:ID!,$field:ID!,$opt:String!){
-        updateProjectV2ItemFieldValue(
-            input:{
-            projectId:$proj,
-            itemId:$item,
-            fieldId:$field,
-            value:{ singleSelectOptionId:$opt }
-            }
-        ){ projectV2Item { id } }
-        }
-        """
         await self._graphql(
-            mutation,
+            UPDATE_PROJECT_ITEM_STATUS,
             {
                 "proj": proj_node,
                 "item": item_id,
@@ -1314,31 +1290,6 @@ class GitHubTicketManager(TicketManager):
         # Prepare options for SINGLE_SELECT fields
         options: list[dict[str, str]] = field_config.get("options", [])
 
-        mutation = """
-        mutation($proj:ID!, $name:String!, $dataType:ProjectV2CustomFieldType!, $options:[ProjectV2SingleSelectFieldOptionInput!]) {
-            createProjectV2Field(input: {
-                projectId: $proj,
-                name: $name,
-                dataType: $dataType,
-                singleSelectOptions: $options
-            }) {
-                projectV2Field {
-                    ... on ProjectV2Field {
-                        id
-                        name
-                        dataType
-                    }
-                    ... on ProjectV2SingleSelectField {
-                        id
-                        name
-                        dataType
-                        options { name description color }
-                    }
-                }
-            }
-        }
-        """
-
         for opt in options:
             if "color" not in opt:
                 opt["color"] = "GRAY"
@@ -1350,7 +1301,7 @@ class GitHubTicketManager(TicketManager):
             "options": options if options else None,
         }
 
-        data = await self._graphql(mutation, variables)
+        data = await self._graphql(CREATE_PROJECT_FIELD, variables)
         field = data["createProjectV2Field"]["projectV2Field"]
 
         # Format field info

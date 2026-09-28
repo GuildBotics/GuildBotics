@@ -30,6 +30,8 @@ from guildbotics.capabilities.member_github import (
     MemberCapabilityError,
 )
 from guildbotics.entities.team import Person, Project, Team
+from guildbotics.integrations.github import repository_scope
+from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     GuestResult,
@@ -207,8 +209,12 @@ def member(
     for owner in ("owner", "contributor"):
         remotes[owner] = tmp_path / "remotes" / owner / "repo.git"
         worker_git_seed.copy(worker_git_seed.member_remote, remotes[owner])
+    project = Project(
+        name="demo",
+        services={"code_hosting_service": {"name": "GitHub", "owner": "owner"}},
+    )
     service = MemberGitWorkspaceService(
-        _person(), Team(project=Project(name="demo"), members=[_person()])
+        _person(), Team(project=project, members=[_person()])
     )
     # The command's turns work in it: it is there before any of them runs.
     service.workspace_root.mkdir(parents=True)
@@ -220,11 +226,22 @@ def member(
     async def clone_url(owner, repo):
         return result.url(owner)
 
+    def repository_from_remote(url):
+        owners = [owner for owner in remotes if result.url(owner) == url]
+        return (owners[0], "repo") if owners else None
+
     async def pr_head(url):
         return result.heads[url]
 
+    async def no_pull_requests(remote_url, branch):
+        return []
+
     monkeypatch.setattr(service.github, "default_branch", default_branch)
+    monkeypatch.setattr(service.github, "open_pr_checks", no_pull_requests)
     monkeypatch.setattr(service.github, "get_clone_url", clone_url)
+    monkeypatch.setattr(
+        service.github, "repository_from_remote", repository_from_remote
+    )
     monkeypatch.setattr(service.github, "get_pr_head", pr_head)
     return result
 
@@ -480,11 +497,8 @@ async def test_publish_commits_pushes_and_preserves_worktree(member, host_git):
     # The clone knows it is pushed.
     assert repo.commit("refs/remotes/origin/ticket/1").hexsha == result.commit_sha
     push = next(call for call in host_git if "push" in call.args)
-    assert push.args[-3:] == (
-        "--",
-        member.url("owner"),
-        "refs/heads/ticket/1:refs/heads/ticket/1",
-    )
+    assert push.args[-2:] == ("origin", "refs/heads/ticket/1:refs/heads/ticket/1")
+    _connects_to(push, member.url("owner"))
 
 
 @pytest.mark.asyncio
@@ -729,22 +743,24 @@ async def test_prepare_rejects_malformed_repo(member):
 
 
 @pytest.mark.asyncio
-async def test_a_fork_and_its_upstream_push_where_each_was_prepared(member, tmp_path):
+async def test_a_fork_is_prepared_but_only_its_upstream_is_pushed_to(member, tmp_path):
     """Both are the same clone directory; the last ``prepare`` decides where
-    it pushes."""
+    it pushes, and only the configured owner's repository takes the push."""
     fork = git.Repo(member.remotes["contributor"])
     fork.git.branch("feature", "main")
+    before = fork.commit("feature").hexsha
     pr_url = "https://github.com/owner/repo/pull/7"
     member.heads[pr_url] = GitHubPullRequestHead("contributor", "repo", "feature")
 
     await member.prepare(pr_url=pr_url)
-    feature = member.stage(content="fork\n").index.commit("to the fork").hexsha
-    await member.run(lambda s: s.push(member.clone))
+    member.stage(content="fork\n").index.commit("to the fork")
+    with pytest.raises(RepositoryScopeError, match="contributor/repo"):
+        await member.run(lambda s: s.push(member.clone))
     await member.prepare()
     ticket = member.stage(content="upstream\n").index.commit("upstream").hexsha
     await member.run(lambda s: s.push(member.clone))
 
-    assert member.remote("contributor").commit("feature").hexsha == feature
+    assert member.remote("contributor").commit("feature").hexsha == before
     assert member.remote("owner").commit("ticket/1").hexsha == ticket
     assert "ticket/1" not in [head.name for head in member.remote("contributor").heads]
     assert "feature" not in [head.name for head in member.remote("owner").heads]
@@ -980,7 +996,7 @@ async def test_what_a_clone_plants_never_runs_on_the_host_or_gets_the_token(
         )
         if call.env.get("GIT_PASSWORD"):
             assert call.cwd == member.origin / "owner" / "repo.git"
-            assert member.url("owner") in call.args
+            _connects_to(call, member.url("owner"))
     assert any(call.env.get("GIT_PASSWORD") for call in host_git)
 
 
@@ -1081,20 +1097,61 @@ async def test_the_environment_is_given_nothing_but_git_identity(member):
 # -- the user's own repository ------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_publish_current_workspace_runs_the_users_hooks_on_the_host(
-    member, tmp_path, worker_git_seed
-):
+def _current_repo(
+    tmp_path: Path, worker_git_seed: WorkerGitSeed, *config: tuple[str, str]
+) -> tuple[git.Repo, Path]:
+    """The user's own repository, its ``origin`` configured with ``config``."""
     repo_path = tmp_path / "current" / "repo"
     worker_git_seed.copy(worker_git_seed.member_worktree, repo_path)
     repo = git.Repo(repo_path)
-    repo.remote("origin").set_url(str(member.remotes["owner"]))
+    for key, value in config:
+        # The seed's origin already has a URL; everything else is added.
+        replace = "--replace-all" if key == "remote.origin.url" else "--add"
+        repo.git.config(replace, key, value)
+    return repo, repo_path
+
+
+def _connects_to(call: _HostCall, url: str) -> None:
+    """``call`` connects to ``origin`` of its repository, and git resolves
+    both of that remote's destinations to ``url`` alone."""
+    assert "origin" in call.args, call
+    repo = git.Repo(call.cwd)
+    for direction in ((), ("--push",)):
+        listed = repo.git.remote("get-url", *direction, "--all", "origin")
+        assert listed.splitlines() == [url]
+
+
+def _credentialed(host_git: list[_HostCall]) -> list[_HostCall]:
+    return [call for call in host_git if call.env.get("GIT_PASSWORD") == _TOKEN]
+
+
+def _only_the_hosts_repositories_get_the_token(
+    member: _Member, host_git: list[_HostCall]
+) -> None:
+    """Every git given the member's credential runs in a repository of the
+    host's own, never in one whose configuration the host did not write."""
+    runs = _credentialed(host_git)
+    assert runs
+    for call in runs:
+        assert member.service.host_root in call.cwd.parents, call
+
+
+@pytest.mark.asyncio
+async def test_publish_current_workspace_commits_with_the_users_hooks_and_pushes_from_the_host(
+    member, tmp_path, worker_git_seed, host_git
+):
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
     ran = tmp_path / "hook-ran"
     _hook(
         repo_path,
         "pre-commit",
         f'echo "host$GUILDBOTICS_TEST_GUEST" > "{ran.as_posix()}"',
     )
+    # The push leaves from the host's own repository, not from this one.
+    pushed_from_here = tmp_path / "pre-push-ran"
+    _hook(repo_path, "pre-push", f'touch "{pushed_from_here.as_posix()}"')
     (repo_path / "README.md").write_text("initial\ncurrent\n", encoding="utf-8")
     repo.git.add(A=True)
 
@@ -1108,8 +1165,285 @@ async def test_publish_current_workspace_runs_the_users_hooks_on_the_host(
     ]
     assert repo.active_branch.name == "main"
     assert member.remote().commit("main").hexsha == result.commit_sha
+    assert repo.commit("refs/remotes/origin/main").hexsha == result.commit_sha
     assert repo.commit(result.commit_sha).author.email == "aiko@example.com"
     assert ran.read_text(encoding="utf-8").strip() == "host"
+    assert not pushed_from_here.exists()
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
+@pytest.mark.asyncio
+async def test_push_current_workspace_goes_where_git_would_push(
+    member, tmp_path, worker_git_seed, host_git
+):
+    """``pushurl`` decides which repository is pushed to, as git would; the
+    host then pushes there itself."""
+    repo, repo_path = _current_repo(
+        tmp_path,
+        worker_git_seed,
+        ("remote.origin.url", member.url("contributor")),
+        ("remote.origin.pushurl", member.url("owner")),
+    )
+    contributor = member.remote("contributor").commit("main").hexsha
+    sha = repo.index.commit("local").hexsha
+
+    result = await member.service.push(
+        repo_path, workspace_mode="current", cwd=repo_path
+    )
+
+    assert result.pushed is True
+    assert member.remote("owner").commit("main").hexsha == sha
+    assert member.remote("contributor").commit("main").hexsha == contributor
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
+@pytest.mark.asyncio
+async def test_push_current_workspace_publishes_a_branch_new_to_the_remote(
+    member, tmp_path, worker_git_seed, host_git
+):
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    repo.git.switch("-c", "feature/new")
+    sha = repo.index.commit("new work").hexsha
+
+    result = await member.service.push(
+        repo_path, workspace_mode="current", cwd=repo_path
+    )
+
+    assert result.pushed is True
+    assert result.branch == "feature/new"
+    assert member.remote().commit("feature/new").hexsha == sha
+    assert repo.commit("refs/remotes/origin/feature/new").hexsha == sha
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
+@pytest.mark.asyncio
+async def test_push_current_workspace_behind_the_remote_is_rejected_with_origin_fetched(
+    member, tmp_path, worker_git_seed
+):
+    """As ``git fetch`` then ``git push`` did: the push is rejected, and the
+    user's ``origin/<branch>`` shows what the remote has."""
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    remote = member.remote()
+    tip = remote.commit("main")
+    identity = {
+        f"GIT_{role}_{field}": value
+        for role in ("AUTHOR", "COMMITTER")
+        for field, value in (("NAME", "Someone"), ("EMAIL", "someone@example.com"))
+    }
+    with remote.git.custom_environment(**identity):
+        ahead = remote.git.commit_tree(tip.tree.hexsha, "-p", tip.hexsha, m="remote")
+    remote.git.update_ref("refs/heads/main", ahead)
+    repo.index.commit("local")
+
+    with pytest.raises(MemberCapabilityError, match="Failed to push 'main'"):
+        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+    assert remote.commit("main").hexsha == ahead
+    assert repo.commit("refs/remotes/origin/main").hexsha == ahead
+
+
+@pytest.mark.asyncio
+async def test_push_current_workspace_of_a_branch_without_commits_is_refused(
+    member, tmp_path, worker_git_seed
+):
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    repo.git.switch("--orphan", "empty")
+
+    with pytest.raises(MemberCapabilityError, match="'empty' has no commit to push"):
+        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+
+def _in_environment(monkeypatch, tmp_path, settings) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", str(len(settings)))
+    for index, (key, value) in enumerate(settings):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{index}", key)
+        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{index}", value)
+
+
+def _in_global_config(monkeypatch, tmp_path, settings) -> None:
+    lines = []
+    for key, value in settings:
+        section, rest = key.split(".", 1)
+        subsection, name = rest.rsplit(".", 1)
+        lines.append(f'[{section} "{subsection}"]\n\t{name} = {value}\n')
+    config = tmp_path / "global.gitconfig"
+    config.write_text("".join(lines), encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+
+
+def _owner_dir(member: _Member, owner: str) -> str:
+    """``file:///.../remotes/<owner>/``, which the repository is under."""
+    return member.url(owner).rsplit("/", 1)[0] + "/"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        lambda m: [
+            (f"url.{_owner_dir(m, 'contributor')}.insteadOf", _owner_dir(m, "owner"))
+        ],
+        lambda m: [
+            (
+                f"url.{_owner_dir(m, 'contributor')}.pushInsteadOf",
+                _owner_dir(m, "owner"),
+            )
+        ],
+        # An empty value is a rule git applies to every URL.
+        lambda m: [(f"url.{_owner_dir(m, 'contributor')}.insteadOf", "")],
+        lambda m: [(f"url.{_owner_dir(m, 'contributor')}.pushInsteadOf", "")],
+        lambda m: [("remote.origin.pushurl", m.url("contributor"))],
+        # The fetch moves while the push stays: each destination is checked.
+        lambda m: [
+            (f"url.{_owner_dir(m, 'contributor')}.insteadOf", _owner_dir(m, "owner")),
+            (f"url.{m.url('owner')}.pushInsteadOf", m.url("owner")),
+        ],
+    ],
+    ids=[
+        "insteadOf",
+        "pushInsteadOf",
+        "empty-insteadOf",
+        "empty-pushInsteadOf",
+        "pushurl",
+        "fetch-only",
+    ],
+)
+@pytest.mark.parametrize("source", [_in_environment, _in_global_config])
+@pytest.mark.asyncio
+async def test_git_configuration_that_moves_origin_is_never_given_the_token(
+    member, tmp_path, host_git, monkeypatch, source, settings
+):
+    """The host's repository connects only to the URL the host derived. What
+    the configuration git reads outside that repository (system, global, the
+    environment) says of where ``origin`` is would take the credential
+    elsewhere, so git's own resolution of it is what is checked."""
+    await member.prepare()
+    member.stage().index.commit("local")
+    contributor = member.remote("contributor").commit("main").hexsha
+    source(monkeypatch, tmp_path, settings(member))
+    already = len(host_git)
+
+    with pytest.raises(MemberCapabilityError, match="elsewhere"):
+        await member.run(lambda s: s.push(member.clone))
+
+    assert _credentialed(host_git[already:]) == []
+    assert member.remote("contributor").commit("main").hexsha == contributor
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_of_another_url_leaves_the_push_alone(
+    member, tmp_path, worker_git_seed, host_git, monkeypatch
+):
+    """Only a rule that applies to the host's URL stops the push; the rest of
+    git's configuration stays the user's."""
+    repo, repo_path = _current_repo(
+        tmp_path, worker_git_seed, ("remote.origin.url", member.url("owner"))
+    )
+    sha = repo.index.commit("local").hexsha
+    _in_environment(
+        monkeypatch,
+        tmp_path,
+        [("url.https://x.example/.insteadOf", "https://elsewhere.example/")],
+    )
+
+    result = await member.service.push(
+        repo_path, workspace_mode="current", cwd=repo_path
+    )
+
+    assert result.pushed is True
+    assert member.remote().commit("main").hexsha == sha
+    _only_the_hosts_repositories_get_the_token(member, host_git)
+
+
+@pytest.mark.parametrize(
+    ("config", "refused"),
+    [
+        (
+            lambda member: [("remote.origin.url", member.url("contributor"))],
+            "contributor/repo",
+        ),
+        (
+            lambda member: [
+                ("remote.origin.url", "https://example.com/owner/repo.git")
+            ],
+            "example.com",
+        ),
+        (
+            lambda member: [
+                (
+                    "remote.origin.url",
+                    "https://x-access-token:secret@example.com/owner/repo.git",
+                )
+            ],
+            "example.com",
+        ),
+        (
+            lambda member: [("remote.origin.url", "git@example.com:owner/repo.git")],
+            "example.com",
+        ),
+        (
+            lambda member: [
+                ("remote.origin.url", member.url("owner")),
+                ("remote.origin.pushurl", member.url("contributor")),
+            ],
+            "contributor/repo",
+        ),
+        (
+            lambda member: [
+                ("remote.origin.url", member.url("owner")),
+                (f"url.{member.url('contributor')}.pushInsteadOf", member.url("owner")),
+            ],
+            "contributor/repo",
+        ),
+        (
+            lambda member: [
+                ("remote.origin.url", member.url("owner")),
+                ("remote.origin.pushurl", member.url("owner")),
+                ("remote.origin.pushurl", member.url("contributor")),
+            ],
+            "refused",
+        ),
+    ],
+    ids=[
+        "another-owner",
+        "another-host",
+        "credential-in-url",
+        "scp-form",
+        "pushurl",
+        "pushInsteadOf",
+        "two-push-urls",
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_current_workspace_outside_the_owner_never_reaches_the_remote(
+    member, tmp_path, worker_git_seed, host_git, monkeypatch, config, refused
+):
+    """Where git would push is judged, not ``remote.origin.url``: another
+    owner's repository, or a host that is not the configured one, is refused
+    before any git is given the member's credential, and the refusal names no
+    credential the remote's URL carries."""
+    recorded = []
+    monkeypatch.setattr(
+        repository_scope,
+        "record_correlated_event",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+    repo, repo_path = _current_repo(tmp_path, worker_git_seed, *config(member))
+    repo.index.commit("local")
+    contributor = member.remote("contributor").commit("main").hexsha
+
+    with pytest.raises(RepositoryScopeError, match=refused) as refusal:
+        await member.service.push(repo_path, workspace_mode="current", cwd=repo_path)
+
+    assert _credentialed(host_git) == []
+    assert not [call for call in host_git if {"fetch", "push"} & set(call.args)]
+    assert member.remote("contributor").commit("main").hexsha == contributor
+    assert "secret" not in f"{refusal.value} {recorded}"
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,7 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
+from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.observability import join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.observability.interactive_sessions import (
@@ -2467,6 +2468,7 @@ def _run(coro, *, output_format: str) -> Any:
         MemberMemoryError,
         ChatUpdatesRequired,
         TaskRunError,
+        RepositoryScopeError,
         KeyError,
     ) as exc:
         raise click.ClickException(_safe_error(exc)) from exc

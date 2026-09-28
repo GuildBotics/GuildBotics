@@ -1,5 +1,6 @@
 import httpx
 
+from guildbotics.integrations.github.repository_scope import check_request
 from guildbotics.observability.diagnostics_events import record_correlated_event
 
 HTTP_UNAUTHORIZED = 401
@@ -44,17 +45,23 @@ def record_github_auth_failure(
     )
 
 
-def get_async_client(base_url: str, auth: httpx.Auth) -> httpx.AsyncClient:
+def get_async_client(base_url: str, auth: httpx.Auth, owner: str) -> httpx.AsyncClient:
     """
     Create and return an async HTTP client with the specified base URL and headers.
 
     Args:
         base_url (str): The base URL for the client.
         auth (httpx.Auth): Authentication class to use for the client.
+        owner (str): The configured owner, the only one whose repositories
+            the client writes to.
 
     Returns:
         httpx.AsyncClient: An instance of AsyncClient configured with the provided base URL and headers.
     """
+    base = httpx.URL(base_url)
+
+    async def request_hook(request: httpx.Request) -> None:
+        check_request(owner, base, request)
 
     async def response_hook(response: httpx.Response) -> None:
         await raise_for_status_with_text(
@@ -68,6 +75,7 @@ def get_async_client(base_url: str, auth: httpx.Auth) -> httpx.AsyncClient:
         auth=auth,
         timeout=10.0,
         event_hooks={
+            "request": [request_hook],
             "response": [response_hook],
         },
     )
