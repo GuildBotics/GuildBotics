@@ -393,11 +393,28 @@ def test_retrying_a_synchronized_workspace_reports_its_state(
     assert payload["state"] == "idle"
 
 
+def _hub_relay_still_open() -> bool:
+    """The relay watcher and heartbeat are the threads that open hub files."""
+    names = {"guildbotics-hub-live-watch", "guildbotics-hub-live-heartbeat"}
+    return any(
+        thread.name in names and thread.is_alive() for thread in threading.enumerate()
+    )
+
+
 @pytest.mark.usefixtures("idle_queue")
 def test_a_hub_that_fails_reports_what_it_printed(client: TestClient) -> None:
-    """The Desktop shows why the hub failed, in the words Git used."""
+    """The Desktop shows why the hub failed, in the words Git used.
+
+    Windows will not rename a directory while a file under it is open. The
+    queue does not run in this case; the relay watcher and its heartbeat are
+    what open files under the hub, so they stop before the directory moves.
+    """
     client.post("/hub", headers=AUTH_HEADERS)
     client.post("/workspace/sync/enable", headers=AUTH_HEADERS, json={"hub": {}})
+    service = client.app.state.runtime.workspace_sync_service
+    assert service._relay_runtime is not None
+    service._stop_relay()
+    assert not _hub_relay_still_open()
     hub_root().rename(hub_root().with_name("gone"))
 
     payload = _json(client.post("/workspace/sync/retry", headers=AUTH_HEADERS))

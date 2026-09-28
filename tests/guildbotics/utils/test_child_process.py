@@ -18,8 +18,10 @@ from guildbotics.utils.child_process import ChildProcess
 _LEAVES_ONE_RUNNING = """
 import subprocess, sys, time
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-print(child.pid, flush=True)
+# The parent stops this process as soon as it has read the pid. Flush first,
+# or that stop lands before the write and the reader sees an empty stream.
 print("said before it ended", file=sys.stderr, flush=True)
+print(child.pid, flush=True)
 if sys.argv[1] == "killed":
     time.sleep(60)
 if sys.argv[1] == "reads":
@@ -50,19 +52,30 @@ async def test_a_process_ends_with_itself_not_what_it_left_holding_its_pipes(how
     ends shortly after: a process it left running, which holds its pipes open,
     holds neither whoever waits for it nor whoever reads what it said."""
     process = await _start(how)
-    left = int(await process.stdout.readline())
+    # The pipes close shortly after the process ends. A read started only then
+    # loses bytes still in the kernel buffer when that delay is shorter than
+    # the time a loaded runner takes to reach the read.
+    stderr = asyncio.create_task(process.stderr.read())
+    rest = None
+    left = None
     try:
+        left = int(await process.stdout.readline())
+        rest = asyncio.create_task(process.stdout.read())
         if how == "killed":
             await asyncio.wait_for(process.kill(), 10)
         else:
             await asyncio.wait_for(process.wait(), 10)
 
         assert process.returncode is not None
-        assert await asyncio.wait_for(process.stdout.read(), 10) == b""
-        stderr = await asyncio.wait_for(process.stderr.read(), 10)
-        assert stderr.decode().strip() == "said before it ended"
+        assert await asyncio.wait_for(rest, 10) == b""
+        said = await asyncio.wait_for(stderr, 10)
+        assert said.decode().strip() == "said before it ended"
     finally:
-        os.kill(left, signal.SIGTERM)
+        if rest is not None:
+            rest.cancel()
+        stderr.cancel()
+        if left is not None:
+            os.kill(left, signal.SIGTERM)
 
 
 @pytest.mark.asyncio
