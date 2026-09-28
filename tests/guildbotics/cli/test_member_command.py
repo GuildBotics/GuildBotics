@@ -1495,7 +1495,7 @@ def test_member_github_write_outside_the_configured_owner_is_never_sent(monkeypa
             "--person",
             "aiko",
             "--repo",
-            "superradcompany/microsandbox",
+            "other-owner/demo",
             "--title",
             "Issue title",
             "--human-approved",
@@ -1506,7 +1506,7 @@ def test_member_github_write_outside_the_configured_owner_is_never_sent(monkeypa
     )
 
     assert result.exit_code != 0
-    assert "refused POST /repos/superradcompany/microsandbox/issues" in result.output
+    assert "refused POST /repos/other-owner/demo/issues" in result.output
     assert sent == []
 
 

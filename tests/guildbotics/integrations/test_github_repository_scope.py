@@ -73,8 +73,8 @@ def _graphql(document: object) -> dict[str, Any]:
 
 
 PERMITTED = [
-    ("GET", "/repos/superradcompany/microsandbox/issues", {}),
-    ("HEAD", "/repos/superradcompany/microsandbox", {}),
+    ("GET", "/repos/other-owner/demo/issues", {}),
+    ("HEAD", "/repos/other-owner/demo", {}),
     ("GET", "/rate_limit", {}),
     ("POST", "/repos/acme/demo/issues", {"json": {"title": "t"}}),
     ("POST", "/repos/ACME/demo/issues/1/comments", {"json": {"body": "b"}}),
@@ -88,7 +88,7 @@ PERMITTED = [
 ]
 
 REFUSED = [
-    ("POST", "/repos/superradcompany/microsandbox/issues", {"json": {}}),
+    ("POST", "/repos/other-owner/demo/issues", {"json": {}}),
     ("POST", "/repos/acme-other/demo/issues", {"json": {}}),
     ("PATCH", "/repos/other/demo/pulls/1", {"json": {}}),
     ("DELETE", "/repos/other/demo/issues/1/labels/bug", {}),
@@ -269,7 +269,7 @@ def test_check_repository_admits_the_configured_owner(refusals, owner, repositor
 @pytest.mark.parametrize(
     ("scope", "owner", "repository"),
     [
-        ("acme", "superradcompany", "microsandbox"),
+        ("acme", "other-owner", "demo"),
         ("acme", "acme", ".."),
         ("acme", "acme", ""),
         ("acme", "https://example.com/acme/demo.git", ""),
