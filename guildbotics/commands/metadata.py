@@ -160,7 +160,7 @@ def _validate_choice(
 
 
 def parse_command_arguments(
-    path: Path | None, metadata: dict[str, Any], command_name: str = ""
+    path: Path | None, metadata: dict[str, Any], command_name: str
 ) -> list[CommandArgumentMetadata]:
     """Return caller-visible arguments for a command.
 
@@ -173,7 +173,7 @@ def parse_command_arguments(
 
 
 def parse_metadata_arguments(
-    metadata: dict[str, Any], command_name: str = ""
+    metadata: dict[str, Any], command_name: str
 ) -> list[CommandArgumentMetadata]:
     """Parse declared and placeholder-discovered arguments from metadata."""
     placeholders = extract_placeholders(metadata) - command_output_names(
@@ -234,7 +234,7 @@ def command_output_name(
 
     path_value = config.get("path")
     if path_value:
-        path = Path(path_value)
+        path = Path(str(path_value))
         if path.name.startswith(".") and path.stem:
             return path.stem
         return path.stem or path.name
@@ -242,20 +242,23 @@ def command_output_name(
     return f"{anchor_name}__{command_index}"
 
 
-def command_output_names(metadata: dict[str, Any], command_name: str) -> set[str]:
-    """Return names populated by the command's declared subcommands."""
+def command_entries(metadata: dict[str, Any]) -> list[Any]:
+    """Return the command's declared subcommand entries in run order."""
     raw_commands = metadata.get("commands")
     if raw_commands is None:
-        return set()
+        return []
     if isinstance(raw_commands, Sequence) and not isinstance(
         raw_commands, (str, bytes)
     ):
-        entries = list(raw_commands)
-    else:
-        entries = [str(raw_commands)]
+        return list(raw_commands)
+    return [raw_commands]
+
+
+def command_output_names(metadata: dict[str, Any], command_name: str) -> set[str]:
+    """Return names populated by the command's declared subcommands."""
     return {
         command_output_name(normalize_command_entry(entry), command_name, index)
-        for index, entry in enumerate(entries, start=1)
+        for index, entry in enumerate(command_entries(metadata), start=1)
     }
 
 

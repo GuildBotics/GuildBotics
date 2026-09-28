@@ -191,6 +191,19 @@ async def test_yaml_empty_commands_is_noop(config_dir: Path):
 
 
 @pytest.mark.asyncio
+async def test_yaml_single_mapping_command_executes(config_dir: Path):
+    """A single mapping may be declared without wrapping it in a list."""
+    commands = config_dir / "commands"
+    (commands / "single.yml").write_text(
+        "commands:\n  name: greeting\n  print: hello\n", encoding="utf-8"
+    )
+
+    ctx = await _run_main(config_dir, "single")
+
+    assert ctx.shared_state["greeting"] == "hello"
+
+
+@pytest.mark.asyncio
 async def test_yaml_invalid_command_entry_raises(config_dir: Path):
     """A non-string / non-mapping command entry raises a CommandError."""
     commands = config_dir / "commands"

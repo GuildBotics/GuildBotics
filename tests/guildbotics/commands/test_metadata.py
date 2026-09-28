@@ -53,7 +53,7 @@ def test_metadata_arguments_declared_and_discovered() -> None:
         "args": {"file": {"required": True}, "language": {"default": "English"}},
         "body": "Translate ${file} into ${language} and ${extra}.",
     }
-    arguments = {arg.name: arg for arg in parse_metadata_arguments(metadata)}
+    arguments = {arg.name: arg for arg in parse_metadata_arguments(metadata, "")}
 
     assert arguments["file"].required is True
     assert arguments["language"].default == "English"
@@ -94,6 +94,15 @@ def test_subcommand_outputs_are_not_caller_arguments(
     assert [argument.name for argument in arguments] == ["caller_input"]
 
 
+def test_numeric_subcommand_path_output_is_not_a_caller_argument() -> None:
+    metadata = {
+        "commands": [{"path": 123}],
+        "body": "${123}",
+    }
+
+    assert parse_metadata_arguments(metadata, "system") == []
+
+
 def test_python_arguments_from_signature() -> None:
     source = (
         "def main(context, path, language='English', *, verbose=False):\n"
@@ -117,11 +126,11 @@ def test_parse_command_arguments_dispatches_on_extension(tmp_path: Path) -> None
     py_path = tmp_path / "task.py"
     py_path.write_text("def main(context, name):\n    return ''\n", encoding="utf-8")
 
-    py_args = [arg.name for arg in parse_command_arguments(py_path, {})]
+    py_args = [arg.name for arg in parse_command_arguments(py_path, {}, "task")]
     md_args = [
         arg.name
         for arg in parse_command_arguments(
-            tmp_path / "task.md", {"body": "Hello ${name}."}
+            tmp_path / "task.md", {"body": "Hello ${name}."}, "task"
         )
     ]
 
@@ -187,7 +196,7 @@ def test_parse_python_arguments_tolerates_non_utf8_source(tmp_path: Path) -> Non
     command = tmp_path / "broken.py"
     command.write_bytes(b"\xff")
 
-    assert parse_command_arguments(command, {}) == []
+    assert parse_command_arguments(command, {}, "broken") == []
 
 
 def test_a_command_declares_no_access_unless_it_says_so() -> None:

@@ -327,6 +327,43 @@ def test_command_options_extract_yaml_frontmatter_arguments(
     ]
 
 
+def test_command_options_hide_unnamed_subcommand_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = _isolate_workspace(tmp_path, monkeypatch)
+    _write(
+        config_dir / "commands/system.md",
+        "\n".join(
+            [
+                "---",
+                "routine: true",
+                "brain: none",
+                "commands:",
+                "  - script: uname -s",
+                "---",
+                "{system__1}",
+            ]
+        ),
+    )
+    context = _make_context([_make_person()])
+    runtime = _runtime_with_context(monkeypatch, context)
+
+    option = next(
+        item
+        for item in runtime.get_command_options().options
+        if item.command == "system"
+    )
+    routine = next(
+        item
+        for item in runtime.get_routine_command_options().options
+        if item.command == "system"
+    )
+
+    assert option.arguments == []
+    assert routine.arguments == []
+    assert routine.routine_eligible is True
+
+
 def test_command_options_apply_declared_argument_requiredness_and_defaults(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

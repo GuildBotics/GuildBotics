@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import posixpath
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +11,11 @@ from guildbotics.commands.arguments import (
 )
 from guildbotics.commands.discovery import resolve_command_reference
 from guildbotics.commands.errors import CommandError
-from guildbotics.commands.metadata import command_output_name, normalize_command_entry
+from guildbotics.commands.metadata import (
+    command_entries,
+    command_output_name,
+    normalize_command_entry,
+)
 from guildbotics.commands.models import CommandSpec
 from guildbotics.commands.registry import find_command_class, get_command_types
 from guildbotics.intelligences.agent_runtime.host_client import admits
@@ -180,16 +184,6 @@ class CommandSpecFactory:
         spec.class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         spec.children = []
 
-        raw_commands = config.get("commands")
-        if raw_commands is None:
-            entries: list[Any] = []
-        elif isinstance(raw_commands, Sequence) and not isinstance(
-            raw_commands, (str, bytes)
-        ):
-            entries = list(raw_commands)
-        else:
-            entries = [str(raw_commands)]
-
-        for entry in entries:
+        for entry in command_entries(config):
             child = self.build_from_entry(spec, entry)
             spec.children.append(child)
