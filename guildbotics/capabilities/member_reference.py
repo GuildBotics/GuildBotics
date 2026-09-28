@@ -320,16 +320,22 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "Stage with plain git (`git add`), then commit and push through `member git "
     "commit`, `member git push`, or `member git publish`.",
     "When issue work changed code, open or reuse a PR with `member github pr "
-    "create`. Pass `--issue-url`, and add `--closes-issue` only when merging "
-    "this PR into the default branch completes the whole issue; keep the "
-    "default `Refs` for stacked PRs, partial steps, and tracking or parent "
-    "issues. `Closes` only states intent — the issue closes when a human "
-    "merges the PR, so this is not the human-only issue closing decision. "
+    "create`. Pass `--issue-url`, and add `--closes-issue` only when the issue is "
+    "complete once this PR merges into the branch that receives its work. "
+    "A child issue can therefore use `Closes` in a PR to its parent's feature "
+    "branch: pass the child with `--issue-url <child> --closes-issue` and put "
+    "`Refs #<parent>` on a standalone line in the body. A PR from that feature "
+    "branch to the default branch uses `Closes` for the parent issue. Keep the "
+    "default `Refs` for stacked PRs, partial steps, and tracking or parent issues "
+    "that the merge does not complete. GitHub only closes an issue automatically "
+    "when the PR merges into the default branch, so after a human merges a child "
+    "PR into a feature branch, follow the manual-close rule below. `Closes` only "
+    "states intent and does not by itself authorize closing the issue.",
     "When creating new PR inline feedback, first inspect the PR with "
     "`member github pr inspect --include-diff`, then use `member github pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
-    "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`). When "
-    "addressing existing PR review threads, reply with `member github pr reply` "
+    "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`).",
+    "When addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `pr inspect --include-comments`.",
     "After opening or updating a PR, inspect its CI and completion readiness with "
     "`member github pr checks`. "
@@ -405,7 +411,12 @@ _CROSS_CUTTING_RULES: list[str] = [
     "Opening an issue and closing or reopening one stay human decisions. Pass "
     "`--human-approved` only when a human in the originating conversation asked for or "
     "approved that specific issue, never on the member's own judgment and never because "
-    "another member asked for it.",
+    "another member asked for it. The one exception is a human's merge outside the default "
+    "branch: if GitHub does not close an issue after a human merges its PR there, inspect "
+    "the current PR and issue and verify that the merge completed the issue's whole scope. "
+    "If it did, post a completion comment and close the issue with `issue update "
+    "--state closed --state-reason completed --human-approved`. If it did not, leave "
+    "the issue open and comment on what remains.",
     "Labels come from the labels the target repository already defines; `issue create "
     "--label` and `issue update --add-label` reject anything else. When the defined "
     "labels do not cover what the issue needs, propose the new label to a human instead "

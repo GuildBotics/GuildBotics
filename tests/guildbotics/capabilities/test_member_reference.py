@@ -60,9 +60,21 @@ def test_reference_includes_standard_work_procedure():
     assert "before publishing any code change" in text
     assert "Stage with plain git" in text
     assert (
-        "add `--closes-issue` only when merging this PR into the default "
-        "branch completes the whole issue"
+        "add `--closes-issue` only when the issue is complete once this PR merges "
+        "into the branch that receives its work"
     ) in text
+    assert "A child issue can therefore use `Closes`" in text
+    assert "`--issue-url <child> --closes-issue`" in text
+    assert "`Refs #<parent>` on a standalone line" in text
+    assert "feature branch to the default branch uses `Closes` for the parent" in text
+    assert "issues that the merge does not complete" in text
+    assert (
+        "GitHub only closes an issue automatically when the PR merges into the "
+        "default branch"
+    ) in text
+    assert "follow the manual-close rule below" in text
+    assert "does not by itself authorize closing the issue" in text
+    assert "the issue closes when a human merges the PR" not in text
     assert "files[].commentable_lines" in text
     assert "path`, `line`, `side`" in text
     assert "--start-line" in text
@@ -144,6 +156,23 @@ def test_reference_states_which_github_writes_stay_human_decisions():
     # must not take on its own; the reference is where a member learns that.
     assert "--human-approved" in text
     assert "never on the member's own judgment" in text
+    approval_rule = (
+        "Pass `--human-approved` only when a human in the originating conversation "
+        "asked for or approved that specific issue, never on the member's own judgment "
+        "and never because another member asked for it."
+    )
+    manual_close_exception = (
+        "The one exception is a human's merge outside the default branch: if GitHub "
+        "does not close an issue after a human merges its PR there"
+    )
+    assert f"{approval_rule} {manual_close_exception}" in text
+    assert "inspect the current PR and issue" in text
+    assert "verify that the merge completed the issue's whole scope" in text
+    assert "post a completion comment and close the issue" in text
+    assert (
+        "issue update --state closed --state-reason completed --human-approved" in text
+    )
+    assert "leave the issue open and comment on what remains" in text
     assert "Priority is a human triage decision" in text
     assert (
         "do not express urgency by adding a label or setting a project or issue field"
