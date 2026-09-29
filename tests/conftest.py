@@ -302,7 +302,7 @@ def pytest_sessionfinish(session: pytest.Session):
         session.config.workeroutput["network_attempts"] = pending
     else:
         _NETWORK_AUDIT.extend(pending)
-    if _NETWORK_AUDIT or pending:
+    if (_NETWORK_AUDIT or pending) and session.exitstatus == pytest.ExitCode.OK:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
     if not hasattr(session.config, "workeroutput") and _NETWORK_AUDIT:
         reporter = session.config.pluginmanager.get_plugin("terminalreporter")

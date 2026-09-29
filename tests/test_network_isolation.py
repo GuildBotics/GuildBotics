@@ -228,6 +228,30 @@ def test_second(request):
     assert "Total: 2" in result.stdout
 
 
+def test_network_attempt_preserves_existing_exit_status(tmp_path: Path) -> None:
+    (tmp_path / "conftest.py").write_text(
+        """
+import socket
+import pytest
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session):
+    try:
+        socket.gethostbyname("late.example")
+    except OSError:
+        pass
+    session.exitstatus = pytest.ExitCode.INTERRUPTED
+""",
+        encoding="utf-8",
+    )
+    test_file = tmp_path / "test_exit_status.py"
+    test_file.write_text("def test_success(): pass\n", encoding="utf-8")
+    result = _run(test_file)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "late.example" in result.stdout
+
+
 def test_real_device_requires_explicit_opt_in(tmp_path: Path) -> None:
     test_file = tmp_path / "test_real_device.py"
     test_file.write_text(
