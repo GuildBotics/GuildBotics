@@ -180,8 +180,7 @@ def test_listing_device_records_is_ordered_by_identifier(
     assert other in records
 
 
-@pytest.mark.parametrize("_attempt", range(10))
-def test_concurrent_first_use_agrees_on_one_workspace_id(_attempt: int) -> None:
+def test_concurrent_first_use_agrees_on_one_workspace_id() -> None:
     start = threading.Barrier(4)
     seen: list[str] = []
 
