@@ -660,8 +660,11 @@ rate limitに関するRPCデータを使用します。標準エラー出力に�
 エラーメッセージには依存しません。
 
 Antigravityでは、終端の`result`イベントで判定します。`status`が`SUCCESS`以外なら異常とみなし、
-同じイベントの`error`フィールドで種別を決めます。`agy` 1.1.10は利用制限と認証エラーをコード
-ではなく文章で報告するため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
+同じイベントの`error`フィールドで種別を決めます。`agy`は利用制限と認証エラーを、独立したコードの
+フィールドではなくこの1つの文字列で報告します。1.1.10は文章で、1.2.13は上流の状態名とHTTPの
+コードを先頭に付けた形（`UNAUTHENTICATED (code 401): ...`、
+`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`。ゲートウェイで推論の応答を差し替えて
+確認）です。そのため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
 文章に含まれる復帰時刻（`Resets in 1h23m`）は、他のツールと共通の正規化処理へ渡します。
 利用制限ではセッションを切り替えず、認証・プロトコル・プロセスの失敗では切り替えます。
 
@@ -687,8 +690,8 @@ ACPを使うadapterではさらに、trusted member capability transportに必�
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
 確認します。動作確認済みの基準バージョンは、Grok Build 1.0.44、GitHub Copilot CLI 1.0.77と1.0.89です。
-Antigravity 1.1.11が必要なflagを公開することは確認済みですが、追加した補助workspaceからMCP設定を
-読み込めることは、trusted member transportの対応版と宣言する前の実機確認項目として残します。
+Antigravity 1.1.11が必要なflagを公開することと、1.2.13が追加した補助workspaceからMCP設定を読み込み、
+そのMCP serverを通してmember brokerを呼べることを確認しています。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
 として分類します。標準エラー出力や応答本文の解析は行いません。xAIのretry-state通知は

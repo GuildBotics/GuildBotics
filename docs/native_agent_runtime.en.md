@@ -773,9 +773,12 @@ decisions.
 
 Antigravity is classified from its terminal `result` event: a `status` other than
 `SUCCESS` is a failure, and the accompanying `error` field decides the category.
-`agy` 1.1.10 reports quota and credential failures as prose rather than as a code,
-so that one field is matched against a small anchored pattern set kept in the
-adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
+`agy` reports quota and credential failures in that one string rather than in a
+separate code field: 1.1.10 wrote prose, and 1.2.13 prefixes the upstream status and
+HTTP code (`UNAUTHENTICATED (code 401): ...`,
+`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`, observed by replacing the
+inference answer at the gateway). So that one field is matched against a small
+anchored pattern set kept in the adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
 same normalization every other tool uses. A rate limit does not rotate the session;
 authentication, protocol, and process failures do.
 
@@ -801,9 +804,8 @@ capability detection reads `agy --help` (which prints to stderr and exits 0) and
 requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
 verified baselines are Grok Build 1.0.44 and GitHub Copilot CLI 1.0.77 and 1.0.89. Antigravity
-1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
-workspace remains an explicit machine-verification item before the adapter is declared
-supported for the trusted member transport.
+1.1.11 exposes the required flags, and 1.2.13 was observed loading the MCP configuration
+from the added auxiliary workspace and calling the member broker through it.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. The xAI
