@@ -9,8 +9,6 @@ in CI. Nothing it observes is written to a fixture.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from guildbotics.intelligences.agent_runtime.usage import read_copilot_usage
@@ -19,11 +17,7 @@ from tests.timeouts import REAL_DEVICE
 TOOL = "copilot"
 
 pytestmark = [
-    *REAL_DEVICE,
-    pytest.mark.skipif(
-        os.environ.get("GUILDBOTICS_COPILOT_SMOKE") != "1",
-        reason="Set GUILDBOTICS_COPILOT_SMOKE=1 to run the real Copilot smoke test.",
-    ),
+    *REAL_DEVICE("GUILDBOTICS_COPILOT_SMOKE"),
     pytest.mark.asyncio,
 ]
 

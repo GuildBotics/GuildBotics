@@ -23,6 +23,7 @@ from tests.git_seed import WorkerGitSeed
 from tests.guildbotics.command_environment_doubles import (  # noqa: F401
     commands_in_process,
 )
+from tests.timeouts import REAL_DEVICE_OPT_INS
 from tests.windows_shards import (
     WINDOWS_SHARDS,
     verify_windows_shards,
@@ -32,6 +33,7 @@ from tests.windows_shards import (
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
 _NETWORK_AUDIT: list[tuple[str, str]] = []
+_REAL_DEVICE_ENABLED = pytest.StashKey[frozenset[str]]()
 _WINDOWS_BASETEMP = pytest.StashKey[Path]()
 
 
@@ -73,6 +75,9 @@ def _configure_windows_basetemp(config: pytest.Config) -> None:
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _PHASE_DURATION_OUTPUT
+    config.stash[_REAL_DEVICE_ENABLED] = frozenset(
+        flag for flag in REAL_DEVICE_OPT_INS if os.environ.get(flag) == "1"
+    )
     if hasattr(config, "workerinput"):
         return
     _configure_windows_basetemp(config)
@@ -150,9 +155,29 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     )
 
 
+def _real_device_flag(item: pytest.Item) -> str | None:
+    marker = item.get_closest_marker("real_device")
+    if marker is None:
+        return None
+    if (
+        len(marker.args) != 1
+        or marker.kwargs
+        or not isinstance(marker.args[0], str)
+        or marker.args[0] not in REAL_DEVICE_OPT_INS
+    ):
+        raise pytest.UsageError("real_device requires a known opt-in flag")
+    return marker.args[0]
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
+    enabled = config.stash[_REAL_DEVICE_ENABLED]
+    for item in items:
+        flag = _real_device_flag(item)
+        if flag is not None and flag not in enabled:
+            item.add_marker(pytest.mark.skip(reason=f"Set {flag}=1 to run this test."))
+
     shard = config.getoption("windows_shard")
     if shard is None:
         return
@@ -218,7 +243,7 @@ def _isolate_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureReq
     cover common child-process clients, but a binary that ignores them (such as
     bare ``ssh``) must be stubbed by its test because Python cannot intercept it.
     """
-    if request.node.get_closest_marker("real_device"):
+    if _real_device_flag(request.node) in request.config.stash[_REAL_DEVICE_ENABLED]:
         yield
         return
 

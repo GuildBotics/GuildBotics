@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
 import shlex
 import tempfile
 import time
@@ -55,11 +54,7 @@ STAND_IN = "guildbotics-stand-in-SYNTHETIC-459"
 _CA = "/etc/contract-probe-ca.pem"
 
 pytestmark = [
-    *REAL_DEVICE,
-    pytest.mark.skipif(
-        os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
-        reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the provider CLIs.",
-    ),
+    *REAL_DEVICE("GUILDBOTICS_CONTRACT_PROBE"),
     pytest.mark.asyncio,
 ]
 
