@@ -95,6 +95,14 @@ def atomic_write_text(path: Path, text: str) -> None:
     atomic_write_bytes(path, text.encode("utf-8"))
 
 
+def _plain_windows_path(value: str) -> str:
+    if value.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + value[8:]
+    if value.startswith("\\\\?\\") and value[4:6].endswith(":"):
+        return value[4:]
+    return value
+
+
 def resolve_from_existing_ancestor(path: Path) -> Path:
     """Resolve existing ancestors, then append missing components by spelling.
 
@@ -110,6 +118,8 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
                 raise RuntimeError(f"Symlink loop: {candidate}")
             seen_links.add(candidate)
             target = candidate.readlink()
+            if os.name == "nt":
+                target = Path(_plain_windows_path(str(target)))
             candidate = target if target.is_absolute() else candidate.parent / target
             continue
         try:
