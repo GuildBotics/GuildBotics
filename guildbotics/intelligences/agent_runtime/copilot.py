@@ -28,7 +28,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
-    ConversationRecord,
 )
 
 #: The only method Copilot advertises. Its ``_meta.terminal-auth`` tells the
@@ -139,7 +138,6 @@ class CopilotAcpAdapter(AcpAdapterBase):
         self,
         session_id: str,
         context: AgentExecutionContext,
-        conversation: ConversationRecord,
         result: dict[str, Any],
     ) -> list[AgentEvent]:
         desired = {

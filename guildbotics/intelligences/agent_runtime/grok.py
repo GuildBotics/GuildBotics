@@ -26,7 +26,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
-    ConversationRecord,
     context_compaction_event,
 )
 
@@ -104,7 +103,6 @@ class GrokAcpAdapter(AcpAdapterBase):
         self,
         session_id: str,
         context: AgentExecutionContext,
-        conversation: ConversationRecord,
         result: dict[str, Any],
     ) -> list[AgentEvent]:
         desired = {

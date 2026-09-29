@@ -405,9 +405,7 @@ class AcpAdapterBase(JsonRpcAdapter):
                     f"{self.agent_label} returned no session id.",
                     rotate_session=True,
                 )
-            await self._publish_session_settings(
-                session_id, context, conversation, result, emit
-            )
+            await self._publish_session_settings(session_id, context, result, emit)
             return session_id
         session_id = conversation.provider_session_id
         method = "session/resume" if self._supports_resume else "session/load"
@@ -443,22 +441,17 @@ class AcpAdapterBase(JsonRpcAdapter):
                     details={"replayed_updates": replayed, "session_method": method},
                 ),
             )
-        await self._publish_session_settings(
-            session_id, context, conversation, result, emit
-        )
+        await self._publish_session_settings(session_id, context, result, emit)
         return session_id
 
     async def _publish_session_settings(
         self,
         session_id: str,
         context: AgentExecutionContext,
-        conversation: ConversationRecord,
         result: dict[str, Any],
         emit: EventSink,
     ) -> None:
-        for event in await self._configure_session(
-            session_id, context, conversation, result
-        ):
+        for event in await self._configure_session(session_id, context, result):
             await _publish(emit, event)
 
     async def _consume_turn(
@@ -862,7 +855,6 @@ class AcpAdapterBase(JsonRpcAdapter):
         self,
         session_id: str,
         context: AgentExecutionContext,
-        conversation: ConversationRecord,
         result: dict[str, Any],
     ) -> list[AgentEvent]:
         """Apply this turn's settings to a freshly created or reloaded session.
