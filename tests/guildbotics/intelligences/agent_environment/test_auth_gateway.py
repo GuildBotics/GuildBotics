@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 import logging
 import ssl
 from collections.abc import AsyncIterator
@@ -600,6 +601,45 @@ async def test_a_route_ending_in_a_star_forwards_what_is_under_it_only() -> None
     assert [str(r.url) for r in upstream.requests] == [
         "https://api.anthropic.com/agents/owner/repo?x=1"
     ]
+
+
+@pytest.mark.asyncio
+async def test_codex_discovers_workspace_routing_through_the_tls_gateway() -> None:
+    broker = cli_agent_info("codex").provision.credential_broker
+    assert broker is not None
+    body = json.dumps(
+        {
+            "accounts": [
+                {
+                    "id": "synthetic-account",
+                    "workspace_backend_origin": "NO_CONSTRAINT",
+                    "account_routing_override": "NO_CONSTRAINT",
+                }
+            ]
+        }
+    ).encode()
+    upstream = _Upstream(_answer(200, body, **{"content-type": "application/json"}))
+    gateway = await _started(
+        broker, _Tokens(REAL), STAND_IN, transport=httpx.MockTransport(upstream)
+    )
+    try:
+        assert gateway.turn_environment()["GUILDBOTICS_CODEX_BASE_URL"] == (
+            f"https://{GUEST_HOST_ALIAS}:{gateway.port}/backend-api"
+        )
+        trust = ssl.create_default_context(cadata=gateway.ca_pem.decode())
+        async with httpx.AsyncClient(verify=trust) as guest:
+            response = await guest.get(
+                f"https://127.0.0.1:{gateway.port}/backend-api/wham/accounts/check",
+                headers={"authorization": f"Bearer {STAND_IN}"},
+                extensions={"sni_hostname": GUEST_HOST_ALIAS},
+            )
+        assert response.status_code == 200
+        assert response.content == body
+        (request,) = upstream.requests
+        assert str(request.url) == "https://chatgpt.com/backend-api/wham/accounts/check"
+        assert request.headers["authorization"] == f"Bearer {REAL}"
+    finally:
+        await gateway.close()
 
 
 _ELSEWHERE = CredentialBroker(

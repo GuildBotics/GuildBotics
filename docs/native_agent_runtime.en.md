@@ -487,6 +487,12 @@ and `-p no:xdist`). Nothing is sent off the device.
   connected apps (`codex_apps`) is authenticated by `CODEX_CONNECTORS_TOKEN` (Codex attaches
   no login to it from a stand-in), so the same stand-in is given in that variable too.
   Analytics are not forwarded. An API key login is not kept: only a ChatGPT account login is sealed.
+  Codex is pinned to 0.159.0. Before reading the account or starting a turn, it discovers
+  workspace routing through `GET /backend-api/wham/accounts/check`. The gateway forwards
+  that route and speaks HTTPS, using the existing per-turn CA mechanism. With the observed
+  `workspace_backend_origin: NO_CONSTRAINT`, Codex retains the configured gateway origin
+  but still requires HTTPS. The discovery response is forwarded unchanged; routing policies
+  that require a different backend origin have not been verified.
 - **Antigravity specifics**: the Cloud Code API is taken over HTTPS only, so Antigravity's
   gateway speaks TLS with a certificate from a CA made for the turn. The turn trusts, through
   `SSL_CERT_FILE`, a file of the system's CAs with that CA added

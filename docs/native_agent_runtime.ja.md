@@ -392,6 +392,12 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   （ログインの方は、置換用の値では付けません）、同じ置換用の値をこの変数でも渡します。分析の送信は
   転送しません。
   APIキーでのログインは扱いません（ChatGPTアカウントでのログインだけを保存します）。
+  Codexは0.159.0に固定しています。アカウントの読み取りとturnの開始前に、
+  `GET /backend-api/wham/accounts/check`でワークスペースの接続先を確認します。
+  ゲートウェイはこの経路を転送し、既存のturnごとのCAを使ってHTTPSで受け付けます。
+  実測した`workspace_backend_origin: NO_CONSTRAINT`では、Codexは設定されたゲートウェイを
+  接続先に保ちますが、この場合もHTTPSを要求します。探索の応答は書き換えずに転送します。
+  別のbackend originを要求するルーティングポリシーは未検証です。
 - **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、Antigravityのゲートウェイは
   turnごとに作るCAの証明書でTLSを話します。turnは`SSL_CERT_FILE`で、システムのCAにこのCAを
   加えたファイル（`/etc/guildbotics/ca-certificates.crt`）を信頼します。CAの鍵はGuildBoticsプロセスの

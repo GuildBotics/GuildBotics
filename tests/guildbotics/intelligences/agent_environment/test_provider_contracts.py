@@ -311,13 +311,38 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
         lambda tool: {codex.provision.auth: json.dumps(login).encode()},
     )
     lent = LentLogin(codex, None)  # type: ignore[arg-type]
-    recorder = Recorder()
+
+    def answer(host: str, method: str, path: str):
+        if path == "/backend-api/wham/accounts/check":
+            # Observed through the gateway on 0.159.0. NO_CONSTRAINT keeps
+            # the configured origin; the CLI still requires it to be HTTPS.
+            return json_answer(
+                {
+                    "accounts": [
+                        {
+                            "id": "account-459",
+                            "name": None,
+                            "plan_type": "plus",
+                            "workspace_backend_origin": "NO_CONSTRAINT",
+                            "account_routing_override": "NO_CONSTRAINT",
+                            "profile_picture_url": None,
+                            "structure": "personal",
+                        }
+                    ],
+                    "default_account_id": "account-459",
+                    "account_ordering": ["account-459"],
+                }
+            )
+        return None
+
+    recorder = Recorder(answer)
     home = guest_path(_REAL_HOME.resolve())
     guest = await boot(recorder, ".codex", {"CODEX_HOME": f"{home}/.codex"})
     for name, data in lent.stand_in_files().items():
         await guest.write(f"{home}/.codex/{name}", data)
+    url = recorder.tls_url if broker.tls else recorder.url
     spec = SimpleNamespace(
-        env=dict.fromkeys(broker.base_url_env, recorder.url + broker.base_url_path)
+        env=dict.fromkeys(broker.base_url_env, url + broker.base_url_path)
     )
     configured = shlex.join(_config_arguments(_gateway_overrides(spec)))
 
@@ -351,6 +376,7 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
     )
 
     # The stand-in is a login Codex takes as its account's.
+    assert "result" in _replies(answered)[2], answered
     account = _replies(answered)[2]["result"]["account"]
     assert (account["email"], account["planType"]) == ("synthetic@example.com", "plus")
     responses = recorder.requests("/backend-api/codex/responses")
@@ -360,6 +386,10 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
     }
     assert all("chatgpt-account-id" in s.headers for s in responses)
     assert _bearer(recorder, "/backend-api/wham/usage") == {f"Bearer {lent.stand_in}"}
+    assert _bearer(recorder, "/backend-api/wham/accounts/check") == {
+        f"Bearer {lent.stand_in}"
+    }
+    assert all(s.kind == "tls" for s in recorder.requests("/backend-api/"))
     assert recorder.carrying(lent.stand_in) == {GUEST_HOST_ALIAS}, recorder.seen
     # Nothing it holds tries to refresh.
     assert not recorder.requests("/oauth/token"), recorder.seen
@@ -367,7 +397,11 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
     # What a turn needs of it is what the gateway forwards.
     needed = {
         (s.method, s.path.split("?")[0])
-        for prefix in ("/backend-api/codex/", "/backend-api/wham/usage")
+        for prefix in (
+            "/backend-api/codex/",
+            "/backend-api/wham/usage",
+            "/backend-api/wham/accounts/",
+        )
         for s in recorder.requests(prefix)
         if "analytics" not in s.path
     }
