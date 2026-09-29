@@ -691,9 +691,9 @@ same runtime event; the completed turn remains successful, while the next dispat
 starts a new generation and rebuilds the Slack snapshot.
 
 ACP has no standard compaction notification, so Grok compaction is normalized from
-xAI's `auto_compact_*` extension notifications. Grok Build 0.2.114 does not emit the
-standard ACP `usage_update` at all, so the absolute session context snapshot stays empty
-and the 90% `context_limit` rotation does not arm on that version. The handling is
+xAI's `auto_compact_*` extension notifications. Grok Build does not emit the standard
+ACP `usage_update` at all (observed from 0.2.114 through 1.0.44), so the absolute
+session context snapshot stays empty and the 90% `context_limit` rotation does not arm. The handling is
 implemented for a version that does emit it, where a drop in `used` also serves as a
 name-independent compaction signal.
 
@@ -734,8 +734,8 @@ session id stored on the conversation, performs the reload. The turn's settings 
 still re-applied either way.
 
 Exact ACP resume uses `session/resume` when advertised and `session/load`
-otherwise. Neither Grok Build 0.2.114 nor GitHub Copilot CLI 1.0.77 advertises
-`sessionCapabilities.resume`, so both take the `session/load` path. `session/load` replays the whole transcript before it answers, so that
+otherwise. Neither Grok Build (observed from 0.2.114 through 1.0.44) nor GitHub Copilot
+CLI (observed from 1.0.77 through 1.0.89) advertises `sessionCapabilities.resume`, so both take the `session/load` path. `session/load` replays the whole transcript before it answers, so that
 response is the boundary: replayed history is excluded from the current turn's events,
 from Slack, and from the normal transcript, and only the replayed count is recorded.
 History replays on the xAI extension channels as well as the standard one and includes
@@ -773,9 +773,12 @@ decisions.
 
 Antigravity is classified from its terminal `result` event: a `status` other than
 `SUCCESS` is a failure, and the accompanying `error` field decides the category.
-`agy` 1.1.10 reports quota and credential failures as prose rather than as a code,
-so that one field is matched against a small anchored pattern set kept in the
-adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
+`agy` reports quota and credential failures in that one string rather than in a
+separate code field: 1.1.10 wrote prose, and 1.2.13 prefixes the upstream status and
+HTTP code (`UNAUTHENTICATED (code 401): ...`,
+`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`, observed by replacing the
+inference answer at the gateway). So that one field is matched against a small
+anchored pattern set kept in the adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
 same normalization every other tool uses. A rate limit does not rotate the session;
 authentication, protocol, and process failures do.
 
@@ -801,9 +804,8 @@ capability detection reads `agy --help` (which prints to stderr and exits 0) and
 requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
 verified baselines are Grok Build 1.0.44 and GitHub Copilot CLI 1.0.77 and 1.0.89. Antigravity
-1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
-workspace remains an explicit machine-verification item before the adapter is declared
-supported for the trusted member transport.
+1.1.11 exposes the required flags, and 1.2.13 was observed loading the MCP configuration
+from the added auxiliary workspace and calling the member broker through it.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. The xAI
@@ -819,12 +821,12 @@ provide the percentage, including API-key usage, remain unavailable rather than
 synthesizing 0%. Authentication stays inside Grok Build's `cached_token` flow;
 GuildBotics neither reads the authentication file nor adds a direct HTTP fallback.
 
-GitHub Copilot CLI 1.0.77 reports no token usage over ACP at all: neither the standard
-`usage_update` nor a private extension channel carries one. Usage counters therefore
-stay empty for Copilot, and the TTL, turn-count, usage, and `context_limit` rotations
-that depend on them do not arm on that version. The standard handling is implemented,
-so a version that does emit `usage_update` is picked up without a change (1.0.86 was
-observed sending `usage_update` during a turn). Copilot rate
+GitHub Copilot CLI reports its session context (`used` / `size`) with the standard ACP
+`usage_update` (observed on 1.0.86 and 1.0.89; 1.0.77 sent none), so the 90%
+`context_limit` rotation arms for Copilot alongside the TTL and turn-count limits. It
+reports no per-turn token counts -- neither `usage_update` nor a private extension
+channel carries one -- so its input and output token counters stay at 0 and the
+token-total limit does not arm. Copilot rate
 limits are likewise classified only from structured RPC error data -- its weekly quota
 identifier `user_weekly_rate_limited` among them -- and never from stderr text or
 assistant prose; an error that cannot be classified becomes a protocol failure that
@@ -855,7 +857,7 @@ no direct HTTP call. The probe starts no turn and spends no quota.
 Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
 `thinking_tokens`, `cache_read_tokens`, `total_tokens`), which are normalized onto
 the same shared keys every other adapter uses. It reports no absolute session
-context size, so context-usage rotation does not arm for Antigravity; only the TTL,
+context size (observed on 1.2.13), so context-usage rotation does not arm for Antigravity; only the TTL,
 turn-count, and token-total limits do. This is the same situation as Grok.
 
 Account quotas are a separate path from those per-turn counters. From Antigravity

@@ -196,8 +196,8 @@ class GrokAcpAdapter(AcpAdapterBase):
         if kind == "retry_state":
             return _retry_state_events(update, session_id)
         if kind == "turn_completed":
-            # Grok Build 0.2.114 never emits the standard ACP usage_update; the
-            # only token counts it reports arrive here.
+            # Grok Build (observed from 0.2.114 through 1.0.44) never emits the
+            # standard ACP usage_update; the only token counts it reports arrive here.
             return _turn_usage_events(update, session_id)
         return super()._decode_extension(update, session_id)
 
