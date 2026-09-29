@@ -581,9 +581,9 @@ Codexの`contextCompaction`とClaude Codeの`compact_boundary`は、GuildBotics�
 セッションを開始してSlackスレッドの履歴を再構築します。
 
 Grok BuildにはACP標準の文脈圧縮通知がないため、xAI独自拡張の`auto_compact_started`などの
-通知を`context_compaction`として正規化します。0.2.114ではACP標準の`usage_update`が送られて
-こないため、そこから得るセッション文脈量（`used` / `size`）による90%到達時の`context_limit`
-切り替えは、この版では作動しません。`usage_update`を送る版に備えて処理自体は実装しており、
+通知を`context_compaction`として正規化します。Grok BuildはACP標準の`usage_update`を送ってこない
+（0.2.114から1.0.44まで確認）ため、そこから得るセッション文脈量（`used` / `size`）による90%到達時の
+`context_limit`切り替えは作動しません。`usage_update`を送る版に備えて処理自体は実装しており、
 その場合は`used`の減少も文脈圧縮の検出手段として併用します。
 
 0.2.114でトークン使用量が届く経路は、xAI独自拡張の`turn_completed`だけです。ここに含まれる
@@ -620,8 +620,8 @@ ACPの`session/prompt`はターンが終了した時点で応答が返るため�
 そのターンの設定は改めて適用します。
 
 ACPを使うAI CLIツールの正確な再開には、`initialize`が提示した機能に応じてACPの`session/resume`
-または`session/load`を使用します。Grok Build 0.2.114とGitHub Copilot CLI 1.0.77はどちらも
-`sessionCapabilities.resume`を提示しないため、`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
+または`session/load`を使用します。Grok Build（0.2.114から1.0.44まで確認）とGitHub Copilot CLI
+（1.0.77から1.0.89まで確認）はどちらも`sessionCapabilities.resume`を提示しないため、`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
 その応答を境界として、再送された履歴を現在のturnのイベント、Slackへの投稿、通常の実行記録から
 除外します。再送された件数だけを診断記録に残します。履歴は標準の`session/update`だけでなく
 xAI独自拡張の経路でも再送され、前回turnの`turn_completed`（トークン使用量）が含まれます。
@@ -702,11 +702,11 @@ Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データ�
 API-key利用では、利用率0%を生成せず「使用量情報なし」として扱います。認証にはGrok Build自身の
 `cached_token`方式だけを使い、GuildBoticsが認証ファイルを読み取ったり独自にHTTP通信したりしません。
 
-GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく報告しません。標準の
-`usage_update`も、独自拡張の通知も届きません。そのためGitHub Copilotでは使用量が空のままとなり、
-有効期間・turn数・使用量・`context_limit`による切り替えはこの版では作動しません。標準の
-`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します
-（1.0.86では、turn中に`usage_update`が届くことを確認しています）。GitHub Copilotの
+GitHub Copilot CLIは、ACP標準の`usage_update`でセッション文脈量（`used` / `size`）を報告します
+（1.0.86と1.0.89で確認。1.0.77は送ってきませんでした）。そのため、有効期間・turn数に加えて、
+90%到達時の`context_limit`による切り替えも作動します。一方でturnごとのトークン使用量は、
+`usage_update`にも独自拡張の通知にも含まれないため、入力・出力トークンは0のままとなり、
+トークン累計の上限による切り替えは作動しません。GitHub Copilotの
 利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
 `rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
 プロトコルエラーとして扱い、セッションを切り替えて回復します。
@@ -731,7 +731,7 @@ APIが3種別すべてに要求時刻そのものを`resetDate`として返す�
 
 Antigravityはターンごとのトークン使用量（`input_tokens` / `output_tokens` /
 `thinking_tokens` / `cache_read_tokens` / `total_tokens`）を報告するため、共通のトークン項目へ
-正規化して扱います。一方でセッション文脈量の絶対値は報告しないため、文脈使用率による切り替えは
+正規化して扱います。一方でセッション文脈量の絶対値は報告しない（1.2.13で確認）ため、文脈使用率による切り替えは
 作動せず、有効期間・turn数・トークン累計の上限だけが機能します。これはGrok Buildと同じ状況です。
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
