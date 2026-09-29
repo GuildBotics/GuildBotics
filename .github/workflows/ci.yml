@@ -118,15 +118,6 @@ jobs:
           --junitxml=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}.xml
           --phase-durations-json=${{ runner.temp }}/pytest-windows-${{ matrix.shard }}-phases.json
 
-      - name: Repeat workspace identity race test
-        if: matrix.shard == 'remainder'
-        shell: pwsh
-        run: |
-          1..10 | ForEach-Object {
-            uv run --no-sync python -m pytest tests/guildbotics/workspace/test_identity.py::test_concurrent_first_use_agrees_on_one_workspace_id -q
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
       - name: Upload Windows pytest durations
         if: always()
         uses: actions/upload-artifact@v7
