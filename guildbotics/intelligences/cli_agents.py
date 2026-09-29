@@ -239,7 +239,8 @@ class CliAgentProvision(BaseModel):
     speaks to it are tested together and shipped together, so the version is
     GuildBotics' to pin. A tool that is not on npm names an ``install``
     script instead, which pins its version the same way. A tool with neither
-    is not provisioned yet.
+    is not provisioned yet. Raising a pin follows
+    ``.agents/skills/update-ai-cli-tools/SKILL.md``.
 
     The tool keeps its state under ``state_root`` in the home directory (the
     directory ``state_root_env`` points it at). Only the entries in
