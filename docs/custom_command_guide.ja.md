@@ -780,7 +780,7 @@ guildbotics run summarize file=README.md effort=high
 
 `default` と未指定はどちらも「介入しない」を意味します。LLM API 経路では毎回モデルを生成し直すため、これはモデル既定値での実行と同じです。
 
-一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。model や effort を変更しても provider のセッションは維持され、Claude と Grok は次の turn で新しい設定を渡します。設定を消した場合は、そのセッションに最後に記録した値を送り直します。設定を消すだけでは provider の既定値に戻りません。会話を明示的にリセットすると、設定で指定した値がない限り、新しいセッションは provider の既定値で始まります。
+一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。model や effort を変更しても provider のセッションは維持され、Claude と Grok は次の turn で新しい設定を渡します。再開時に設定を消した場合、Claude は最後に記録した値を送り直し、Grok は provider のセッションに保存された値を維持します。設定を消すだけでは provider の既定値に戻りません。会話を明示的にリセットすると、設定で指定した値がない限り、新しいセッションは provider の既定値で始まります。
 
 ### 9.3. モデル定義 YAML の schema
 
@@ -861,7 +861,7 @@ effort:
 
 - codex: `model` / `effort` を `turn/start` で毎ターン送信。`model/list` の `supportedReasoningEfforts` で検証し、非対応値は警告して落とします
 - claude: `model` / `effort` を `--model` / `--effort` に翻訳し、`--resume` と一緒に渡します。再開時にどちらかを設定しなかった場合は、その値を会話の記録から送り直します。`low` / `medium` / `high` / `xhigh` / `max` 以外の effort は警告のうえ落とします
-- grok: セッションの作成・再開後に ACP の `session/set_config_option` で `model` / `reasoning_effort` を設定し、Grok が確認した値を検査してからプロンプトを送ります。再開時にどちらかを設定しなかった場合は、その値を会話の記録から送り直します。この2つ以外のキーは警告のうえ無視されます
+- grok: セッションの作成・再開後に明示的に指定した `model` / `reasoning_effort` を ACP の `session/set_config_option` で設定し、Grok が確認した値を検査してからプロンプトを送ります。指定しなかった値は Grok がセッションに保存した値を維持します。この2つ以外のキーは警告のうえ無視されます
 
 ### 9.5. mapping が無いレベルを指定した場合
 

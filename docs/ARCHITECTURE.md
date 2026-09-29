@@ -370,9 +370,10 @@ silent: they describe the provider, not the scope that happens to hold a file.
 `default` and unspecified both request no effort overlay. A settings change
 does not itself rotate a native session. Claude sends `--model` and `--effort` with
 `--resume`; Grok confirms `model` and `reasoning_effort` through ACP
-`session/set_config_option` after `session/new` or `session/resume`. When either
-setting is omitted on a resumed session, these adapters re-send the last value
-recorded for that session. Codex sends its settings on every `turn/start`.
+`session/set_config_option` after `session/new` or `session/resume`. Claude
+re-sends the last recorded value for an omitted setting on resume. Grok keeps
+the setting returned by its resumed session when no new value is requested.
+Codex sends its settings on every `turn/start`.
 
 Effort decisions are recorded through a safe allowlist — requested level,
 resolved level, effective model id, the *names* of the applied parameters, and
@@ -386,15 +387,16 @@ What a turn *really* ran on is decided by the layer that holds the provider
 knowledge and is carried out on the normal result path: each adapter fills
 `AgentTerminalResult.model` / `.effort` with the value its provider reported
 (claude's `system/init` model, copilot's confirmed session options, grok's
-`_x.ai/models/update.currentModelId`) or with the one it imposed itself
+confirmed session options or `_x.ai/models/update.currentModelId`) or with the
+one it imposed itself
 (codex's validated `turn/start` settings and the catalog's advertised default
-model and `defaultReasoningEffort`, claude's `--effort` flag, grok's confirmed
-ACP session option, `agy`'s command line), and the brain passes
+model and `defaultReasoningEffort`, claude's `--effort` flag, `agy`'s command
+line), and the brain passes
 them to `record_span_summary()` and logs one line per span. The conversation
 record retains the last reported or imposed values (`effective_model` /
-`effective_effort`, cleared on rotation). Claude and Grok re-send recorded
-settings when resuming without configured values; a turn that reports no value
-retains the last known value in the record. An omitted Codex setting on a
+`effective_effort`, cleared on rotation). Claude re-sends recorded settings on
+resume; Grok reports the values its session confirms. A turn that reports no
+value retains the last known value in the record. An omitted Codex setting on a
 resumed thread is reported from that record without independently verifying
 that the provider retained it. A provider that reports nothing and was given
 nothing leaves both empty rather than inventing an effective value; the span's

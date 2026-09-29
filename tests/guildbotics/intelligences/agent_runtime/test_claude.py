@@ -891,7 +891,7 @@ async def test_claude_empty_terminal_response_is_protocol_failure(
 
 
 # --------------------------------------------------------------------------- #
-# Effort: CLI flags, level validation, and the session-scoped settings contract
+# Effort: CLI flags, level validation, and resuming with recorded settings
 # --------------------------------------------------------------------------- #
 
 
@@ -1004,7 +1004,7 @@ async def test_claude_terminal_result_claims_no_effort_when_it_imposed_none(
 async def test_a_continued_session_reports_the_last_recorded_effort(
     monkeypatch, tmp_path
 ) -> None:
-    """Without an effort flag, Claude reports the last recorded effort."""
+    """Resuming sends and reports the last recorded effort."""
     context_key_source = _context(tmp_path)
     conversation = ConversationRecord(
         key=context_key_source.conversation_key,

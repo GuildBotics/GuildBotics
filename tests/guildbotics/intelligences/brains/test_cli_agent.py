@@ -466,9 +466,8 @@ async def test_a_default_effort_turn_states_no_settings(
 ) -> None:
     """`default` cancels the frontmatter but still imposes nothing downstream.
 
-    Stating the level here would give the turn a non-empty fingerprint, which
-    rotates a session-scoped provider's session instead of leaving this turn
-    without an effort overlay.
+    Stating the level here would impose its mapped settings, despite `default`
+    asking for no effort overlay on this turn.
     """
     captured: dict = {}
 
@@ -914,7 +913,6 @@ async def test_a_turn_says_where_it_works_for_the_host_to_record_its_confinement
 
     monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
     adapter = SimpleNamespace(
-        applied_settings=lambda _: {},
         run_turn=AsyncMock(
             return_value=AgentTerminalResult(
                 output="answer", events=(), provider_session_id="s"
@@ -959,6 +957,7 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     goes along with it."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
+
     from guildbotics.intelligences.agent_runtime.models import (
         AgentRuntimeError,
         AgentRuntimeErrorCategory,
@@ -985,9 +984,7 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
             output="Error: Execution failed", events=(), provider_session_id="s"
         )
 
-    adapter = SimpleNamespace(
-        applied_settings=lambda _: {}, run_turn=run_turn, close=AsyncMock()
-    )
+    adapter = SimpleNamespace(run_turn=run_turn, close=AsyncMock())
 
     monkeypatch.setattr(cli_agent, "create_native_adapter", lambda _name: adapter)
     brain = cli_agent.CliAgentBrain("judge", "chat_decision", _test_logger())

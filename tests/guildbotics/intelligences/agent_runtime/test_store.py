@@ -296,7 +296,7 @@ def test_stored_record_without_context_fields_loads_as_zero(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Effort: settings fingerprints and the "keep the session as it is" rule
+# Effort: recorded settings and the "keep the session as it is" rule
 # --------------------------------------------------------------------------- #
 
 

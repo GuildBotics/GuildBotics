@@ -117,9 +117,8 @@ class ExecutableInfo:
 #: See ``simple_brain_factory.person_brain_mapping`` for why.
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
 
-#: The one effort-mapping key the core gives a name of its own, because it feeds
-#: the settings fingerprint. Everything else is passed through to the adapter,
-#: which owns the rest of the provider vocabulary.
+#: The one effort-mapping key the core gives a name of its own for diagnostics.
+#: Everything else is passed through to the adapter, which owns the provider vocabulary.
 EFFORT_MODEL_KEY = "model"
 
 
@@ -917,8 +916,8 @@ class CliAgentBrain(Brain):
             conversation.provider_session_id = terminal.provider_session_id
             conversation.provider_turn_id = terminal.provider_turn_id
             conversation.provider = adapter_name
-            # Retain the last known values when the turn reports none. Adapters
-            # re-send recorded settings on resume where the provider needs it.
+            # Retain the last known values when the turn reports none. Each
+            # adapter decides whether resume needs those values sent again.
             conversation.effective_model = (
                 terminal.model or conversation.effective_model
             )

@@ -100,7 +100,8 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             "--strict-mcp-config",
         ]
         _warn_unusable_effort_settings(context)
-        args.extend(_effort_arguments(context, conversation))
+        setting_args, effective_effort = _effort_arguments(context, conversation)
+        args.extend(setting_args)
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -232,12 +233,7 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             returncode=returncode,
             model=reported_model,
             # Claude does not report effort; use the value sent on this turn.
-            effort=_applied_effort(context)
-            or (
-                conversation.effective_effort
-                if conversation.provider_session_id
-                else ""
-            ),
+            effort=effective_effort,
         )
 
 
@@ -268,16 +264,6 @@ def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
     return model_and_effort(context, _EFFORT_VALUES)
 
 
-def _applied_effort(context: AgentExecutionContext) -> str:
-    """The effort level this turn really imposed on the session.
-
-    Claude Code reports no effort of its own, so the only honest value is the
-    level the adapter actually put on the command line, in Claude Code's own
-    vocabulary. A turn with no effort flag does not establish a new level.
-    """
-    return str(_applied_effort_settings(context).get("effort", ""))
-
-
 def _reported_model(raw: dict[str, Any]) -> str:
     """The model Claude Code names for the session, from its init event."""
     if raw.get("type") != "system" or raw.get("subtype") != "init":
@@ -287,8 +273,8 @@ def _reported_model(raw: dict[str, Any]) -> str:
 
 def _effort_arguments(
     context: AgentExecutionContext, conversation: ConversationRecord
-) -> list[str]:
-    """Build model and effort flags, reusing recorded values on resume."""
+) -> tuple[list[str], str]:
+    """Build model and effort flags and return the effort actually sent."""
     settings = _applied_effort_settings(context)
     args: list[str] = []
     model = str(settings.get("model", ""))
@@ -301,7 +287,7 @@ def _effort_arguments(
         effort = conversation.effective_effort
     if effort:
         args.extend(("--effort", effort))
-    return args
+    return args, effort
 
 
 def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:

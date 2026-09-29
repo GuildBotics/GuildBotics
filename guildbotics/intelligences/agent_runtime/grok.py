@@ -89,22 +89,16 @@ class GrokAcpAdapter(AcpAdapterBase):
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
         return (
             self._executable,
+            # A headless turn must not update the CLI while it runs.
             "--no-auto-update",
             "--sandbox",
             _SANDBOX_PROFILE,
             "agent",
+            # The root parser accepts this flag too, but only the agent parser
+            # passes it through to the ACP session.
             "--always-approve",
             "stdio",
         )
-
-    def _desired_settings(
-        self, context: AgentExecutionContext, conversation: ConversationRecord
-    ) -> dict[str, str]:
-        settings = self.applied_settings(context)
-        if conversation.provider_session_id:
-            settings.setdefault("model", conversation.effective_model)
-            settings.setdefault("reasoning_effort", conversation.effective_effort)
-        return {key: str(value) for key, value in settings.items() if value}
 
     async def _configure_session(
         self,
@@ -113,7 +107,9 @@ class GrokAcpAdapter(AcpAdapterBase):
         conversation: ConversationRecord,
         result: dict[str, Any],
     ) -> list[AgentEvent]:
-        desired = self._desired_settings(context, conversation)
+        desired = {
+            key: str(value) for key, value in self.applied_settings(context).items()
+        }
         try:
             current = await self._set_config_options(session_id, desired, result)
         except RpcError as exc:
@@ -128,8 +124,8 @@ class GrokAcpAdapter(AcpAdapterBase):
                     AgentRuntimeErrorCategory.CONFIGURATION,
                     f"Grok did not confirm {option_id} for the session.",
                 )
-        self._confirmed_model = desired.get("model", "")
-        self._turn_effort = desired.get("reasoning_effort", "")
+        self._confirmed_model = current.get("model", "")
+        self._turn_effort = current.get("reasoning_effort", "")
         return []
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:

@@ -15,7 +15,6 @@ from acp_fake_peer import (
     text_chunk,
 )
 
-from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
 )
@@ -86,6 +85,7 @@ class _Peer(AcpPeerBase):
         replay_extensions: list[dict[str, Any]] | None = None,
         model_updates: list[str] | None = None,
         ignore_config: bool = False,
+        initial_config: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.initialize = initialize if initialize is not None else _initialize()
@@ -105,7 +105,11 @@ class _Peer(AcpPeerBase):
         self.usage_channel = usage_channel
         self.replay_extensions = replay_extensions or []
         self.model_updates = model_updates or []
-        self.config = {"model": "", "reasoning_effort": ""}
+        self.config = (
+            initial_config.copy()
+            if initial_config is not None
+            else {"model": "", "reasoning_effort": ""}
+        )
         self.ignore_config = ignore_config
 
     def _config_options(self) -> list[dict[str, str]]:
@@ -352,10 +356,13 @@ async def test_effort_settings_are_confirmed_on_the_new_session(
 async def test_a_turn_without_settings_uses_the_provider_defaults(
     monkeypatch, tmp_path
 ) -> None:
-    peer = _Peer(updates=[text_chunk("ok")])
+    peer = _Peer(
+        updates=[text_chunk("ok")],
+        initial_config={"model": "grok-default", "reasoning_effort": "medium"},
+    )
     launched = install(monkeypatch, peer)
 
-    await _run(GrokAcpAdapter(), tmp_path)
+    result, _ = await _run(GrokAcpAdapter(), tmp_path)
 
     argv = launched[0][0]
     assert "--model" not in argv
@@ -364,6 +371,33 @@ async def test_a_turn_without_settings_uses_the_provider_defaults(
         message.get("method") == "session/set_config_option"
         for message in peer.messages
     )
+    assert (result.model, result.effort) == ("grok-default", "medium")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_options", "expected"),
+    [
+        ({"model": "grok-selected"}, ("grok-selected", "medium")),
+        ({"reasoning_effort": "high"}, ("grok-default", "high")),
+    ],
+)
+async def test_only_explicit_settings_replace_provider_values(
+    monkeypatch, tmp_path, provider_options, expected
+) -> None:
+    peer = _Peer(initial_config={"model": "grok-default", "reasoning_effort": "medium"})
+    install(monkeypatch, peer)
+
+    result, _ = await _run(
+        GrokAcpAdapter(), tmp_path, provider_options=provider_options
+    )
+
+    assert [
+        message["params"]["configId"]
+        for message in peer.messages
+        if message.get("method") == "session/set_config_option"
+    ] == list(provider_options)
+    assert (result.model, result.effort) == expected
 
 
 @pytest.mark.asyncio
@@ -471,10 +505,18 @@ async def test_resumed_session_uses_new_config_options(monkeypatch, tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_resumed_session_resends_recorded_settings_when_unset(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("can_resume", [False, True])
+async def test_resumed_session_keeps_provider_settings_when_unset(
+    monkeypatch, tmp_path, can_resume
 ) -> None:
-    peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.5"])
+    initialize = _initialize()
+    if can_resume:
+        initialize["agentCapabilities"]["sessionCapabilities"] = {"resume": True}
+    peer = _Peer(
+        initialize=initialize,
+        updates=[text_chunk("ok")],
+        initial_config={"model": "grok-4.6", "reasoning_effort": "high"},
+    )
     install(monkeypatch, peer)
     conversation = ConversationRecord(
         key=_context(tmp_path).conversation_key,
@@ -485,8 +527,11 @@ async def test_resumed_session_resends_recorded_settings_when_unset(
 
     result, _ = await _run(GrokAcpAdapter(), tmp_path, conversation)
 
-    assert peer.config == {"model": "grok-4.5", "reasoning_effort": "low"}
-    assert (result.model, result.effort) == ("grok-4.5", "low")
+    assert not any(
+        message.get("method") == "session/set_config_option"
+        for message in peer.messages
+    )
+    assert (result.model, result.effort) == ("grok-4.6", "high")
 
 
 @pytest.mark.asyncio

@@ -770,7 +770,7 @@ The order is the same for every brain (both the LLM API path and the AI CLI tool
 
 Both mean "do not intervene". On the LLM API path a model is built fresh for every run, so this is the same as running on the model's own defaults.
 
-On the native AI CLI tool path, **the session may continue**. Changing model or effort keeps the provider session. Claude and Grok send the new settings on the next turn. If a setting is omitted, they re-send the last value recorded for that session; omitting a setting does not reset it to the provider default. An explicit conversation reset starts a new session on provider defaults unless the configuration supplies settings.
+On the native AI CLI tool path, **the session may continue**. Changing model or effort keeps the provider session. Claude and Grok send new settings on the next turn. When a setting is omitted on resume, Claude re-sends its last recorded value and Grok keeps the value saved in its provider session. Omitting a setting does not reset it to the provider default. An explicit conversation reset starts a new session on provider defaults unless the configuration supplies settings.
 
 ### 9.3. Model definition YAML schema
 
@@ -851,7 +851,7 @@ The keys inside a block are provider-specific. The core understands only the com
 
 - codex: sends `model` / `effort` on every `turn/start`. Both are validated against `model/list` (`supportedReasoningEfforts`); an unsupported value is warned about and dropped
 - claude: translates `model` / `effort` into the `--model` / `--effort` flags, including with `--resume`. When either setting is omitted on resume, the adapter passes its last recorded value. An effort outside `low` / `medium` / `high` / `xhigh` / `max` is warned about and dropped
-- grok: sets `model` / `reasoning_effort` with ACP `session/set_config_option` after creating or resuming the session, and checks the values Grok confirms before prompting. When either setting is omitted on resume, the adapter sends its last recorded value. Keys outside that pair are warned about and ignored
+- grok: sets explicitly requested `model` / `reasoning_effort` values with ACP `session/set_config_option` after creating or resuming the session, and checks the values Grok confirms before prompting. Omitted values remain as Grok reports them for the session. Keys outside that pair are warned about and ignored
 
 ### 9.5. Requesting a level that has no mapping
 
