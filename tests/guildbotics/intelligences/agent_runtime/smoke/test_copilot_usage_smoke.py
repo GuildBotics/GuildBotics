@@ -12,12 +12,11 @@ from __future__ import annotations
 import pytest
 
 from guildbotics.intelligences.agent_runtime.usage import read_copilot_usage
-from tests.timeouts import REAL_DEVICE
 
 TOOL = "copilot"
 
 pytestmark = [
-    *REAL_DEVICE("GUILDBOTICS_COPILOT_SMOKE"),
+    pytest.mark.real_device("GUILDBOTICS_COPILOT_SMOKE"),
     pytest.mark.asyncio,
 ]
 

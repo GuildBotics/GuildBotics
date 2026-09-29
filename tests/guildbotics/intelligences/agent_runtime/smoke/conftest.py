@@ -9,8 +9,8 @@ device's snapshot, inside a real microVM, with the login saved here, for the
 workspace the device has selected (or the one ``GUILDBOTICS_CONFIG_DIR``
 names). No CLI on the host is needed.
 
-Each module names the tool it drives as ``TOOL`` and skips itself unless its
-own flag is set; where the environment or that tool's login is not ready,
+Each module names the tool it drives as ``TOOL``; the suite skips it unless its
+own flag is set. Where the environment or that tool's login is not ready,
 the test is skipped with the reason the device gives. Run them without
 ``pytest-xdist`` (``-p no:xdist``): tests in parallel workers would each boot a
 microVM and be lent the same saved login at once.

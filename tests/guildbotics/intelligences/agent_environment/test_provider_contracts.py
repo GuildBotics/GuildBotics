@@ -45,7 +45,6 @@ from guildbotics.intelligences.agent_runtime.codex import (
 )
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-from tests.timeouts import REAL_DEVICE
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
@@ -54,7 +53,7 @@ STAND_IN = "guildbotics-stand-in-SYNTHETIC-459"
 _CA = "/etc/contract-probe-ca.pem"
 
 pytestmark = [
-    *REAL_DEVICE("GUILDBOTICS_CONTRACT_PROBE"),
+    pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE"),
     pytest.mark.asyncio,
 ]
 

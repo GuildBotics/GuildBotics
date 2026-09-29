@@ -22,10 +22,9 @@ from guildbotics.intelligences.agent_runtime.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import AgentEvent
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
-from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
-    *REAL_DEVICE("GUILDBOTICS_GROK_SMOKE"),
+    pytest.mark.real_device("GUILDBOTICS_GROK_SMOKE"),
     pytest.mark.asyncio,
 ]
 

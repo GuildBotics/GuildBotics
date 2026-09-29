@@ -28,10 +28,9 @@ from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     settle_contract,
 )
 from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
-from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
-    *REAL_DEVICE("GUILDBOTICS_COPILOT_SMOKE"),
+    pytest.mark.real_device("GUILDBOTICS_COPILOT_SMOKE"),
     pytest.mark.asyncio,
 ]
 
