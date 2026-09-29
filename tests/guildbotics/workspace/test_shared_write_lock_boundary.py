@@ -343,6 +343,11 @@ def test_dangling_symlink_to_shared_file_keeps_the_lock(
     alias = workspace / "alias.jsonl"
     alias.symlink_to(target)
 
+    assert shared_relative_path(alias) == "state/new.jsonl", (
+        alias.resolve(strict=False),
+        alias.is_symlink(),
+        alias.readlink(),
+    )
     with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
         append_shared_text(alias, "{}\n")
     assert not target.exists()

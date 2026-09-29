@@ -103,16 +103,18 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
     """
     candidate = path.expanduser().absolute()
     missing: list[str] = []
+    seen_links: set[Path] = set()
     while True:
+        if candidate.is_symlink():
+            if candidate in seen_links:
+                raise RuntimeError(f"Symlink loop: {candidate}")
+            seen_links.add(candidate)
+            target = candidate.readlink()
+            candidate = target if target.is_absolute() else candidate.parent / target
+            continue
         try:
             return candidate.resolve(strict=True).joinpath(*reversed(missing))
         except FileNotFoundError:
-            if candidate.is_symlink():
-                target = candidate.readlink()
-                candidate = (
-                    target if target.is_absolute() else candidate.parent / target
-                )
-                continue
             if candidate == candidate.parent:
                 raise
             missing.append(candidate.name)
