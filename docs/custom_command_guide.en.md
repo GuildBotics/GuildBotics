@@ -371,6 +371,8 @@ commands:
 ```
 
 When `name` is set, you can reference that command’s output by the given name.
+For an unnamed inline command, the output name is `<source_basename>__N`. The basename comes from the command's own file, without its directory, locale, or extension. `N` is the entry's 1-based position among all entries in that command's own `commands:` list, including named entries. Calling the command from a parent or under an alias does not change this name.
+Commands with the same source basename share this output key in `Context.shared_state`; give their inline entries distinct `name` values when both results must remain available.
 
 ```markdown
 ---

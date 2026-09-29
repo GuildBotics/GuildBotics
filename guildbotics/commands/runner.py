@@ -155,6 +155,7 @@ class CommandRunner:
                 "params": kwargs,
                 "cwd": cwd,
             },
+            0,
         )
         outcome = await self._run_with_children(spec)
         return outcome.result if outcome else None

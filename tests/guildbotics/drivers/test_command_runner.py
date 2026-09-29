@@ -134,7 +134,7 @@ async def test_invoke_passes_top_level_cwd_to_spec_factory(monkeypatch):
 
     captured = {}
 
-    def fake_build(anchor, entry):
+    def fake_build(anchor, entry, index):
         captured["entry"] = entry
         return _main_spec()
 
@@ -165,7 +165,7 @@ async def test_invoke_drives_completion_managed_turns_with_the_host_ledger(monke
             {**execution_context, "attempt": 2}, {"previous_attempt_evidence": "[]"}
         )
 
-    def fake_build(anchor, entry):
+    def fake_build(anchor, entry, index):
         captured["entry"] = entry
         return _main_spec()
 

@@ -83,6 +83,21 @@ def test_read_hides_subcommand_output_from_caller_arguments(
     assert detail.arguments == []
 
 
+@pytest.mark.parametrize("relative", ["child.md", "sub/child.md"])
+def test_editor_discovers_unnamed_subcommand_output(
+    env: SimpleNamespace, relative: str
+) -> None:
+    _write(
+        env.commands / relative,
+        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
+        "child saw {child__1}\n",
+    )
+
+    detail = _service().read_file(encode_file_id(relative))
+
+    assert detail.arguments == []
+
+
 def test_list_excludes_member_commands(env: SimpleNamespace) -> None:
     _write(env.commands / "shared.md", "---\nname: Shared\n---\nBody\n")
     _write(

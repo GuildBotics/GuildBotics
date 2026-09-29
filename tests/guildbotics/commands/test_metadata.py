@@ -10,6 +10,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
     CommandAccess,
     CommandInputPolicy,
+    command_output_names,
     extract_placeholders,
     load_command_metadata,
     parse_command_access,
@@ -101,6 +102,25 @@ def test_numeric_subcommand_path_output_is_not_a_caller_argument() -> None:
     }
 
     assert parse_metadata_arguments(metadata, "system") == []
+
+
+def test_unnamed_output_names_are_local_to_the_command() -> None:
+    metadata = {
+        "commands": [{"name": "first", "print": "earlier"}, {"print": "inner"}],
+        "body": "{child__2} {caller_input}",
+    }
+
+    assert command_output_names(metadata, "child") == {"first", "child__2"}
+    assert [arg.name for arg in parse_metadata_arguments(metadata, "child")] == [
+        "caller_input"
+    ]
+
+
+def test_subdirectory_command_output_uses_source_basename() -> None:
+    metadata = {"commands": [{"print": "inner"}], "body": "{child__1}"}
+
+    assert command_output_names(metadata, "sub/child") == {"child__1"}
+    assert parse_metadata_arguments(metadata, "sub/child") == []
 
 
 def test_python_arguments_from_signature() -> None:

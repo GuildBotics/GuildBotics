@@ -59,7 +59,7 @@ from guildbotics.commands.to_pdf_command import ToPdfCommand
 work = pathlib.Path.cwd()
 spec = CommandSpec(
     name="inline_to_pdf", base_dir=work, command_class=ToPdfCommand, path=None,
-    params={}, args=[], stdin_override=None, cwd=work, command_index=0, config={},
+    params={}, args=[], stdin_override=None, cwd=work, config={},
 )
 context = SimpleNamespace(pipe="# 見出し\\n\\n日本語の本文 and Latin text.", shared_state={})
 outcome = asyncio.run(ToPdfCommand(context, spec, work).run())

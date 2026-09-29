@@ -14,6 +14,7 @@ from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import (
     command_entries,
     command_output_name,
+    command_source_name,
     normalize_command_entry,
 )
 from guildbotics.commands.models import CommandSpec
@@ -60,11 +61,15 @@ class CommandSpecFactory:
         )
         return spec
 
-    def build_from_entry(self, anchor: CommandSpec, entry: Any) -> CommandSpec:
+    def build_from_entry(
+        self, anchor: CommandSpec, entry: Any, index: int
+    ) -> CommandSpec:
         config = normalize_command_entry(entry)
-        anchor.command_index += 1
-
-        name = command_output_name(config, anchor.name, anchor.command_index)
+        source = str(anchor.config.get("path") or anchor.name)
+        source_name = command_source_name(
+            source, self._context.team.project.get_language_code()
+        )
+        name = command_output_name(config, source_name, index)
         path = None
         inline_command = self._is_inline_command(config, anchor)
         if inline_command:
@@ -91,7 +96,6 @@ class CommandSpecFactory:
             args=args,
             stdin_override=stdin_override,
             cwd=cwd,
-            command_index=anchor.command_index,
             config=config,
             class_resolver=anchor.class_resolver,
         )
@@ -184,6 +188,6 @@ class CommandSpecFactory:
         spec.class_resolver = ClassResolver(config.get("schema", ""), class_resolver)
         spec.children = []
 
-        for entry in command_entries(config):
-            child = self.build_from_entry(spec, entry)
+        for index, entry in enumerate(command_entries(config), start=1):
+            child = self.build_from_entry(spec, entry, index)
             spec.children.append(child)

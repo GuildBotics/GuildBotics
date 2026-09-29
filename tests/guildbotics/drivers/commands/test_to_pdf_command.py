@@ -42,7 +42,6 @@ def _make_spec(
         args=[],
         stdin_override=None,
         cwd=tmp_path,
-        command_index=0,
         config=config or {},
     )
 
