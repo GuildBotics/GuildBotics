@@ -21,8 +21,8 @@ What is looked for, and where:
   was cancelled, timed out, or its owner was killed.
 - the snapshot every environment boots from.
 
-Run it serially (``-p no:xdist``): each check tells its microVM from the
-others by the sandboxes that appear while it runs.
+Run it serially (``-p no:xdist``). Each check gives its microVMs a unique
+name prefix, so unrelated environments on this device do not enter its checks.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -49,6 +50,7 @@ import pytest_asyncio
 from guildbotics.intelligences.agent_environment import (
     credential_vault,
     provider_state,
+    runtime,
 )
 from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialGateway,
@@ -185,7 +187,7 @@ def _on_disk(*roots: Path, since: float = 0.0, mark: str = MARK) -> list[str]:
 
 
 def _sandboxes() -> set[str]:
-    return set(os.listdir(_SANDBOXES)) if _SANDBOXES.is_dir() else set()
+    return {path.name for path in _SANDBOXES.glob(f"{runtime._NAME_PREFIX}*")}
 
 
 @pytest_asyncio.fixture
@@ -193,6 +195,8 @@ async def device(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> AsyncIterator[LoginEnvironment]:
     """This device's environment, with a store and a vault of the test's own."""
+    # Keep the production prefix's length: the runtime uses Unix socket paths.
+    monkeypatch.setattr(runtime, "_NAME_PREFIX", uuid.uuid4().hex[:10] + "-")
     monkeypatch.setenv("HOME", str(_REAL_HOME))
     monkeypatch.setenv("USERPROFILE", str(_REAL_HOME))
     monkeypatch.delenv(GUILDBOTICS_WORKSPACE_ROOT, raising=False)
@@ -556,11 +560,13 @@ _OWNER = """
 import asyncio, sys
 from pathlib import Path
 from guildbotics.intelligences.agent_environment.runtime import AgentEnvironment
+from guildbotics.intelligences.agent_environment import runtime
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpec, EnvironmentMount, EnvironmentNetwork, guest_home)
 from guildbotics.intelligences.agent_environment.status import device_status
 
 async def main():
+    runtime._NAME_PREFIX = sys.argv[3]
     status = device_status()
     home = guest_home()
     environment = await AgentEnvironment.start(
@@ -588,7 +594,7 @@ async def test_an_environment_whose_owner_is_killed_goes_with_it(
     nothing of it stays on the disk."""
     before = _sandboxes()
     owner = subprocess.Popen(
-        [sys.executable, "-c", _OWNER, f"{MARK}K459", CANARY],
+        [sys.executable, "-c", _OWNER, f"{MARK}K459", CANARY, runtime._NAME_PREFIX],
         stdout=subprocess.PIPE,
         text=True,
     )
