@@ -186,6 +186,11 @@ Treat each hit by what it claims:
 
 Also check by hand:
 
+- The limitations `docs/native_agent_runtime.*.md` attributes to a tool's
+  version (no `usage_update`, no context size, failures reported as prose, an
+  unverified capability): check whether the new pin lifts each one, from the
+  step 3 output or the tool's release notes, and update the description when
+  one is.
 - `guildbotics/templates/intelligences/cli_agents/*/default.yml`: choices read
   from a tool's own answer (Copilot's effort levels, from `session/new`).
 - Codex: `docker/agent-environment/Dockerfile` removes the image's bubblewrap
@@ -204,8 +209,9 @@ Also check by hand:
 ## 6. The PR
 
 The body lists each tool's old, latest and new version, the real-device checks
-that ran and their result, each tool held on its pin with its issue, and the
-observations left on an older version.
+that ran and their result, each tool held on its pin with its issue, the
+observations left on an older version, and the documented limitations the new
+pins lift.
 
 After the merge, each device's snapshot turns `stale`: a running service
 rebuilds it once it runs the new code, and `guildbotics environment build`
