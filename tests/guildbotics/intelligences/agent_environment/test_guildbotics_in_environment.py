@@ -34,17 +34,12 @@ from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
 from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, CODE_ROOT
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
-from tests.timeouts import REAL_DEVICE
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
 
 pytestmark = [
-    REAL_DEVICE,
-    pytest.mark.skipif(
-        os.environ.get("GUILDBOTICS_CONTRACT_PROBE") != "1",
-        reason="Set GUILDBOTICS_CONTRACT_PROBE=1 to probe the agent environment.",
-    ),
+    pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE"),
     pytest.mark.asyncio,
 ]
 

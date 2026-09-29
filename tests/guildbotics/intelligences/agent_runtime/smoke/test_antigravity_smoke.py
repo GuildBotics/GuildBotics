@@ -12,7 +12,6 @@ history stay in the run output only.
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -40,17 +39,9 @@ from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     settle_contract,
 )
 from tests.guildbotics.intelligences.agent_runtime.smoke.turns import run_turns
-from tests.timeouts import REAL_DEVICE
 
 pytestmark = [
-    REAL_DEVICE,
-    pytest.mark.skipif(
-        os.environ.get("GUILDBOTICS_ANTIGRAVITY_SMOKE") != "1",
-        reason=(
-            "Set GUILDBOTICS_ANTIGRAVITY_SMOKE=1 to run the real Antigravity "
-            "smoke test."
-        ),
-    ),
+    pytest.mark.real_device("GUILDBOTICS_ANTIGRAVITY_SMOKE"),
     pytest.mark.asyncio,
 ]
 
