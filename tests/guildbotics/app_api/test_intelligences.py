@@ -1060,9 +1060,9 @@ def test_every_native_tool_declares_the_settings_its_adapter_applies(
 ) -> None:
     """Each native adapter has real knobs, and the editor must expose them.
 
-    codex takes model/effort on `turn/start`, Claude Code takes a model and an
-    effort level as launch flags, and `grok agent stdio` takes model and
-    reasoning effort as launch options. None of them is limited to raw JSON.
+    Codex takes model/effort on `turn/start`, Claude Code takes `--model` and
+    `--effort` with `--resume`, and Grok sets model and reasoning effort on its
+    ACP session. None of them is limited to raw JSON.
     """
     _write_yaml(
         _team_intelligences(tmp_path) / "cli_agent_mapping.yml",

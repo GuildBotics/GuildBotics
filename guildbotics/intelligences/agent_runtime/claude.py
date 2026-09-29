@@ -14,7 +14,6 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -64,12 +63,6 @@ _SESSION_LIMIT_PATTERN = re.compile(
 
 class ClaudeStreamJsonAdapter(StreamJsonAdapter):
     name = "claude-stream-json"
-    # Differing non-empty settings fingerprints rotate the conversation. Claude
-    # Code does not retain the model on resume, so re-send the last recorded one.
-    settings_scope = SETTINGS_SCOPE_SESSION
-
-    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
-        return _applied_effort_settings(context)
 
     def __init__(
         self,
@@ -107,7 +100,8 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             "--strict-mcp-config",
         ]
         _warn_unusable_effort_settings(context)
-        args.extend(_effort_arguments(context, conversation))
+        setting_args, effective_effort = _effort_arguments(context, conversation)
+        args.extend(setting_args)
         if conversation.provider_session_id:
             args.extend(("--resume", conversation.provider_session_id))
         try:
@@ -238,9 +232,8 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             stderr=output.stderr,
             returncode=returncode,
             model=reported_model,
-            # Claude does not report effort; carry forward the last recorded
-            # value when this turn supplied no effort flag.
-            effort=_applied_effort(context) or conversation.effective_effort,
+            # Claude does not report effort; use the value sent on this turn.
+            effort=effective_effort,
         )
 
 
@@ -266,20 +259,9 @@ def _claude_mcp_config(broker: TurnBroker) -> str:
 def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
     """The effort settings this adapter can really impose, normalized.
 
-    Silent by design: it also backs the session fingerprint, which is computed
-    outside the run path and must not emit a second round of warnings.
+    Silent by design: warning about unusable settings happens in the run path.
     """
     return model_and_effort(context, _EFFORT_VALUES)
-
-
-def _applied_effort(context: AgentExecutionContext) -> str:
-    """The effort level this turn really imposed on the session.
-
-    Claude Code reports no effort of its own, so the only honest value is the
-    level the adapter actually put on the command line, in Claude Code's own
-    vocabulary. A turn with no effort flag does not establish a new level.
-    """
-    return str(_applied_effort_settings(context).get("effort", ""))
 
 
 def _reported_model(raw: dict[str, Any]) -> str:
@@ -291,8 +273,8 @@ def _reported_model(raw: dict[str, Any]) -> str:
 
 def _effort_arguments(
     context: AgentExecutionContext, conversation: ConversationRecord
-) -> list[str]:
-    """Build model and effort flags, reusing the recorded model on resume."""
+) -> tuple[list[str], str]:
+    """Build model and effort flags and return the effort actually sent."""
     settings = _applied_effort_settings(context)
     args: list[str] = []
     model = str(settings.get("model", ""))
@@ -300,9 +282,12 @@ def _effort_arguments(
         model = conversation.effective_model
     if model:
         args.extend(("--model", model))
-    if effort := str(settings.get("effort", "")):
+    effort = str(settings.get("effort", ""))
+    if not effort and conversation.provider_session_id:
+        effort = conversation.effective_effort
+    if effort:
         args.extend(("--effort", effort))
-    return args
+    return args, effort
 
 
 def _warn_unusable_effort_settings(context: AgentExecutionContext) -> None:

@@ -4,9 +4,9 @@
 # to translate the provider-neutral effort labels (low / high) into settings the
 # Grok adapter can apply.
 #
-# `grok agent stdio` accepts these as launch options, so they are fixed for the
-# life of the process: changing one starts a fresh session rather than adjusting
-# the current one.
+# The adapter sets these with ACP session/set_config_option after session/new
+# or session/resume. Launch options alone can be replaced by saved session
+# settings, so the adapter checks the values Grok confirms before prompting.
 #
 # The values below come from Grok itself, not from guesswork. `grok --help` does
 # not enumerate them and its shell completion reports a free-form string

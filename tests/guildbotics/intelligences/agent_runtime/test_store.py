@@ -11,7 +11,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
     ConversationKey,
     ResumePolicy,
-    settings_fingerprint,
 )
 from guildbotics.intelligences.agent_runtime.store import ConversationStore
 
@@ -136,19 +135,16 @@ def test_auto_rotation_clears_provider_state(
     assert rotated.context_cursor == ""
 
 
-def test_settings_change_and_explicit_reset_rotate_atomically(tmp_path) -> None:
+def test_settings_change_keeps_session_and_explicit_reset_rotates(tmp_path) -> None:
     store = ConversationStore(tmp_path)
-    record = store.resolve(
-        _key(), ResumePolicy.AUTO, model="old", settings_fingerprint="fp-old"
-    )
+    record = store.resolve(_key(), ResumePolicy.AUTO, model="old")
     record.provider_session_id = "thread-1"
     store.save(record)
 
-    changed = store.resolve(
-        _key(), ResumePolicy.AUTO, model="new", settings_fingerprint="fp-new"
-    )
-    assert changed.generation == 1
-    assert changed.rotation_reason == "settings_changed"
+    changed = store.resolve(_key(), ResumePolicy.AUTO, model="new")
+    assert changed.generation == 0
+    assert changed.provider_session_id == "thread-1"
+    assert changed.model == "new"
     store.save(changed)
 
     reset = store.resolve(_key(), ResumePolicy.RESET, model="new")
@@ -156,7 +152,7 @@ def test_settings_change_and_explicit_reset_rotate_atomically(tmp_path) -> None:
     loaded = store.load(_key())
 
     assert loaded is not None
-    assert loaded.generation == 2
+    assert loaded.generation == 1
     assert loaded.rotation_reason == "reset"
     payload = json.loads(
         next(
@@ -300,7 +296,7 @@ def test_stored_record_without_context_fields_loads_as_zero(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Effort: settings fingerprints and the "keep the session as it is" rule
+# Effort: recorded settings and the "keep the session as it is" rule
 # --------------------------------------------------------------------------- #
 
 
@@ -313,93 +309,6 @@ def _context(**overrides) -> AgentExecutionContext:
         "conversation_key": _key(),
     }
     return AgentExecutionContext(**{**defaults, **overrides})
-
-
-def test_a_turn_that_imposes_nothing_has_an_empty_fingerprint() -> None:
-    assert settings_fingerprint({}) == ""
-
-
-def test_the_fingerprint_is_stable_and_distinguishes_applied_settings() -> None:
-    base = settings_fingerprint({"model": "m", "effort": "high"})
-    assert base != ""
-    assert base == settings_fingerprint({"effort": "high", "model": "m"})
-    assert base != settings_fingerprint({"model": "m", "effort": "low"})
-    # Model alone still distinguishes two sessions, as it did before effort.
-    assert settings_fingerprint({"model": "old"}) != settings_fingerprint(
-        {"model": "new"}
-    )
-
-
-def test_a_request_the_adapter_cannot_apply_is_not_a_settings_change() -> None:
-    """The fingerprint follows what is applied, not what was asked for.
-
-    Grok ignores every effort setting, and an unmapped level applies nothing at
-    all. Either way the provider configuration is untouched, so the session must
-    not be rotated and its history thrown away.
-    """
-    assert settings_fingerprint({}) == settings_fingerprint({})
-
-
-def test_two_different_stated_settings_rotate_the_session(tmp_path) -> None:
-    store = ConversationStore(tmp_path)
-    record = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-a")
-    record.provider_session_id = "thread-1"
-    store.save(record)
-
-    changed = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-b")
-
-    assert changed.rotation_reason == "settings_changed"
-    assert changed.provider_session_id == ""
-    assert changed.settings_fingerprint == "fp-b"
-
-
-def test_dropping_to_no_stated_settings_keeps_the_session(tmp_path) -> None:
-    """An empty fingerprint preserves the session and its last fingerprint."""
-    store = ConversationStore(tmp_path)
-    record = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-high")
-    record.provider_session_id = "thread-1"
-    store.save(record)
-
-    kept = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="")
-
-    assert kept.rotation_reason == ""
-    assert kept.provider_session_id == "thread-1"
-    assert kept.settings_fingerprint == "fp-high"
-
-
-def test_stating_settings_for_the_first_time_keeps_the_session(tmp_path) -> None:
-    store = ConversationStore(tmp_path)
-    record = store.resolve(_key(), ResumePolicy.AUTO)
-    record.provider_session_id = "thread-1"
-    store.save(record)
-
-    adopted = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-high")
-
-    assert adopted.rotation_reason == ""
-    assert adopted.provider_session_id == "thread-1"
-    assert adopted.settings_fingerprint == "fp-high"
-
-
-def test_a_rotated_session_forgets_the_settings_it_was_running(tmp_path) -> None:
-    store = ConversationStore(tmp_path)
-    record = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-high")
-    record.provider_session_id = "thread-1"
-    store.save(record)
-
-    fresh = store.resolve(_key(), ResumePolicy.FRESH)
-
-    assert fresh.settings_fingerprint == ""
-
-
-def test_the_fingerprint_survives_a_save_reload_round_trip(tmp_path) -> None:
-    store = ConversationStore(tmp_path)
-    record = store.resolve(_key(), ResumePolicy.AUTO, settings_fingerprint="fp-high")
-    store.save(record)
-
-    loaded = store.load(_key())
-
-    assert loaded is not None
-    assert loaded.settings_fingerprint == "fp-high"
 
 
 def test_effective_settings_survive_a_round_trip_and_die_with_the_session(

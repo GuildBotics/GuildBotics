@@ -27,8 +27,6 @@ from guildbotics.intelligences.agent_runtime.host_client import (
 )
 from guildbotics.intelligences.agent_runtime.models import (
     CONTEXT_COMPACTION,
-    SETTINGS_SCOPE_SESSION,
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -37,7 +35,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
-    settings_fingerprint,
 )
 from guildbotics.intelligences.agent_runtime.turn import turn_window
 from guildbotics.intelligences.brains.brain import (
@@ -120,9 +117,8 @@ class ExecutableInfo:
 #: See ``simple_brain_factory.person_brain_mapping`` for why.
 person_cli_agent_mapping: dict[str, dict[str, ExecutableInfo]] = {}
 
-#: The one effort-mapping key the core gives a name of its own, because it feeds
-#: the settings fingerprint. Everything else is passed through to the adapter,
-#: which owns the rest of the provider vocabulary.
+#: The one effort-mapping key the core gives a name of its own for diagnostics.
+#: Everything else is passed through to the adapter, which owns the provider vocabulary.
 EFFORT_MODEL_KEY = "model"
 
 
@@ -817,23 +813,11 @@ class CliAgentBrain(Brain):
         # ends with it, and a session outlives it by being resumed by id.
         adapter = create_native_adapter(adapter_name)
         try:
-            # A turn-scoped adapter re-sends its settings on every turn, so a
-            # change never justifies discarding the session. For a
-            # session-scoped one the fingerprint comes from what the adapter
-            # will really impose, so a request it cannot act on does not read
-            # as a change.
-            fingerprint = (
-                ""
-                if getattr(adapter, "settings_scope", SETTINGS_SCOPE_SESSION)
-                == SETTINGS_SCOPE_TURN
-                else settings_fingerprint(adapter.applied_settings(context))
-            )
             try:
                 conversation = store.resolve(
                     context.conversation_key,
                     context.resume_policy,
                     model=context.model,
-                    settings_fingerprint=fingerprint,
                 )
             except LookupError as exc:
                 return CliAgentExecutionResult(
@@ -932,9 +916,8 @@ class CliAgentBrain(Brain):
             conversation.provider_session_id = terminal.provider_session_id
             conversation.provider_turn_id = terminal.provider_turn_id
             conversation.provider = adapter_name
-            # Retain the last known values when the turn reports none. Claude
-            # re-sends the recorded model on resume; effort is only carried
-            # forward here for reporting when no new value is available.
+            # Retain the last known values when the turn reports none. Each
+            # adapter decides whether resume needs those values sent again.
             conversation.effective_model = (
                 terminal.model or conversation.effective_model
             )

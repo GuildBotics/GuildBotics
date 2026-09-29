@@ -320,7 +320,6 @@ class HostWindow:
         key: ConversationKey,
         policy: ResumePolicy,
         model: str = "",
-        settings_fingerprint: str = "",
     ) -> dict[str, Any]:
         self._check_conversation(key)
         record = await asyncio.to_thread(
@@ -329,7 +328,6 @@ class HostWindow:
                 key,
                 policy,
                 model=model,
-                settings_fingerprint=settings_fingerprint,
             )
         )
         return asdict(record)
