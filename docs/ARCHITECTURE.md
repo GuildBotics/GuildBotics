@@ -696,7 +696,11 @@ Which writers must take it is not decided writer by writer. Every write to a sha
 goes through the sync port, and the port takes the lock for it, so a writer that composes
 what it writes without reading anything has nothing to declare and no way to forget.
 Device-local paths and an unselected workspace are dropped by the same judgement that
-decides whether to announce a change, so neither waits on anything.
+decides whether to announce a change, so neither waits on anything. Shared-path membership
+resolves existing ancestors and appends missing components by name, keeping the lock and
+notification decision stable while another writer creates a parent directory.
+If an existing ancestor cannot be inspected, resolution fails and the write stops
+instead of treating the path as device-local.
 
 What the port cannot infer is how far back a span reaches. Config is not the only side that
 loses this way: conversation control state (`state/chat_state`) and member memory
@@ -706,7 +710,8 @@ whole memory document. `update_shared_text(path, apply)` and its JSON form take 
 read, hand the content to `apply`, and write what comes back, so the span starts at the read
 by construction rather than by each writer remembering to say so. It is the same shape as
 `ConfigRepository.write` for the same reason: passing the transformation in leaves no
-sequence for a caller to assemble wrongly.
+sequence for a caller to assemble wrongly. A missing file is passed to `apply` as `None`;
+other read failures stop the update without replacing the shared file.
 
 A few operations are wider than any single write — a journal that may be replaced rather
 than appended to, a document that is two files, a policy that is at most one per directory —

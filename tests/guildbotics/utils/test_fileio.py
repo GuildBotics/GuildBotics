@@ -6,6 +6,7 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     WorkspaceNotConfiguredError,
     _clean_data,
+    _plain_windows_path,
     apply_workspace_root,
     find_package_subdir,
     get_config_path,
@@ -23,6 +24,18 @@ from guildbotics.utils.fileio import (
     load_yaml_file,
     save_yaml_file,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (r"\\?\C:\Workspace\file.json", r"C:\Workspace\file.json"),
+        (r"\\?\UNC\server\share\file.json", r"\\server\share\file.json"),
+        (r"C:\Workspace\file.json", r"C:\Workspace\file.json"),
+    ],
+)
+def test_plain_windows_path_strips_device_prefix(value: str, expected: str) -> None:
+    assert _plain_windows_path(value) == expected
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])

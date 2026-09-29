@@ -14,6 +14,7 @@ from guildbotics.utils.advisory_lock import (
     held_lock,
     lock_file_nonblocking,
     open_lock_file,
+    process_lock,
     read_lock_data,
     unlock_file,
     write_lock_data,
@@ -112,6 +113,41 @@ def test_concurrent_first_acquisitions_all_succeed(tmp_path: Path) -> None:
 
     assert failures == []
     assert sorted(entered) == [0, 1, 2, 3]
+
+
+def test_process_mutex_identity_does_not_depend_on_missing_path_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "new" / "advisory.lock"
+    real_resolve = Path.resolve
+    calls = 0
+
+    def unstable_resolve(candidate: Path, *args: object, **kwargs: object) -> Path:
+        nonlocal calls
+        if candidate == path and not kwargs.get("strict"):
+            calls += 1
+            return tmp_path / f"alternate-{calls}.lock"
+        return real_resolve(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", unstable_resolve)
+    assert process_lock(path) is process_lock(path)
+
+
+def test_process_mutex_unifies_an_alias_of_an_existing_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias = tmp_path.parent / "workspace-alias"
+    real_resolve = Path.resolve
+
+    def resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == alias and kwargs.get("strict"):
+            return tmp_path
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert process_lock(alias / "new/advisory.lock") is process_lock(
+        tmp_path / "new/advisory.lock"
+    )
 
 
 def test_threads_are_serialized_without_os_help(
