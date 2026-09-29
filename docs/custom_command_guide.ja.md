@@ -780,9 +780,7 @@ guildbotics run summarize file=README.md effort=high
 
 `default` と未指定はどちらも「介入しない」を意味します。LLM API 経路では毎回モデルを生成し直すため、これはモデル既定値での実行と同じです。
 
-一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。「介入しない」は新しい effort の上書きやセッションの切り替えを要求しないという意味で、provider がすべての設定を保持する保証ではありません。必要な設定は adapter が記録から送り直します。Claude では、再開時に会話が最後に記録した model を送り直します。
-
-セッションのローテーションは、その turn の要求から adapter が採用した設定のフィンガープリント（解決したレベル + モデル + プロバイダ固有設定）で判定します。空（＝何も指定していない）と非空の間の遷移ではローテーションしません。**非空同士が異なるときだけ**、`settings_changed` としてローテーションします。設定を毎ターン送り直せるアダプタ（codex）は、そもそもローテーションしません。
+一方、ネイティブAI CLIツールの経路では**セッションが継続する場合があります**。model や effort を変更しても provider のセッションは維持され、Claude と Grok は次の turn で新しい設定を渡します。設定を消した場合は、そのセッションに最後に記録した値を送り直します。設定を消すだけでは provider の既定値に戻りません。会話を明示的にリセットすると、設定で指定した値がない限り、新しいセッションは provider の既定値で始まります。
 
 ### 9.3. モデル定義 YAML の schema
 
@@ -847,7 +845,7 @@ effort:            # low / high のときだけ上書き
 
 `default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。設定として書くのはこの 2 つのキーだけで、ツール自体はビルトインのアダプタが動かします。同梱の既定ファイルはこのほかに `effort_fields:`（前節の型付き編集用の宣言）を持ちますが、これはツールに同梱されるプロバイダ知識であり、利用者が設定する項目ではありません。
 
-同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は model と思考予算、`grok agent stdio` は起動オプションの model / reasoning effort、`copilot --acp` はセッション設定項目 `model` / `reasoning_effort`、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
+同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は `--model` / `--effort`、Grok と Copilot は ACP のセッション設定項目 model / reasoning effort、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
@@ -859,11 +857,11 @@ effort:
     effort: high
 ```
 
-ブロック内のキーはプロバイダ固有です。コアが解釈するのは共通キー `model` のみで、フィンガープリント計算に使われます。アダプタは自分が扱えるキーの allowlist を持ち、未知のキーは警告ログに出して無視します（黙って捨てません）。
+ブロック内のキーはプロバイダ固有です。コアが解釈するのは共通キー `model` のみです。アダプタは自分が扱えるキーの allowlist を持ち、未知のキーは警告ログに出して無視します（黙って捨てません）。
 
 - codex: `model` / `effort` を `turn/start` で毎ターン送信。`model/list` の `supportedReasoningEfforts` で検証し、非対応値は警告して落とします
-- claude: `model` / `effort` を起動フラグ `--model` / `--effort` に翻訳します。非空の設定フィンガープリント同士が異なる場合に新しいセッションを開始します。model を設定せずに再開するときは、会話が最後に記録した model を `--model` で渡し、model のバリエーションを維持します。`low` / `medium` / `high` / `xhigh` / `max` 以外の effort は警告のうえ落とします
-- grok: `model` / `reasoning_effort` を `grok agent stdio` の起動オプションとして渡します。プロセス起動時に固定されるため、変更時は新しいセッションを開始します。この2つ以外のキーは警告のうえ無視されます
+- claude: `model` / `effort` を `--model` / `--effort` に翻訳し、`--resume` と一緒に渡します。再開時にどちらかを設定しなかった場合は、その値を会話の記録から送り直します。`low` / `medium` / `high` / `xhigh` / `max` 以外の effort は警告のうえ落とします
+- grok: セッションの作成・再開後に ACP の `session/set_config_option` で `model` / `reasoning_effort` を設定し、Grok が確認した値を検査してからプロンプトを送ります。再開時にどちらかを設定しなかった場合は、その値を会話の記録から送り直します。この2つ以外のキーは警告のうえ無視されます
 
 ### 9.5. mapping が無いレベルを指定した場合
 

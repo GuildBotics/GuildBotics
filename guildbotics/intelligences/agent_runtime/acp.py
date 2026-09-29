@@ -23,7 +23,6 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -117,7 +116,6 @@ class AcpAdapterBase(JsonRpcAdapter):
     agent_label = ""
     #: The installed CLI product ("Grok Build", "GitHub Copilot CLI").
     product_label = ""
-    settings_scope = SETTINGS_SCOPE_SESSION
     #: The provider settings keys this adapter can really impose.
     setting_keys: frozenset[str] = frozenset()
     #: Private notification channels this provider wraps session updates in.
@@ -165,9 +163,7 @@ class AcpAdapterBase(JsonRpcAdapter):
     def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
         """The settings this adapter can really impose, normalized.
 
-        Silent by design: it also backs the session fingerprint, which is
-        computed outside the run path and must not emit a second round of
-        warnings.
+        Silent by design: warnings are emitted in the run path.
         """
         return {
             key: value
@@ -409,7 +405,9 @@ class AcpAdapterBase(JsonRpcAdapter):
                     f"{self.agent_label} returned no session id.",
                     rotate_session=True,
                 )
-            await self._publish_session_settings(session_id, context, result, emit)
+            await self._publish_session_settings(
+                session_id, context, conversation, result, emit
+            )
             return session_id
         session_id = conversation.provider_session_id
         method = "session/resume" if self._supports_resume else "session/load"
@@ -445,17 +443,22 @@ class AcpAdapterBase(JsonRpcAdapter):
                     details={"replayed_updates": replayed, "session_method": method},
                 ),
             )
-        await self._publish_session_settings(session_id, context, result, emit)
+        await self._publish_session_settings(
+            session_id, context, conversation, result, emit
+        )
         return session_id
 
     async def _publish_session_settings(
         self,
         session_id: str,
         context: AgentExecutionContext,
+        conversation: ConversationRecord,
         result: dict[str, Any],
         emit: EventSink,
     ) -> None:
-        for event in await self._configure_session(session_id, context, result):
+        for event in await self._configure_session(
+            session_id, context, conversation, result
+        ):
             await _publish(emit, event)
 
     async def _consume_turn(
@@ -856,7 +859,11 @@ class AcpAdapterBase(JsonRpcAdapter):
         raise NotImplementedError
 
     async def _configure_session(
-        self, session_id: str, context: AgentExecutionContext, result: dict[str, Any]
+        self,
+        session_id: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        result: dict[str, Any],
     ) -> list[AgentEvent]:
         """Apply this turn's settings to a freshly created or reloaded session.
 
@@ -865,6 +872,24 @@ class AcpAdapterBase(JsonRpcAdapter):
         them during the turn. The events describe confirmed session settings.
         """
         return []
+
+    async def _set_config_options(
+        self, session_id: str, desired: dict[str, str], result: dict[str, Any]
+    ) -> dict[str, str]:
+        """Send changed ACP options and return the provider's confirmed values."""
+        current = config_values(result)
+        for option_id, value in desired.items():
+            if current.get(option_id) == value:
+                continue
+            updated = config_values(
+                await self._transport.request(
+                    "session/set_config_option",
+                    {"sessionId": session_id, "configId": option_id, "value": value},
+                )
+            )
+            if updated:
+                current = updated
+        return current
 
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
         """The model and effort the finished turn really ran with.
@@ -969,3 +994,15 @@ def non_negative_int(value: Any) -> int | None:
 def as_dict(value: Any) -> dict[str, Any]:
     """The value as a mapping, or an empty one -- protocol payloads are untyped."""
     return value if isinstance(value, dict) else {}
+
+
+def config_values(result: Any) -> dict[str, str]:
+    """The confirmed values of ACP session configuration options."""
+    options = as_dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return {}
+    return {
+        str(as_dict(option)["id"]): str(as_dict(option).get("currentValue", "") or "")
+        for option in options
+        if as_dict(option).get("id")
+    }

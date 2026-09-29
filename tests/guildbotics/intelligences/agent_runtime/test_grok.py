@@ -18,7 +18,6 @@ from acp_fake_peer import (
 from guildbotics.intelligences.agent_runtime import acp as acp_module
 from guildbotics.intelligences.agent_runtime.grok import (
     GrokAcpAdapter,
-    _launch_argv,
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import CLIENT_INFO
 from guildbotics.intelligences.agent_runtime.member_broker import (
@@ -33,7 +32,6 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
     ResumePolicy,
-    settings_fingerprint,
 )
 
 FIXTURE = json.loads(
@@ -87,6 +85,7 @@ class _Peer(AcpPeerBase):
         usage_channel: str = "_x.ai/session_notification",
         replay_extensions: list[dict[str, Any]] | None = None,
         model_updates: list[str] | None = None,
+        ignore_config: bool = False,
     ) -> None:
         super().__init__()
         self.initialize = initialize if initialize is not None else _initialize()
@@ -106,6 +105,13 @@ class _Peer(AcpPeerBase):
         self.usage_channel = usage_channel
         self.replay_extensions = replay_extensions or []
         self.model_updates = model_updates or []
+        self.config = {"model": "", "reasoning_effort": ""}
+        self.ignore_config = ignore_config
+
+    def _config_options(self) -> list[dict[str, str]]:
+        return [
+            {"id": key, "currentValue": value} for key, value in self.config.items()
+        ]
 
     def handle(self, message: dict[str, Any]) -> None:
         self.messages.append(message)
@@ -134,8 +140,17 @@ class _Peer(AcpPeerBase):
             else:
                 self.send_result(request_id, {})
         elif method == "session/new":
-            self.send_result(request_id, {"sessionId": self.SESSION_ID})
+            self.send_result(
+                request_id,
+                {"sessionId": self.SESSION_ID, "configOptions": self._config_options()},
+            )
             self._emit_noise()
+        elif method == "session/set_config_option":
+            params = message.get("params", {})
+            key = params.get("configId")
+            if key in self.config and not self.ignore_config:
+                self.config[key] = params.get("value", "")
+            self.send_result(request_id, {"configOptions": self._config_options()})
         elif method in {"session/load", "session/resume"}:
             if self.load_error:
                 self.send_error(request_id, self.load_error)
@@ -151,7 +166,7 @@ class _Peer(AcpPeerBase):
                     }
                 )
             self._emit_noise()
-            self.send_result(request_id, {})
+            self.send_result(request_id, {"configOptions": self._config_options()})
         elif method == "session/prompt":
             if self.prompt_error:
                 self.send_error(request_id, self.prompt_error)
@@ -307,14 +322,10 @@ async def test_new_session_streams_chunks_and_reports_the_session_id(
 
 
 @pytest.mark.asyncio
-async def test_effort_settings_are_passed_as_launch_options(
+async def test_effort_settings_are_confirmed_on_the_new_session(
     monkeypatch, tmp_path
 ) -> None:
-    """`grok agent stdio` takes the model and reasoning effort at launch.
-
-    They are not protocol fields, so they have to reach the process on its argv
-    or they never take effect at all.
-    """
+    """Grok's session can replace process launch settings with saved values."""
     peer = _Peer(updates=[text_chunk("ok")])
     launched = install(monkeypatch, peer)
     adapter = GrokAcpAdapter()
@@ -327,16 +338,18 @@ async def test_effort_settings_are_passed_as_launch_options(
     )
 
     argv = launched[0][0]
-    assert "--model" in argv and argv[argv.index("--model") + 1] == "grok-4.5"
-    assert "--reasoning-effort" in argv
-    assert argv[argv.index("--reasoning-effort") + 1] == "high"
-    # These are agent options; passing them through the root parser does not
-    # reliably apply them to the ACP session.
-    assert argv.index("agent") < argv.index("--model") < argv.index("stdio")
+    assert "--model" not in argv
+    assert "--reasoning-effort" not in argv
+    assert [
+        message["params"]["configId"]
+        for message in peer.messages
+        if message.get("method") == "session/set_config_option"
+    ] == ["model", "reasoning_effort"]
+    assert peer.config == {"model": "grok-4.5", "reasoning_effort": "high"}
 
 
 @pytest.mark.asyncio
-async def test_a_turn_without_effort_adds_no_launch_options(
+async def test_a_turn_without_settings_uses_the_provider_defaults(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(updates=[text_chunk("ok")])
@@ -347,10 +360,14 @@ async def test_a_turn_without_effort_adds_no_launch_options(
     argv = launched[0][0]
     assert "--model" not in argv
     assert "--reasoning-effort" not in argv
+    assert not any(
+        message.get("method") == "session/set_config_option"
+        for message in peer.messages
+    )
 
 
 @pytest.mark.asyncio
-async def test_reported_model_overrides_initialize_and_launch_settings(
+async def test_reported_model_overrides_requested_session_setting(
     monkeypatch, tmp_path
 ) -> None:
     peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.7"])
@@ -387,14 +404,9 @@ async def test_unreported_model_is_left_empty(monkeypatch, tmp_path) -> None:
 
     adapter = GrokAcpAdapter()
     adapter._turn_model = "grok-previous"
-    result, _ = await _run(
-        adapter,
-        tmp_path,
-        effort="high",
-        provider_options={"model": "grok-code", "reasoning_effort": "low"},
-    )
+    result, _ = await _run(adapter, tmp_path)
 
-    assert (result.model, result.effort) == ("", "low")
+    assert (result.model, result.effort) == ("", "")
 
 
 @pytest.mark.asyncio
@@ -435,21 +447,78 @@ async def test_unknown_effort_settings_are_reported_not_silently_dropped(
     assert "temperature" in caplog.text
 
 
-def test_only_settings_grok_can_apply_count_as_a_session_change(tmp_path) -> None:
-    """The fingerprint follows what the launch actually carries."""
-    adapter = GrokAcpAdapter()
-    high = _context(tmp_path, effort="high", provider_options={"model": "grok-4.5"})
-    low = _context(tmp_path, effort="low", provider_options={"model": "grok-4.5"})
-    other = _context(tmp_path, effort="low", provider_options={"model": "grok-3"})
+@pytest.mark.asyncio
+async def test_resumed_session_uses_new_config_options(monkeypatch, tmp_path) -> None:
+    peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.7"])
+    install(monkeypatch, peer)
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id=_Peer.SESSION_ID,
+        effective_model="grok-4.5",
+        effective_effort="low",
+    )
 
-    # The neutral label alone changes nothing about the launch, so it is not a
-    # settings change; a different model is.
-    assert settings_fingerprint(adapter.applied_settings(high)) == settings_fingerprint(
-        adapter.applied_settings(low)
+    result, _ = await _run(
+        GrokAcpAdapter(),
+        tmp_path,
+        conversation,
+        provider_options={"model": "grok-4.7", "reasoning_effort": "high"},
     )
-    assert settings_fingerprint(adapter.applied_settings(low)) != settings_fingerprint(
-        adapter.applied_settings(other)
+
+    assert peer.config == {"model": "grok-4.7", "reasoning_effort": "high"}
+    assert peer.sent("session/load")["params"]["sessionId"] == _Peer.SESSION_ID
+    assert (result.model, result.effort) == ("grok-4.7", "high")
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_resends_recorded_settings_when_unset(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(updates=[text_chunk("ok")], model_updates=["grok-4.5"])
+    install(monkeypatch, peer)
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id=_Peer.SESSION_ID,
+        effective_model="grok-4.5",
+        effective_effort="low",
     )
+
+    result, _ = await _run(GrokAcpAdapter(), tmp_path, conversation)
+
+    assert peer.config == {"model": "grok-4.5", "reasoning_effort": "low"}
+    assert (result.model, result.effort) == ("grok-4.5", "low")
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_model_is_rejected_before_prompt(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(ignore_config=True)
+    install(monkeypatch, peer)
+
+    with pytest.raises(AgentRuntimeError) as error:
+        await _run(
+            GrokAcpAdapter(),
+            tmp_path,
+            provider_options={"model": "grok-4.6"},
+        )
+
+    assert error.value.category is AgentRuntimeErrorCategory.CONFIGURATION
+    assert "session/prompt" not in peer.methods()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_model_is_recorded_without_a_turn_update(
+    monkeypatch, tmp_path
+) -> None:
+    peer = _Peer(updates=[text_chunk("ok")])
+    install(monkeypatch, peer)
+
+    result, _ = await _run(
+        GrokAcpAdapter(), tmp_path, provider_options={"model": "grok-4.6"}
+    )
+
+    assert result.model == "grok-4.6"
 
 
 @pytest.mark.asyncio
@@ -1211,8 +1280,9 @@ async def test_cancellation_terminates_the_process_group(monkeypatch, tmp_path) 
 # --- pure helpers ------------------------------------------------------------
 
 
-def test_launch_argv_places_options_in_their_parser_scopes() -> None:
-    argv = _launch_argv("grok")
+def test_launch_argv_places_options_in_their_parser_scopes(tmp_path) -> None:
+    adapter = GrokAcpAdapter()
+    argv = adapter._launch_argv(_context(tmp_path))
 
     assert argv.index("--no-auto-update") < argv.index("agent")
     assert argv.index("--sandbox") < argv.index("agent")

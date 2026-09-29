@@ -8,7 +8,6 @@ import pytest
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_runtime import diagnostics
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentRuntimeError,
@@ -41,7 +40,6 @@ class _Logger:
 
 class _Adapter:
     name = "codex-app-server"
-    settings_scope = SETTINGS_SCOPE_TURN
 
     def __init__(self) -> None:
         self.fail = False
@@ -49,9 +47,6 @@ class _Adapter:
         self.contexts = []
         self.model = ""
         self.effort = ""
-
-    def applied_settings(self, context):
-        return dict(context.provider_options)
 
     async def close(self) -> None:
         self.closed = True

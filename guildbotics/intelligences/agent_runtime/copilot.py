@@ -17,15 +17,18 @@ import asyncio
 from logging import getLogger
 from typing import Any
 
-from guildbotics.intelligences.agent_runtime.acp import AcpAdapterBase, as_dict
+from guildbotics.intelligences.agent_runtime.acp import (
+    AcpAdapterBase,
+    as_dict,
+)
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    ConversationRecord,
 )
 
 #: The only method Copilot advertises. Its ``_meta.terminal-auth`` tells the
@@ -53,10 +56,7 @@ class CopilotAcpAdapter(AcpAdapterBase):
     agent_label = "Copilot"
     product_label = "GitHub Copilot CLI"
     tool_name = "copilot"
-    # Copilot accepts `session/set_config_option` on any live session, including
-    # one that was just reloaded, so changing the model or the effort costs a
-    # request rather than a fresh session.
-    settings_scope = SETTINGS_SCOPE_TURN
+    # Copilot accepts `session/set_config_option` on a reloaded session.
     setting_keys = _SETTING_KEYS
     rate_limit_codes = _RATE_LIMIT_CODES
 
@@ -136,33 +136,22 @@ class CopilotAcpAdapter(AcpAdapterBase):
         )
 
     async def _configure_session(
-        self, session_id: str, context: AgentExecutionContext, result: dict[str, Any]
+        self,
+        session_id: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        result: dict[str, Any],
     ) -> list[AgentEvent]:
         desired = {
             key: str(value) for key, value in self.applied_settings(context).items()
         }
         desired[_ALLOW_ALL_OPTION] = _ALLOW_ALL
-        current = _config_values(result)
-        for option_id, value in desired.items():
-            if current.get(option_id) == value:
-                continue
-            try:
-                updated = _config_values(
-                    await self._transport.request(
-                        "session/set_config_option",
-                        {
-                            "sessionId": session_id,
-                            "configId": option_id,
-                            "value": value,
-                        },
-                    )
-                )
-            except RpcError as exc:
-                raise self._agent_error_from_rpc(exc) from exc
-            # Copilot answers an unknown option id with an empty result instead
-            # of an error, so only an option list it returns proves anything.
-            if updated:
-                current = updated
+        try:
+            current = await self._set_config_options(session_id, desired, result)
+        except RpcError as exc:
+            raise self._agent_error_from_rpc(exc) from exc
+        # Copilot answers an unknown option id with an empty result instead of
+        # an error, so only an option list it returns proves anything.
         rejected = sorted(
             option_id
             for option_id, value in desired.items()
@@ -190,15 +179,3 @@ class CopilotAcpAdapter(AcpAdapterBase):
                 },
             )
         ]
-
-
-def _config_values(result: Any) -> dict[str, str]:
-    """The current value of every config option in a session response."""
-    options = as_dict(result).get("configOptions")
-    if not isinstance(options, list):
-        return {}
-    return {
-        str(as_dict(option)["id"]): str(as_dict(option).get("currentValue", "") or "")
-        for option in options
-        if as_dict(option).get("id")
-    }

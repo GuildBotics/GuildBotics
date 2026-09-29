@@ -15,7 +15,6 @@ from logging import getLogger
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -101,10 +100,6 @@ _RETRY_AFTER_PATTERN = re.compile(
 
 class AntigravityStreamJsonAdapter(StreamJsonAdapter):
     name = "antigravity-stream-json"
-    # Every turn is its own process and carries `--model` / `--effort` on its
-    # own command line, and a resumed conversation honours a changed model, so
-    # a settings change never needs a fresh conversation.
-    settings_scope = SETTINGS_SCOPE_TURN
 
     def __init__(
         self,
@@ -115,14 +110,6 @@ class AntigravityStreamJsonAdapter(StreamJsonAdapter):
         super().__init__(executable=executable, timeout=timeout)
         self._model_catalog: frozenset[str] = frozenset()
         self._model_catalog_read = False
-
-    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
-        """The effort settings this adapter recognizes.
-
-        Not used for rotation (this adapter is turn-scoped, so a change costs
-        nothing), but it keeps the contract uniform across adapters.
-        """
-        return model_and_effort(context, _EFFORT_VALUES)
 
     async def _run_active_turn(
         self,

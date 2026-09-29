@@ -52,7 +52,6 @@ class WindowDouble(HostClient):
                 ConversationKey(**arguments["key"]),
                 ResumePolicy(arguments["policy"]),
                 model=arguments["model"],
-                settings_fingerprint=arguments["settings_fingerprint"],
             )
             return asdict(record)
         if name == "save":

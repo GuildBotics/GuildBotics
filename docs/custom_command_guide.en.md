@@ -770,9 +770,7 @@ The order is the same for every brain (both the LLM API path and the AI CLI tool
 
 Both mean "do not intervene". On the LLM API path a model is built fresh for every run, so this is the same as running on the model's own defaults.
 
-On the native AI CLI tool path, **the session may continue**. "Do not intervene" requests no new effort overlay or session rotation; it does not guarantee that the provider retains every setting. The adapter may re-send a recorded setting when needed: Claude re-sends the conversation's last recorded model on resume.
-
-Rotation is decided by a fingerprint of settings accepted from the current request (resolved level + model + provider-specific settings). Moving between an empty fingerprint (nothing stated) and a non-empty one does not rotate. Only **two differing non-empty** fingerprints rotate the session, with the reason `settings_changed`. An adapter that can re-send its settings on every turn (codex) never rotates for this.
+On the native AI CLI tool path, **the session may continue**. Changing model or effort keeps the provider session. Claude and Grok send the new settings on the next turn. If a setting is omitted, they re-send the last value recorded for that session; omitting a setting does not reset it to the provider default. An explicit conversation reset starts a new session on provider defaults unless the configuration supplies settings.
 
 ### 9.3. Model definition YAML schema
 
@@ -837,7 +835,7 @@ effort:            # overlays it for low / high only
 
 `default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all there is to configure: the tool itself is driven by its built-in adapter. The shipped defaults additionally declare `effort_fields:` -- the typed-editing descriptors of the previous section -- but that is provider knowledge shipped with the tool, not something to configure.
 
-Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes a model and a thinking budget, `grok agent stdio` takes model and reasoning effort as launch options, `copilot --acp` takes them as the `model` and `reasoning_effort` session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes `--model` / `--effort`, Grok and Copilot take model and reasoning effort as ACP session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
@@ -849,11 +847,11 @@ effort:
     effort: high
 ```
 
-The keys inside a block are provider-specific. The core understands only the common `model` key, which it uses for the settings fingerprint. Each adapter holds an allowlist of the keys it can act on and warns about the rest rather than dropping them silently.
+The keys inside a block are provider-specific. The core understands only the common `model` key. Each adapter holds an allowlist of the keys it can act on and warns about the rest rather than dropping them silently.
 
 - codex: sends `model` / `effort` on every `turn/start`. Both are validated against `model/list` (`supportedReasoningEfforts`); an unsupported value is warned about and dropped
-- claude: translates `model` / `effort` into the `--model` / `--effort` launch flags. Two differing non-empty settings fingerprints start a fresh session; when resuming without a configured model, the adapter passes the conversation's last recorded model with `--model` to preserve the model variant. An effort outside `low` / `medium` / `high` / `xhigh` / `max` is warned about and dropped
-- grok: passes `model` / `reasoning_effort` to `grok agent stdio` as launch options. They are fixed for the life of the process, so changing them starts a fresh session; keys outside that pair are warned about and ignored
+- claude: translates `model` / `effort` into the `--model` / `--effort` flags, including with `--resume`. When either setting is omitted on resume, the adapter passes its last recorded value. An effort outside `low` / `medium` / `high` / `xhigh` / `max` is warned about and dropped
+- grok: sets `model` / `reasoning_effort` with ACP `session/set_config_option` after creating or resuming the session, and checks the values Grok confirms before prompting. When either setting is omitted on resume, the adapter sends its last recorded value. Keys outside that pair are warned about and ignored
 
 ### 9.5. Requesting a level that has no mapping
 

@@ -18,7 +18,6 @@ from acp_fake_peer import (
 from guildbotics.intelligences.agent_runtime import copilot as copilot_module
 from guildbotics.intelligences.agent_runtime.copilot import CopilotAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -512,9 +511,6 @@ def test_only_the_settings_the_adapter_can_impose_count_as_a_change(tmp_path) ->
     )
 
     assert applied == {"model": "gpt-5-mini", "reasoning_effort": "high"}
-    # Config options can be re-sent on a live session, so a change never costs
-    # a fresh one.
-    assert adapter.settings_scope == SETTINGS_SCOPE_TURN
 
 
 # --- exact reload ------------------------------------------------------------

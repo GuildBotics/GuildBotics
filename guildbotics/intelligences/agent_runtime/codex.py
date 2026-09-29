@@ -19,7 +19,6 @@ from guildbotics.intelligences.agent_runtime.jsonrpc import (
     RpcError,
 )
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_TURN,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -103,21 +102,6 @@ def _default_entry(catalog: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
 
 class CodexAppServerAdapter(JsonRpcAdapter):
     name = "codex-app-server"
-    # ``turn/start`` accepts model and effort on every turn, so a change never
-    # requires a fresh thread.
-    settings_scope = SETTINGS_SCOPE_TURN
-
-    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
-        """The turn/start fields this adapter recognizes.
-
-        Not used for rotation (this adapter is turn-scoped, so a change costs
-        nothing), but it keeps the contract uniform across adapters.
-        """
-        return {
-            key: value
-            for key, value in context.provider_options.items()
-            if key in _TURN_SETTING_KEYS
-        }
 
     def __init__(
         self,

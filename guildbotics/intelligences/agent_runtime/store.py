@@ -52,7 +52,6 @@ class ConversationStore:
         policy: ResumePolicy,
         *,
         model: str = "",
-        settings_fingerprint: str = "",
     ) -> ConversationRecord:
         with self._lock:
             record = self.load(key)
@@ -63,23 +62,15 @@ class ConversationStore:
                     "The exact conversation has no healthy provider session to resume."
                 )
             if record is None:
-                return self._new_record(
-                    key, model=model, settings_fingerprint=settings_fingerprint
-                )
+                return self._new_record(key, model=model)
             if policy in {ResumePolicy.FRESH, ResumePolicy.RESET}:
                 record.rotate(policy.value)
             elif policy is ResumePolicy.AUTO:
-                reason = self.rotation_reason(
-                    record, settings_fingerprint=settings_fingerprint
-                )
+                reason = self.rotation_reason(record)
                 if reason:
                     record.rotate(reason)
             if model:
                 record.model = model
-            # An empty fingerprint requests no settings change or rotation;
-            # retain the last non-empty settings request for future comparisons.
-            if settings_fingerprint:
-                record.settings_fingerprint = settings_fingerprint
             return record
 
     def load(self, key: ConversationKey) -> ConversationRecord | None:
@@ -114,7 +105,6 @@ class ConversationStore:
             last_run_id=_text(payload.get("last_run_id")),
             provider=_text(payload.get("provider")),
             model=_text(payload.get("model")),
-            settings_fingerprint=_text(payload.get("settings_fingerprint")),
             effective_model=_text(payload.get("effective_model")),
             effective_effort=_text(payload.get("effective_effort")),
             healthy=bool(payload.get("healthy", True)),
@@ -153,20 +143,9 @@ class ConversationStore:
         record.rotation_reason = reason
         self.save(record)
 
-    def rotation_reason(
-        self, record: ConversationRecord, *, settings_fingerprint: str = ""
-    ) -> str:
+    def rotation_reason(self, record: ConversationRecord) -> str:
         if not record.healthy:
             return record.rotation_reason or "unhealthy_session"
-        # Only two *stated* settings can conflict. An empty fingerprint on
-        # either side means one of them made no statement, which is a request to
-        # keep the session as it is rather than a change.
-        if (
-            settings_fingerprint
-            and record.settings_fingerprint
-            and settings_fingerprint != record.settings_fingerprint
-        ):
-            return "settings_changed"
         if record.turn_count >= self._max_turns:
             return "turn_limit"
         if record.input_tokens + record.output_tokens >= self._max_tokens:
@@ -190,14 +169,11 @@ class ConversationStore:
         )
 
     @staticmethod
-    def _new_record(
-        key: ConversationKey, *, model: str, settings_fingerprint: str = ""
-    ) -> ConversationRecord:
+    def _new_record(key: ConversationKey, *, model: str) -> ConversationRecord:
         now = datetime.now(UTC).isoformat()
         return ConversationRecord(
             key=key,
             model=model,
-            settings_fingerprint=settings_fingerprint,
             created_at=now,
             updated_at=now,
         )

@@ -845,10 +845,6 @@ async def _run_turn_with(monkeypatch, tmp_path, **context_overrides) -> _Process
     return process
 
 
-def test_codex_applies_settings_per_turn_so_a_change_needs_no_new_thread() -> None:
-    assert CodexAppServerAdapter.settings_scope == "turn"
-
-
 @pytest.mark.asyncio
 async def test_codex_turn_start_carries_effort_and_model(monkeypatch, tmp_path) -> None:
     process = await _run_turn_with(

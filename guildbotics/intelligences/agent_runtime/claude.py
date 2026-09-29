@@ -14,7 +14,6 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     MEMBER_BROKER_TOKEN_ENV,
 )
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
@@ -64,12 +63,6 @@ _SESSION_LIMIT_PATTERN = re.compile(
 
 class ClaudeStreamJsonAdapter(StreamJsonAdapter):
     name = "claude-stream-json"
-    # Differing non-empty settings fingerprints rotate the conversation. Claude
-    # Code does not retain the model on resume, so re-send the last recorded one.
-    settings_scope = SETTINGS_SCOPE_SESSION
-
-    def applied_settings(self, context: AgentExecutionContext) -> dict[str, Any]:
-        return _applied_effort_settings(context)
 
     def __init__(
         self,
@@ -238,9 +231,13 @@ class ClaudeStreamJsonAdapter(StreamJsonAdapter):
             stderr=output.stderr,
             returncode=returncode,
             model=reported_model,
-            # Claude does not report effort; carry forward the last recorded
-            # value when this turn supplied no effort flag.
-            effort=_applied_effort(context) or conversation.effective_effort,
+            # Claude does not report effort; use the value sent on this turn.
+            effort=_applied_effort(context)
+            or (
+                conversation.effective_effort
+                if conversation.provider_session_id
+                else ""
+            ),
         )
 
 
@@ -266,8 +263,7 @@ def _claude_mcp_config(broker: TurnBroker) -> str:
 def _applied_effort_settings(context: AgentExecutionContext) -> dict[str, Any]:
     """The effort settings this adapter can really impose, normalized.
 
-    Silent by design: it also backs the session fingerprint, which is computed
-    outside the run path and must not emit a second round of warnings.
+    Silent by design: warning about unusable settings happens in the run path.
     """
     return model_and_effort(context, _EFFORT_VALUES)
 
@@ -292,7 +288,7 @@ def _reported_model(raw: dict[str, Any]) -> str:
 def _effort_arguments(
     context: AgentExecutionContext, conversation: ConversationRecord
 ) -> list[str]:
-    """Build model and effort flags, reusing the recorded model on resume."""
+    """Build model and effort flags, reusing recorded values on resume."""
     settings = _applied_effort_settings(context)
     args: list[str] = []
     model = str(settings.get("model", ""))
@@ -300,7 +296,10 @@ def _effort_arguments(
         model = conversation.effective_model
     if model:
         args.extend(("--model", model))
-    if effort := str(settings.get("effort", "")):
+    effort = str(settings.get("effort", ""))
+    if not effort and conversation.provider_session_id:
+        effort = conversation.effective_effort
+    if effort:
         args.extend(("--effort", effort))
     return args
 

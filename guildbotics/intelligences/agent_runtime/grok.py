@@ -21,12 +21,12 @@ from guildbotics.intelligences.agent_runtime.acp import (
 )
 from guildbotics.intelligences.agent_runtime.jsonrpc import RpcError
 from guildbotics.intelligences.agent_runtime.models import (
-    SETTINGS_SCOPE_SESSION,
     AgentEvent,
     AgentEventKind,
     AgentExecutionContext,
     AgentRuntimeError,
     AgentRuntimeErrorCategory,
+    ConversationRecord,
     context_compaction_event,
 )
 
@@ -60,7 +60,7 @@ _KNOWN_EXTENSION_NOISE = frozenset(
         "_x.ai/settings/update",
     }
 )
-#: The launch options this adapter can set on `grok agent stdio`.
+#: The ACP session options this adapter can set on Grok Build.
 _EFFORT_SETTING_KEYS = frozenset({"model", "reasoning_effort"})
 
 
@@ -69,10 +69,8 @@ class GrokAcpAdapter(AcpAdapterBase):
     agent_label = "Grok"
     product_label = "Grok Build"
     tool_name = "grok"
-    # `grok agent stdio` takes the model and reasoning effort as launch options,
-    # so they are fixed for the life of the process: changing them needs a fresh
-    # session rather than a mid-conversation adjustment.
-    settings_scope = SETTINGS_SCOPE_SESSION
+    # The process starts for each turn. Session options must be confirmed after
+    # session/new or session/resume: launch flags alone can be overwritten.
     setting_keys = _EFFORT_SETTING_KEYS
     extension_notifications = _EXTENSION_NOTIFICATIONS
     known_extension_noise = _KNOWN_EXTENSION_NOISE
@@ -85,9 +83,54 @@ class GrokAcpAdapter(AcpAdapterBase):
     ) -> None:
         super().__init__(executable=executable, timeout=timeout)
         self._turn_model = ""
+        self._confirmed_model = ""
+        self._turn_effort = ""
 
     def _launch_argv(self, context: AgentExecutionContext) -> tuple[str, ...]:
-        return _launch_argv(self._executable, self.applied_settings(context))
+        return (
+            self._executable,
+            "--no-auto-update",
+            "--sandbox",
+            _SANDBOX_PROFILE,
+            "agent",
+            "--always-approve",
+            "stdio",
+        )
+
+    def _desired_settings(
+        self, context: AgentExecutionContext, conversation: ConversationRecord
+    ) -> dict[str, str]:
+        settings = self.applied_settings(context)
+        if conversation.provider_session_id:
+            settings.setdefault("model", conversation.effective_model)
+            settings.setdefault("reasoning_effort", conversation.effective_effort)
+        return {key: str(value) for key, value in settings.items() if value}
+
+    async def _configure_session(
+        self,
+        session_id: str,
+        context: AgentExecutionContext,
+        conversation: ConversationRecord,
+        result: dict[str, Any],
+    ) -> list[AgentEvent]:
+        desired = self._desired_settings(context, conversation)
+        try:
+            current = await self._set_config_options(session_id, desired, result)
+        except RpcError as exc:
+            raise AgentRuntimeError(
+                AgentRuntimeErrorCategory.CONFIGURATION,
+                "Grok did not apply the requested session settings.",
+                details={"provider_error": str(exc)},
+            ) from exc
+        for option_id, value in desired.items():
+            if current.get(option_id) != value:
+                raise AgentRuntimeError(
+                    AgentRuntimeErrorCategory.CONFIGURATION,
+                    f"Grok did not confirm {option_id} for the session.",
+                )
+        self._confirmed_model = desired.get("model", "")
+        self._turn_effort = desired.get("reasoning_effort", "")
+        return []
 
     def _policy_details(self, context: AgentExecutionContext) -> dict[str, Any]:
         return {"sandbox": _SANDBOX_PROFILE}
@@ -95,16 +138,14 @@ class GrokAcpAdapter(AcpAdapterBase):
     async def _prepare_turn(self, context: AgentExecutionContext) -> None:
         await super()._prepare_turn(context)
         self._turn_model = ""
+        self._confirmed_model = ""
+        self._turn_effort = ""
 
     def _effective_settings(self, context: AgentExecutionContext) -> tuple[str, str]:
-        # Grok Build 1.0.34 reports the current model during the turn on
-        # `_x.ai/models/update.currentModelId`. The initialize modelState can
-        # differ from it, even when a model was supplied at launch.
-        # Reasoning effort is not reported, so only an imposed value is known.
-        return (
-            self._turn_model,
-            str(self.applied_settings(context).get("reasoning_effort", "") or ""),
-        )
+        # The turn's model update wins over the option confirmed after resume.
+        # Initialize's modelState can differ from both. Reasoning effort comes
+        # from the confirmed session option.
+        return self._turn_model or self._confirmed_model, self._turn_effort
 
     def _decode(
         self, method: str, params: dict[str, Any], session_id: str
@@ -172,33 +213,6 @@ class GrokAcpAdapter(AcpAdapterBase):
 #: Grok refuses to start rather than run a profile it cannot enforce. The
 #: environment is the boundary; the inner sandbox was never counted as one.
 _SANDBOX_PROFILE = "off"
-
-
-def _launch_argv(
-    executable: str, settings: dict[str, Any] | None = None
-) -> tuple[str, ...]:
-    # `grok agent stdio` takes the model and reasoning effort as launch options.
-    # They are process-wide rather than per-turn, which is exactly why this
-    # adapter is session-scoped: changing them starts a fresh session.
-    applied = settings or {}
-    options: list[str] = []
-    if model := str(applied.get("model", "") or ""):
-        options.extend(("--model", model))
-    if effort := str(applied.get("reasoning_effort", "") or ""):
-        options.extend(("--reasoning-effort", effort))
-    return (
-        executable,
-        # Headless runs must never let the CLI update itself mid-session.
-        "--no-auto-update",
-        "--sandbox",
-        _SANDBOX_PROFILE,
-        "agent",
-        # These are `grok agent` options. The root parser accepts the same
-        # spellings, but does not propagate always-approve to ACP sessions.
-        "--always-approve",
-        *options,
-        "stdio",
-    )
 
 
 def _turn_usage_events(update: dict[str, Any], session_id: str) -> list[AgentEvent]:
