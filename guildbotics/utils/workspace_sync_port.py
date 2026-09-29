@@ -264,6 +264,13 @@ def delete_shared_path(
         )
 
 
+def _read_shared_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
 def update_shared_text(
     path: Path,
     apply: Callable[[str | None], str | None],
@@ -293,7 +300,7 @@ def update_shared_text(
         str | None: The text the file now holds, or None when it was deleted.
     """
     with _writing([path], workspace_root):
-        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        current = _read_shared_text(path)
         updated = apply(current)
         if updated is None:
             delete_shared_path(path, workspace_root=workspace_root)
@@ -347,7 +354,7 @@ def update_shared_json_with_change(
     change: ChangeSet | None = None
 
     with _writing([path], workspace_root):
-        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        current = _read_shared_text(path)
         written = apply(json.loads(current) if current is not None else None)
         if written is None:
             change = delete_shared_path(path, workspace_root=workspace_root)

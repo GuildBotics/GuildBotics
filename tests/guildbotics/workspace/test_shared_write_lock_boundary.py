@@ -48,6 +48,7 @@ from guildbotics.utils.workspace_sync_port import (
     notify_shared_state_changed,
     set_workspace_sync_port,
     update_shared_json,
+    update_shared_json_with_change,
     update_shared_text,
     write_shared_bytes,
     write_shared_json,
@@ -293,6 +294,52 @@ def test_a_rewrite_sees_what_the_other_writer_left(workspace: Path) -> None:
     payload = update_shared_json(target, lambda current: {"n": current["n"] + 1})
 
     assert payload == {"n": 2}
+
+
+@pytest.mark.parametrize(
+    "helper",
+    ["update_shared_text", "update_shared_json", "update_shared_json_with_change"],
+)
+def test_an_unreadable_file_is_not_replaced(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, helper: str
+) -> None:
+    shared = _existing_shared_files(workspace)
+    target = shared / "state/other.json"
+    original = target.read_bytes()
+    applied: list[object] = []
+    announced: list[ChangeSet] = []
+    real_is_file = Path.is_file
+    real_read_text = Path.read_text
+
+    def missed_stat(path: Path) -> bool:
+        return False if path == target else real_is_file(path)
+
+    def unreadable(path: Path, *args: object, **kwargs: object) -> str:
+        if path == target:
+            raise PermissionError("file temporarily unreadable")
+        return real_read_text(path, *args, **kwargs)
+
+    def apply(current: object) -> object:
+        applied.append(current)
+        return "changed" if helper == "update_shared_text" else {"changed": True}
+
+    monkeypatch.setattr(Path, "is_file", missed_stat)
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    set_workspace_sync_port(_RecordingPort(announced))
+    try:
+        with pytest.raises(PermissionError, match="temporarily unreadable"):
+            if helper == "update_shared_text":
+                update_shared_text(target, apply)
+            elif helper == "update_shared_json":
+                update_shared_json(target, apply)
+            else:
+                update_shared_json_with_change(target, apply)
+    finally:
+        set_workspace_sync_port(None)
+
+    assert applied == []
+    assert target.read_bytes() == original
+    assert announced == []
 
 
 def test_unchanged_content_is_not_rewritten(workspace: Path) -> None:
