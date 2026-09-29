@@ -68,7 +68,14 @@ async def test_prepare_commit_and_push_run_the_clone_in_the_microvm(
         account_info={"git_user": "Aiko Bot", "git_email": "aiko@example.com"},
     )
     service = MemberGitWorkspaceService(
-        person, Team(project=Project(name="probe"), members=[person])
+        person,
+        Team(
+            project=Project(
+                name="probe",
+                services={"code_hosting_service": {"name": "GitHub", "owner": "owner"}},
+            ),
+            members=[person],
+        ),
     )
     service.workspace_root = clones
     service.host_root = tmp_path / "host"

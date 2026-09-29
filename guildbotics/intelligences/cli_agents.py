@@ -366,7 +366,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # access token has expired whenever it first needs it; listing the
         # models needs it, and makes no turn.
         provision=CliAgentProvision(
-            package="@openai/codex@0.153.4",
+            package="@openai/codex@0.159.0",
             state_root=".codex",
             state_root_env="CODEX_HOME",
             auth="auth.json",
@@ -403,13 +403,15 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 ),
                 upstream="https://chatgpt.com",
                 # Inference (compaction too), the model catalog, the rate
-                # limits and settings a turn checks first, the plugins, and
-                # the account's connected apps (an MCP server of ChatGPT's).
+                # limits, workspace routing and settings a turn checks first,
+                # the plugins, and the account's connected apps (an MCP server
+                # of ChatGPT's).
                 # Analytics stay closed.
                 routes=(
                     "POST /backend-api/codex/responses",
                     "GET /backend-api/codex/models",
                     "GET /backend-api/wham/usage",
+                    "GET /backend-api/wham/accounts/check",
                     "GET /backend-api/wham/rate-limit-reset-credits",
                     "GET /backend-api/wham/settings/user",
                     "GET /backend-api/ps/plugins/*",
@@ -418,6 +420,9 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 ),
                 base_url_env=("GUILDBOTICS_CODEX_BASE_URL",),
                 base_url_path="/backend-api",
+                # Workspace routing requires HTTPS even for NO_CONSTRAINT,
+                # which keeps the configured gateway as the backend origin.
+                tls=True,
                 # The connected apps take the token from here, not the login.
                 stand_in_also_env=("CODEX_CONNECTORS_TOKEN",),
                 refresh=("codex", "debug", "models"),
