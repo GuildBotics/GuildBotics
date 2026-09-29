@@ -47,6 +47,7 @@ from guildbotics.utils.workspace_sync_port import (
     delete_shared_path,
     notify_shared_state_changed,
     set_workspace_sync_port,
+    shared_relative_path,
     update_shared_json,
     update_shared_json_with_change,
     update_shared_text,
@@ -297,6 +298,62 @@ def test_a_rewrite_sees_what_the_other_writer_left(workspace: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "helper", ["write_shared_json", "update_shared_json_with_change"]
+)
+def test_shared_target_stays_locked_and_announced_when_resolution_changes(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, helper: str
+) -> None:
+    target = workspace / ".guildbotics/state/new/thing.json"
+    real_resolve = Path.resolve
+
+    def unstable_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == target and not kwargs.get("strict"):
+            return workspace / "outside.json"
+        return real_resolve(path, *args, **kwargs)
+
+    def write() -> ChangeSet | None:
+        if helper == "write_shared_json":
+            return write_shared_json(target, {"id": "one"})
+        return update_shared_json_with_change(target, lambda _current: {"id": "one"})[1]
+
+    monkeypatch.setattr(Path, "resolve", unstable_resolve)
+    assert shared_relative_path(target) == "state/new/thing.json"
+
+    with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
+        write()
+    assert not target.exists()
+
+    announced: list[ChangeSet] = []
+    set_workspace_sync_port(_RecordingPort(announced))
+    try:
+        change = write()
+    finally:
+        set_workspace_sync_port(None)
+
+    assert change is not None
+    assert change.paths == ("state/new/thing.json",)
+    assert announced == [change]
+
+
+def test_dangling_symlink_to_shared_file_keeps_the_lock(
+    workspace: Path, symlinks: None
+) -> None:
+    target = workspace / ".guildbotics/state/new.jsonl"
+    target.parent.mkdir(parents=True)
+    alias = workspace / "alias.jsonl"
+    alias.symlink_to(target)
+
+    with held_elsewhere(workspace), pytest.raises(SharedWriteBusyError):
+        append_shared_text(alias, "{}\n")
+    assert not target.exists()
+
+    change = append_shared_text(alias, "{}\n")
+    assert target.read_text(encoding="utf-8") == "{}\n"
+    assert change is not None
+    assert change.paths == ("state/new.jsonl",)
+
+
+@pytest.mark.parametrize(
     "helper",
     ["update_shared_text", "update_shared_json", "update_shared_json_with_change"],
 )
@@ -308,11 +365,7 @@ def test_an_unreadable_file_is_not_replaced(
     original = target.read_bytes()
     applied: list[object] = []
     announced: list[ChangeSet] = []
-    real_is_file = Path.is_file
     real_read_text = Path.read_text
-
-    def missed_stat(path: Path) -> bool:
-        return False if path == target else real_is_file(path)
 
     def unreadable(path: Path, *args: object, **kwargs: object) -> str:
         if path == target:
@@ -323,7 +376,6 @@ def test_an_unreadable_file_is_not_replaced(
         applied.append(current)
         return "changed" if helper == "update_shared_text" else {"changed": True}
 
-    monkeypatch.setattr(Path, "is_file", missed_stat)
     monkeypatch.setattr(Path, "read_text", unreadable)
     set_workspace_sync_port(_RecordingPort(announced))
     try:

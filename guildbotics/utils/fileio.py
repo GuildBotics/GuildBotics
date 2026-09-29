@@ -95,13 +95,33 @@ def atomic_write_text(path: Path, text: str) -> None:
     atomic_write_bytes(path, text.encode("utf-8"))
 
 
-def _resolve_path(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
+def resolve_from_existing_ancestor(path: Path) -> Path:
+    """Resolve existing ancestors, then append missing components by spelling.
+
+    ``Path.resolve(strict=False)`` can change its Windows path prefix while a
+    missing parent is created, giving one path two identities during a write.
+    """
+    candidate = path.expanduser().absolute()
+    missing: list[str] = []
+    while True:
+        try:
+            return candidate.resolve(strict=True).joinpath(*reversed(missing))
+        except FileNotFoundError:
+            if candidate.is_symlink():
+                target = candidate.readlink()
+                candidate = (
+                    target if target.is_absolute() else candidate.parent / target
+                )
+                continue
+            if candidate == candidate.parent:
+                raise
+            missing.append(candidate.name)
+            candidate = candidate.parent
 
 
 def workspace_root_from_config_dir(config_dir: Path) -> Path | None:
     """Return the workspace root when ``config_dir`` is ``<ws>/.guildbotics/config``."""
-    resolved = _resolve_path(config_dir)
+    resolved = resolve_from_existing_ancestor(config_dir)
     if resolved.name == "config" and resolved.parent.name == ".guildbotics":
         return resolved.parent.parent
     return None
@@ -118,10 +138,10 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
     The process cwd and member working clones are never used as a workspace.
     """
     if workspace_root is not None:
-        return _resolve_path(workspace_root)
+        return resolve_from_existing_ancestor(workspace_root)
     configured = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
     if configured:
-        return _resolve_path(Path(configured))
+        return resolve_from_existing_ancestor(Path(configured))
     config_dir = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
     if config_dir:
         derived = workspace_root_from_config_dir(Path(config_dir))
@@ -135,7 +155,7 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
 
 def apply_workspace_root(workspace_root: Path) -> Path:
     """Publish the selected workspace root and its config dir."""
-    resolved = _resolve_path(workspace_root)
+    resolved = resolve_from_existing_ancestor(workspace_root)
     os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(resolved)
     os.environ[GUILDBOTICS_CONFIG_DIR] = str(resolved / ".guildbotics" / "config")
     return resolved

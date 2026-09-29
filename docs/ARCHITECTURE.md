@@ -696,7 +696,9 @@ Which writers must take it is not decided writer by writer. Every write to a sha
 goes through the sync port, and the port takes the lock for it, so a writer that composes
 what it writes without reading anything has nothing to declare and no way to forget.
 Device-local paths and an unselected workspace are dropped by the same judgement that
-decides whether to announce a change, so neither waits on anything.
+decides whether to announce a change, so neither waits on anything. Shared-path membership
+resolves existing ancestors and appends missing components by name, keeping the lock and
+notification decision stable while another writer creates a parent directory.
 
 What the port cannot infer is how far back a span reaches. Config is not the only side that
 loses this way: conversation control state (`state/chat_state`) and member memory

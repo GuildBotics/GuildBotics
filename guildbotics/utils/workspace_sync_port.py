@@ -32,6 +32,7 @@ from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     atomic_write_bytes,
     get_workspace_root,
+    resolve_from_existing_ancestor,
 )
 from guildbotics.utils.shared_write_lock import shared_write_lock
 
@@ -118,13 +119,18 @@ def shared_relative_path(path: Path, workspace_root: Path | None = None) -> str 
         str | None: A POSIX path such as ``state/devices/<id>.json``, or None
             when the path is outside the shared roots, is device-local
             (``local/``), or no workspace is selected.
+
+    Resolve existing ancestors independently of missing descendants, so a
+    concurrent directory creation cannot change lock or notification scope.
     """
     try:
-        root = get_workspace_root(workspace_root) / ".guildbotics"
+        root = resolve_from_existing_ancestor(
+            get_workspace_root(workspace_root) / ".guildbotics"
+        )
     except WorkspaceNotConfiguredError:
         return None
     try:
-        relative = path.expanduser().resolve(strict=False).relative_to(root.resolve())
+        relative = resolve_from_existing_ancestor(path).relative_to(root)
     except ValueError:
         return None
     if not relative.parts or relative.parts[0] not in SHARED_ROOTS:

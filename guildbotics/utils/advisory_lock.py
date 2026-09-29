@@ -15,6 +15,7 @@ from guildbotics.utils.fileio import (
     WorkspaceNotConfiguredError,
     get_workspace_local_path,
     get_workspace_root,
+    resolve_from_existing_ancestor,
 )
 
 _WINDOWS = os.name == "nt"
@@ -73,7 +74,7 @@ _process_locks: dict[Path, threading.Lock] = {}
 
 def process_lock(path: Path) -> threading.Lock:
     """Return the in-process mutex for one advisory-lock file."""
-    resolved = Path(os.path.normcase(path.resolve(strict=False)))
+    resolved = Path(os.path.normcase(resolve_from_existing_ancestor(path)))
     with _process_locks_guard:
         return _process_locks.setdefault(resolved, threading.Lock())
 

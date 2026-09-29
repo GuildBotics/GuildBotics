@@ -55,6 +55,71 @@ def test_shared_relative_path_covers_config_and_state(tmp_path: Path) -> None:
     )
 
 
+def test_shared_relative_path_accepts_an_alias_of_the_workspace_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias = tmp_path.parent / "workspace-alias"
+    target = alias / ".guildbotics/state/workspace.json"
+    real_resolve = Path.resolve
+
+    def resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == alias and kwargs.get("strict"):
+            return tmp_path
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert shared_relative_path(target) == "state/workspace.json"
+
+
+def test_shared_relative_path_resolves_symlink_before_dotdot(
+    tmp_path: Path, symlinks: None
+) -> None:
+    child = tmp_path / ".guildbotics/state/child"
+    child.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "link").symlink_to(child, target_is_directory=True)
+
+    assert shared_relative_path(outside / "link/../thing.json") == "state/thing.json"
+
+
+def test_shared_relative_path_keeps_dotdot_after_a_resolved_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "outside/link/../thing.json"
+    link_parent = tmp_path / "outside/link/.."
+    real_resolve = Path.resolve
+
+    def resolve(candidate: Path, *args: object, **kwargs: object) -> Path:
+        if candidate == link_parent and kwargs.get("strict"):
+            return tmp_path / ".guildbotics/state"
+        return real_resolve(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert shared_relative_path(path) == "state/thing.json"
+
+
+def test_shared_relative_path_follows_a_dangling_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias = tmp_path / "alias.json"
+    target = tmp_path / ".guildbotics/state/new.json"
+    real_is_symlink = Path.is_symlink
+    real_readlink = Path.readlink
+
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == alias or real_is_symlink(path),
+    )
+    monkeypatch.setattr(
+        Path,
+        "readlink",
+        lambda path: target if path == alias else real_readlink(path),
+    )
+    assert shared_relative_path(alias) == "state/new.json"
+
+
 def test_shared_relative_path_excludes_device_local_and_outside_paths(
     tmp_path: Path,
 ) -> None:
