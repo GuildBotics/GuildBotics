@@ -56,10 +56,10 @@ from tests.guildbotics.runtime.test_context import (
 # --- Fixtures / helpers ----------------------------------------------------
 
 
-def _make_team(members: list[Person] | None = None) -> Team:
+def _make_team(members: list[Person] | None = None, language: str = "en") -> Team:
     if members is None:
         members = [Person(person_id="alice", name="Alice", is_active=True)]
-    return Team(project=Project(name="demo", language="en"), members=members)
+    return Team(project=Project(name="demo", language=language), members=members)
 
 
 def _make_context(message: str = "", team: Team | None = None) -> Context:
@@ -82,10 +82,14 @@ def config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 async def _run_main(
-    config_dir: Path, name: str, args: list[str] | None = None, message: str = ""
+    config_dir: Path,
+    name: str,
+    args: list[str] | None = None,
+    message: str = "",
+    language: str = "en",
 ) -> Context:
     """Run a named command resolved from config_dir and return its context."""
-    ctx = _make_context(message)
+    ctx = _make_context(message, _make_team(language=language))
     runner = machinery(ctx, name, args or [], config_dir)
     await runner.run()
     return ctx
@@ -216,23 +220,24 @@ async def test_unnamed_output_uses_source_basename_in_subdirectory(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
 async def test_unnamed_output_uses_logical_name_for_localized_source(
-    config_dir: Path,
+    config_dir: Path, language: str
 ) -> None:
     commands = config_dir / "commands"
-    (commands / "child.en.md").write_text(
+    (commands / f"child.{language}.md").write_text(
         "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
         "child saw {child__1}\n",
         encoding="utf-8",
     )
     (commands / "parent.md").write_text(
         "---\nbrain: none\ncommands:\n"
-        "  - name: alias\n    path: child.en.md\n---\n"
+        f"  - name: alias\n    path: child.{language}.md\n---\n"
         "parent saw {alias}\n",
         encoding="utf-8",
     )
 
-    ctx = await _run_main(config_dir, "parent")
+    ctx = await _run_main(config_dir, "parent", language=language)
 
     assert ctx.shared_state["child__1"] == "inner-output"
     assert ctx.shared_state["alias"] == "child saw inner-output"

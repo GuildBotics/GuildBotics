@@ -356,14 +356,12 @@ class ClientConversationStore:
         policy: ResumePolicy,
         *,
         model: str = "",
-        settings_fingerprint: str = "",
     ) -> ConversationRecord:
         answer = self._client.call(
             "resolve",
             key=asdict(key),
             policy=policy.value,
             model=model,
-            settings_fingerprint=settings_fingerprint,
         )
         return _RECORD.validate_python(answer)
 

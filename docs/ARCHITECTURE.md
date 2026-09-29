@@ -345,10 +345,10 @@ API and an AI CLI tool.
 Translating a label into concrete settings belongs strictly to the layers that
 hold provider knowledge: the definition YAML of a model or of an AI CLI tool,
 and the native adapters, which each allowlist the keys they can apply. The core
-understands only the common `model` key, which feeds the settings fingerprint;
-every other key belongs to the adapter. A level with no mapping is a
-warning, never a failure — mapping coverage differs per provider, and halting a
-run over a missing overlay would cost more than running without it.
+understands only the common `model` key; every other key belongs to the adapter.
+A level with no mapping is a warning, never a failure — mapping coverage differs
+per provider, and halting a run over a missing overlay would cost more than
+running without it.
 
 Both kinds of definition have the same two layers. `parameters:` always applies,
 whatever effort was asked for, and `effort.<level>` overlays it. `default` is
@@ -367,17 +367,13 @@ and a provider without a declaration simply falls back to editing raw JSON.
 Descriptors resolve from the packaged definition when the workspace copy is
 silent: they describe the provider, not the scope that happens to hold a file.
 
-`default` and unspecified both request no effort overlay. A native session may
-continue, but the adapter and provider determine which settings persist;
-Claude explicitly re-sends the last recorded model on resume. Session rotation
-compares a fingerprint of settings the adapter accepts from this turn's request —
-taken from its own `applied_settings`, not directly from the request — so a
-setting a provider cannot act on never reads as a change. An empty fingerprint
-on either side requests no rotation, and only two differing non-empty
-fingerprints rotate the session.
-Adapters declare how far a settings change reaches through `settings_scope` —
-`turn` (codex re-sends `model` / `effort` on every `turn/start`, so it never
-rotates) or `session` (claude, grok).
+`default` and unspecified both request no effort overlay. A settings change
+does not itself rotate a native session. Claude sends `--model` and `--effort` with
+`--resume`; Grok confirms `model` and `reasoning_effort` through ACP
+`session/set_config_option` after `session/new` or `session/resume`. Claude
+re-sends the last recorded value for an omitted setting on resume. Grok keeps
+the setting returned by its resumed session when no new value is requested.
+Codex sends its settings on every `turn/start`.
 
 Effort decisions are recorded through a safe allowlist — requested level,
 resolved level, effective model id, the *names* of the applied parameters, and
@@ -391,19 +387,20 @@ What a turn *really* ran on is decided by the layer that holds the provider
 knowledge and is carried out on the normal result path: each adapter fills
 `AgentTerminalResult.model` / `.effort` with the value its provider reported
 (claude's `system/init` model, copilot's confirmed session options, grok's
-`_x.ai/models/update.currentModelId`) or with the one it imposed itself
+confirmed session options or `_x.ai/models/update.currentModelId`) or with the
+one it imposed itself
 (codex's validated `turn/start` settings and the catalog's advertised default
-model and `defaultReasoningEffort`, claude's and grok's `--effort` /
-`--reasoning-effort` launch flags, `agy`'s command line), and the brain passes
+model and `defaultReasoningEffort`, claude's `--effort` flag, `agy`'s command
+line), and the brain passes
 them to `record_span_summary()` and logs one line per span. The conversation
 record retains the last reported or imposed values (`effective_model` /
-`effective_effort`, cleared on rotation). Claude re-sends the recorded model
-when resuming without a configured one; a turn that reports no value retains
-the last known value in the record. Claude's unreported effort and an omitted
-Codex setting on a resumed thread are therefore reported from that record,
-without independently verifying that the provider retained them. A provider
-that reports nothing and was given nothing leaves both empty
-rather than inventing an effective value; the span's model then stays empty
+`effective_effort`, cleared on rotation). Claude re-sends recorded settings on
+resume; Grok reports the values its session confirms. A turn that reports no
+value retains the last known value in the record. An omitted Codex setting on a
+resumed thread is reported from that record without independently verifying
+that the provider retained it. A provider that reports nothing and was given
+nothing leaves both empty rather than inventing an effective value; the span's
+model then stays empty
 too, while the `agent.slot` / `model.slot` attribute always names the slot so
 traces stay searchable whatever model the slot resolved to.
 

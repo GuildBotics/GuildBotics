@@ -891,7 +891,7 @@ async def test_claude_empty_terminal_response_is_protocol_failure(
 
 
 # --------------------------------------------------------------------------- #
-# Effort: CLI flags, level validation, and the session-scoped settings contract
+# Effort: CLI flags, level validation, and resuming with recorded settings
 # --------------------------------------------------------------------------- #
 
 
@@ -1004,7 +1004,7 @@ async def test_claude_terminal_result_claims_no_effort_when_it_imposed_none(
 async def test_a_continued_session_reports_the_last_recorded_effort(
     monkeypatch, tmp_path
 ) -> None:
-    """Without an effort flag, Claude reports the last recorded effort."""
+    """Resuming sends and reports the last recorded effort."""
     context_key_source = _context(tmp_path)
     conversation = ConversationRecord(
         key=context_key_source.conversation_key,
@@ -1018,10 +1018,6 @@ async def test_a_continued_session_reports_the_last_recorded_effort(
         conversation=conversation,
     )
     assert terminal.effort == "high"
-
-
-def test_claude_settings_are_session_scoped_so_a_change_rotates() -> None:
-    assert ClaudeStreamJsonAdapter.settings_scope == "session"
 
 
 @pytest.mark.asyncio
@@ -1049,6 +1045,35 @@ async def test_claude_configured_model_wins_when_resuming(
     )
     assert args[args.index("--resume") + 1] == "session-1"
     assert args[args.index("--model") + 1] == "claude-sonnet-5"
+
+
+@pytest.mark.asyncio
+async def test_claude_resends_recorded_effort_when_unset(monkeypatch, tmp_path) -> None:
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id="session-1",
+        effective_effort="high",
+    )
+    args, _ = await _run_turn_with(monkeypatch, tmp_path, conversation=conversation)
+    assert args[args.index("--resume") + 1] == "session-1"
+    assert args[args.index("--effort") + 1] == "high"
+
+
+@pytest.mark.asyncio
+async def test_claude_changed_effort_is_sent_with_resume(monkeypatch, tmp_path) -> None:
+    conversation = ConversationRecord(
+        key=_context(tmp_path).conversation_key,
+        provider_session_id="session-1",
+        effective_effort="low",
+    )
+    args, _ = await _run_turn_with(
+        monkeypatch,
+        tmp_path,
+        conversation=conversation,
+        provider_options={"effort": "high"},
+    )
+    assert args[args.index("--resume") + 1] == "session-1"
+    assert args[args.index("--effort") + 1] == "high"
 
 
 @pytest.mark.asyncio

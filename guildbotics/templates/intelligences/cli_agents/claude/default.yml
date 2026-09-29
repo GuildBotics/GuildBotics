@@ -7,10 +7,9 @@
 # `default` is deliberately absent, and is rejected if written: it means "do not
 # intervene", so a mapping for it could never be applied.
 #
-# GuildBotics currently rotates the conversation when two non-empty settings
-# fingerprints differ (see `settings_scope`). Claude can accept --model on
-# resume, and the adapter re-sends the last recorded model when no model is
-# configured.
+# Claude accepts --model and --effort with --resume. Changing either setting
+# keeps the session; when a setting is omitted, the adapter re-sends the last
+# value recorded for that session.
 effort:
   low:
     effort: low
