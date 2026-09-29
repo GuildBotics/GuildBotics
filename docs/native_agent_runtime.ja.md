@@ -686,7 +686,7 @@ ACPを使うadapterではさらに、trusted member capability transportに必�
 バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
 Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
 `--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 1.0.34、GitHub Copilot CLI 1.0.77と1.0.86です。
+確認します。動作確認済みの基準バージョンは、Grok Build 1.0.44、GitHub Copilot CLI 1.0.77と1.0.89です。
 Antigravity 1.1.11が必要なflagを公開することは確認済みですが、追加した補助workspaceからMCP設定を
 読み込めることは、trusted member transportの対応版と宣言する前の実機確認項目として残します。
 
@@ -705,16 +705,16 @@ API-key利用では、利用率0%を生成せず「使用量情報なし」と�
 GitHub Copilot CLI 1.0.77は、ACP経由でトークン使用量をまったく報告しません。標準の
 `usage_update`も、独自拡張の通知も届きません。そのためGitHub Copilotでは使用量が空のままとなり、
 有効期間・turn数・使用量・`context_limit`による切り替えはこの版では作動しません。標準の
-`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します（隔離環境が固定する
-1.0.86では、turn中に`usage_update`が届くことを確認しています）。GitHub Copilotの
+`usage_update`を処理する実装はあるため、これを送る版では変更なしで機能します
+（1.0.86では、turn中に`usage_update`が届くことを確認しています）。GitHub Copilotの
 利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
 `rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
 プロトコルエラーとして扱い、セッションを切り替えて回復します。
 
 GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
 提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
-GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.86を固定しており（1.0.83のserverには
-`account.getQuota`が存在しないため更新しました）、`connect`のあとに`account.getQuota`を呼ぶと
+GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.89を固定しており（1.0.83のserverには
+`account.getQuota`が存在しません）、`connect`のあとに`account.getQuota`を呼ぶと
 `quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
 `entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
 種別は実行時の文字列なので一覧で選別せず、有限の枠をすべて種別名をラベルにした行として
@@ -736,8 +736,8 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
 `agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.1
-を固定しており、構造化payloadは 1.2.5 で確認しています。`command.data.groups[].buckets[]` に
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.13
+を固定しており、構造化payloadもこの版で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
 既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /
 `5h` 以外の `window` は期間を推測せず、生の値をラベルに残して行を見分けられるようにします。
