@@ -23,7 +23,6 @@ class CommandSpec:
     stdin_override: str | None = None
     children: list[CommandSpec] = field(default_factory=list)
     cwd: Path = field(kw_only=True)
-    command_index: int = 0
     config: dict[str, Any] = field(default_factory=dict)
     class_resolver: ClassResolver | None = None
 

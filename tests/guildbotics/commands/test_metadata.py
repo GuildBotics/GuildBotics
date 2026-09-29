@@ -116,6 +116,13 @@ def test_unnamed_output_names_are_local_to_the_command() -> None:
     ]
 
 
+def test_subdirectory_command_output_uses_source_basename() -> None:
+    metadata = {"commands": [{"print": "inner"}], "body": "{child__1}"}
+
+    assert command_output_names(metadata, "sub/child") == {"child__1"}
+    assert parse_metadata_arguments(metadata, "sub/child") == []
+
+
 def test_python_arguments_from_signature() -> None:
     source = (
         "def main(context, path, language='English', *, verbose=False):\n"

@@ -21,6 +21,7 @@ import yaml
 
 from guildbotics.commands.arguments import parse_command_argument_definitions
 from guildbotics.commands.errors import CommandError
+from guildbotics.commands.registry import get_command_extensions
 from guildbotics.utils.fileio import (
     load_markdown_with_frontmatter,
     load_yaml_file,
@@ -242,6 +243,16 @@ def command_output_name(
     return f"{anchor_name}__{command_index}"
 
 
+def command_source_name(reference: str, language_code: str = "") -> str:
+    """Return the source basename used by unnamed inline outputs."""
+    path = Path(reference)
+    name = path.stem if path.suffix.lower() in get_command_extensions() else path.name
+    for locale in (language_code, "en"):
+        if locale and name.endswith(f".{locale}"):
+            return name[: -len(locale) - 1]
+    return name
+
+
 def command_entries(metadata: dict[str, Any]) -> list[Any]:
     """Return the command's declared subcommand entries in run order."""
     raw_commands = metadata.get("commands")
@@ -257,7 +268,9 @@ def command_entries(metadata: dict[str, Any]) -> list[Any]:
 def command_output_names(metadata: dict[str, Any], command_name: str) -> set[str]:
     """Return names populated by the command's declared subcommands."""
     return {
-        command_output_name(normalize_command_entry(entry), command_name, index)
+        command_output_name(
+            normalize_command_entry(entry), command_source_name(command_name), index
+        )
         for index, entry in enumerate(command_entries(metadata), start=1)
     }
 

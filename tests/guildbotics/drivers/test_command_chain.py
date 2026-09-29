@@ -161,6 +161,103 @@ async def test_unnamed_output_uses_child_local_index(
 
 
 @pytest.mark.asyncio
+async def test_unnamed_output_uses_source_name_under_aliases(config_dir: Path) -> None:
+    commands = config_dir / "commands"
+    (commands / "child.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: '{{ label }}'\n---\n"
+        "child saw {child__1}\n",
+        encoding="utf-8",
+    )
+    (commands / "parent.md").write_text(
+        "---\nbrain: none\ncommands:\n"
+        "  - name: first\n    path: child.md\n    params: {label: one}\n"
+        "  - name: second\n    path: child.md\n    params: {label: two}\n---\n"
+        "parent saw {first} and {second}\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, "parent")
+
+    assert ctx.shared_state["child__1"] == "two"
+    assert ctx.shared_state["first"] == "child saw one"
+    assert ctx.shared_state["second"] == "child saw two"
+    assert "first__1" not in ctx.shared_state
+    assert "second__1" not in ctx.shared_state
+    assert ctx.pipe == "parent saw child saw one and child saw two"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command_name", ["sub/child", "parent"])
+async def test_unnamed_output_uses_source_basename_in_subdirectory(
+    config_dir: Path, command_name: str
+) -> None:
+    commands = config_dir / "commands"
+    (commands / "sub").mkdir()
+    (commands / "sub/child.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
+        "child saw {child__1}\n",
+        encoding="utf-8",
+    )
+    (commands / "parent.md").write_text(
+        "---\nbrain: none\ncommands:\n  - path: sub/child.md\n---\n"
+        "parent saw {child}\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, command_name)
+
+    assert ctx.shared_state["child__1"] == "inner-output"
+    assert "sub/child__1" not in ctx.shared_state
+    assert ctx.pipe == (
+        "child saw inner-output"
+        if command_name == "sub/child"
+        else "parent saw child saw inner-output"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unnamed_output_uses_logical_name_for_localized_source(
+    config_dir: Path,
+) -> None:
+    commands = config_dir / "commands"
+    (commands / "child.en.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
+        "child saw {child__1}\n",
+        encoding="utf-8",
+    )
+    (commands / "parent.md").write_text(
+        "---\nbrain: none\ncommands:\n"
+        "  - name: alias\n    path: child.en.md\n---\n"
+        "parent saw {alias}\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, "parent")
+
+    assert ctx.shared_state["child__1"] == "inner-output"
+    assert ctx.shared_state["alias"] == "child saw inner-output"
+
+
+@pytest.mark.asyncio
+async def test_unnamed_output_index_is_stable_across_repeated_runs(
+    config_dir: Path,
+) -> None:
+    (config_dir / "commands/child.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
+        "child saw {child__1}\n",
+        encoding="utf-8",
+    )
+    ctx = _make_context()
+    runner = machinery(ctx, "child", [], config_dir)
+
+    await runner.run()
+    await runner.run()
+
+    assert list(ctx.shared_state) == ["child__1", "child"]
+    assert ctx.shared_state["child"] == "child saw inner-output"
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("shell_commands")
 async def test_pipe_flows_as_stdin_into_each_command(config_dir: Path):
     """pipe is fed as stdin/message; each command can transform and forward it."""

@@ -327,12 +327,16 @@ def test_command_options_extract_yaml_frontmatter_arguments(
     ]
 
 
+@pytest.mark.parametrize(
+    ("relative", "command"),
+    [("system.md", "system"), ("sub/system.md", "sub/system")],
+)
 def test_command_options_hide_unnamed_subcommand_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str, command: str
 ) -> None:
     config_dir = _isolate_workspace(tmp_path, monkeypatch)
     _write(
-        config_dir / "commands/system.md",
+        config_dir / "commands" / relative,
         "\n".join(
             [
                 "---",
@@ -351,12 +355,12 @@ def test_command_options_hide_unnamed_subcommand_output(
     option = next(
         item
         for item in runtime.get_command_options().options
-        if item.command == "system"
+        if item.command == command
     )
     routine = next(
         item
         for item in runtime.get_routine_command_options().options
-        if item.command == "system"
+        if item.command == command
     )
 
     assert option.arguments == []
