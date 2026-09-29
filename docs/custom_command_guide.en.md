@@ -371,6 +371,7 @@ commands:
 ```
 
 When `name` is set, you can reference that command’s output by the given name.
+For an unnamed inline command, the output name is `<command_name>__N`, where `N` starts at 1 within that command's own `commands:` list. Calling the command from a parent does not change this number.
 
 ```markdown
 ---

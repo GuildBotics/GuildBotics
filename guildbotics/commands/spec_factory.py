@@ -91,7 +91,6 @@ class CommandSpecFactory:
             args=args,
             stdin_override=stdin_override,
             cwd=cwd,
-            command_index=anchor.command_index,
             config=config,
             class_resolver=anchor.class_resolver,
         )

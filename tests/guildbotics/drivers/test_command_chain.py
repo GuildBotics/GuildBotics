@@ -128,6 +128,39 @@ async def test_chain_runs_children_before_parent_and_orders_pipe(config_dir: Pat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("command_name", ["child", "parent"])
+async def test_unnamed_output_uses_child_local_index(
+    config_dir: Path, command_name: str
+) -> None:
+    commands = config_dir / "commands"
+    (commands / "child.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: inner-output\n---\n"
+        "child saw {child__1}\n",
+        encoding="utf-8",
+    )
+    (commands / "parent.md").write_text(
+        "---\nbrain: none\ncommands:\n  - print: earlier\n"
+        "  - path: child.md\n---\nparent saw {child}\n",
+        encoding="utf-8",
+    )
+
+    ctx = await _run_main(config_dir, command_name)
+
+    assert ctx.shared_state["child__1"] == "inner-output"
+    assert ctx.shared_state["child"] == "child saw inner-output"
+    assert list(ctx.shared_state) == (
+        ["child__1", "child"]
+        if command_name == "child"
+        else ["parent__1", "child__1", "child", "parent"]
+    )
+    assert ctx.pipe == (
+        "child saw inner-output"
+        if command_name == "child"
+        else "parent saw child saw inner-output"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.usefixtures("shell_commands")
 async def test_pipe_flows_as_stdin_into_each_command(config_dir: Path):
     """pipe is fed as stdin/message; each command can transform and forward it."""
