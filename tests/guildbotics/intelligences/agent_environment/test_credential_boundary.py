@@ -195,7 +195,7 @@ async def device(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> AsyncIterator[LoginEnvironment]:
     """This device's environment, with a store and a vault of the test's own."""
-    # Keep the production prefix's length: the runtime uses Unix socket paths.
+    # No longer than the production prefix: the runtime uses Unix socket paths.
     monkeypatch.setattr(runtime, "_NAME_PREFIX", uuid.uuid4().hex[:10] + "-")
     monkeypatch.setenv("HOME", str(_REAL_HOME))
     monkeypatch.setenv("USERPROFILE", str(_REAL_HOME))

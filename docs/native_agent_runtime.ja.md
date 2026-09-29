@@ -362,6 +362,10 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   pathの完全一致で、末尾が`/*`の経路（ツールがpathにリポジトリ名などを入れるもの）は、その下の
   通常の名前だけからなるpathを転送します（`.`で始まるsegment、空のsegment、%エンコードや
   ASCII以外の文字を含むpathは断ります）。
+- **TLS**: HTTPSを要求するツールには、ゲートウェイがturnごとに作るCAの証明書でTLSを話します。
+  turnは`SSL_CERT_FILE`で、システムのCAにこのCAを加えたファイル
+  （`/etc/guildbotics/ca-certificates.crt`）を信頼します。CAの鍵はGuildBoticsプロセスの
+  メモリから出ません。CodexとAntigravityがこの仕組みを使います。
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
@@ -392,16 +396,14 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   （ログインの方は、置換用の値では付けません）、同じ置換用の値をこの変数でも渡します。分析の送信は
   転送しません。
   APIキーでのログインは扱いません（ChatGPTアカウントでのログインだけを保存します）。
-  Codexは0.159.0に固定しています。アカウントの読み取りとturnの開始前に、
+  Codex 0.156以降は、アカウントの読み取りとturnの開始前に、
   `GET /backend-api/wham/accounts/check`でワークスペースの接続先を確認します。
-  ゲートウェイはこの経路を転送し、既存のturnごとのCAを使ってHTTPSで受け付けます。
+  ゲートウェイはこの経路をHTTPSで受け付けて転送します。
   実測した`workspace_backend_origin: NO_CONSTRAINT`では、Codexは設定されたゲートウェイを
   接続先に保ちますが、この場合もHTTPSを要求します。探索の応答は書き換えずに転送します。
   別のbackend originを要求するルーティングポリシーは未検証です。
-- **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、Antigravityのゲートウェイは
-  turnごとに作るCAの証明書でTLSを話します。turnは`SSL_CERT_FILE`で、システムのCAにこのCAを
-  加えたファイル（`/etc/guildbotics/ca-certificates.crt`）を信頼します。CAの鍵はGuildBoticsプロセスの
-  メモリから出ません。起動時の利用資格の確認は、設定で変えられないURL（`www.googleapis.com`の
+- **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、AntigravityはTLSを使います。
+  起動時の利用資格の確認は、設定で変えられないURL（`www.googleapis.com`の
   userinfo）を読むため、turnの中の`/etc/hosts`でこのホストを`127.0.0.2`に向け、そこでNodeの
   TCP中継がゲートウェイへつなぎます（ゲートウェイはこの名前でも証明書を出します）。`HTTPS_PROXY`は
   ツールの全通信をhostへ通すことになるため使いません。プロフィール画像

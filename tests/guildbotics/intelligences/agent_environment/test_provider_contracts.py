@@ -337,7 +337,13 @@ async def test_codex_follows_a_provider_of_its_own_and_its_chatgpt_base_url(
 
     recorder = Recorder(answer)
     home = guest_path(_REAL_HOME.resolve())
-    guest = await boot(recorder, ".codex", {"CODEX_HOME": f"{home}/.codex"})
+    guest = await boot(
+        recorder,
+        ".codex",
+        {"CODEX_HOME": f"{home}/.codex", "SSL_CERT_FILE": environment._TURN_CAS},
+        ca=False,
+    )
+    await environment._trust(guest.environment, recorder.ca_pem)
     for name, data in lent.stand_in_files().items():
         await guest.write(f"{home}/.codex/{name}", data)
     url = recorder.tls_url if broker.tls else recorder.url
