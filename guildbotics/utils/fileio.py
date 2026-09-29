@@ -108,6 +108,16 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
 
     ``Path.resolve(strict=False)`` can change its Windows path prefix while a
     missing parent is created, giving one path two identities during a write.
+
+    Args:
+        path: Path whose existing ancestors and symlinks are resolved.
+
+    Returns:
+        The resolved ancestor with missing components appended by name.
+
+    Raises:
+        RuntimeError: A symlink cycle is found.
+        OSError: An existing ancestor cannot be inspected or resolved.
     """
     candidate = path.expanduser().absolute()
     missing: list[str] = []
@@ -118,12 +128,13 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
                 raise RuntimeError(f"Symlink loop: {candidate}")
             seen_links.add(candidate)
             target = candidate.readlink()
-            if os.name == "nt":
+            if target.is_absolute():
                 target = Path(_plain_windows_path(str(target)))
             candidate = target if target.is_absolute() else candidate.parent / target
             continue
         try:
-            return candidate.resolve(strict=True).joinpath(*reversed(missing))
+            resolved = Path(_plain_windows_path(str(candidate.resolve(strict=True))))
+            return resolved.joinpath(*reversed(missing))
         except FileNotFoundError:
             if candidate == candidate.parent:
                 raise

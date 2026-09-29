@@ -699,6 +699,8 @@ Device-local paths and an unselected workspace are dropped by the same judgement
 decides whether to announce a change, so neither waits on anything. Shared-path membership
 resolves existing ancestors and appends missing components by name, keeping the lock and
 notification decision stable while another writer creates a parent directory.
+If an existing ancestor cannot be inspected, resolution fails and the write stops
+instead of treating the path as device-local.
 
 What the port cannot infer is how far back a span reaches. Config is not the only side that
 loses this way: conversation control state (`state/chat_state`) and member memory
