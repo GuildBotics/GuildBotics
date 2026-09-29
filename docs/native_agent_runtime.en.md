@@ -800,7 +800,7 @@ any newer CLI that still exposes those capabilities keeps working. Antigravity
 capability detection reads `agy --help` (which prints to stderr and exits 0) and
 requires `--print`,
 `--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 1.0.34 and GitHub Copilot CLI 1.0.77 and 1.0.86. Antigravity
+verified baselines are Grok Build 1.0.44 and GitHub Copilot CLI 1.0.77 and 1.0.89. Antigravity
 1.1.11 exposes the required flags; loading MCP configuration from an added auxiliary
 workspace remains an explicit machine-verification item before the adapter is declared
 supported for the trusted member transport.
@@ -823,9 +823,8 @@ GitHub Copilot CLI 1.0.77 reports no token usage over ACP at all: neither the st
 `usage_update` nor a private extension channel carries one. Usage counters therefore
 stay empty for Copilot, and the TTL, turn-count, usage, and `context_limit` rotations
 that depend on them do not arm on that version. The standard handling is implemented,
-so a version that does emit `usage_update` is picked up without a change (1.0.86, the
-version the isolated environment pins, was observed sending `usage_update` during a
-turn). Copilot rate
+so a version that does emit `usage_update` is picked up without a change (1.0.86 was
+observed sending `usage_update` during a turn). Copilot rate
 limits are likewise classified only from structured RPC error data -- its weekly quota
 identifier `user_weekly_rate_limited` among them -- and never from stderr text or
 assistant prose; an error that cannot be classified becomes a protocol failure that
@@ -834,8 +833,8 @@ rotates the session.
 GitHub Copilot's account quota comes from a different path than that ACP turn: the
 Copilot SDK server protocol (JSON-RPC with `Content-Length` framing) that the same
 CLI serves through `copilot --headless --stdio`. GuildBotics pins GitHub Copilot CLI
-1.0.86 in the isolated environment (the 1.0.83 server had no `account.getQuota`, so
-the pin moved). After `connect`, `account.getQuota` answers with `quotaSnapshots`
+1.0.89 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
+After `connect`, `account.getQuota` answers with `quotaSnapshots`
 keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
 carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
 `resetDate`. The keys are runtime strings, so they are not filtered against a list:
@@ -862,8 +861,8 @@ turn-count, and token-total limits do. This is the same situation as Grok.
 Account quotas are a separate path from those per-turn counters. From Antigravity
 CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
 slash command without starting an agent turn, spending quota, or leaving a
-conversation. GuildBotics pins Antigravity CLI 1.2.1 in the isolated environment
-and verified the structured payload on 1.2.5: `command.data.groups[].buckets[]`
+conversation. GuildBotics pins Antigravity CLI 1.2.13 in the isolated environment
+and verified the structured payload on that version: `command.data.groups[].buckets[]`
 carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
 `reset_time`. Those buckets become the same usage meters the Activity view already
 shows for Claude, Codex, and Grok. A `window` other than `weekly` / `5h` keeps

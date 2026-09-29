@@ -369,7 +369,7 @@ _ANTIGRAVITY_WINDOW_MINUTES = {
 def parse_antigravity_usage(result: Any) -> CliAgentUsageSnapshot:
     """Build a usage snapshot from ``agy -p /usage --output-format json``.
 
-    The measured 1.2.5 payload keeps quotas in
+    The measured 1.2.13 payload keeps quotas in
     ``command.data.groups[].buckets[]``. Each bucket's ``remaining_fraction``
     (1 remaining means unused) becomes
     ``used_percent = (1 - remaining_fraction) * 100``. Missing, non-numeric,

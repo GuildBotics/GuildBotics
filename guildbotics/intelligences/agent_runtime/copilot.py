@@ -1,6 +1,6 @@
 """GitHub Copilot CLI Agent Client Protocol (ACP) adapter.
 
-Verified against GitHub Copilot CLI 1.0.77 and 1.0.86 (``copilot --acp``): ACP
+Verified against GitHub Copilot CLI 1.0.77 and 1.0.89 (``copilot --acp``): ACP
 protocol version 1, ``loadSession: true`` with no ``sessionCapabilities.resume``,
 and a single ``copilot-login`` authentication method. The model, the reasoning effort
 and the approval policy are session configuration options rather than launch
