@@ -1446,7 +1446,29 @@ pre {
 
 .activity-member-role {
   color: var(--color-text-subtle);
+  display: flex;
+  gap: 4px;
   font-size: 11px;
+}
+
+.activity-member-role > span:first-child {
+  flex-shrink: 0;
+}
+
+.activity-member-model {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cli-agent-last-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--color-text-subtle);
+  overflow-wrap: anywhere;
 }
 
 .activity-member-rate-limit {

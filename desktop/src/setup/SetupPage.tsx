@@ -131,7 +131,8 @@ import {
   restartBackend,
 } from "../api/backend";
 import { announceWorkspaceChange } from "../appEvents";
-import { cliAgentLabelFromConfig, useMemberCliAgentLabel } from "../cliAgent";
+import { cliAgentLabelFromConfig, useMemberCliAgentLabel, useCliAgentLastTurns } from "../cliAgent";
+import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
 import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
 import { SlackTokenVerificationPanel } from "./SlackTokenVerification";
@@ -1794,6 +1795,7 @@ function OptionCard({
   disabledTooltip,
   onSelect,
   extra,
+  detail,
 }: {
   label: string;
   active: boolean;
@@ -1803,6 +1805,7 @@ function OptionCard({
   disabledTooltip: string;
   onSelect: () => void;
   extra?: ReactNode;
+  detail?: ReactNode;
 }) {
   const card = (
     <div style={{ position: "relative", display: "block", width: "100%" }}>
@@ -1826,6 +1829,7 @@ function OptionCard({
           <i />
           {statusText}
         </span>
+        {detail}
       </button>
       {extra ? (
         <div
@@ -1893,13 +1897,16 @@ function DefaultCliAgentCards({
   isActive,
   onSelect,
   renderExtra,
+  personId,
 }: {
   tools: EnvironmentToolStatus[];
   isActive: (tool: EnvironmentToolStatus) => boolean;
   onSelect: (tool: EnvironmentToolStatus) => void;
   renderExtra?: (tool: EnvironmentToolStatus) => ReactNode;
+  personId?: string;
 }) {
   const { t } = useTranslation();
+  const turns = useCliAgentLastTurns(Boolean(personId));
   return (
     <div className="option-card-grid">
       {tools.map((tool) => (
@@ -1913,6 +1920,15 @@ function DefaultCliAgentCards({
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
           onSelect={() => onSelect(tool)}
           extra={renderExtra?.(tool)}
+          detail={
+            personId && turns.data ? (
+              <CliAgentLastTurnDetails
+                turn={turns.data.find(
+                  (turn) => turn.person_id === personId && turn.agent === tool.name,
+                )}
+              />
+            ) : null
+          }
         />
       ))}
     </div>
@@ -2889,6 +2905,7 @@ function IntelligenceEditor({
                 <DefaultCliAgentCards
                   tools={tools}
                   isActive={(tool) => draft.cli_agent_mapping.default === tool.config_reference}
+                  personId={personId}
                   // Reuse the advanced-slot handler so the picked tool is also
                   // registered in draft.cli_agents; otherwise the default slot
                   // would vanish when the 詳細設定 accordion is opened.

@@ -678,13 +678,14 @@ class CliAgentBrain(Brain):
             message, kwargs.get("session_state", {}), self.template_engine
         )
         effort = self._resolve_provider_effort(kwargs)
+        model = effort.model or str(_agent_execution_context(kwargs).get("model") or "")
         with span_scope("cli_agent"):
             started = time.monotonic()
             await records.add(self._request_entry(input, kwargs, effort))
             try:
-                result = await self._execute(input, cwd, kwargs, effort, records)
+                result = await self._execute(input, cwd, kwargs, effort, records, model)
             except BaseException:
-                await self._end_span(records, started, "failed")
+                await self._end_span(records, started, "failed", bool(model))
                 raise
             await records.add(self._response_entry(result))
             if (credential := self._credential_entry(result)) is not None:
@@ -693,6 +694,7 @@ class CliAgentBrain(Brain):
                 records,
                 started,
                 "finished" if result.returncode == 0 else "failed",
+                bool(model),
                 result,
             )
         return result
@@ -702,6 +704,7 @@ class CliAgentBrain(Brain):
         records: _TurnRecords,
         started: float,
         status: Literal["finished", "failed"],
+        model_specified: bool,
         result: CliAgentExecutionResult | None = None,
     ) -> None:
         """Close the span with what the turn really ran on.
@@ -715,7 +718,9 @@ class CliAgentBrain(Brain):
             SummaryEntry(
                 span=current_span(),
                 slot=self.cli_agent,
+                tool=self.executable_info.adapter,
                 status=status,
+                model_specified=model_specified,
                 model=result.model if result else "",
                 effort=result.effort if result else "",
                 duration_ms=(time.monotonic() - started) * 1000,
@@ -746,6 +751,7 @@ class CliAgentBrain(Brain):
         kwargs: dict[str, Any],
         effort: EffortDecision,
         records: _TurnRecords,
+        model: str,
     ) -> CliAgentExecutionResult:
         """Run the turn for the command's run, or the workflow run's work the
         call names: the host's grant holds every turn of the command to its
@@ -774,7 +780,7 @@ class CliAgentBrain(Brain):
             resume_policy=policy,
             context_cursor=str(configured.get("context_cursor") or ""),
             event_id=str(configured.get("event_id") or ""),
-            model=effort.model or str(configured.get("model") or ""),
+            model=model,
             # `default` and unspecified request no effort overlay or rotation.
             # Whether resumed settings persist depends on the adapter and provider.
             # A level whose overlay is empty also imposed nothing of its

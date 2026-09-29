@@ -18,6 +18,7 @@ import {
   getRoutineCommandOptions,
   getConfigStatus,
   getIntelligenceConfig,
+  getCliAgentLastTurns,
   saveDecisionCredential,
   getMemberConfig,
   getAgentEnvironmentStatus,
@@ -190,6 +191,7 @@ vi.mock("../api/client", async (importOriginal) => {
       project_file_exists: true,
       storage_dir: "/workspace/.guildbotics",
     })),
+    getCliAgentLastTurns: vi.fn(async () => []),
     getIntelligenceConfig: vi.fn(async () => ({
       config_dir: "/workspace/.guildbotics/config",
       revisions: {},
@@ -4554,6 +4556,7 @@ describe("IntelligenceEditor (team default)", () => {
 
 describe("IntelligenceEditor (member override)", () => {
   beforeEach(() => {
+    vi.mocked(getCliAgentLastTurns).mockResolvedValue([]);
     // Two providers and two AI CLI tools are available so the full editor offers
     // a non-default option to select for the member override.
     vi.mocked(getProjectConfig).mockResolvedValue(
@@ -4595,6 +4598,46 @@ describe("IntelligenceEditor (member override)", () => {
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail());
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
   });
+
+  it.each([
+    { model: "actual-model", specified: true, key: "specified" },
+    { model: "actual-model", specified: false, key: "default" },
+    { model: "", specified: false, key: "unavailable" },
+    { model: "", specified: true, key: "specified" },
+    { model: null, specified: false, key: "notRun" },
+  ])(
+    "shows the member card's $key last turn on this machine",
+    async ({ model, specified, key }) => {
+      const timestamp = "2026-09-29T10:02:00Z";
+      vi.mocked(getCliAgentLastTurns).mockResolvedValue([
+        {
+          person_id: "another-member",
+          agent: "codex",
+          model: "other-model",
+          model_specified: true,
+          timestamp,
+        },
+        ...(model === null
+          ? []
+          : [{ person_id: "alice", agent: "codex", model, model_specified: specified, timestamp }]),
+      ]);
+      await openMemberIntelligenceTab(userEvent.setup());
+      const card = await screen.findByRole("button", { name: "OpenAI Codex CLI" });
+      await waitFor(() => expect(card).toHaveTextContent(t(`setup.intelligence.lastTurn.${key}`)));
+      expect(card).not.toHaveTextContent("other-model");
+      if (model !== null) {
+        expect(card).toHaveTextContent(
+          t("setup.intelligence.lastTurn.time", {
+            time: new Date(timestamp).toLocaleString(i18n.language),
+          }),
+        );
+      }
+      if (model) expect(card).toHaveTextContent(model);
+      expect(screen.getByRole("button", { name: "Claude Code" })).toHaveTextContent(
+        t("setup.intelligence.lastTurn.notRun"),
+      );
+    },
+  );
 
   it("saves the workspace Jev key from an inheriting member's save button", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(

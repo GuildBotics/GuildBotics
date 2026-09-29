@@ -57,6 +57,7 @@ from guildbotics.app_api.models import (
     AgentFieldStateResponse,
     ApiError,
     ChatReceiveResetResponse,
+    CliAgentLastTurn,
     CliAgentUsageResponse,
     CommandAuthoringApplyRequest,
     CommandAuthoringApplyResponse,
@@ -1095,6 +1096,16 @@ def create_app(
             sync_start=sync_start,
             sync_end=sync_end,
         )
+
+    @app.get(
+        "/intelligences/cli-agents/last-turns",
+        response_model=list[CliAgentLastTurn],
+        responses=error_responses,
+    )
+    def cli_agent_last_turns(
+        _: None = Depends(require_token),
+    ) -> list[CliAgentLastTurn]:
+        return app_runtime.get_cli_agent_last_turns()
 
     @app.get(
         "/intelligences/cli-agents/{agent}/usage",

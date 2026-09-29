@@ -6,6 +6,7 @@ import {
   type IntelligenceConfig,
   getAgentEnvironmentStatus,
   getCliAgentUsage,
+  getCliAgentLastTurns,
   getIntelligenceConfig,
 } from "./api/client";
 
@@ -63,6 +64,29 @@ function useEnvironmentTools(): EnvironmentToolStatus[] {
 export function useMemberCliAgentLabel(personId: string, enabled: boolean): string | null {
   const config = useMemberIntelligenceConfig(personId, enabled);
   return cliAgentLabelFromConfig(config.data, useEnvironmentTools());
+}
+
+const LAST_TURN_REFRESH_MS = 15 * 1000;
+
+// Both screens share one device-local reading, irrespective of activity range.
+export function useCliAgentLastTurns(enabled: boolean) {
+  return useQuery({
+    queryKey: ["cli-agent-last-turns"],
+    queryFn: getCliAgentLastTurns,
+    enabled,
+    staleTime: LAST_TURN_REFRESH_MS,
+    refetchInterval: LAST_TURN_REFRESH_MS,
+  });
+}
+
+export function useMemberCliAgentModel(personId: string, enabled: boolean): string | null {
+  const config = useMemberIntelligenceConfig(personId, enabled);
+  const agent = cliAgentNameFromConfig(config.data);
+  const turns = useCliAgentLastTurns(enabled);
+  if (!enabled) return null;
+  return (
+    turns.data?.find((turn) => turn.person_id === personId && turn.agent === agent)?.model || null
+  );
 }
 
 const USAGE_REFRESH_MS = 5 * 60 * 1000;
