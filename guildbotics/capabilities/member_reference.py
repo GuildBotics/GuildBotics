@@ -88,6 +88,24 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "Repository",
+        [
+            (
+                "guildbotics member repository read --person <person> --resource <name> "
+                "--repo <repository> [--identifier <id>] [--params <json>] "
+                "[--continuation <value>]",
+                "Read one bounded page through the configured code_hosting_service. "
+                "dependency_alerts accepts state (open by default, resolved, dismissed) "
+                "and page_size (1-100, default 30). With an identifier, it returns one "
+                "alert and accepts no conditions or continuation. Results contain "
+                "normalized items and continuation; reuse identical conditions for "
+                "the next page. For formatted or JSON alerts, run "
+                "repository/security_alerts in a ready command environment. "
+                "URLs, HTTP methods, headers, and GraphQL are not accepted.",
+            ),
+        ],
+    ),
+    (
         "GitHub",
         [
             (

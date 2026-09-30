@@ -227,6 +227,7 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
      - **Checks**: Read-only (reading check runs for pull request commits)
      - **Commit statuses**: Read-only (reading external CI statuses for pull request commits)
      - **Contents**: Read and write (cloning the repository and pushing the working branch)
+     - **Dependabot alerts**: Read-only (reading dependency vulnerability alerts)
      - **Issues**: Read and write (reading and writing issues, comments, labels, open/close, reactions)
      - **Metadata**: Read-only (added automatically once any other permission is selected)
      - **Pull requests**: Read and write (creating and updating PRs, review comments and replies, reactions)
@@ -237,16 +238,20 @@ Issue a **fine-grained personal access token** for the machine account, scoped t
 7. Press **Generate token** and copy the token shown (it cannot be displayed again once you leave the page). If a **Pending** badge appears next to the token name, it is awaiting approval and does not work until an organization owner approves it on the **Pending requests** page from step 2; complete the approval before moving on
 8. In the desktop app, open **Setup → Members → GitHub**, select "Machine Account (Machine User)", paste the token into **Access token**, and save
 
+For an existing fine-grained PAT, open the token under **Fine-grained tokens** from step 5 and edit its permissions to add **Repository permissions → Dependabot alerts → Read-only**. Updating only the permissions of the same token does not require registering it again in the desktop app. If the organization requires approval, have an owner approve the updated permissions before retrying. Also confirm the target repository is included under **Repository access**. See GitHub's [required permissions](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts) and [token approval requests](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization).
+
 **Using a GitHub App**:
 
 The member edit screen in the desktop app (select "GitHub Apps" on the GitHub tab) offers a "Register a new app" mode, which creates and installs the app on GitHub semi-automatically. You only approve the creation and pick the repositories in the browser; the App ID, private key, and installation ID are then filled in automatically, so the manual steps below are not needed.
 
 When creating the GitHub App manually, configure the following permissions.
 
-- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
+- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** / **Dependabot alerts** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
 - **Organization permissions**: **Projects** as Read & Write
 
-When adding **Actions**, **Checks**, **Commit statuses**, or **Workflows** to an existing App, approve the requested permission update for each installation before using the App again.
+When adding permissions to an existing App, approve the update for each installation before using them. For Dependabot alerts, set **Repository permissions → Dependabot alerts → Read-only** in the App's **Permissions & events**, then have an organization owner review and accept the update under **Organization Settings → GitHub Apps → Configure**. Confirm the target repository is included in the installation. New apps registered through GuildBotics request this permission automatically. See [GitHub's approval procedure](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app).
+
+To inspect current alerts, run `guildbotics run repository/security_alerts --person alice repo=org/repo`; add `alert=42` for an individual alert. This command needs a ready execution environment but no LLM call. See [Dependabot alert commands](docs/custom_command_guide.en.md#41-checking-dependency-vulnerability-alerts) for pagination, structured results, and access errors.
 
 After creating the GitHub App:
 
@@ -934,6 +939,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | Not sure which workspace is in use | Check and change it under **Setup → Project** in the desktop app. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, GitHub, and Slack settings under **Setup → Verification** in the desktop app |
 | Cannot write to GitHub | Check the fine-grained PAT permissions (repository Contents / Issues / Pull requests as Read and write, organization Projects as Read and write), that the target repository is listed under **Only select repositories**, and that the organization allows and has approved the token. For a GitHub App, check its permissions. `guildbotics member context --person <person_id> --check-credentials` also reports this. An error that says `GitHub writes are limited to repositories of '<owner>'` means the target repository belongs to another owner than the one configured for the project, and GuildBotics refused the write without sending it |
+| Cannot read vulnerability alerts (403) | Check **Dependabot alerts: Read-only** and target repository access for the member's GitHub App or fine-grained PAT. For an App, approve updated permissions for the installation; for a PAT, edit the token's permissions and obtain any required organization approval. See [GitHub account setup](#prepare-a-github-account-for-the-ai-agent). A 403 alone does not establish the cause |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether the service was started with **Event triggers** included (from the CLI, whether it was started with `--only scheduler`) |
 | A command execution failed | Open the session on the **Diagnostics** screen in the desktop app and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |

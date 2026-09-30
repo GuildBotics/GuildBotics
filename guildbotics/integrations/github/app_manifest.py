@@ -26,7 +26,7 @@ HOMEPAGE_URL = "https://github.com/GuildBotics/GuildBotics"
 REQUEST_TIMEOUT_SECONDS = 15.0
 
 # Permissions required by GuildBotics workflows (see README "Using a GitHub
-# App"): repository Actions / Checks / Commit statuses (read), Contents / Issues /
+# App"): repository Actions / Checks / Commit statuses / Dependabot alerts (read), Contents / Issues /
 # Projects / Pull requests / Workflows (write), plus organization Projects (write).
 DEFAULT_APP_PERMISSIONS: dict[str, str] = {
     "actions": "read",
@@ -36,6 +36,7 @@ DEFAULT_APP_PERMISSIONS: dict[str, str] = {
     "pull_requests": "write",
     "repository_projects": "write",
     "statuses": "read",
+    "vulnerability_alerts": "read",
     "organization_projects": "write",
     "workflows": "write",
     "metadata": "read",

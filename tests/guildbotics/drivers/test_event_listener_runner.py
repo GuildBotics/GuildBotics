@@ -153,6 +153,9 @@ class _WorkflowIntegrationFactory(IntegrationFactory):
     def __init__(self, chat_service: _WorkflowChatService) -> None:
         self.chat_service = chat_service
 
+    def create_code_hosting_service(self, logger, person, team):
+        raise AssertionError("unused in this test")
+
     def create_ticket_manager(self, logger, person, team):
         raise AssertionError("unused in this test")
 

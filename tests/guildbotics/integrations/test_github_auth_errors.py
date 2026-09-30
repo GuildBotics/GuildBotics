@@ -28,6 +28,96 @@ def _github_app_auth(monkeypatch: pytest.MonkeyPatch) -> github_utils.GitHubAppA
     return auth
 
 
+class CountingStream(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.count = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.count += 1
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["app", "token"])
+@pytest.mark.parametrize("status", [200, 401, 403, 500])
+async def test_bounded_client_stops_before_auth_or_error_hooks_buffer_body(
+    monkeypatch, kind, status
+):
+    auth = (
+        _github_app_auth(monkeypatch)
+        if kind == "app"
+        else github_utils.GitHubTokenAuth("token")
+    )
+    stream = CountingStream([b"x" * 100] * 100)
+    client = async_client.get_async_client(
+        "https://api.github.com", auth, "acme", max_response_bytes=150
+    )
+    client._transport = httpx.MockTransport(
+        lambda _: httpx.Response(status, stream=stream)
+    )
+    client._mounts = {}
+    async with client:
+        with pytest.raises(async_client.ResponseTooLarge):
+            await client.get("/repos/acme/repo/dependabot/alerts")
+    assert stream.count == 2
+    assert stream.closed
+
+
+@pytest.mark.asyncio
+async def test_bounded_app_client_refreshes_and_retries_without_losing_body(
+    monkeypatch,
+):
+    auth = _github_app_auth(monkeypatch)
+    seen = []
+    bodies = [b"expired", b'{"token":"new","expires_at":"2099-01-01T00:00:00Z"}', b"[]"]
+    streams = [CountingStream([body]) for body in bodies]
+
+    def respond(request):
+        seen.append((request.method, request.headers.get("Authorization")))
+        i = len(seen) - 1
+        return httpx.Response([401, 201, 200][i], stream=streams[i])
+
+    client = async_client.get_async_client(
+        "https://api.github.com", auth, "acme", max_response_bytes=150
+    )
+    client._transport = httpx.MockTransport(respond)
+    client._mounts = {}
+    async with client:
+        result = await client.get("/repos/acme/repo/dependabot/alerts")
+        assert result.json() == []
+    assert seen == [("GET", "token expired"), ("POST", None), ("GET", "token new")]
+    assert all(stream.closed and stream.count == 1 for stream in streams)
+
+
+@pytest.mark.asyncio
+async def test_bounded_client_limits_decoded_compressed_body():
+    import gzip
+
+    stream = CountingStream([gzip.compress(b"x" * 1000)])
+    client = async_client.get_async_client(
+        "https://api.github.com",
+        github_utils.GitHubTokenAuth("token"),
+        "acme",
+        max_response_bytes=150,
+    )
+    client._transport = httpx.MockTransport(
+        lambda _: httpx.Response(
+            200, stream=stream, headers={"content-encoding": "gzip"}
+        )
+    )
+    client._mounts = {}
+    async with client:
+        with pytest.raises(async_client.ResponseTooLarge):
+            await client.get("/repos/acme/repo/dependabot/alerts")
+    assert stream.closed
+
+
 @pytest.mark.asyncio
 async def test_unauthorized_response_records_credential_failure(monkeypatch) -> None:
     recorded = []

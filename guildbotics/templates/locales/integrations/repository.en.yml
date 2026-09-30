@@ -1,0 +1,3 @@
+en:
+  unsupported: "Configure a supported code_hosting_service (currently github) to read repository resources."
+  too_large: "The repository response exceeds the page limit. Reduce page_size for a collection; an oversized individual item cannot be returned."

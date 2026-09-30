@@ -315,6 +315,38 @@ label: Late night
 reason: The current time is 23:36, which falls in the late night period (typically 11pm–3am).
 ```
 
+### 4.1. Checking dependency vulnerability alerts
+
+Read one page of open alerts, or an individual alert:
+
+```shell
+guildbotics run repository/security_alerts --person alice repo=org/repo
+guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
+guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
+```
+
+The command uses the workspace's `services.code_hosting_service`, runs read-only in the usual microVM, and makes no LLM call. Prepare the execution environment as for other commands. Currently the supported provider is `github`; missing or unsupported configuration fails explicitly. For GitHub, the member's credentials (GitHub App or fine-grained PAT) need **Dependabot alerts: Read-only** and access to the target repository. Approve added permissions for existing App installations; for an existing PAT, edit its permissions and complete any approval required by the organization. See [GitHub account setup](../README.md#prepare-a-github-account-for-the-ai-agent) for the steps.
+
+`output=json` returns JSON text with `{ "repo": "org/repo", "alerts": [...], "continuation": null }`, preserving empty lists and `null`. Each alert has a string `id`, URL, state, package, ecosystem, manifest path, severity, advisory `identifiers` (a list of `{ "type": "CVE", "value": "..." }`), summary, description, `affected_versions`, `patched_version`, and creation/update timestamps. Missing optional fields are `null`; missing identifiers are an empty list. Markdown omits missing optional fields and explicitly marks unreported patches. Its headings show the selected state and each alert’s ID, package, and severity. Lists show summaries; individual alerts show the full description after the metadata, inside a blockquote. This resource covers dependency vulnerabilities.
+
+`state` accepts `open` (default), `resolved`, or `dismissed`; `page_size` accepts 1–100 (default 30). GitHub maps resolved to fixed and includes both manually and automatically dismissed alerts in dismissed. These conditions apply to collections; `alert=<id>` selects one alert. IDs and repository names are provider-defined strings; GitHub uses alert numbers and `owner/name`.
+
+Each invocation returns one page. For a non-null `continuation`, repeat the same repository and conditions with `continuation=<returned-value>`. Markdown includes a complete next-page command with the same member, repository, state, and page size. An empty page is a successful read; access failures are errors. Oversized responses fail without truncated JSON; reduce `page_size` for a collection. An oversized detail cannot be returned. GitHub 403/404 errors may mean insufficient permissions, unapproved App or PAT permissions, inaccessible resources, or disabled Dependabot alerts. Rate-limit errors ask you to wait before retrying.
+
+A following Python command can decode `context.pipe`, or the value returned by `await context.invoke("repository/security_alerts", repo="org/repo", output="json")`. Custom Python commands can also consume typed results directly:
+
+```python
+async def main(context, repo):
+    page = await context.get_code_hosting_service().read(
+        "dependency_alerts", repo, parameters={"state": "open", "page_size": 10},
+    )
+    return [alert.package for alert in page.items]
+```
+
+The member CLI equivalent is `guildbotics member repository read --person alice --resource dependency_alerts --repo org/repo --params '{"state":"open","page_size":10}'`. It returns normalized `items` and `continuation`. For one alert, supply `--identifier 42` and no parameters or continuation.
+
+`integrations/code_hosting_service.py` owns the common service and result types. The host integration factory selects the configured implementation; commands use the same interface through their member grant. Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host. Only the unique `after` cursor is extracted from a pagination link; the next request uses the original approved route and conditions even if GitHub returns a canonical `/repositories/{id}/...` URL. Redirects are not followed. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
+
 ## 5. Using subcommands
 You can chain multiple subcommands to build a workflow.
 

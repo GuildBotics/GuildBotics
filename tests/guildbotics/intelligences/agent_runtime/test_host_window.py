@@ -24,16 +24,18 @@ from guildbotics.commands.metadata import CommandAccess
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.window import (
     MemberCommandError,
     WindowChatService,
+    WindowCodeHostingService,
     WindowIntegrationFactory,
 )
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_environment.spec import (
     AgentEnvironmentSpecError,
-    host_environment,
     guest_path,
+    host_environment,
     host_path,
 )
 from guildbotics.intelligences.agent_runtime import environment
@@ -42,10 +44,10 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     HOST_TOKEN_ENV,
     HOST_URL_ENV,
     MEMBER_BROKER_TOKEN_ENV,
+    TURN_WORKING_DIRECTORY,
     ClientConversationStore,
     ClientRunLedger,
     CommandFacts,
-    TURN_WORKING_DIRECTORY,
     CredentialEntry,
     EventEntry,
     HostCallError,
@@ -71,8 +73,7 @@ from guildbotics.intelligences.brains.inference import AgnoCall, inference
 from guildbotics.intelligences.brains.inference_host import DirectInference
 from guildbotics.intelligences.brains.jev import JevBrain
 from guildbotics.intelligences.effort import ResolvedEffort
-from guildbotics.observability import SpanContext, trace_scope
-from guildbotics.observability import diagnostics_events
+from guildbotics.observability import SpanContext, diagnostics_events, trace_scope
 from guildbotics.runtime.person_lease import PersonExecutionLease
 from guildbotics.utils.fileio import (
     GUILDBOTICS_CONFIG_DIR,
@@ -1160,6 +1161,77 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
     assert general == "C9"
     assert str(refused.value).endswith(t("cli.member.lease.invalid_delegation"))
     assert chat.posted == []
+
+
+@pytest.mark.asyncio
+async def test_read_only_repository_read_uses_the_member_grant(
+    tmp_path, monkeypatch, chat
+):
+    from guildbotics.cli import member as member_cli
+    from guildbotics.editions.simple.simple_integration_factory import (
+        SimpleIntegrationFactory,
+    )
+    from guildbotics.integrations.github import code_hosting_service as provider
+
+    context, person = member_cli.resolve_member_context("aiko")
+    context.person = person
+    context.integration_factory = SimpleIntegrationFactory()
+    context.team.project.services["code_hosting_service"] = {"name": "github"}
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=[{"number": 42, "state": "open"}])
+
+    # Let the service own/close the mocked client, just as in production.
+    async def get_client(*_args, **_kwargs):
+        return httpx.AsyncClient(
+            base_url="https://api.github.com", transport=httpx.MockTransport(respond)
+        )
+
+    monkeypatch.setattr(provider, "create_github_client", get_client)
+    lease = PersonExecutionLease("aiko")
+    lease.acquire(source="manual", command="test", work_id="work")
+    try:
+        async with _command(
+            monkeypatch, tmp_path, access=CommandAccess(read_only=True)
+        ) as command:
+            result = await WindowCodeHostingService(command.client, "aiko").read(
+                "dependency_alerts", "GuildBotics/GuildBotics"
+            )
+            # The member command's own refusal is a read failure the command
+            # reports; the grant's refusal of another person is not.
+            for person, resource, refusal in [
+                ("other", "dependency_alerts", MemberCommandError),
+                ("aiko", "secrets", RepositoryReadError),
+            ]:
+                with pytest.raises(refusal):
+                    await WindowCodeHostingService(command.client, person).read(
+                        resource, "GuildBotics/GuildBotics"
+                    )
+            refused = await command.client.acall(
+                "member",
+                arguments=[
+                    "repository",
+                    "read",
+                    "--person",
+                    "aiko",
+                    "--resource",
+                    "dependency_alerts",
+                    "--repo",
+                    "GuildBotics/GuildBotics",
+                    "--method",
+                    "PATCH",
+                ],
+                stdin="",
+            )
+            assert refused["exit_code"] != 0
+    finally:
+        lease.release()
+    assert result.items[0].id == "42"
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
 
 
 @pytest.mark.asyncio

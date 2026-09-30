@@ -5,16 +5,32 @@ from guildbotics.integrations.chat_profile import (
     get_chat_slack_base_url,
 )
 from guildbotics.integrations.chat_service import ChatService
+from guildbotics.integrations.code_hosting_service import (
+    CodeHostingService,
+    RepositoryReadError,
+)
+from guildbotics.integrations.github.code_hosting_service import (
+    GitHubCodeHostingService,
+)
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
 from guildbotics.integrations.slack.slack_chat_service import SlackChatService
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.runtime import IntegrationFactory
+from guildbotics.utils.i18n_tool import t
 
 
 class SimpleIntegrationFactory(IntegrationFactory):
     """
     Default integration factory for creating message pollers.
     """
+
+    def create_code_hosting_service(
+        self, logger: Logger, person: Person, team: Team
+    ) -> CodeHostingService:
+        name = team.project.get_service_name(Service.CODE_HOSTING_SERVICE)
+        if name == "github":
+            return GitHubCodeHostingService(person, team)
+        raise RepositoryReadError(t("integrations.repository.unsupported"))
 
     def create_ticket_manager(
         self, logger: Logger, person: Person, team: Team

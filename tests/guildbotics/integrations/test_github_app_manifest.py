@@ -57,6 +57,7 @@ def test_build_app_manifest_contains_required_permissions() -> None:
         "pull_requests": "write",
         "repository_projects": "write",
         "statuses": "read",
+        "vulnerability_alerts": "read",
         "organization_projects": "write",
         "workflows": "write",
         "metadata": "read",

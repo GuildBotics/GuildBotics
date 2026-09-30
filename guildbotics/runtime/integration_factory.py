@@ -3,10 +3,17 @@ from logging import Logger
 
 from guildbotics.entities import Person, Team
 from guildbotics.integrations.chat_service import ChatService
+from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.ticket_manager import TicketManager
 
 
 class IntegrationFactory(ABC):
+    @abstractmethod
+    def create_code_hosting_service(
+        self, logger: Logger, person: Person, team: Team
+    ) -> CodeHostingService:
+        """Create the configured repository service for this member."""
+
     @abstractmethod
     def create_ticket_manager(
         self, logger: Logger, person: Person, team: Team

@@ -27,6 +27,7 @@ _ALLOWED = (
     "guildbotics.editions.simple.simple_loader_factory",
     "guildbotics.entities",
     "guildbotics.integrations.chat_service",
+    "guildbotics.integrations.code_hosting_service",
     "guildbotics.integrations.ticket_manager",
     "guildbotics.integrations.window",
     "guildbotics.intelligences.agent_runtime.acp",

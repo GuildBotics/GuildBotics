@@ -226,6 +226,7 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
      - **Checks**: Read-only（pull request の commit に対する check run の読み取り）
      - **Commit statuses**: Read-only（pull request の commit に対する外部 CI status の読み取り）
      - **Contents**: Read and write（リポジトリの複製と作業ブランチの push）
+     - **Dependabot alerts**: Read-only（依存ライブラリの脆弱性アラートの読み取り）
      - **Issues**: Read and write（Issue の読み書き、コメント、ラベル、開閉、リアクション）
      - **Metadata**: Read-only（他の権限を選ぶと自動で付きます）
      - **Pull requests**: Read and write（PR の作成・更新、レビューコメントと返信、リアクション）
@@ -236,16 +237,20 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
 7. **Generate token** を押し、表示されたトークンをコピーしてください（この画面を離れると再表示できません）。発行後にトークン名の横へ **Pending** と表示された場合は承認待ちの状態で、organization の owner が手順 2 の **Pending requests** で承認するまでそのトークンは機能しません。承認を済ませてから次へ進んでください
 8. デスクトップアプリの **設定 → メンバー → GitHub** タブで「マシンアカウント（マシンユーザー）」を選び、**アクセストークン** に貼り付けて保存してください
 
+既存の fine-grained PAT は、手順 5 の **Fine-grained tokens** で対象トークンを開き、権限を編集して **Repository permissions → Dependabot alerts → Read-only** を追加してください。同じトークンの権限だけを更新する場合、デスクトップアプリへの再登録は不要です。organization が承認を必須にしている場合は、編集後の権限も owner に承認してもらってから再試行してください。対象リポジトリが **Repository access** に含まれていることも確認します。[GitHub の必要権限一覧](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#repository-permissions-for-dependabot-alerts)と[承認リクエストの管理](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/managing-requests-for-personal-access-tokens-in-your-organization)も参照してください。
+
 **GitHub App を利用する場合**:
 
 デスクトップアプリのメンバー編集画面（GitHub タブで「GitHub Apps」を選択）で「新規に App を登録」を選ぶと、GitHub 上への App 作成とインストールを半自動で行えます。ブラウザで作成とインストール先の選択を承認するだけで、App ID・秘密鍵・インストール ID などの設定値は自動で取り込まれるため、以下の手動手順は不要です。
 
 手動で作成する場合は、GitHub App 作成の際に以下の Permission 設定を行ってください。
 
-- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** を Read-only、**Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
+- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** / **Dependabot alerts** を Read-only、**Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** をそれぞれ Read & Write
 - **Organization permissions**: **Projects** を Read & Write
 
-既存 App に **Actions** / **Checks** / **Commit statuses** / **Workflows** を追加した場合は、再利用する前に各インストール先で権限変更を承認してください。
+既存 App に権限を追加した場合は、利用する前に各インストール先で変更を承認してください。Dependabot アラートでは、App の **Permissions & events → Repository permissions → Dependabot alerts** を **Read-only** に変更し、organization owner が **Organization Settings → GitHub Apps → Configure** で変更内容を確認・承認します。対象リポジトリがインストール先に含まれていることも確認してください。GuildBotics から新規登録する App は、この権限を最初から要求します。[GitHub の承認手順](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app)も参照してください。
+
+最新のアラートは `guildbotics run repository/security_alerts --person alice repo=org/repo` で確認できます。個別確認は `alert=42` を追加します。実行環境の準備は必要ですが、LLM は呼びません。ページ送り・構造化結果・アクセスエラーは[Dependabot アラート確認コマンド](docs/custom_command_guide.ja.md#41-依存ライブラリの脆弱性アラートの確認)を参照してください。
 
 GitHub App 作成後に以下の作業を行ってください。
 
@@ -909,6 +914,7 @@ CLI コマンドとオプションの完全な一覧は、ソースコードか�
 | どのワークスペースが使われているか分からない | デスクトップアプリの **設定 → プロジェクト** で確認・変更できます。CLI では `guildbotics workspace status` / `guildbotics workspace use <path>` を使います                                                                                                                                                                                                                                                                   |
 | メンバーが動作しない・設定に不安がある       | デスクトップアプリの **設定 → 検証** で LLM・AI CLI ツール・GitHub・Slack 設定を検証してください                                                                                                                                                                                                                                                                                                                             |
 | GitHub に書き込めない                        | fine-grained PAT の権限（Repository の Contents / Issues / Pull requests が Read and write、Organization の Projects が Read and write）と、対象リポジトリが **Only select repositories** に含まれているか、organization が fine-grained PAT を許可し承認済みかを確認してください。GitHub App の場合は Permission を確認してください。`guildbotics member context --person <person_id> --check-credentials` でも確認できます。`GitHub writes are limited to repositories of '<owner>'` というエラーは、書き込み先リポジトリの owner がプロジェクトに設定した owner と異なるため、GuildBotics が送信せずに拒否したことを表します |
+| 脆弱性アラートを読めない（403） | メンバーの GitHub App または fine-grained PAT に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスがあるか確認してください。App はインストール先で追加権限を承認し、PAT はトークンの権限を編集して organization が要求する承認を済ませます。手順は [GitHub アカウントの準備](#ai-エージェント用の-github-アカウントを用意する)を参照してください。403 だけでは原因を断定できません |
 | Slack イベントを受信しない                   | Socket Mode、App-Level Token、bot events の設定と、**サービス実行** 画面で **イベント起動** を含めて開始しているか（CLI なら `--only scheduler` で起動していないか）を確認してください                                                                                                                                                                                                                                       |
 | コマンド実行が失敗した                       | デスクトップアプリの **診断** 画面で該当セッションを開き、ログを確認してください。AI アシスタントに原因を調べさせることもできます                                                                                                                                                                                                                                                                                            |
 | スケジューラが止まった                       | **連続失敗で停止する回数**（既定: 3 回）に達するとワーカーが停止します。**診断** 画面で失敗原因を確認してから再起動してください                                                                                                                                                                                                                                                                                              |

@@ -20,6 +20,11 @@ from guildbotics.integrations.chat_service import (
     ChatPostResult,
     ChatService,
 )
+from guildbotics.integrations.code_hosting_service import (
+    CodeHostingService,
+    RepositoryReadError,
+    RepositoryReadPage,
+)
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.agent_runtime.host_client import HostClient
 from guildbotics.runtime.integration_factory import IntegrationFactory
@@ -27,6 +32,79 @@ from guildbotics.runtime.integration_factory import IntegrationFactory
 
 class MemberCommandError(RuntimeError):
     """A member command the window ran failed; the message is its error."""
+
+
+class WindowCodeHostingService(CodeHostingService):
+    """The same repository contract, via the command's member grant."""
+
+    def __init__(self, client: HostClient, person_id: str) -> None:
+        self._client = client
+        self._person_id = person_id
+
+    async def read(
+        self,
+        resource: str,
+        repo: str,
+        *,
+        identifier: str = "",
+        parameters: dict[str, Any] | None = None,
+        continuation: str = "",
+    ) -> RepositoryReadPage:
+        result = await _member_result(
+            self._client,
+            [
+                "repository",
+                "read",
+                "--person",
+                self._person_id,
+                "--resource",
+                resource,
+                "--repo",
+                repo,
+                "--identifier",
+                identifier,
+                "--params",
+                json.dumps(parameters if parameters is not None else {}),
+                "--continuation",
+                continuation,
+                "--format",
+                "json",
+            ],
+            failure=RepositoryReadError,
+        )
+        return RepositoryReadPage.model_validate(result)
+
+    async def aclose(self) -> None:
+        """The command owns the shared host client."""
+
+
+#: How a member command reports a failure it anticipated (``ClickException``).
+_REPORTED_FAILURE = "Error: "
+
+
+async def _member_result(
+    client: HostClient,
+    arguments: list[str],
+    stdin: str = "",
+    *,
+    failure: type[Exception] = MemberCommandError,
+) -> dict[str, Any]:
+    """Run a member command and read its JSON result.
+
+    Raises:
+        Exception: ``failure`` with the command's own message when it reported
+            the failure; ``MemberCommandError`` for anything else, such as an
+            uncaught error, whose text is not meant for the user.
+    """
+    result = await client.acall("member", arguments=arguments, stdin=stdin)
+    if result["exit_code"]:
+        stderr = result["stderr"].strip()
+        if stderr.startswith(_REPORTED_FAILURE):
+            raise failure(stderr.removeprefix(_REPORTED_FAILURE))
+        raise MemberCommandError(
+            stderr or f"The member command exited with {result['exit_code']}."
+        )
+    return json.loads(result["stdout"])
 
 
 class WindowChatService(ChatService):
@@ -84,9 +162,9 @@ class WindowChatService(ChatService):
 
     async def _member(self, *arguments: str, stdin: str = "") -> dict[str, Any]:
         """Run the member's chat command ``arguments`` and read its result."""
-        result = await self._client.acall(
-            "member",
-            arguments=[
+        return await _member_result(
+            self._client,
+            [
                 "chat",
                 *arguments,
                 "--person",
@@ -98,12 +176,6 @@ class WindowChatService(ChatService):
             ],
             stdin=stdin,
         )
-        if result["exit_code"]:
-            raise MemberCommandError(
-                result["stderr"].strip()
-                or f"The member command exited with {result['exit_code']}."
-            )
-        return json.loads(result["stdout"])
 
 
 class WindowIntegrationFactory(IntegrationFactory):
@@ -112,6 +184,11 @@ class WindowIntegrationFactory(IntegrationFactory):
 
     def __init__(self, client: HostClient) -> None:
         self._client = client
+
+    def create_code_hosting_service(
+        self, logger: Logger, person: Person, team: Team
+    ) -> CodeHostingService:
+        return WindowCodeHostingService(self._client, person.person_id)
 
     def create_ticket_manager(
         self, logger: Logger, person: Person, team: Team

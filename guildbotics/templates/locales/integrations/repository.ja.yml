@@ -1,0 +1,3 @@
+ja:
+  unsupported: "リポジトリの参照には、対応する code_hosting_service（現在は github）を設定してください。"
+  too_large: "取得結果がページの上限サイズを超えています。一覧では page_size を下げてください。上限を超える個別の項目は返せません。"

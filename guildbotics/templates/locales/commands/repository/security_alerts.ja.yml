@@ -1,0 +1,22 @@
+ja:
+  output: "output は markdown または json を指定してください。"
+  page_size: "page_size は1～100の整数で指定してください。"
+  heading: "# 依存ライブラリの脆弱性アラート: %{repo}（状態: %{state}）"
+  detail_heading: "# 依存ライブラリの脆弱性アラート: %{repo} / %{alert}"
+  empty: "このページに状態 %{state} に該当するアラートはありません。"
+  no_patch: "修正版の報告なし"
+  more: "続きがあります。次のコマンドで次ページを取得してください。"
+  fields:
+    url: URL
+    state: 状態
+    package: パッケージ
+    ecosystem: エコシステム
+    manifest_path: マニフェストのパス
+    severity: 深刻度
+    identifiers: アドバイザリ識別子
+    summary: 概要
+    description: 説明
+    affected_versions: 影響を受けるバージョン
+    patched_version: 最初の修正版
+    created_at: 作成日時
+    updated_at: 更新日時

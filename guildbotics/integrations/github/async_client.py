@@ -6,6 +6,23 @@ from guildbotics.observability.diagnostics_events import record_correlated_event
 HTTP_UNAUTHORIZED = 401
 
 
+class ResponseTooLarge(httpx.RequestError):
+    """A decoded response exceeded the client's byte limit."""
+
+
+async def _read_bounded(response: httpx.Response, limit: int) -> None:
+    content = bytearray()
+    async for chunk in response.aiter_bytes():
+        if len(content) + len(chunk) > limit:
+            raise ResponseTooLarge(
+                "Response exceeds byte limit", request=response.request
+            )
+        content.extend(chunk)
+    # Populate HTTPX's read cache so auth refresh and error hooks can read the
+    # same bounded body. Auth's requires_response_body runs after this hook.
+    response._content = bytes(content)
+
+
 async def raise_for_status_with_text(
     response: httpx.Response,
     *,
@@ -45,7 +62,13 @@ def record_github_auth_failure(
     )
 
 
-def get_async_client(base_url: str, auth: httpx.Auth, owner: str) -> httpx.AsyncClient:
+def get_async_client(
+    base_url: str,
+    auth: httpx.Auth,
+    owner: str,
+    *,
+    max_response_bytes: int | None = None,
+) -> httpx.AsyncClient:
     """
     Create and return an async HTTP client with the specified base URL and headers.
 
@@ -64,6 +87,8 @@ def get_async_client(base_url: str, auth: httpx.Auth, owner: str) -> httpx.Async
         check_request(owner, base, request)
 
     async def response_hook(response: httpx.Response) -> None:
+        if max_response_bytes is not None:
+            await _read_bounded(response, max_response_bytes)
         await raise_for_status_with_text(
             response,
             handle_unauthorized=not bool(getattr(auth, "handles_unauthorized", False)),
