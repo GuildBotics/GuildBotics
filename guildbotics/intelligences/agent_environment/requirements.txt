@@ -64,7 +64,7 @@ pydantic-core==2.46.4
 pydantic-settings==2.15.0
 pydyf==0.12.1
 pygments==2.20.0
-pyjwt==2.13.0
+pyjwt==2.14.0
 pyphen==0.17.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
@@ -94,7 +94,7 @@ typing-extensions==4.16.0
 typing-inspection==0.4.2
 tzdata==2026.4
 tzlocal==5.4.4
-urllib3==2.7.0
+urllib3==2.8.0
 uvicorn==0.52.1
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
 watchfiles==1.2.0
