@@ -143,6 +143,41 @@ describe("i18n resources", () => {
     expect(authoring).not.toEqual([]);
     expect(authoring.filter((key) => !troubleshooting.includes(key))).toEqual([]);
   });
+
+  it("formats the last-turn model and source for each language", () => {
+    expect(
+      i18n.getFixedT("en")("setup.intelligence.lastTurn.modelWithSource", {
+        model: "actual-model",
+        source: "Selected by default",
+      }),
+    ).toBe("actual-model (Selected by default)");
+    expect(
+      i18n.getFixedT("ja")("setup.intelligence.lastTurn.modelWithSource", {
+        model: "actual-model",
+        source: "既定で選ばれたモデル",
+      }),
+    ).toBe("actual-model（既定で選ばれたモデル）");
+  });
+
+  it("describes retained last-turn evidence without inferring history or cause", () => {
+    const en = i18n.getFixedT("en");
+    const ja = i18n.getFixedT("ja");
+
+    expect(en("setup.intelligence.lastTurn.noRecord")).toBe(
+      "No run record available on this machine",
+    );
+    expect(en("setup.intelligence.lastTurn.modelNotReported")).toBe("Model name not reported");
+    expect(en("setup.intelligence.lastTurn.defaultModelNotReported")).toBe(
+      "Default (model name not reported)",
+    );
+    expect(ja("setup.intelligence.lastTurn.noRecord")).toBe("このマシンに実行記録がありません");
+    expect(ja("setup.intelligence.lastTurn.modelNotReported")).toBe(
+      "モデル名を取得できませんでした",
+    );
+    expect(ja("setup.intelligence.lastTurn.defaultModelNotReported")).toBe(
+      "既定（モデル名を取得できませんでした）",
+    );
+  });
 });
 
 describe("language changes across windows", () => {

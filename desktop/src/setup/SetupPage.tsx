@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -1807,11 +1807,14 @@ function OptionCard({
   extra?: ReactNode;
   detail?: ReactNode;
 }) {
+  const statusId = useId();
+  const detailId = useId();
   const card = (
     <div style={{ position: "relative", display: "block", width: "100%" }}>
       <button
         type="button"
         aria-label={label}
+        aria-describedby={`${statusId}${detail ? ` ${detailId}` : ""}`}
         disabled={!enabled}
         className={`option-card ${active ? "active" : ""}`}
         style={{ paddingRight: extra ? "40px" : undefined, width: "100%", textAlign: "left" }}
@@ -1823,13 +1826,14 @@ function OptionCard({
           {label}
         </span>
         <span
+          id={statusId}
           className="detection"
           style={{ userSelect: "none", color: `var(--mantine-color-${statusColor}-6)` }}
         >
           <i />
           {statusText}
         </span>
-        {detail}
+        {detail ? <span id={detailId}>{detail}</span> : null}
       </button>
       {extra ? (
         <div

@@ -4602,9 +4602,9 @@ describe("IntelligenceEditor (member override)", () => {
   it.each([
     { model: "actual-model", specified: true, key: "specified" },
     { model: "actual-model", specified: false, key: "default" },
-    { model: "", specified: false, key: "unavailable" },
+    { model: "", specified: false, key: "defaultModelNotReported" },
     { model: "", specified: true, key: "specified" },
-    { model: null, specified: false, key: "notRun" },
+    { model: null, specified: false, key: "noRecord" },
   ])(
     "shows the member card's $key last turn on this machine",
     async ({ model, specified, key }) => {
@@ -4623,7 +4623,16 @@ describe("IntelligenceEditor (member override)", () => {
       ]);
       await openMemberIntelligenceTab(userEvent.setup());
       const card = await screen.findByRole("button", { name: "OpenAI Codex CLI" });
-      await waitFor(() => expect(card).toHaveTextContent(t(`setup.intelligence.lastTurn.${key}`)));
+      const expectedSummary =
+        model === null
+          ? t("setup.intelligence.lastTurn.noRecord")
+          : model || specified
+            ? t("setup.intelligence.lastTurn.modelWithSource", {
+                model: model || t("setup.intelligence.lastTurn.modelNotReported"),
+                source: t(`setup.intelligence.lastTurn.${key}`),
+              })
+            : t("setup.intelligence.lastTurn.defaultModelNotReported");
+      await waitFor(() => expect(card).toHaveTextContent(expectedSummary));
       expect(card).not.toHaveTextContent("other-model");
       if (model !== null) {
         expect(card).toHaveTextContent(
@@ -4633,8 +4642,14 @@ describe("IntelligenceEditor (member override)", () => {
         );
       }
       if (model) expect(card).toHaveTextContent(model);
-      expect(screen.getByRole("button", { name: "Claude Code" })).toHaveTextContent(
-        t("setup.intelligence.lastTurn.notRun"),
+      expect(card).toHaveAccessibleDescription(
+        new RegExp(t("setup.intelligence.environment.toolCredentialsSaved")),
+      );
+      if (model) expect(card).toHaveAccessibleDescription(new RegExp(model));
+      const noRecordCard = screen.getByRole("button", { name: "Claude Code" });
+      expect(noRecordCard).toHaveTextContent(t("setup.intelligence.lastTurn.noRecord"));
+      expect(noRecordCard).toHaveAccessibleDescription(
+        new RegExp(t("setup.intelligence.lastTurn.noRecord")),
       );
     },
   );
