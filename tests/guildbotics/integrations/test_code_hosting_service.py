@@ -275,7 +275,7 @@ def test_repository_consumers_cannot_import_provider_modules():
     }
     violations = []
     for name in consumers:
-        for node in ast.walk(ast.parse((root / name).read_text())):
+        for node in ast.walk(ast.parse((root / name).read_text(encoding="utf-8"))):
             modules = (
                 [f"{node.module}.{entry.name}" for entry in node.names]
                 if isinstance(node, ast.ImportFrom)
