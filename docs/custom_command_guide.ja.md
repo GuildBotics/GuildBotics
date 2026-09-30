@@ -332,11 +332,11 @@ guildbotics run repository/security_alerts --person alice repo=org/repo state=re
 
 コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` で、未設定・未対応のサービスは明示的にエラーになります。GitHub では、メンバーの App に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存のインストールでは追加権限を承認してください（[GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)）。fine-grained PAT にも同等の権限が必要です。
 
-`output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では情報や修正版が未提供であることを明示します。対象は依存ライブラリの脆弱性です。
+`output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では未提供の任意項目を省略し、修正版の報告がない場合だけ明示します。見出しには取得する状態と、各アラートの ID・パッケージ・重要度を表示します。一覧には概要を、個別表示には他の項目の後ろに引用ブロックで説明の全文を表示します。対象は依存ライブラリの脆弱性です。
 
 `state` は `open`（既定）、`resolved`、`dismissed`、`page_size` は1～100（既定30）です。GitHub では resolved を fixed に変換し、dismissed に手動・自動の両方の却下を含めます。一覧にだけ条件を適用し、`alert=<id>` は個別取得です。ID とリポジトリ名はサービスが定義する文字列で、GitHub ではアラート番号と `owner/name` を使います。
 
-1回の実行で1ページ返します。`continuation` があれば、同じリポジトリ・条件に `continuation=<返された値>` を加えて続けてください。空ページは取得成功ですが、アクセス失敗はエラーです。サイズ上限を超えた場合は JSON を切り詰めず失敗します。一覧では `page_size` を下げてください。上限を超える個別アラートは返せません。GitHub の403・404には権限不足、未承認の追加権限、参照できないリソース、Dependabot alerts の無効化など複数の原因があります。レート制限では時間を置いて再実行してください。
+1回の実行で1ページ返します。`continuation` があれば、同じリポジトリ・条件に `continuation=<返された値>` を加えて続けてください。Markdown にはメンバー・リポジトリ・状態・ページサイズを維持した次ページの実行コマンドを表示します。空ページは取得成功ですが、アクセス失敗はエラーです。サイズ上限を超えた場合は JSON を切り詰めず失敗します。一覧では `page_size` を下げてください。上限を超える個別アラートは返せません。GitHub の403・404には権限不足、未承認の追加権限、参照できないリソース、Dependabot alerts の無効化など複数の原因があります。レート制限では時間を置いて再実行してください。
 
 後続の Python コマンドは `context.pipe`、または `await context.invoke("repository/security_alerts", repo="org/repo", output="json")` の返り値を JSON として読み取れます。型付きの結果を直接使うこともできます。
 
@@ -350,7 +350,7 @@ async def main(context, repo):
 
 member CLI は `guildbotics member repository read --person alice --resource dependency_alerts --repo org/repo --params '{"state":"open","page_size":10}'` です。共通形式の `items` と `continuation` を返します。個別取得は `--identifier 42` を指定し、条件と continuation は渡しません。
 
-共通のサービス・結果型は `integrations/code_hosting_service.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持し、リダイレクトやページ送りのリンクでアクセス先を広げません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
+共通のサービス・結果型は `integrations/code_hosting_service.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after` だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
 
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。

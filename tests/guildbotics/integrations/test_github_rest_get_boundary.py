@@ -14,6 +14,12 @@ ROOT = Path(__file__).parents[3]
 # Adding a raw GET requires both a classification and a concrete reason.
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
+        "guildbotics/integrations/github/code_hosting_service.py",
+        "read",
+        "self._client.get",
+        "path",
+    ): "bounded: one alert or one size-limited page with an explicit continuation token",
+    (
         "guildbotics/app_api/avatar.py",
         "get_github_avatar_url",
         "client.get",

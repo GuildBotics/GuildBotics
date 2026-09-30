@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
+import shlex
 from typing import Any
 
 from guildbotics.commands.errors import CommandError
@@ -48,11 +51,13 @@ async def main(
     return (
         json.dumps(result, ensure_ascii=False, indent=2)
         if output == "json"
-        else _display(result)
+        else _display(result, context.person.person_id, alert, state, size)
     )
 
 
-def _display(result: dict[str, Any]) -> str:
+def _display(
+    result: dict[str, Any], person: str, alert: str, state: str, page_size: int
+) -> str:
     labels = {
         "url": t("commands.repository.security_alerts.fields.url"),
         "state": t("commands.repository.security_alerts.fields.state"),
@@ -62,7 +67,6 @@ def _display(result: dict[str, Any]) -> str:
         "severity": t("commands.repository.security_alerts.fields.severity"),
         "identifiers": t("commands.repository.security_alerts.fields.identifiers"),
         "summary": t("commands.repository.security_alerts.fields.summary"),
-        "description": t("commands.repository.security_alerts.fields.description"),
         "affected_versions": t(
             "commands.repository.security_alerts.fields.affected_versions"
         ),
@@ -72,29 +76,73 @@ def _display(result: dict[str, Any]) -> str:
         "created_at": t("commands.repository.security_alerts.fields.created_at"),
         "updated_at": t("commands.repository.security_alerts.fields.updated_at"),
     }
-    lines = [t("commands.repository.security_alerts.heading", repo=result["repo"])]
+    heading = (
+        t(
+            "commands.repository.security_alerts.detail_heading",
+            repo=_text(result["repo"]),
+            alert=_text(alert),
+        )
+        if alert
+        else t(
+            "commands.repository.security_alerts.heading",
+            repo=_text(result["repo"]),
+            state=_text(state),
+        )
+    )
+    lines = [heading]
     if not result["alerts"]:
-        lines.append(t("commands.repository.security_alerts.empty"))
+        lines.append(t("commands.repository.security_alerts.empty", state=_text(state)))
     for item in result["alerts"]:
-        lines.append(f"\n## {item['id']}")
+        title = " · ".join(
+            _text(item[key]) for key in ("id", "package", "severity") if item[key]
+        )
+        lines.append(f"\n## {title}")
         for field, label in labels.items():
-            missing = (
-                t("commands.repository.security_alerts.no_patch")
-                if field == "patched_version"
-                else t("commands.repository.security_alerts.missing")
-            )
             value = item[field]
             if field == "identifiers":
                 value = ", ".join(
                     f"{entry['type']}: {entry['value']}" for entry in value
                 )
-            lines.append(f"- **{label}**: {value or missing}")
+            if value or field == "patched_version":
+                lines.append(
+                    f"- **{label}**: {_text(value) if value else t('commands.repository.security_alerts.no_patch')}"
+                )
+        if alert and item["description"]:
+            lines.extend(
+                [
+                    "",
+                    f"**{t('commands.repository.security_alerts.fields.description')}**",
+                    "",
+                ]
+            )
+            lines.extend("> " + line for line in item["description"].splitlines())
     if result["continuation"]:
         lines.extend(
             [
                 "",
                 t("commands.repository.security_alerts.more"),
-                f"`continuation={result['continuation']}`",
+                "```sh",
+                shlex.join(
+                    [
+                        "guildbotics",
+                        "run",
+                        "repository/security_alerts",
+                        "--person",
+                        person,
+                        f"repo={result['repo']}",
+                        f"state={state}",
+                        f"page_size={page_size}",
+                        f"continuation={result['continuation']}",
+                        "output=markdown",
+                    ]
+                ),
+                "```",
             ]
         )
     return "\n".join(lines)
+
+
+def _text(value: Any) -> str:
+    """Keep scalar metadata on one line and outside Markdown structure."""
+    text = html.escape(" ".join(str(value).split()), quote=False)
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)

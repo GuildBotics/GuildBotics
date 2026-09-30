@@ -1,9 +1,11 @@
 """The alert command formats provider data; only the host authorizes reads."""
 
 import json
+import shlex
 from types import SimpleNamespace
 
 import pytest
+from markdown_it import MarkdownIt
 
 from guildbotics.commands.discovery import (
     iter_command_candidate_names,
@@ -37,7 +39,10 @@ def command(monkeypatch):
     service = WindowCodeHostingService(Window(), "aiko")
     return (
         module,
-        SimpleNamespace(get_code_hosting_service=lambda: service),
+        SimpleNamespace(
+            person=SimpleNamespace(person_id="aiko"),
+            get_code_hosting_service=lambda: service,
+        ),
         page,
         calls,
     )
@@ -114,7 +119,7 @@ async def test_empty_missing_fields_and_no_patch_are_localized(command, language
     set_language(language)
     try:
         empty = await module.main(context, "org/subgroup/repo")
-        assert t("commands.repository.security_alerts.empty") in empty
+        assert t("commands.repository.security_alerts.empty", state="open") in empty
         page.update(items=[{"id": "opaque", "state": "open"}])
         result = json.loads(
             await module.main(context, "org/subgroup/repo", alert="42", output="json")
@@ -123,7 +128,7 @@ async def test_empty_missing_fields_and_no_patch_are_localized(command, language
         assert result["alerts"][0]["identifiers"] == []
         text = await module.main(context, "org/subgroup/repo", alert="42")
         assert t("commands.repository.security_alerts.no_patch") in text
-        assert t("commands.repository.security_alerts.fields.manifest_path") in text
+        assert t("commands.repository.security_alerts.fields.manifest_path") not in text
         assert "commands.repository.security_alerts" not in text
     finally:
         set_language(previous)
@@ -191,3 +196,106 @@ async def test_python_command_output_is_json_including_empty_page(
         "continuation": None,
     }
     assert outcome.result == outcome.text_output
+
+
+@pytest.mark.asyncio
+async def test_descriptions_only_in_detail_and_cannot_take_over_metadata(command):
+    module, context, page, _ = command
+    description = "### Impact\nAn attacker can do X.\n\n### Patches\nUpgrade to 2.\n\n### Workarounds\nNone."
+    page["items"] = [
+        {
+            "id": "opaque",
+            "state": "open",
+            "package": "demo",
+            "severity": "high",
+            "summary": "A summary",
+            "description": description,
+            "affected_versions": "< 2",
+            "patched_version": "2",
+        }
+    ]
+    listing = await module.main(context, "org/repo")
+    assert "## opaque · demo · high" in listing
+    assert "### Impact" not in listing and "### Workarounds" not in listing
+    detail = await module.main(context, "org/repo", alert="opaque")
+    tokens = MarkdownIt().parse(detail)
+    assert [
+        (token.tag, token.level) for token in tokens if token.type == "heading_open"
+    ] == [("h1", 0), ("h2", 0), ("h3", 1), ("h3", 1), ("h3", 1)]
+    assert detail.index(
+        t("commands.repository.security_alerts.fields.patched_version")
+    ) < detail.index("> ### Impact")
+    structured = json.loads(await module.main(context, "org/repo", output="json"))
+    assert structured["alerts"][0]["description"] == description
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    [
+        "id",
+        "package",
+        "severity",
+        "summary",
+        "url",
+        "ecosystem",
+        "manifest_path",
+        "affected_versions",
+        "patched_version",
+        "created_at",
+        "updated_at",
+    ],
+)
+async def test_scalar_metadata_never_creates_markdown_structure(command, field):
+    module, context, page, _ = command
+    page["items"] = [
+        {
+            "id": "opaque",
+            "state": "open",
+            field: "value\n\n# Injected heading\n<h1>HTML heading</h1>",
+        }
+    ]
+    text = await module.main(context, "org/repo")
+    tokens = MarkdownIt().parse(text)
+    assert [token.tag for token in tokens if token.type == "heading_open"] == [
+        "h1",
+        "h2",
+    ]
+    assert not any(token.type in {"html_block", "html_inline"} for token in tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_empty_page_names_filter_and_continuation_is_executable(
+    command, language
+):
+    module, context, page, _ = command
+    page["continuation"] = "opaque+cursor=="
+    previous = get_language()
+    set_language(language)
+    try:
+        text = await module.main(
+            context, "org/subgroup/repo", state="resolved", page_size="7"
+        )
+        assert t("commands.repository.security_alerts.empty", state="resolved") in text
+        assert "resolved" in text.splitlines()[0]
+        fence = next(
+            token for token in MarkdownIt().parse(text) if token.type == "fence"
+        )
+        arguments = shlex.split(fence.content)
+        assert arguments[:5] == [
+            "guildbotics",
+            "run",
+            "repository/security_alerts",
+            "--person",
+            "aiko",
+        ]
+        assert dict(argument.split("=", 1) for argument in arguments[5:]) == {
+            "repo": "org/subgroup/repo",
+            "state": "resolved",
+            "page_size": "7",
+            "continuation": "opaque+cursor==",
+            "output": "markdown",
+        }
+    finally:
+        set_language(previous)

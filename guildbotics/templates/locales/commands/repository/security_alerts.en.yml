@@ -1,11 +1,11 @@
 en:
   output: "output must be markdown or json."
   page_size: "page_size must be an integer between 1 and 100."
-  heading: "# Dependency vulnerability alerts: %{repo}"
-  empty: "No alerts in this page for the selected conditions."
-  missing: "Not provided"
+  heading: "# Dependency vulnerability alerts: %{repo} (state: %{state})"
+  detail_heading: "# Dependency vulnerability alert: %{repo} / %{alert}"
+  empty: "No alerts with state %{state} on this page."
   no_patch: "No patched version reported"
-  more: "More alerts are available. Run again with the same conditions and this continuation:"
+  more: "More alerts are available. Run the following command for the next page:"
   fields:
     url: URL
     state: State

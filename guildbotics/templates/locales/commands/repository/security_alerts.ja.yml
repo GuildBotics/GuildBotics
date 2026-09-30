@@ -1,11 +1,11 @@
 ja:
   output: "output は markdown または json を指定してください。"
   page_size: "page_size は1～100の整数で指定してください。"
-  heading: "# 依存ライブラリの脆弱性アラート: %{repo}"
-  empty: "指定条件に該当するアラートは、このページにありません。"
-  missing: "情報なし"
+  heading: "# 依存ライブラリの脆弱性アラート: %{repo}（状態: %{state}）"
+  detail_heading: "# 依存ライブラリの脆弱性アラート: %{repo} / %{alert}"
+  empty: "このページに状態 %{state} に該当するアラートはありません。"
   no_patch: "修正版の報告なし"
-  more: "続きがあります。同じ取得条件と次の継続指定で再実行してください。"
+  more: "続きがあります。次のコマンドで次ページを取得してください。"
   fields:
     url: URL
     state: 状態
