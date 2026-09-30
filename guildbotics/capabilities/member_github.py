@@ -36,11 +36,6 @@ from guildbotics.integrations.github.github_utils import (
     normalize_login,
     paginated_items,
 )
-from guildbotics.integrations.github.read_resources import (
-    GitHubReadError,
-    prepare_read,
-    read_page,
-)
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
     configured_owner,
@@ -174,23 +169,6 @@ class MemberGitHubCapabilityService:
             # prompts, never here.
             "capabilities": capability_reference_text(),
         }
-
-    async def read(
-        self,
-        resource: str,
-        repo: str,
-        identifier: str = "",
-        parameters: str = "{}",
-        continuation: str = "",
-    ) -> dict[str, Any]:
-        """Read one page of a resource allowed by the host."""
-        try:
-            definition, request = prepare_read(resource, repo, identifier, parameters)
-            return await read_page(
-                await self._get_client(), definition, request, continuation
-            )
-        except GitHubReadError as exc:
-            raise MemberCapabilityError(str(exc)) from None
 
     async def issue_inspect(self, url: str) -> dict[str, Any]:
         resource = self.parse_url(url, expected_kind="issue")

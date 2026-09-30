@@ -208,6 +208,7 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
         ("capabilities/github_activity_events.py", "poll"),
         ("capabilities/member_github.py", "_get_client"),
         ("integrations/github/github_ticket_manager.py", "login"),
+        ("integrations/github/code_hosting_service.py", "read"),
     }
 
 

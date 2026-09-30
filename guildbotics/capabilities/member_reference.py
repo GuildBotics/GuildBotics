@@ -88,21 +88,26 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ],
     ),
     (
-        "GitHub",
+        "Repository",
         [
             (
-                "guildbotics member github read --person <person> --resource <name> "
-                "--repo <owner/repo> [--identifier <id>] [--params <json>] "
+                "guildbotics member repository read --person <person> --resource <name> "
+                "--repo <repository> [--identifier <id>] [--params <json>] "
                 "[--continuation <value>]",
-                "Read one bounded page through a host-approved resource. "
-                "dependabot-alerts accepts state (open by default, fixed, dismissed, "
-                "auto_dismissed) and per_page (1-100, default 30); dependabot-alert "
-                "requires an alert number as identifier and accepts no conditions. "
-                "Reuse identical conditions with the returned continuation. "
-                "For formatted or structured alerts, run github/security_alerts "
-                "in a ready command environment. URLs, HTTP methods, headers, and "
-                "GraphQL are not accepted.",
+                "Read one bounded page through the configured code_hosting_service. "
+                "dependency_alerts accepts state (open by default, resolved, dismissed) "
+                "and page_size (1-100, default 30). With an identifier, it returns one "
+                "alert and accepts no conditions or continuation. Results contain "
+                "normalized items and continuation; reuse identical conditions for "
+                "the next page. For formatted or JSON alerts, run "
+                "repository/security_alerts in a ready command environment. "
+                "URLs, HTTP methods, headers, and GraphQL are not accepted.",
             ),
+        ],
+    ),
+    (
+        "GitHub",
+        [
             (
                 "guildbotics member github issue inspect --person <person> --url <issue_url>",
                 "Read an issue and its comments.",

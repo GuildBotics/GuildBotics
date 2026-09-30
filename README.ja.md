@@ -247,7 +247,7 @@ organization で GitHub Projects (v2) のプロジェクトを作成し、以下
 
 既存 App に権限を追加した場合は、利用する前に各インストール先で変更を承認してください。Dependabot アラートでは、App の **Permissions & events → Repository permissions → Dependabot alerts** を **Read-only** に変更し、organization owner が **Organization Settings → GitHub Apps → Configure** で変更内容を確認・承認します。対象リポジトリがインストール先に含まれていることも確認してください。GuildBotics から新規登録する App は、この権限を最初から要求します。[GitHub の承認手順](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app)も参照してください。
 
-最新のアラートは `guildbotics run github/security_alerts --person alice repo=org/repo` で確認できます。個別確認は `alert=42` を追加します。実行環境の準備は必要ですが、LLM は呼びません。ページ送り・構造化結果・アクセスエラーは[Dependabot アラート確認コマンド](docs/custom_command_guide.ja.md#41-dependabot-アラートの確認)を参照してください。
+最新のアラートは `guildbotics run repository/security_alerts --person alice repo=org/repo` で確認できます。個別確認は `alert=42` を追加します。実行環境の準備は必要ですが、LLM は呼びません。ページ送り・構造化結果・アクセスエラーは[Dependabot アラート確認コマンド](docs/custom_command_guide.ja.md#41-依存ライブラリの脆弱性アラートの確認)を参照してください。
 
 GitHub App 作成後に以下の作業を行ってください。
 

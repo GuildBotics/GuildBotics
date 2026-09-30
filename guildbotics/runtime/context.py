@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatService
+from guildbotics.integrations.code_hosting_service import CodeHostingService
 from guildbotics.integrations.ticket_manager import TicketManager
 from guildbotics.intelligences.brains.brain import Brain
 from guildbotics.runtime.brain_factory import BrainFactory
@@ -51,6 +52,7 @@ class Context:
         self.person = person
         self.ticket_manager: TicketManager | None = None
         self.chat_service: ChatService | None = None
+        self.code_hosting_service: CodeHostingService | None = None
         self.pipe = message
         self.shared_state: dict[str, Any] = {}
         self._invoker: Callable[[str, Any], Awaitable[Any]] | None = None
@@ -141,6 +143,16 @@ class Context:
             )
         return self.ticket_manager
 
+    def get_code_hosting_service(self) -> CodeHostingService:
+        """Get the configured code-hosting service for the current member."""
+        if self.code_hosting_service is None:
+            self.code_hosting_service = (
+                self.integration_factory.create_code_hosting_service(
+                    self.logger, self.person, self.team
+                )
+            )
+        return self.code_hosting_service
+
     def get_chat_service(self) -> ChatService:
         """Get a chat service for the current person/team."""
         if self.chat_service is None:
@@ -164,6 +176,8 @@ class Context:
 
     async def aclose(self) -> None:
         """Close cached integrations that hold network resources."""
+        await _maybe_aclose(self.code_hosting_service)
+        self.code_hosting_service = None
         await _maybe_aclose(self.chat_service)
         self.chat_service = None
 

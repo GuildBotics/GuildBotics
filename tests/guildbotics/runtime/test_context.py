@@ -82,6 +82,9 @@ class DummyIntegrationFactory(IntegrationFactory):
         self.ticket_manager_calls: list[tuple[Person, Team]] = []
         self.chat_service_calls: list[tuple[Person, Team]] = []
 
+    def create_code_hosting_service(self, logger, person, team):
+        return self.create_chat_service(logger, person, team)
+
     def create_ticket_manager(
         self, logger: logging.Logger, person: Person, team: Team
     ) -> TicketManager:
@@ -226,10 +229,19 @@ async def test_context_aclose_closes_cached_chat_resources():
     )
 
     chat_service = ctx.get_chat_service()
+    repository_service = ctx.get_code_hosting_service()
+    assert ctx.get_code_hosting_service() is repository_service
+    clone = ctx.clone_for(Person(person_id="other", name="Other"))
+    assert clone.code_hosting_service is None
+    assert clone.get_code_hosting_service() is not repository_service
+    await clone.aclose()
+    assert not repository_service.closed
     await ctx.aclose()
 
     assert getattr(chat_service, "closed", False) is True
     assert ctx.chat_service is None
+    assert repository_service.closed
+    assert ctx.code_hosting_service is None
 
 
 def test_get_brain_delegates_to_factory_with_language():

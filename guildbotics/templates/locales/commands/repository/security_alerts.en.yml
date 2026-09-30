@@ -1,8 +1,7 @@
 en:
-  environment: "Run this command through guildbotics run with a ready execution environment."
   output: "output must be markdown or json."
-  page_size: "per_page must be an integer between 1 and 100."
-  heading: "# Dependabot alerts: %{repo}"
+  page_size: "page_size must be an integer between 1 and 100."
+  heading: "# Dependency vulnerability alerts: %{repo}"
   empty: "No alerts in this page for the selected conditions."
   missing: "Not provided"
   no_patch: "No patched version reported"
@@ -14,11 +13,10 @@ en:
     ecosystem: Ecosystem
     manifest_path: Manifest path
     severity: Severity
-    ghsa: GHSA
-    cve: CVE
+    identifiers: Advisory identifiers
     summary: Summary
     description: Description
-    vulnerable_version_range: Affected versions
-    first_patched_version: First patched version
+    affected_versions: Affected versions
+    patched_version: First patched version
     created_at: Created
     updated_at: Updated

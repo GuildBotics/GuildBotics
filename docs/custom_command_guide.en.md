@@ -315,46 +315,37 @@ label: Late night
 reason: The current time is 23:36, which falls in the late night period (typically 11pm–3am).
 ```
 
-### 4.1. Checking Dependabot alerts
+### 4.1. Checking dependency vulnerability alerts
 
-Read the first page of open alerts, or one alert by number:
-
-```shell
-guildbotics run github/security_alerts --person alice repo=org/repo
-guildbotics run github/security_alerts --person alice repo=org/repo alert=42
-```
-
-The command is read-only, runs in the usual microVM, and makes no LLM call. Prepare and start the execution environment as for other commands; Python commands are not run directly on the host. The member's GitHub App needs **Dependabot alerts: Read-only** and access to the repository. Existing installations must approve added permissions; see [GitHub App setup](../README.md#prepare-a-github-account-for-the-ai-agent). A fine-grained PAT needs the equivalent repository permission. GitHub documents the [list and detail API permissions](https://docs.github.com/en/rest/dependabot/alerts).
-
-For fixed alerts as structured data, use:
+Read one page of open alerts, or an individual alert:
 
 ```shell
-guildbotics run github/security_alerts --person alice repo=org/repo state=fixed per_page=10 output=json
+guildbotics run repository/security_alerts --person alice repo=org/repo
+guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
+guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-`output=json` returns `{ "repo": "org/repo", "alerts": [...], "continuation": null }`. Each alert includes its number, URL, state, package, ecosystem, manifest path, severity, GHSA/CVE, summary, description, affected versions, first patched version, and creation/update timestamps. Missing fields are `null`; Markdown displays missing values and unreported patches explicitly. `state` accepts `open` (default), `fixed`, `dismissed`, or `auto_dismissed`; `per_page` accepts 1–100 (default 30). These conditions apply to lists. For `alert=42`, the command requests only that alert.
+The command uses the workspace's `services.code_hosting_service`, runs read-only in the usual microVM, and makes no LLM call. Prepare the execution environment as for other commands. Currently the supported provider is `github`; missing or unsupported configuration fails explicitly. For GitHub, the member's App needs **Dependabot alerts: Read-only** and repository access. Existing installations must approve added permissions; see [GitHub App setup](../README.md#prepare-a-github-account-for-the-ai-agent). A fine-grained PAT needs the equivalent repository permission.
 
-Each invocation returns one page. When `continuation` is non-null, run again with the same repository and conditions plus `continuation=<returned-value>`. Markdown includes that argument when more results exist. An empty page is a successful read; an access failure is an error. Oversized responses fail without truncated JSON; reduce `per_page` for a collection. An oversized detail cannot be returned. A 403 or 404 can have several causes, so check permissions, installation approval, repository access, the alert number, and whether Dependabot alerts are enabled. Rate-limit errors ask you to wait before retrying.
+`output=json` returns JSON text with `{ "repo": "org/repo", "alerts": [...], "continuation": null }`, preserving empty lists and `null`. Each alert has a string `id`, URL, state, package, ecosystem, manifest path, severity, advisory `identifiers` (a list of `{ "type": "CVE", "value": "..." }`), summary, description, `affected_versions`, `patched_version`, and creation/update timestamps. Missing optional fields are `null`; missing identifiers are an empty list. Markdown displays missing values and unreported patches explicitly. This resource covers dependency vulnerabilities.
 
-`output=json` returns JSON text, preserving empty lists and `null`. A following Python command can read it with `json.loads(context.pipe)`, or decode the value returned by `await context.invoke("github/security_alerts", repo="org/repo", output="json")`.
+`state` accepts `open` (default), `resolved`, or `dismissed`; `page_size` accepts 1–100 (default 30). GitHub maps resolved to fixed and includes both manually and automatically dismissed alerts in dismissed. These conditions apply to collections; `alert=<id>` selects one alert. IDs and repository names are provider-defined strings; GitHub uses alert numbers and `owner/name`.
 
-Custom Python commands can consume the same allowed data through the existing host window:
+Each invocation returns one page. For a non-null `continuation`, repeat the same repository and conditions with `continuation=<returned-value>`. An empty page is a successful read; access failures are errors. Oversized responses fail without truncated JSON; reduce `page_size` for a collection. An oversized detail cannot be returned. GitHub 403/404 errors may mean insufficient permissions, unapproved installation permissions, inaccessible resources, or disabled Dependabot alerts. Rate-limit errors ask you to wait before retrying.
+
+A following Python command can decode `context.pipe`, or the value returned by `await context.invoke("repository/security_alerts", repo="org/repo", output="json")`. Custom Python commands can also consume typed results directly:
 
 ```python
-from guildbotics.integrations.window import read_github
-from guildbotics.intelligences.agent_runtime.host_client import command_window
-
 async def main(context, repo):
-    page = await read_github(
-        command_window(), context.person.person_id,
-        "dependabot-alerts", repo, parameters={"state": "open", "per_page": 10},
+    page = await context.get_code_hosting_service().read(
+        "dependency_alerts", repo, parameters={"state": "open", "page_size": 10},
     )
-    return page  # data contains the GitHub page; continuation identifies its successor.
+    return [alert.package for alert in page.items]
 ```
 
-The member CLI equivalent is `guildbotics member github read --person alice --resource dependabot-alerts --repo org/repo --params '{"state":"open","per_page":10}'`. `dependabot-alert` requires `--identifier 42` and no conditions. Both return `resource`, `repo`, `identifier`, `parameters`, `data`, and `continuation`. Pass `--continuation` with identical request conditions for the next page. The continuation carries those conditions and a cursor, not authorization; the host validates every request against its resource definitions and reconstructs the allowed URL. Redirects and pagination links cannot expand access. Tokens and authentication stay on the host.
+The member CLI equivalent is `guildbotics member repository read --person alice --resource dependency_alerts --repo org/repo --params '{"state":"open","page_size":10}'`. It returns normalized `items` and `continuation`. For one alert, supply `--identifier 42` and no parameters or continuation.
 
-New resource types require a definition and tests in `integrations/github/read_resources.py`. Aggregation and display of already allowed data belong in commands. The common entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL, and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
+`integrations/code_hosting_service.py` owns the common service and result types. The host integration factory selects the configured implementation; commands use the same interface through their member grant. Authentication, approved routes, API payload conversion, and pagination belong to the provider adapter. A continuation is bound to its API base and request conditions, carries no authorization, and is revalidated on each read. Tokens stay on the host; redirects and pagination links cannot expand access. New resources require a common contract, adapter support, and tests. The entrance accepts no arbitrary URLs, HTTP methods, headers, or GraphQL and cannot change alert state. The existing CI Dependabot digest remains a separate scheduled workflow.
 
 ## 5. Using subcommands
 You can chain multiple subcommands to build a workflow.

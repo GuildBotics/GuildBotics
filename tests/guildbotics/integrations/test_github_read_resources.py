@@ -154,12 +154,38 @@ async def test_malformed_continuation_never_reaches_network(continuation):
 )
 async def test_continuations_are_bound_to_the_original_request(overrides):
     _, request = prepared()
+    request["api_base_url"] = "https://api.github.com"
     token = base64.urlsafe_b64encode(
         json.dumps({"request": request, "after": "cursor"}).encode()
     ).decode()
     async with httpx.AsyncClient(base_url="https://api.github.com") as client:
         with pytest.raises(reads.GitHubReadError):
             await reads.read_page(client, *prepared(**overrides), token)
+
+
+@pytest.mark.asyncio
+async def test_real_continuation_cannot_move_to_another_api():
+    def respond(_):
+        return httpx.Response(
+            200,
+            json=[],
+            headers={
+                "Link": f'<https://api.github.com{PATH}?state=open&per_page=30&after=cursor>; rel="next"'
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://api.github.com", transport=httpx.MockTransport(respond)
+    ) as client:
+        page = await reads.read_page(client, *prepared())
+    calls = []
+    async with httpx.AsyncClient(
+        base_url="https://other.test/api/v3/",
+        transport=httpx.MockTransport(lambda request: calls.append(request)),
+    ) as client:
+        with pytest.raises(reads.GitHubReadError):
+            await reads.read_page(client, *prepared(), page["continuation"])
+    assert calls == []
 
 
 @pytest.mark.asyncio

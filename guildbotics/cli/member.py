@@ -45,6 +45,7 @@ from guildbotics.capabilities.member_reference import (
     capability_reference_text,
     command_summary,
 )
+from guildbotics.capabilities.member_repository import read_repository
 from guildbotics.capabilities.task_runs import (
     RunStore,
     TaskRunError,
@@ -63,6 +64,7 @@ from guildbotics.commands.errors import (
     PersonExecutionNotAllowedError,
     PersonNotFoundError,
 )
+from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.github.repository_scope import RepositoryScopeError
 from guildbotics.observability import join_trace, trace_scope
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -1656,13 +1658,20 @@ def issue() -> None:
     """GitHub issue operations."""
 
 
-@github.command(name="read")
+@member.group()
+def repository() -> None:
+    """Read resources from the configured code-hosting service."""
+
+
+@repository.command(name="read")
 @_read_only_member_command
 @_person_option
 @click.option(
     "--resource", required=True, help="Host-defined resource name; see member help."
 )
-@click.option("--repo", required=True, help="Repository in owner/name form.")
+@click.option(
+    "--repo", required=True, help="Repository identifier for the configured service."
+)
 @click.option(
     "--identifier", default="", help="Resource identifier for an individual item."
 )
@@ -1675,7 +1684,7 @@ def issue() -> None:
     help="Continuation returned for the same resource and conditions.",
 )
 @_json_format_option
-def github_read(
+def repository_read(
     person: str,
     resource: str,
     repo: str,
@@ -1684,12 +1693,23 @@ def github_read(
     continuation: str,
     output_format: str,
 ) -> None:
+    try:
+        conditions = json.loads(parameters)
+        if not isinstance(conditions, dict):
+            raise ValueError
+    except ValueError:
+        raise click.BadParameter(
+            "Expected a JSON object.", param_hint="--params"
+        ) from None
+    context, _ = _resolve(person)
     _run(
-        _github(
-            person,
-            lambda service: service.read(
-                resource, repo, identifier, parameters, continuation
-            ),
+        read_repository(
+            context,
+            resource,
+            repo,
+            identifier=identifier,
+            parameters=conditions,
+            continuation=continuation,
         ),
         output_format=output_format,
     )
@@ -2504,6 +2524,7 @@ def _run(coro, *, output_format: str) -> Any:
                 result = _run_interactive(coro, interactive_session, command)
     except (
         MemberCapabilityError,
+        RepositoryReadError,
         MemberMemoryError,
         ChatUpdatesRequired,
         TaskRunError,

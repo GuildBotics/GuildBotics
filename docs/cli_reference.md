@@ -89,7 +89,6 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
 | [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
-| [`guildbotics member github read`](#guildbotics-member-github-read) | Read one bounded page through a host-approved resource. |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 | [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
 | [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
@@ -102,6 +101,8 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member memory record`](#guildbotics-member-memory-record) | Create a memory document and move it to the front of the digest. |
 | [`guildbotics member memory touch`](#guildbotics-member-memory-touch) | Mark a useful memory as actually used by moving it to the digest front. |
 | [`guildbotics member memory update`](#guildbotics-member-memory-update) | Replace selected body or metadata fields and move the document to the digest front. |
+| [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
+| [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
 | [`guildbotics member task complete`](#guildbotics-member-task-complete) | Finish a ticket workflow run with evidence, revalidating affected PR readiness before accepting done. |
 | [`guildbotics member task status`](#guildbotics-member-task-status) | Inspect recorded run evidence. |
@@ -656,6 +657,7 @@ guildbotics member [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github`](#guildbotics-member-github) | GitHub issue, pull request, Actions, and reaction capabilities. |
 | [`guildbotics member help`](#guildbotics-member-help) | Print the member capability reference (commands and cross-cutting rules). |
 | [`guildbotics member memory`](#guildbotics-member-memory) | Record, recall, and maintain member memory documents. |
+| [`guildbotics member repository`](#guildbotics-member-repository) | Read resources from the configured code-hosting service. |
 | [`guildbotics member task`](#guildbotics-member-task) | Workflow task-run completion records. |
 
 ## `guildbotics member agent`
@@ -1082,7 +1084,6 @@ guildbotics member github [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
-| [`guildbotics member github read`](#guildbotics-member-github-read) | Read one bounded page through a host-approved resource. |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 
 ## `guildbotics member github issue`
@@ -1388,25 +1389,6 @@ guildbotics member github reaction add [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
-## `guildbotics member github read`
-
-Read one bounded page through a host-approved resource. dependabot-alerts accepts state (open by default, fixed, dismissed, auto_dismissed) and per_page (1-100, default 30); dependabot-alert requires an alert number as identifier and accepts no conditions. Reuse identical conditions with the returned continuation. For formatted or structured alerts, run github/security_alerts in a ready command environment. URLs, HTTP methods, headers, and GraphQL are not accepted.
-
-```text
-guildbotics member github read [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--resource TEXT` | Host-defined resource name; see member help. [required] |
-| `--repo TEXT` | Repository in owner/name form. [required] |
-| `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
-| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
-| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
-| `--format [json\|markdown]` | Output format. [default: json] |
-| `--help` | Show this message and exit. |
-
 ## `guildbotics member github run`
 
 GitHub Actions run operations.
@@ -1631,6 +1613,41 @@ guildbotics member memory update [OPTIONS]
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--policy-approved` | Confirm that a human approved this policy memory change. |
 | `--set TEXT` | Extra metadata as key=value. May be repeated. |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member repository`
+
+Read resources from the configured code-hosting service.
+
+```text
+guildbotics member repository [OPTIONS] COMMAND [ARGS]...
+```
+
+| Option | Description |
+| --- | --- |
+| `--help` | Show this message and exit. |
+
+| Subcommand | Summary |
+| --- | --- |
+| [`guildbotics member repository read`](#guildbotics-member-repository-read) | Read one bounded page through the configured code_hosting_service. |
+
+## `guildbotics member repository read`
+
+Read one bounded page through the configured code_hosting_service. dependency_alerts accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an identifier, it returns one alert and accepts no conditions or continuation. Results contain normalized items and continuation; reuse identical conditions for the next page. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. URLs, HTTP methods, headers, and GraphQL are not accepted.
+
+```text
+guildbotics member repository read [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--resource TEXT` | Host-defined resource name; see member help. [required] |
+| `--repo TEXT` | Repository identifier for the configured service. [required] |
+| `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
+| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
+| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

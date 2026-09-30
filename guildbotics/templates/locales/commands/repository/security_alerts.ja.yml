@@ -1,8 +1,7 @@
 ja:
-  environment: "実行環境を準備し、guildbotics run からこのコマンドを実行してください。"
   output: "output は markdown または json を指定してください。"
-  page_size: "per_page は1～100の整数で指定してください。"
-  heading: "# Dependabot アラート: %{repo}"
+  page_size: "page_size は1～100の整数で指定してください。"
+  heading: "# 依存ライブラリの脆弱性アラート: %{repo}"
   empty: "指定条件に該当するアラートは、このページにありません。"
   missing: "情報なし"
   no_patch: "修正版の報告なし"
@@ -14,11 +13,10 @@ ja:
     ecosystem: エコシステム
     manifest_path: マニフェストのパス
     severity: 深刻度
-    ghsa: GHSA
-    cve: CVE
+    identifiers: アドバイザリ識別子
     summary: 概要
     description: 説明
-    vulnerable_version_range: 影響を受けるバージョン
-    first_patched_version: 最初の修正版
+    affected_versions: 影響を受けるバージョン
+    patched_version: 最初の修正版
     created_at: 作成日時
     updated_at: 更新日時

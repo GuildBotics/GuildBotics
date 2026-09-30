@@ -13,16 +13,18 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from guildbotics.integrations.code_hosting_service import (
+    MAX_PAGE_BYTES,
+    RepositoryReadError,
+)
+from guildbotics.integrations.github.async_client import ResponseTooLarge
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
-# Leave room for JSON escaping in the CLI, member result, and host envelope.
-MAX_PAGE_BYTES = STREAM_READ_LIMIT // 16
 _CURSOR_LIMIT = 2048
 _CONTINUATION_LIMIT = 8192
 
 
-class GitHubReadError(RuntimeError):
+class GitHubReadError(RepositoryReadError):
     """A safe, localized failure that carries no upstream body or credentials."""
 
 
@@ -35,7 +37,9 @@ class NoParameters(BaseModel):
 class AlertParameters(NoParameters):
     """The conditions this host exposes for Dependabot collections."""
 
-    state: Literal["open", "fixed", "dismissed", "auto_dismissed"] = "open"
+    state: Literal[
+        "open", "fixed", "dismissed", "auto_dismissed", "dismissed,auto_dismissed"
+    ] = "open"
     per_page: int = Field(default=30, ge=1, le=100)
 
 
@@ -159,6 +163,7 @@ async def read_page(
     continuation: str = "",
 ) -> dict[str, Any]:
     """Read exactly one allowed page, without following upstream URLs."""
+    request = {**request, "api_base_url": str(client.base_url)}
     parameters = dict(request["parameters"])
     if continuation:
         if not definition.collection:
@@ -193,6 +198,8 @@ async def read_page(
                 if not isinstance(data, dict):
                     raise GitHubReadError(t("integrations.github.read.response"))
                 next_page = None
+    except ResponseTooLarge:
+        raise GitHubReadError(t("integrations.github.read.too_large")) from None
     except httpx.HTTPStatusError as exc:
         raise _http_error(exc.response) from None
     except httpx.RequestError:
