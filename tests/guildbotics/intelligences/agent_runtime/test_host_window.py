@@ -422,6 +422,8 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
                 SummaryEntry(
                     span=span,
                     slot="default",
+                    tool="claude",
+                    model_specified=True,
                     status="finished",
                     model="m",
                     duration_ms=1500,
@@ -463,6 +465,8 @@ async def test_records_are_written_in_the_commands_trace_under_the_span_named(
     }
     assert provider_state.authentication_failed(tool)
     assert written[4]["attributes"]["agent.slot"] == "default"
+    assert written[4]["attributes"]["agent.adapter"] == "claude"
+    assert written[4]["payload"]["model_specified"] is True
 
 
 @pytest.mark.asyncio
@@ -561,6 +565,20 @@ _OTHERS = {
                 CredentialEntry(span=None, tool="codex", failed=False).model_dump(
                     mode="json"
                 )
+            ]
+        },
+    ),
+    "a summary of a tool the command does not run": (
+        "record",
+        {
+            "entries": [
+                SummaryEntry(
+                    span=None,
+                    slot="default",
+                    tool="codex",
+                    model_specified=False,
+                    status="finished",
+                ).model_dump(mode="json")
             ]
         },
     ),

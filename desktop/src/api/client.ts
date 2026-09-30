@@ -1705,6 +1705,19 @@ export async function getMemoryEvents(params?: {
   return request(`/diagnostics/memory-events${suffix ? `?${suffix}` : ""}`);
 }
 
+export type CliAgentLastTurn = {
+  person_id: string;
+  agent: string;
+  model: string;
+  model_specified: boolean;
+  effort: string;
+  timestamp: string;
+};
+
+export async function getCliAgentLastTurns(): Promise<CliAgentLastTurn[]> {
+  return request("/intelligences/cli-agents/last-turns");
+}
+
 // `refresh` waits for a new probe instead of answering from the cache.
 export async function getCliAgentUsage(
   agent: string,

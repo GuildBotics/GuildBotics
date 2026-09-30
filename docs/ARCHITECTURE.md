@@ -380,8 +380,16 @@ resolved level, effective model id, the *names* of the applied parameters, and
 an unsupported flag — never the effective parameter values, which can sit
 alongside API keys and headers. The effective model id and the effort level are
 the two deliberate exceptions to "names only": both are values, and both are
-written. They surface in trace / diagnostics detail only; the activity history is
-about domain outcomes.
+written. Trace / diagnostics detail shows both values. The member's CLI tool
+cards and activity member column also show the last turn's model on this device.
+`GET /intelligences/cli-agents/last-turns` returns that reading per member and
+tool from the retained diagnostics index, including failed turns and turns with
+no reported model. CLI span summaries record `agent.adapter` and
+`payload.model_specified` alongside `agent.slot` and `payload.model`.
+The brain determines `model_specified` from the model sent to the turn after
+slot settings and effort overlays are resolved; changing settings later cannot
+change the recorded classification. Rows without those facts are not inferred
+from current settings.
 
 What a turn *really* ran on is decided by the layer that holds the provider
 knowledge and is carried out on the normal result path: each adapter fills

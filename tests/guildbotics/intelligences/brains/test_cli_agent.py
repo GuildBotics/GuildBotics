@@ -324,6 +324,63 @@ async def test_an_unknown_model_stays_empty_in_the_span(monkeypatch, tmp_path, w
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["finished", "failed", "exception"])
+@pytest.mark.parametrize(
+    ("parameters", "levels", "configured", "expected"),
+    [
+        ({"model": "slot-model"}, {}, {}, "slot-model"),
+        (
+            {"model": "slot-model"},
+            {"high": {"model": "effort-model"}},
+            {},
+            "effort-model",
+        ),
+        ({}, {}, {"model": "context-model"}, "context-model"),
+        ({}, {}, {}, ""),
+    ],
+)
+async def test_span_records_the_model_selection_sent_to_the_turn(
+    monkeypatch, tmp_path, window, parameters, levels, configured, expected, outcome
+):
+    _native_brain(
+        monkeypatch,
+        cli_agent.CliAgentExecutionResult(stdout="done", stderr="", returncode=0),
+        parameters=parameters,
+        effort=levels,
+    )
+    requested = []
+
+    async def execute(self, *, context, **_kwargs):
+        requested.append(context.model)
+        if outcome == "exception":
+            raise RuntimeError("provider unavailable")
+        return cli_agent.CliAgentExecutionResult(
+            stdout="done",
+            stderr="",
+            returncode=int(outcome == "failed"),
+            model="actual-model",
+        )
+
+    monkeypatch.setattr(cli_agent.CliAgentBrain, "_execute_native_turn", execute)
+    brain = cli_agent.CliAgentBrain("p1", "x", logger=_test_logger(), effort="high")
+    call = brain.run_with_execution_details(
+        "hello", cwd=tmp_path, session_state={"agent_execution_context": configured}
+    )
+    if outcome == "exception":
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            await call
+    else:
+        await call
+
+    (span,) = _spans(window)
+    assert requested == [expected]
+    assert span.model_specified is bool(expected)
+    assert span.tool == "claude"
+    assert span.model == ("" if outcome == "exception" else "actual-model")
+    assert span.status == ("finished" if outcome == "finished" else "failed")
+
+
+@pytest.mark.asyncio
 async def test_a_record_the_host_refuses_does_not_undo_the_turn(
     monkeypatch, tmp_path, window, caplog
 ):
@@ -500,6 +557,7 @@ async def test_a_default_effort_turn_states_no_settings(
         },
         effort=brain._resolve_provider_effort({"session_state": {"effort": "default"}}),
         records=cli_agent._TurnRecords(window),
+        model="",
     )
 
     context = captured["context"]
@@ -546,6 +604,7 @@ async def test_an_unmapped_effort_level_is_not_claimed_as_the_turns_effort(
         },
         effort=brain._resolve_provider_effort({"session_state": {}}),
         records=cli_agent._TurnRecords(window),
+        model="base-model",
     )
 
     context = captured["context"]

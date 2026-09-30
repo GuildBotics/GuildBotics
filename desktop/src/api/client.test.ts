@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getCliAgentUsage,
+  getCliAgentLastTurns,
   ApiRequestError,
   applyCommandAuthoring,
   authorCommand,
@@ -335,6 +336,24 @@ describe("GET query parameter encoding", () => {
 
     expect(calls[0].url).toBe("http://127.0.0.1:8765/diagnostics/scenario?person_id=alice%2Fdev");
     expect(calls[0].init.method).toBe("POST");
+  });
+
+  it("reads device-local last turns with the session token", async () => {
+    const turns = [
+      {
+        person_id: "alice",
+        agent: "codex",
+        model: "actual",
+        model_specified: false,
+        effort: "high",
+        timestamp: "2026-09-29T10:00:00Z",
+      },
+    ];
+    const { calls } = captureFetch(jsonResponse(turns));
+    expect(await getCliAgentLastTurns()).toEqual(turns);
+    expect(calls[0].url).toBe("http://127.0.0.1:8765/intelligences/cli-agents/last-turns");
+    expect(calls[0].init.method).toBe("GET");
+    expect(headerValue(calls[0].init, "X-GuildBotics-Session-Token")).toBe("test-token");
   });
 
   it("reads one tool's usage, and waits for a new probe on refresh", async () => {

@@ -56,6 +56,7 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     EventEntry,
     HostCallError,
     IoEntry,
+    SummaryEntry,
 )
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberBrokerEndpoint,
@@ -359,7 +360,7 @@ class HostWindow:
         for entry in entries:
             if isinstance(entry, EventEntry):
                 self._check_conversation(entry.conversation)
-            elif isinstance(entry, CredentialEntry):
+            elif isinstance(entry, (CredentialEntry, SummaryEntry)):
                 self._check_tool(entry.tool)
         await asyncio.to_thread(self._write, entries)
 
@@ -433,8 +434,10 @@ class HostWindow:
                         attributes={
                             "agent.kind": "cli_agent",
                             "agent.slot": entry.slot,
+                            "agent.adapter": entry.tool,
                         },
                         model=entry.model,
+                        model_specified=entry.model_specified,
                         effort=entry.effort,
                         usage=entry.usage,
                     )

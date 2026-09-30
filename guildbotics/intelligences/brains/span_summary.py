@@ -16,6 +16,7 @@ def record_summary(
     duration_ms: float | None,
     attributes: dict[str, Any],
     model: str = "",
+    model_specified: bool | None = None,
     effort: str = "",
     usage: dict[str, Any] | None = None,
 ) -> None:
@@ -33,12 +34,14 @@ def record_summary(
         duration_ms: How long the span's work took.
         attributes: What makes the span attributable without its model.
         model: The model the work really ran on, if known.
+        model_specified: Whether the CLI turn requested a model, if applicable.
         effort: The effort the work really ran under, if known.
         usage: The token usage the provider reported.
     """
     record_span_summary(
         status=status,
         model=model,
+        model_specified=model_specified,
         effort=effort,
         duration_ms=duration_ms,
         usage=usage,

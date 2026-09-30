@@ -43,6 +43,17 @@ from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
 
 
+class CliAgentLastTurn(BaseModel):
+    """The latest recorded CLI turn for a member and tool on this device."""
+
+    person_id: str
+    agent: str
+    model: str
+    model_specified: bool
+    effort: str
+    timestamp: str
+
+
 class VerifyCheck(BaseModel):
     code: str
     status: str = Field(pattern="^(ok|warning|error)$")

@@ -535,6 +535,10 @@ pre {
   box-shadow: inset 0 0 0 1px var(--color-brand);
 }
 
+.option-card[role="group"] {
+  cursor: default;
+}
+
 .option-card:disabled {
   background: var(--color-bg-hover-subtle);
   color: var(--color-text-muted);
@@ -1445,8 +1449,31 @@ pre {
 }
 
 .activity-member-role {
+  align-items: baseline;
   color: var(--color-text-subtle);
+  display: flex;
+  gap: 8px;
   font-size: 11px;
+}
+
+.activity-member-role > span:first-child {
+  flex-shrink: 0;
+}
+
+.activity-member-model {
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cli-agent-last-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--color-text-subtle);
+  overflow-wrap: anywhere;
 }
 
 .activity-member-rate-limit {

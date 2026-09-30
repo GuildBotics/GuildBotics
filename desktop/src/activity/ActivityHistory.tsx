@@ -57,7 +57,11 @@ import {
   getWorkspaceLive,
   memberAvatarUrl,
 } from "../api/client";
-import { useMemberCliAgentLabel, useMemberCliAgentUsage } from "../cliAgent";
+import {
+  useMemberCliAgentLabel,
+  useMemberCliAgentUsage,
+  useMemberCliAgentLastTurn,
+} from "../cliAgent";
 import {
   latestPresentation,
   tracePresentationLabel,
@@ -583,11 +587,22 @@ function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
   const { t } = useTranslation();
   const isHuman = member.person_type === "human";
   const cliAgentLabel = useMemberCliAgentLabel(member.person_id, !isHuman);
+  const turn = useMemberCliAgentLastTurn(member.person_id, !isHuman);
+  const modelDetail = turn?.model ? [turn.model, turn.effort].filter(Boolean).join(" · ") : "";
   const label = isHuman ? t("activity.memberHuman") : cliAgentLabel;
   if (!label) {
     return null;
   }
-  return <span className="activity-member-role">{label}</span>;
+  return (
+    <span className="activity-member-role">
+      <span>{label}</span>
+      {modelDetail ? (
+        <span className="activity-member-model" title={modelDetail}>
+          {modelDetail}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 // Live status under the member name: the newest presentation record of the

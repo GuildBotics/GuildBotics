@@ -194,6 +194,8 @@ class SummaryEntry(BaseModel):
     type: Literal["summary"] = "summary"
     span: SpanContext | None
     slot: str
+    tool: str
+    model_specified: bool
     status: Literal["finished", "failed"]
     model: str = ""
     effort: str = ""

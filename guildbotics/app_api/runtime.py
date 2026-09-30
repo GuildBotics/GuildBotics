@@ -32,6 +32,7 @@ from guildbotics.app_api.agent_environment_status import (
     agent_environment_status,
 )
 from guildbotics.app_api.agent_streams import collapse_assistant_streams
+from guildbotics.app_api.cli_agent_turns import last_cli_agent_turns
 from guildbotics.app_api.cli_agent_usage import CliAgentUsageCache
 from guildbotics.app_api.command_files import CommandFileService, file_revision
 from guildbotics.app_api.command_input_files import command_cwd
@@ -47,6 +48,7 @@ from guildbotics.app_api.models import (
     AgentFieldOption,
     AgentFieldStateResponse,
     ChatReceiveResetResponse,
+    CliAgentLastTurn,
     CliAgentUsageCheck,
     CliAgentUsageResponse,
     CommandAuthoringApplyRequest,
@@ -1794,6 +1796,9 @@ class AppRuntime:
             return None
         finally:
             await context.aclose()
+
+    def get_cli_agent_last_turns(self) -> list[CliAgentLastTurn]:
+        return last_cli_agent_turns(self._diagnostics_store)
 
     async def get_cli_agent_usage(
         self, agent_name: str, refresh: bool = False

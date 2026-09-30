@@ -24,6 +24,7 @@ import {
   getActivityHistory,
   getAgentEnvironmentStatus,
   getCliAgentUsage,
+  getCliAgentLastTurns,
   getIntelligenceConfig,
   getSchedulerStatus,
   getTraceDetail,
@@ -49,6 +50,7 @@ vi.mock("../api/client", async (importOriginal) => {
     getActivityHistory: vi.fn(),
     getAgentEnvironmentStatus: vi.fn(),
     getCliAgentUsage: vi.fn(),
+    getCliAgentLastTurns: vi.fn(),
     getIntelligenceConfig: vi.fn(),
     getSchedulerStatus: vi.fn(),
     getTraceDetail: vi.fn(),
@@ -234,6 +236,7 @@ function liveTraceRecord(message: string): TraceRecord {
 }
 
 beforeEach(() => {
+  vi.mocked(getCliAgentLastTurns).mockResolvedValue([]);
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
   vi.mocked(getActivityHistory).mockResolvedValue(ACTIVITY_FIXTURE);
@@ -375,6 +378,66 @@ describe("ActivityHistoryPage", () => {
     expect(screen.queryByText("developer")).toBe(null);
     expect(screen.queryByText("designer")).toBe(null);
   });
+
+  it.each(
+    ["actual-model-with-a-long-name", "", null].flatMap((model) =>
+      ["high", ""].map((effort) => ({ model, effort })),
+    ),
+  )(
+    "shows only the default tool's last model and known effort ($model, $effort)",
+    async ({ model, effort }) => {
+      const timestamp = "2026-09-29T10:00:00Z";
+      vi.mocked(getCliAgentLastTurns).mockResolvedValue([
+        {
+          person_id: "alice",
+          agent: "codex",
+          model: "other-tool-model",
+          effort: "other-tool-effort",
+          model_specified: true,
+          timestamp,
+        },
+        {
+          person_id: "bob",
+          agent: "claude",
+          model: "other-member-model",
+          effort: "other-member-effort",
+          model_specified: true,
+          timestamp,
+        },
+        ...(model === null
+          ? []
+          : [
+              {
+                person_id: "alice",
+                agent: "claude",
+                model,
+                model_specified: false,
+                effort,
+                timestamp,
+              },
+            ]),
+      ]);
+      renderActivity();
+      const label = await screen.findByText("Claude Code");
+      await waitFor(() => expect(getCliAgentLastTurns).toHaveBeenCalled());
+      if (model) {
+        const detail = effort ? `${model} · ${effort}` : model;
+        const name = await screen.findByTitle(detail);
+        expect(name.textContent).toBe(detail);
+        expect(name.parentElement).toBe(label.parentElement);
+        expect(name).toHaveClass("activity-member-model");
+      } else {
+        expect(label.parentElement).toHaveTextContent(/^Claude Code$/);
+        expect(label.parentElement?.querySelector(".activity-member-model")).toBeNull();
+      }
+      expect(screen.queryByText("other-tool-model")).not.toBeInTheDocument();
+      expect(screen.queryByText("other-member-model")).not.toBeInTheDocument();
+      expect(screen.queryByText(/other-tool-effort|other-member-effort/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(i18n.t("setup.intelligence.lastTurn.default")),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("shows the member's running work as a link to its trace in diagnostics", async () => {
     vi.mocked(getSchedulerStatus).mockResolvedValue(runtimeStatus([ACTIVE_WORK]));
