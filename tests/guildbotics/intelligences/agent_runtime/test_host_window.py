@@ -24,6 +24,7 @@ from guildbotics.commands.metadata import CommandAccess
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.entities.team import Person
 from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.window import (
     MemberCommandError,
     WindowChatService,
@@ -1199,11 +1200,13 @@ async def test_read_only_repository_read_uses_the_member_grant(
             result = await WindowCodeHostingService(command.client, "aiko").read(
                 "dependency_alerts", "GuildBotics/GuildBotics"
             )
-            for person, resource in [
-                ("other", "dependency_alerts"),
-                ("aiko", "secrets"),
+            # The member command's own refusal is a read failure the command
+            # reports; the grant's refusal of another person is not.
+            for person, resource, refusal in [
+                ("other", "dependency_alerts", MemberCommandError),
+                ("aiko", "secrets", RepositoryReadError),
             ]:
-                with pytest.raises(MemberCommandError):
+                with pytest.raises(refusal):
                     await WindowCodeHostingService(command.client, person).read(
                         resource, "GuildBotics/GuildBotics"
                     )

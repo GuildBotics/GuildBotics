@@ -7,6 +7,7 @@ import shlex
 from typing import Any
 
 from guildbotics.commands.errors import CommandError
+from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -34,13 +35,17 @@ async def main(
         size = int(page_size)
     except (ValueError, TypeError):
         raise CommandError(t("commands.repository.security_alerts.page_size")) from None
-    page = await context.get_code_hosting_service().read(
-        "dependency_alerts",
-        repo,
-        identifier=str(alert),
-        parameters={} if alert else {"state": state, "page_size": size},
-        continuation=continuation,
-    )
+    try:
+        page = await context.get_code_hosting_service().read(
+            "dependency_alerts",
+            repo,
+            identifier=str(alert),
+            parameters={} if alert else {"state": state, "page_size": size},
+            continuation=continuation,
+        )
+    except RepositoryReadError as exc:
+        # An anticipated read failure carries its guidance to the user.
+        raise CommandError(str(exc)) from exc
     result = {
         "repo": repo,
         "alerts": [item.model_dump() for item in page.items],

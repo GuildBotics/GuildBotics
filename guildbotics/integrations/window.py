@@ -22,6 +22,7 @@ from guildbotics.integrations.chat_service import (
 )
 from guildbotics.integrations.code_hosting_service import (
     CodeHostingService,
+    RepositoryReadError,
     RepositoryReadPage,
 )
 from guildbotics.integrations.ticket_manager import TicketManager
@@ -69,6 +70,7 @@ class WindowCodeHostingService(CodeHostingService):
                 "--format",
                 "json",
             ],
+            failure=RepositoryReadError,
         )
         return RepositoryReadPage.model_validate(result)
 
@@ -76,14 +78,31 @@ class WindowCodeHostingService(CodeHostingService):
         """The command owns the shared host client."""
 
 
+#: How a member command reports a failure it anticipated (``ClickException``).
+_REPORTED_FAILURE = "Error: "
+
+
 async def _member_result(
-    client: HostClient, arguments: list[str], stdin: str = ""
+    client: HostClient,
+    arguments: list[str],
+    stdin: str = "",
+    *,
+    failure: type[Exception] = MemberCommandError,
 ) -> dict[str, Any]:
+    """Run a member command and read its JSON result.
+
+    Raises:
+        Exception: ``failure`` with the command's own message when it reported
+            the failure; ``MemberCommandError`` for anything else, such as an
+            uncaught error, whose text is not meant for the user.
+    """
     result = await client.acall("member", arguments=arguments, stdin=stdin)
     if result["exit_code"]:
+        stderr = result["stderr"].strip()
+        if stderr.startswith(_REPORTED_FAILURE):
+            raise failure(stderr.removeprefix(_REPORTED_FAILURE))
         raise MemberCommandError(
-            result["stderr"].strip()
-            or f"The member command exited with {result['exit_code']}."
+            stderr or f"The member command exited with {result['exit_code']}."
         )
     return json.loads(result["stdout"])
 

@@ -134,19 +134,34 @@ async def test_empty_missing_fields_and_no_patch_are_localized(command, language
         set_language(previous)
 
 
-@pytest.mark.asyncio
-async def test_failed_read_is_not_an_empty_success(command, monkeypatch):
-    module, context, _, _ = command
-
+def _failing(context, stderr):
     class FailedWindow:
         async def acall(self, *_args, **_kwargs):
-            return {"exit_code": 1, "stdout": "", "stderr": "access denied"}
+            return {"exit_code": 1, "stdout": "", "stderr": stderr}
 
     context.get_code_hosting_service = lambda: WindowCodeHostingService(
         FailedWindow(), "aiko"
     )
-    with pytest.raises(MemberCommandError, match="access denied"):
+
+
+@pytest.mark.asyncio
+async def test_reported_read_failure_is_a_command_error_with_its_guidance(command):
+    """Only a CommandError reaches the user; anything else is a generic 500."""
+    module, context, _, _ = command
+    guidance = t("integrations.github.read.forbidden")
+    _failing(context, f"Error: {guidance}\n")
+    with pytest.raises(CommandError) as failed:
         await module.main(context, "org/subgroup/repo")
+    assert str(failed.value) == guidance
+
+
+@pytest.mark.asyncio
+async def test_unreported_member_failure_stays_a_defect(command):
+    module, context, _, _ = command
+    _failing(context, "Traceback (most recent call last):\n  ...\nKeyError: 'x'\n")
+    with pytest.raises(MemberCommandError, match="Traceback") as failed:
+        await module.main(context, "org/subgroup/repo")
+    assert not isinstance(failed.value, CommandError)
 
 
 @pytest.mark.asyncio
