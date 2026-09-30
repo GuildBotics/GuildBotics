@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import html
 import json
-import re
 import shlex
 from typing import Any
 
@@ -143,6 +141,5 @@ def _display(
 
 
 def _text(value: Any) -> str:
-    """Keep scalar metadata on one line and outside Markdown structure."""
-    text = html.escape(" ".join(str(value).split()), quote=False)
-    return re.sub(r"([\\`*_{}\[\]()#+.!|>-])", r"\\\1", text)
+    """Keep scalar values readable on one line in command output."""
+    return " ".join(str(value).split())

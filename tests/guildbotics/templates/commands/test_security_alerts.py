@@ -261,7 +261,88 @@ async def test_scalar_metadata_never_creates_markdown_structure(command, field):
         "h1",
         "h2",
     ]
-    assert not any(token.type in {"html_block", "html_inline"} for token in tokens)
+    assert "value # Injected heading <h1>HTML heading</h1>" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("detail", [False, True])
+async def test_heading_inputs_and_identifiers_stay_on_one_line(command, detail):
+    module, context, page, _ = command
+    value = "org/demo.repo\n\n# heading\n> quote\n- item"
+    normalized = "org/demo.repo # heading > quote - item"
+    page["items"] = [
+        {
+            "id": "opaque",
+            "state": "open",
+            "identifiers": [{"type": value, "value": value}],
+        }
+    ]
+    text = await module.main(context, value, alert=value if detail else "")
+    assert normalized in text.splitlines()[0]
+    label = t("commands.repository.security_alerts.fields.identifiers")
+    assert f"- **{label}**: {normalized}: {normalized}" in text.splitlines()
+    assert [
+        token.tag for token in MarkdownIt().parse(text) if token.type == "heading_open"
+    ] == ["h1", "h2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize("alert", ["", "41"])
+async def test_python_command_preserves_readable_scalar_values(
+    command, monkeypatch, tmp_path, language, alert
+):
+    from guildbotics.commands import python_command
+    from guildbotics.commands.models import CommandSpec
+
+    module, context, page, _ = command
+    values = {
+        "url": "https://github.com/org/repo/security/dependabot/41",
+        "package": "lodash.merge",
+        "ecosystem": "npm",
+        "manifest_path": "src/package-lock.json",
+        "severity": "high",
+        "summary": "A **bold** summary & a <tag>",
+        "affected_versions": ">= 4.0.0, < 4.17.21",
+        "patched_version": "4.17.21",
+        "created_at": "2026-09-30T12:00:00Z",
+        "updated_at": "2026-09-30T13:00:00Z",
+    }
+    page["items"] = [
+        {
+            "id": "41",
+            "state": "open",
+            **values,
+            "identifiers": [
+                {"type": "GHSA", "value": "GHSA-abcd-1234-efgh"},
+                {"type": "CVE", "value": "CVE-2024-1234"},
+            ],
+        }
+    ]
+    context.pipe = ""
+    monkeypatch.setattr(python_command, "_load_python_module", lambda _: module)
+    spec = CommandSpec(
+        name="repository/security_alerts",
+        base_dir=tmp_path,
+        cwd=tmp_path,
+        command_class=python_command.PythonCommand,
+        path=tmp_path / "security_alerts.py",
+        params={"repo": "org/repo", "alert": alert},
+    )
+    previous = get_language()
+    set_language(language)
+    try:
+        outcome = await python_command.PythonCommand(context, spec, tmp_path).run()
+        lines = outcome.text_output.splitlines()
+        assert "## 41 · lodash.merge · high" in lines
+        for field, value in values.items():
+            label = t(f"commands.repository.security_alerts.fields.{field}")
+            assert f"- **{label}**: {value}" in lines
+        label = t("commands.repository.security_alerts.fields.identifiers")
+        assert f"- **{label}**: GHSA: GHSA-abcd-1234-efgh, CVE: CVE-2024-1234" in lines
+        assert outcome.result == outcome.text_output
+    finally:
+        set_language(previous)
 
 
 @pytest.mark.asyncio
