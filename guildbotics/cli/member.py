@@ -1656,6 +1656,45 @@ def issue() -> None:
     """GitHub issue operations."""
 
 
+@github.command(name="read")
+@_read_only_member_command
+@_person_option
+@click.option(
+    "--resource", required=True, help="Host-defined resource name; see member help."
+)
+@click.option("--repo", required=True, help="Repository in owner/name form.")
+@click.option(
+    "--identifier", default="", help="Resource identifier for an individual item."
+)
+@click.option(
+    "--params", "parameters", default="{}", help="Resource conditions as a JSON object."
+)
+@click.option(
+    "--continuation",
+    default="",
+    help="Continuation returned for the same resource and conditions.",
+)
+@_json_format_option
+def github_read(
+    person: str,
+    resource: str,
+    repo: str,
+    identifier: str,
+    parameters: str,
+    continuation: str,
+    output_format: str,
+) -> None:
+    _run(
+        _github(
+            person,
+            lambda service: service.read(
+                resource, repo, identifier, parameters, continuation
+            ),
+        ),
+        output_format=output_format,
+    )
+
+
 @issue.command(name="inspect")
 @_read_only_member_command
 @_person_option

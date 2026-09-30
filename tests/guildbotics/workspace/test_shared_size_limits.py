@@ -76,6 +76,9 @@ BOUNDARY_LIMITS = {
 
 #: Limits on content that never reaches a shared file, and what each bounds.
 NOT_SHARED = {
+    "guildbotics/integrations/github/read_resources.py:MAX_PAGE_BYTES": (
+        "one GitHub read page transported through the member broker"
+    ),
     "guildbotics/app_api/command_input_files.py:MAX_COMMAND_INPUT_FILE_BYTES": (
         "a temporary upload outside the workspace"
     ),

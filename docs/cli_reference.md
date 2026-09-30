@@ -89,6 +89,7 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
 | [`guildbotics member github reaction add`](#guildbotics-member-github-reaction-add) | React to an issue or review comment. |
+| [`guildbotics member github read`](#guildbotics-member-github-read) | Read one bounded page through a host-approved resource. |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 | [`guildbotics member github run artifact`](#guildbotics-member-github-run-artifact) | GitHub Actions artifact operations. |
 | [`guildbotics member github run artifact download`](#guildbotics-member-github-run-artifact-download) | Download and extract a size-limited GitHub Actions artifact; remove repository files after inspection. |
@@ -1081,6 +1082,7 @@ guildbotics member github [OPTIONS] COMMAND [ARGS]...
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
 | [`guildbotics member github reaction`](#guildbotics-member-github-reaction) | GitHub reaction operations. |
+| [`guildbotics member github read`](#guildbotics-member-github-read) | Read one bounded page through a host-approved resource. |
 | [`guildbotics member github run`](#guildbotics-member-github-run) | GitHub Actions run operations. |
 
 ## `guildbotics member github issue`
@@ -1383,6 +1385,25 @@ guildbotics member github reaction add [OPTIONS]
 | `--target [issue-comment\|pr-review-comment]` | Kind of comment to react to. [required] |
 | `--comment-id INTEGER` | Numeric id of the comment. [required] |
 | `--reaction [+1\|eyes\|heart\|hooray\|rocket\|laugh\|confused\|-1]` | Reaction to add. [required] |
+| `--format [json\|markdown]` | Output format. [default: json] |
+| `--help` | Show this message and exit. |
+
+## `guildbotics member github read`
+
+Read one bounded page through a host-approved resource. dependabot-alerts accepts state (open by default, fixed, dismissed, auto_dismissed) and per_page (1-100, default 30); dependabot-alert requires an alert number as identifier and accepts no conditions. Reuse identical conditions with the returned continuation. For formatted or structured alerts, run github/security_alerts in a ready command environment. URLs, HTTP methods, headers, and GraphQL are not accepted.
+
+```text
+guildbotics member github read [OPTIONS]
+```
+
+| Option | Description |
+| --- | --- |
+| `--person TEXT` | Person ID or name of the member. [required] |
+| `--resource TEXT` | Host-defined resource name; see member help. [required] |
+| `--repo TEXT` | Repository in owner/name form. [required] |
+| `--identifier TEXT` | Resource identifier for an individual item. [default: ""] |
+| `--params TEXT` | Resource conditions as a JSON object. [default: {}] |
+| `--continuation TEXT` | Continuation returned for the same resource and conditions. [default: ""] |
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 

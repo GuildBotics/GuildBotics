@@ -320,6 +320,47 @@ label: 深夜
 reason: 現在の時刻が23時36分であり、これは深夜の時間帯（通常23時から翌3時頃）に該当するためです。
 ```
 
+### 4.1. Dependabot アラートの確認
+
+未解決アラートの最初のページ、または番号を指定した個別アラートを取得します。
+
+```shell
+guildbotics run github/security_alerts --person alice repo=org/repo
+guildbotics run github/security_alerts --person alice repo=org/repo alert=42
+```
+
+このコマンドは読み取り専用で、通常の microVM の中で動き、LLM を呼びません。他のコマンドと同様に実行環境の準備と起動が必要です。Python コマンドを host 上で直接実行することはありません。メンバーの GitHub App には **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存インストールでは追加権限の承認も必要です。[GitHub App の設定手順](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)を参照してください。fine-grained PAT にも同じリポジトリ権限が必要です。[GitHub の一覧・詳細 API の権限](https://docs.github.com/en/rest/dependabot/alerts)も参照できます。
+
+修正済みアラートを構造化データとして受け取る例です。
+
+```shell
+guildbotics run github/security_alerts --person alice repo=org/repo state=fixed per_page=10 output=json
+```
+
+`output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` を返します。各アラートには番号・URL・状態、パッケージ・ecosystem・manifest path、severity、GHSA/CVE、概要・説明、影響範囲・最初の修正版、作成・更新日時が入ります。欠落項目は `null`、Markdown 表示では「情報なし」「修正版の報告なし」と表示します。`state` は `open`（既定）・`fixed`・`dismissed`・`auto_dismissed`、`per_page` は1～100（既定30）です。この条件は一覧に適用し、`alert=42` ではそのアラートだけを取得します。
+
+1回の実行で1ページを返します。`continuation` が `null` でなければ、同じリポジトリ・取得条件に `continuation=<返された値>` を追加して再実行します。Markdown にも続きの取得に使う引数が表示されます。0件は取得成功、アクセス失敗はエラーです。過大な応答では途中で切れた JSON を返さず失敗します。一覧なら `per_page` を減らし、個別詳細が上限を超える場合は取得できません。403・404 は原因を断定せず、権限・インストール先の承認・リポジトリへのアクセス・アラート番号・Dependabot alerts の有効化を確認します。レート制限時は時間をおいて再試行してください。
+
+`output=json` は空配列や `null` を保った JSON テキストを返します。後続の Python コマンドでは `json.loads(context.pipe)` で読み取れます。`await context.invoke("github/security_alerts", repo="org/repo", output="json")` の戻り値も同様に JSON として読み取れます。
+
+カスタム Python コマンドから同じ許可済みデータを読む場合は、既存の host の窓口を使います。
+
+```python
+from guildbotics.integrations.window import read_github
+from guildbotics.intelligences.agent_runtime.host_client import command_window
+
+async def main(context, repo):
+    page = await read_github(
+        command_window(), context.person.person_id,
+        "dependabot-alerts", repo, parameters={"state": "open", "per_page": 10},
+    )
+    return page  # data は GitHub の1ページ、continuation は次ページの継続指定。
+```
+
+member CLI では `guildbotics member github read --person alice --resource dependabot-alerts --repo org/repo --params '{"state":"open","per_page":10}'` が同じ取得を行います。`dependabot-alert` は `--identifier 42` が必須で、取得条件は指定しません。両方とも `resource`・`repo`・`identifier`・`parameters`・`data`・`continuation` を返します。次ページは同じ条件と `--continuation` で取得します。継続指定が運ぶのは条件とカーソルであり、権限ではありません。host が毎回リソース定義に照らして検証し、許可された URL を組み立てます。リダイレクトやページ送りで取得先を広げることはできず、認証処理とトークンは host に残ります。
+
+新しいリソースの公開には `integrations/github/read_resources.py` の定義とテストを追加します。許可済みデータの集計・表示はコマンド側で拡張します。共通入口は任意 URL・HTTP メソッド・ヘッダー・GraphQL を受け付けず、アラートの状態は変更しません。既存の CI による Dependabot digest は別の定期実行のままです。
+
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。
 

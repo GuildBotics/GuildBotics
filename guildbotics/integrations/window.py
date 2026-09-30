@@ -29,6 +29,52 @@ class MemberCommandError(RuntimeError):
     """A member command the window ran failed; the message is its error."""
 
 
+async def read_github(
+    client: HostClient,
+    person_id: str,
+    resource: str,
+    repo: str,
+    *,
+    identifier: str = "",
+    parameters: dict[str, Any] | None = None,
+    continuation: str = "",
+) -> dict[str, Any]:
+    """Read one GitHub page through the command's existing member grant."""
+    return await _member_result(
+        client,
+        [
+            "github",
+            "read",
+            "--person",
+            person_id,
+            "--resource",
+            resource,
+            "--repo",
+            repo,
+            "--identifier",
+            identifier,
+            "--params",
+            json.dumps(parameters or {}),
+            "--continuation",
+            continuation,
+            "--format",
+            "json",
+        ],
+    )
+
+
+async def _member_result(
+    client: HostClient, arguments: list[str], stdin: str = ""
+) -> dict[str, Any]:
+    result = await client.acall("member", arguments=arguments, stdin=stdin)
+    if result["exit_code"]:
+        raise MemberCommandError(
+            result["stderr"].strip()
+            or f"The member command exited with {result['exit_code']}."
+        )
+    return json.loads(result["stdout"])
+
+
 class WindowChatService(ChatService):
     """The member's chat, through the member's chat commands."""
 
@@ -84,9 +130,9 @@ class WindowChatService(ChatService):
 
     async def _member(self, *arguments: str, stdin: str = "") -> dict[str, Any]:
         """Run the member's chat command ``arguments`` and read its result."""
-        result = await self._client.acall(
-            "member",
-            arguments=[
+        return await _member_result(
+            self._client,
+            [
                 "chat",
                 *arguments,
                 "--person",
@@ -98,12 +144,6 @@ class WindowChatService(ChatService):
             ],
             stdin=stdin,
         )
-        if result["exit_code"]:
-            raise MemberCommandError(
-                result["stderr"].strip()
-                or f"The member command exited with {result['exit_code']}."
-            )
-        return json.loads(result["stdout"])
 
 
 class WindowIntegrationFactory(IntegrationFactory):

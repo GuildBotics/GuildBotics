@@ -28,6 +28,7 @@ from guildbotics.integrations.window import (
     MemberCommandError,
     WindowChatService,
     WindowIntegrationFactory,
+    read_github,
 )
 from guildbotics.intelligences.agent_environment.contract import AccessContract
 from guildbotics.intelligences.agent_environment.spec import (
@@ -1160,6 +1161,65 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
     assert general == "C9"
     assert str(refused.value).endswith(t("cli.member.lease.invalid_delegation"))
     assert chat.posted == []
+
+
+@pytest.mark.asyncio
+async def test_read_only_github_read_uses_the_member_grant(tmp_path, monkeypatch, chat):
+    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=[{"number": 42}])
+
+    # Let the service own/close the mocked client, just as in production.
+    async def get_client(self):
+        self._client = httpx.AsyncClient(
+            base_url="https://api.github.com", transport=httpx.MockTransport(respond)
+        )
+        return self._client
+
+    monkeypatch.setattr(MemberGitHubCapabilityService, "_get_client", get_client)
+    lease = PersonExecutionLease("aiko")
+    lease.acquire(source="manual", command="test", work_id="work")
+    try:
+        async with _command(
+            monkeypatch, tmp_path, access=CommandAccess(read_only=True)
+        ) as command:
+            result = await read_github(
+                command.client, "aiko", "dependabot-alerts", "GuildBotics/GuildBotics"
+            )
+            for person, resource in [
+                ("other", "dependabot-alerts"),
+                ("aiko", "secrets"),
+            ]:
+                with pytest.raises(MemberCommandError):
+                    await read_github(
+                        command.client, person, resource, "GuildBotics/GuildBotics"
+                    )
+            refused = await command.client.acall(
+                "member",
+                arguments=[
+                    "github",
+                    "read",
+                    "--person",
+                    "aiko",
+                    "--resource",
+                    "dependabot-alerts",
+                    "--repo",
+                    "GuildBotics/GuildBotics",
+                    "--method",
+                    "PATCH",
+                ],
+                stdin="",
+            )
+            assert refused["exit_code"] != 0
+    finally:
+        lease.release()
+    assert result["data"] == [{"number": 42}]
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
 
 
 @pytest.mark.asyncio

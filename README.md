@@ -243,10 +243,12 @@ The member edit screen in the desktop app (select "GitHub Apps" on the GitHub ta
 
 When creating the GitHub App manually, configure the following permissions.
 
-- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
+- **Repository permissions**: **Actions** / **Checks** / **Commit statuses** / **Dependabot alerts** as Read-only; **Contents** / **Issues** / **Projects** / **Pull requests** / **Workflows** as Read & Write
 - **Organization permissions**: **Projects** as Read & Write
 
-When adding **Actions**, **Checks**, **Commit statuses**, or **Workflows** to an existing App, approve the requested permission update for each installation before using the App again.
+When adding permissions to an existing App, approve the update for each installation before using them. For Dependabot alerts, set **Repository permissions → Dependabot alerts → Read-only** in the App's **Permissions & events**, then have an organization owner review and accept the update under **Organization Settings → GitHub Apps → Configure**. Confirm the target repository is included in the installation. New apps registered through GuildBotics request this permission automatically. See [GitHub's approval procedure](https://docs.github.com/en/apps/using-github-apps/approving-updated-permissions-for-a-github-app).
+
+To inspect current alerts, run `guildbotics run github/security_alerts --person alice repo=org/repo`; add `alert=42` for an individual alert. This command needs a ready execution environment but no LLM call. See [Dependabot alert commands](docs/custom_command_guide.en.md#41-checking-dependabot-alerts) for pagination, structured results, and access errors.
 
 After creating the GitHub App:
 
