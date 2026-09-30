@@ -19,6 +19,11 @@ export function CliAgentLastTurnDetails({ turn }: { turn: CliAgentLastTurn | und
     <span className="cli-agent-last-turn">
       <span>{summary}</span>
       <span>
+        {t("setup.intelligence.lastTurn.effort", {
+          effort: turn.effort || t("setup.intelligence.lastTurn.effortUnknown"),
+        })}
+      </span>
+      <span>
         {t("setup.intelligence.lastTurn.time", {
           time: new Date(turn.timestamp).toLocaleString(i18n.language),
         })}

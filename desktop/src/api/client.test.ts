@@ -345,6 +345,7 @@ describe("GET query parameter encoding", () => {
         agent: "codex",
         model: "actual",
         model_specified: false,
+        effort: "high",
         timestamp: "2026-09-29T10:00:00Z",
       },
     ];

@@ -50,6 +50,7 @@ class CliAgentLastTurn(BaseModel):
     agent: str
     model: str
     model_specified: bool
+    effort: str
     timestamp: str
 
 

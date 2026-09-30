@@ -4599,30 +4599,47 @@ describe("IntelligenceEditor (member override)", () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(memberIntelligenceConfig());
   });
 
-  it.each([
-    { model: "actual-model", specified: true, key: "specified" },
-    { model: "actual-model", specified: false, key: "default" },
-    { model: "", specified: false, key: "defaultModelNotReported" },
-    { model: "", specified: true, key: "specified" },
-    { model: null, specified: false, key: "noRecord" },
-  ])(
-    "shows the member card's $key last turn on this machine",
-    async ({ model, specified, key }) => {
+  it.each(
+    [
+      { model: "actual-model", specified: true, key: "specified", effort: "high" },
+      { model: "actual-model", specified: false, key: "default", effort: "xhigh" },
+      { model: "actual-model", specified: false, key: "default", effort: "" },
+      { model: "", specified: false, key: "defaultModelNotReported", effort: "" },
+      { model: "", specified: true, key: "specified", effort: "high" },
+      { model: null, specified: false, key: "noRecord", effort: "" },
+    ].flatMap((entry) => [false, true].map((inherited) => ({ ...entry, inherited }))),
+  )(
+    "shows the member card's $key last turn on this machine (inherited=$inherited)",
+    async ({ model, specified, key, inherited, effort }) => {
+      vi.mocked(getIntelligenceConfig).mockImplementation(async (personId) =>
+        personId ? memberIntelligenceConfig({ inherited }) : teamIntelligenceConfig(),
+      );
       const timestamp = "2026-09-29T10:02:00Z";
       vi.mocked(getCliAgentLastTurns).mockResolvedValue([
         {
           person_id: "another-member",
           agent: "codex",
           model: "other-model",
+          effort: "other-effort",
           model_specified: true,
           timestamp,
         },
         ...(model === null
           ? []
-          : [{ person_id: "alice", agent: "codex", model, model_specified: specified, timestamp }]),
+          : [
+              {
+                person_id: "alice",
+                agent: "codex",
+                model,
+                model_specified: specified,
+                effort,
+                timestamp,
+              },
+            ]),
       ]);
       await openMemberIntelligenceTab(userEvent.setup());
-      const card = await screen.findByRole("button", { name: "OpenAI Codex CLI" });
+      const role = inherited ? "group" : "button";
+      const card = await screen.findByRole(role, { name: "OpenAI Codex CLI" });
       const expectedSummary =
         model === null
           ? t("setup.intelligence.lastTurn.noRecord")
@@ -4634,7 +4651,13 @@ describe("IntelligenceEditor (member override)", () => {
             : t("setup.intelligence.lastTurn.defaultModelNotReported");
       await waitFor(() => expect(card).toHaveTextContent(expectedSummary));
       expect(card).not.toHaveTextContent("other-model");
+      expect(card).not.toHaveTextContent("other-effort");
       if (model !== null) {
+        const effortText = t("setup.intelligence.lastTurn.effort", {
+          effort: effort || t("setup.intelligence.lastTurn.effortUnknown"),
+        });
+        expect(card).toHaveTextContent(effortText);
+        expect(card).toHaveAccessibleDescription(new RegExp(effortText));
         expect(card).toHaveTextContent(
           t("setup.intelligence.lastTurn.time", {
             time: new Date(timestamp).toLocaleString(i18n.language),
@@ -4646,13 +4669,42 @@ describe("IntelligenceEditor (member override)", () => {
         new RegExp(t("setup.intelligence.environment.toolCredentialsSaved")),
       );
       if (model) expect(card).toHaveAccessibleDescription(new RegExp(model));
-      const noRecordCard = screen.getByRole("button", { name: "Claude Code" });
+      const noRecordCard = screen.getByRole(role, { name: "Claude Code" });
       expect(noRecordCard).toHaveTextContent(t("setup.intelligence.lastTurn.noRecord"));
       expect(noRecordCard).toHaveAccessibleDescription(
         new RegExp(t("setup.intelligence.lastTurn.noRecord")),
       );
     },
   );
+
+  it("shows the team tool while inheriting and preserves the editable member choice", async () => {
+    vi.mocked(getIntelligenceConfig).mockImplementation(async (personId) =>
+      personId
+        ? memberIntelligenceConfig()
+        : teamIntelligenceConfig({
+            cli_agent_mapping: { default: "cli_agents/claude/default.yml" },
+          }),
+    );
+    const user = userEvent.setup();
+    await openMemberIntelligenceTab(user);
+    expect(await screen.findByRole("button", { name: "OpenAI Codex CLI" })).toHaveClass("active");
+    const inherit = screen.getByRole("switch", {
+      name: t("setup.intelligence.inheritTeamDefaults"),
+    });
+    await user.click(inherit);
+    const teamCard = await screen.findByRole("group", { name: "Claude Code" });
+    await waitFor(() => expect(teamCard).toHaveClass("active"));
+    const codex = screen.getByRole("group", { name: "OpenAI Codex CLI" });
+    expect(codex).not.toHaveClass("active");
+    expect(screen.queryByRole("button", { name: "Claude Code" })).not.toBeInTheDocument();
+    await user.click(codex);
+    expect(teamCard).toHaveClass("active");
+    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
+    await user.click(inherit);
+    expect(await screen.findByRole("button", { name: "OpenAI Codex CLI" })).toHaveClass("active");
+    await user.click(screen.getByRole("button", { name: "Claude Code" }));
+    expect(screen.getByRole("button", { name: "Claude Code" })).toHaveClass("active");
+  });
 
   it("saves the workspace Jev key from an inheriting member's save button", async () => {
     vi.mocked(getIntelligenceConfig).mockResolvedValue(

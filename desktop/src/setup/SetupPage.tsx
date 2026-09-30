@@ -131,7 +131,12 @@ import {
   restartBackend,
 } from "../api/backend";
 import { announceWorkspaceChange } from "../appEvents";
-import { cliAgentLabelFromConfig, useMemberCliAgentLabel, useCliAgentLastTurns } from "../cliAgent";
+import {
+  cliAgentLabelFromConfig,
+  cliAgentNameFromConfig,
+  useMemberCliAgentLabel,
+  useCliAgentLastTurns,
+} from "../cliAgent";
 import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
 import { GitHubAppRegistrationPanel } from "./GitHubAppRegistration";
 import { SlackAppRegistrationPanel } from "./SlackAppRegistration";
@@ -1783,7 +1788,7 @@ function withSlotModel(
   return { ...current, model_mapping, models };
 }
 
-// A single selectable option card. `extra` is an optional top-right control
+// An option card, read-only when no selection handler is supplied. `extra` is a top-right control
 // (e.g. the team's API-key popover or CLI skill-status button) that only the
 // team scope supplies; the member scope renders the same card without it.
 function OptionCard({
@@ -1803,24 +1808,24 @@ function OptionCard({
   statusColor: string;
   statusText: string;
   disabledTooltip: string;
-  onSelect: () => void;
+  onSelect?: () => void;
   extra?: ReactNode;
   detail?: ReactNode;
 }) {
   const statusId = useId();
   const detailId = useId();
+  const Element = onSelect ? "button" : "div";
   const card = (
     <div style={{ position: "relative", display: "block", width: "100%" }}>
-      <button
-        type="button"
+      <Element
+        type={onSelect ? "button" : undefined}
+        role={onSelect ? undefined : "group"}
         aria-label={label}
         aria-describedby={`${statusId}${detail ? ` ${detailId}` : ""}`}
-        disabled={!enabled}
+        disabled={onSelect ? !enabled : undefined}
         className={`option-card ${active ? "active" : ""}`}
         style={{ paddingRight: extra ? "40px" : undefined, width: "100%", textAlign: "left" }}
-        onClick={() => {
-          if (enabled) onSelect();
-        }}
+        onClick={enabled ? onSelect : undefined}
       >
         <span className="title" style={{ userSelect: "none" }}>
           {label}
@@ -1834,7 +1839,7 @@ function OptionCard({
           {statusText}
         </span>
         {detail ? <span id={detailId}>{detail}</span> : null}
-      </button>
+      </Element>
       {extra ? (
         <div
           style={{ position: "absolute", top: "10px", right: "10px" }}
@@ -1905,7 +1910,7 @@ function DefaultCliAgentCards({
 }: {
   tools: EnvironmentToolStatus[];
   isActive: (tool: EnvironmentToolStatus) => boolean;
-  onSelect: (tool: EnvironmentToolStatus) => void;
+  onSelect?: (tool: EnvironmentToolStatus) => void;
   renderExtra?: (tool: EnvironmentToolStatus) => ReactNode;
   personId?: string;
 }) {
@@ -1922,7 +1927,7 @@ function DefaultCliAgentCards({
           statusColor={cliToolStatusColor(tool)}
           statusText={t(`setup.intelligence.environment.${cliToolStatusKey(tool)}`)}
           disabledTooltip={t("setup.intelligence.toolNotProvisionedTooltip")}
-          onSelect={() => onSelect(tool)}
+          onSelect={onSelect ? () => onSelect(tool) : undefined}
           extra={renderExtra?.(tool)}
           detail={
             personId && turns.data ? (
@@ -2027,6 +2032,11 @@ function IntelligenceEditor({
   const draftKey = `${personId ?? "team"}:${querySerializedPayload}`;
   const activeDraftState = draftState?.key === draftKey ? draftState : null;
   const draft = activeDraftState?.config ?? query.data ?? null;
+  const teamConfig = useQuery({
+    queryKey: ["intelligence-config", "team"],
+    queryFn: () => getIntelligenceConfig(),
+    enabled: enabled && Boolean(personId) && Boolean(draft?.inherited),
+  });
   // A focused slot lives inside the advanced settings too.
   const openAdvancedPanel = openAdvanced || Boolean(focusSlot);
   const payload = draft ? toIntelligenceUpdatePayload(draft, savePersonId) : null;
@@ -2581,6 +2591,33 @@ function IntelligenceEditor({
     </DecisionSettings>
   );
 
+  const memberCliCards = (
+    <Card withBorder radius="sm" p="md">
+      <Stack gap="xs">
+        <Text size="sm" fw={700}>
+          {t("setup.intelligence.defaultCliAgent")}
+        </Text>
+        <Text size="sm" c="dimmed">
+          {t("setup.intelligence.cliHint")}
+        </Text>
+        <DefaultCliAgentCards
+          tools={tools}
+          isActive={(tool) =>
+            cliAgentNameFromConfig(draft.inherited ? teamConfig.data : draft) === tool.name
+          }
+          personId={personId}
+          // Register the definition along with the slot so it remains visible
+          // in the advanced editor. Inherited cards only display run evidence.
+          onSelect={
+            draft.inherited
+              ? undefined
+              : (agent) => handleUpdateCliSlotAgentPath("default", agent.config_reference)
+          }
+        />
+      </Stack>
+    </Card>
+  );
+
   // Team and member scopes share one advanced editor. A member only adds the
   // "inherit team defaults" toggle on top; when inheriting is off they get the
   // exact same full editor (feature assignments, model slots, CLI slots, native
@@ -2612,6 +2649,7 @@ function IntelligenceEditor({
               <InfoCallout title={t("setup.intelligence.inheritingTitle")}>
                 {t("setup.intelligence.inheritingBody")}
               </InfoCallout>
+              {personId ? memberCliCards : null}
               {decisionSettings}
             </>
           );
@@ -2898,27 +2936,7 @@ function IntelligenceEditor({
                 />
               </Stack>
             </Card>
-            <Card withBorder radius="sm" p="md">
-              <Stack gap="xs">
-                <Text size="sm" fw={700}>
-                  {t("setup.intelligence.defaultCliAgent")}
-                </Text>
-                <Text size="sm" c="dimmed">
-                  {t("setup.intelligence.cliHint")}
-                </Text>
-                <DefaultCliAgentCards
-                  tools={tools}
-                  isActive={(tool) => draft.cli_agent_mapping.default === tool.config_reference}
-                  personId={personId}
-                  // Reuse the advanced-slot handler so the picked tool is also
-                  // registered in draft.cli_agents; otherwise the default slot
-                  // would vanish when the 詳細設定 accordion is opened.
-                  onSelect={(agent) =>
-                    handleUpdateCliSlotAgentPath("default", agent.config_reference)
-                  }
-                />
-              </Stack>
-            </Card>
+            {memberCliCards}
             <Accordion
               variant="contained"
               // Remounted when an alert link asks to open it, so it opens

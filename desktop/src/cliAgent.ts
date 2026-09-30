@@ -79,14 +79,12 @@ export function useCliAgentLastTurns(enabled: boolean) {
   });
 }
 
-export function useMemberCliAgentModel(personId: string, enabled: boolean): string | null {
+export function useMemberCliAgentLastTurn(personId: string, enabled: boolean) {
   const config = useMemberIntelligenceConfig(personId, enabled);
   const agent = cliAgentNameFromConfig(config.data);
   const turns = useCliAgentLastTurns(enabled);
-  if (!enabled) return null;
-  return (
-    turns.data?.find((turn) => turn.person_id === personId && turn.agent === agent)?.model || null
-  );
+  if (!enabled) return undefined;
+  return turns.data?.find((turn) => turn.person_id === personId && turn.agent === agent);
 }
 
 const USAGE_REFRESH_MS = 5 * 60 * 1000;

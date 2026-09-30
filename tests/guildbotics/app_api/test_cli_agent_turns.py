@@ -15,6 +15,7 @@ def _record(
     person="alice",
     tool="codex",
     model="actual",
+    effort="",
     specified=False,
     timestamp="2026-09-29T10:00:00Z",
     status="finished",
@@ -31,16 +32,16 @@ def _record(
                 "agent.adapter": tool,
                 "agent.slot": slot,
             },
-            "payload": {"model": model, "model_specified": specified},
+            "payload": {"model": model, "model_specified": specified, "effort": effort},
         }
     )
 
 
 def test_latest_finished_or_failed_turn_per_member_and_tool(tmp_path):
     store = DiagnosticsStore(tmp_path / "diagnostics.jsonl", memory_limit=1)
-    _record(store, model="old")
-    _record(store, tool="claude", model="sonnet", specified=True)
-    _record(store, person="bob", model="bob-model")
+    _record(store, model="old", effort="low")
+    _record(store, tool="claude", model="sonnet", specified=True, effort="high")
+    _record(store, person="bob", model="bob-model", effort="xhigh")
     # Unknown effective values on the latest turn must replace an older model.
     _record(
         store,
@@ -58,11 +59,14 @@ def test_latest_finished_or_failed_turn_per_member_and_tool(tmp_path):
     turns = {(turn.person_id, turn.agent): turn for turn in last_cli_agent_turns(store)}
     assert set(turns) == {("alice", "codex"), ("alice", "claude"), ("bob", "codex")}
     assert turns["alice", "codex"].model == ""
+    assert turns["alice", "codex"].effort == ""
     assert turns["alice", "codex"].timestamp == "2026-09-29T12:00:00Z"
     assert turns["alice", "claude"].model == "sonnet"
     assert turns["alice", "claude"].model_specified is True
+    assert turns["alice", "claude"].effort == "high"
     assert turns["bob", "codex"].model == "bob-model"
     assert turns["bob", "codex"].model_specified is False
+    assert turns["bob", "codex"].effort == "xhigh"
 
 
 def test_no_store_or_no_records(tmp_path):
@@ -87,9 +91,10 @@ def test_incomplete_turn_facts_are_not_inferred_from_current_settings(
     assert last_cli_agent_turns(store) == []
 
 
-def test_api_reads_persisted_device_records_and_requires_token(tmp_path):
+@pytest.mark.parametrize("effort", ["high", "xhigh", ""])
+def test_api_reads_persisted_device_records_and_requires_token(tmp_path, effort):
     path = tmp_path / "diagnostics.jsonl"
-    _record(DiagnosticsStore(path), specified=True)
+    _record(DiagnosticsStore(path), specified=True, effort=effort)
     store = DiagnosticsStore(path)
     app = create_app(
         session_token="secret", event_bus=EventBus(store=store), diagnostics_store=store
@@ -105,6 +110,7 @@ def test_api_reads_persisted_device_records_and_requires_token(tmp_path):
             "agent": "codex",
             "model": "actual",
             "model_specified": True,
+            "effort": effort,
             "timestamp": "2026-09-29T10:00:00Z",
         }
     ]

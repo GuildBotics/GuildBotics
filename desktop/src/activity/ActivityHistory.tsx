@@ -60,7 +60,7 @@ import {
 import {
   useMemberCliAgentLabel,
   useMemberCliAgentUsage,
-  useMemberCliAgentModel,
+  useMemberCliAgentLastTurn,
 } from "../cliAgent";
 import {
   latestPresentation,
@@ -587,7 +587,8 @@ function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
   const { t } = useTranslation();
   const isHuman = member.person_type === "human";
   const cliAgentLabel = useMemberCliAgentLabel(member.person_id, !isHuman);
-  const model = useMemberCliAgentModel(member.person_id, !isHuman);
+  const turn = useMemberCliAgentLastTurn(member.person_id, !isHuman);
+  const modelDetail = turn?.model ? [turn.model, turn.effort].filter(Boolean).join(" · ") : "";
   const label = isHuman ? t("activity.memberHuman") : cliAgentLabel;
   if (!label) {
     return null;
@@ -595,9 +596,9 @@ function MemberCliAgentRole({ member }: { member: ActivityHistoryMember }) {
   return (
     <span className="activity-member-role">
       <span>{label}</span>
-      {model ? (
-        <span className="activity-member-model" title={model}>
-          {model}
+      {modelDetail ? (
+        <span className="activity-member-model" title={modelDetail}>
+          {modelDetail}
         </span>
       ) : null}
     </span>

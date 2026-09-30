@@ -535,6 +535,10 @@ pre {
   box-shadow: inset 0 0 0 1px var(--color-brand);
 }
 
+.option-card[role="group"] {
+  cursor: default;
+}
+
 .option-card:disabled {
   background: var(--color-bg-hover-subtle);
   color: var(--color-text-muted);
@@ -1445,9 +1449,10 @@ pre {
 }
 
 .activity-member-role {
+  align-items: baseline;
   color: var(--color-text-subtle);
   display: flex;
-  gap: 4px;
+  gap: 8px;
   font-size: 11px;
 }
 

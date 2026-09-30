@@ -144,20 +144,30 @@ describe("i18n resources", () => {
     expect(authoring.filter((key) => !troubleshooting.includes(key))).toEqual([]);
   });
 
-  it("formats the last-turn model and source for each language", () => {
-    expect(
-      i18n.getFixedT("en")("setup.intelligence.lastTurn.modelWithSource", {
-        model: "actual-model",
-        source: "Selected by default",
-      }),
-    ).toBe("actual-model (Selected by default)");
-    expect(
-      i18n.getFixedT("ja")("setup.intelligence.lastTurn.modelWithSource", {
-        model: "actual-model",
-        source: "既定で選ばれたモデル",
-      }),
-    ).toBe("actual-model（既定で選ばれたモデル）");
-  });
+  it.each([
+    { key: "default", enSource: "Default selection", jaSource: "デフォルト選択" },
+    { key: "specified", enSource: "Explicitly configured", jaSource: "明示的に設定" },
+  ])(
+    "formats the last-turn model and $key source for each language",
+    ({ key, enSource, jaSource }) => {
+      const en = i18n.getFixedT("en");
+      const ja = i18n.getFixedT("ja");
+      expect(en(`setup.intelligence.lastTurn.${key}`)).toBe(enSource);
+      expect(ja(`setup.intelligence.lastTurn.${key}`)).toBe(jaSource);
+      expect(
+        en("setup.intelligence.lastTurn.modelWithSource", {
+          model: "actual-model",
+          source: en(`setup.intelligence.lastTurn.${key}`),
+        }),
+      ).toBe(`actual-model (${enSource})`);
+      expect(
+        ja("setup.intelligence.lastTurn.modelWithSource", {
+          model: "actual-model",
+          source: ja(`setup.intelligence.lastTurn.${key}`),
+        }),
+      ).toBe(`actual-model（${jaSource}）`);
+    },
+  );
 
   it("describes retained last-turn evidence without inferring history or cause", () => {
     const en = i18n.getFixedT("en");
@@ -168,15 +178,28 @@ describe("i18n resources", () => {
     );
     expect(en("setup.intelligence.lastTurn.modelNotReported")).toBe("Model name not reported");
     expect(en("setup.intelligence.lastTurn.defaultModelNotReported")).toBe(
-      "Default (model name not reported)",
+      "Default selection (model name not reported)",
     );
     expect(ja("setup.intelligence.lastTurn.noRecord")).toBe("このマシンに実行記録がありません");
     expect(ja("setup.intelligence.lastTurn.modelNotReported")).toBe(
       "モデル名を取得できませんでした",
     );
     expect(ja("setup.intelligence.lastTurn.defaultModelNotReported")).toBe(
-      "既定（モデル名を取得できませんでした）",
+      "デフォルト選択（モデル名を取得できませんでした）",
     );
+  });
+
+  it.each([
+    { language: "en", unknown: "Unknown" },
+    { language: "ja", unknown: "不明" },
+  ])("labels known and unknown effort in $language", ({ language, unknown }) => {
+    const t = i18n.getFixedT(language);
+    expect(t("setup.intelligence.lastTurn.effort", { effort: "high" })).toBe("Effort: high");
+    expect(
+      t("setup.intelligence.lastTurn.effort", {
+        effort: t("setup.intelligence.lastTurn.effortUnknown"),
+      }),
+    ).toBe(`Effort: ${unknown}`);
   });
 });
 

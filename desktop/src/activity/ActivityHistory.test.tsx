@@ -379,15 +379,20 @@ describe("ActivityHistoryPage", () => {
     expect(screen.queryByText("designer")).toBe(null);
   });
 
-  it.each(["actual-model-with-a-long-name", "", null])(
-    "shows only the default tool's last model (%s)",
-    async (model) => {
+  it.each(
+    ["actual-model-with-a-long-name", "", null].flatMap((model) =>
+      ["high", ""].map((effort) => ({ model, effort })),
+    ),
+  )(
+    "shows only the default tool's last model and known effort ($model, $effort)",
+    async ({ model, effort }) => {
       const timestamp = "2026-09-29T10:00:00Z";
       vi.mocked(getCliAgentLastTurns).mockResolvedValue([
         {
           person_id: "alice",
           agent: "codex",
           model: "other-tool-model",
+          effort: "other-tool-effort",
           model_specified: true,
           timestamp,
         },
@@ -395,19 +400,30 @@ describe("ActivityHistoryPage", () => {
           person_id: "bob",
           agent: "claude",
           model: "other-member-model",
+          effort: "other-member-effort",
           model_specified: true,
           timestamp,
         },
         ...(model === null
           ? []
-          : [{ person_id: "alice", agent: "claude", model, model_specified: false, timestamp }]),
+          : [
+              {
+                person_id: "alice",
+                agent: "claude",
+                model,
+                model_specified: false,
+                effort,
+                timestamp,
+              },
+            ]),
       ]);
       renderActivity();
       const label = await screen.findByText("Claude Code");
       await waitFor(() => expect(getCliAgentLastTurns).toHaveBeenCalled());
       if (model) {
-        const name = await screen.findByTitle(model);
-        expect(name).toHaveTextContent(model);
+        const detail = effort ? `${model} · ${effort}` : model;
+        const name = await screen.findByTitle(detail);
+        expect(name.textContent).toBe(detail);
         expect(name.parentElement).toBe(label.parentElement);
         expect(name).toHaveClass("activity-member-model");
       } else {
@@ -416,6 +432,7 @@ describe("ActivityHistoryPage", () => {
       }
       expect(screen.queryByText("other-tool-model")).not.toBeInTheDocument();
       expect(screen.queryByText("other-member-model")).not.toBeInTheDocument();
+      expect(screen.queryByText(/other-tool-effort|other-member-effort/)).not.toBeInTheDocument();
       expect(
         screen.queryByText(i18n.t("setup.intelligence.lastTurn.default")),
       ).not.toBeInTheDocument();

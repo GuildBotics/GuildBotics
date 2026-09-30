@@ -1710,6 +1710,7 @@ export type CliAgentLastTurn = {
   agent: string;
   model: string;
   model_specified: boolean;
+  effort: string;
   timestamp: string;
 };
 

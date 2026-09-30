@@ -42,6 +42,7 @@ def last_cli_agent_turns(store: DiagnosticsStore | None) -> list[CliAgentLastTur
                     agent=agent,
                     model=payload.get("model", ""),
                     model_specified=specified,
+                    effort=payload.get("effort", ""),
                     timestamp=timestamp,
                 ),
             )
