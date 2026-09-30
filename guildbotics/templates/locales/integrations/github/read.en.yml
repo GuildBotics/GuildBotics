@@ -8,7 +8,7 @@ en:
   response: "GitHub returned an invalid response; no page was accepted."
   rate_limit: "GitHub rate-limited the request. Wait before retrying; no page was retrieved."
   authentication: "GitHub rejected authentication. Check the member's GitHub credentials."
-  forbidden: "GitHub denied access. Check repository access and the GitHub App's approved Dependabot alerts read permission; the response does not establish a single cause."
+  forbidden: "GitHub denied access. Check that the member's credentials (approved GitHub App permissions or fine-grained PAT permissions) allow reading Dependabot alerts and accessing the target repository. This response alone does not establish the cause."
   not_found: "GitHub could not return this resource. It may not exist, be inaccessible, or have Dependabot alerts disabled. Check the repository, alert number, access, and feature settings."
   rejected: "GitHub rejected the read conditions or temporarily limited this endpoint. Check the conditions and retry later."
   http: "GitHub read failed (HTTP %{status}); no page was retrieved."

@@ -330,7 +330,7 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` で、未設定・未対応のサービスは明示的にエラーになります。GitHub では、メンバーの App に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存のインストールでは追加権限を承認してください（[GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)）。fine-grained PAT にも同等の権限が必要です。
+コマンドはワークスペースの `services.code_hosting_service` を使い、通常の microVM 内で読み取り専用として動作します。LLM は呼び出しません。他のコマンドと同様に実行環境の準備が必要です。現在の対応サービスは `github` で、未設定・未対応のサービスは明示的にエラーになります。GitHub では、メンバーの認証情報（GitHub App または fine-grained PAT）に **Dependabot alerts: Read-only** と対象リポジトリへのアクセスが必要です。既存の App はインストール先で追加権限を承認し、既存の PAT はトークンの権限を編集して、organization が要求する承認を済ませてください。手順は [GitHub アカウントの準備](../README.ja.md#ai-エージェント用の-github-アカウントを用意する)を参照してください。
 
 `output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では未提供の任意項目を省略し、修正版の報告がない場合だけ明示します。見出しには取得する状態と、各アラートの ID・パッケージ・重要度を表示します。一覧には概要を、個別表示には他の項目の後ろに引用ブロックで説明の全文を表示します。対象は依存ライブラリの脆弱性です。
 
