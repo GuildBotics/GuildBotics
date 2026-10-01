@@ -812,14 +812,35 @@ async def test_bad_collection_shapes_fail(reader, body):
 
 
 @pytest.mark.asyncio
-async def test_raw_limit_is_enforced_by_authenticated_client(reader, monkeypatch):
+@pytest.mark.parametrize(
+    "resource,identifier",
+    [("dependency_alerts", "")]
+    + [
+        (resource, "7")
+        for resource in (
+            "dependency_alerts",
+            *hosting.REST_RESOURCES,
+            *sorted(hosting.GRAPH_RESOURCES),
+        )
+    ],
+)
+async def test_raw_limit_is_enforced_by_authenticated_client(
+    reader, monkeypatch, resource, identifier
+):
     service, state, _ = reader
     monkeypatch.setattr(hosting, "MAX_PAGE_BYTES", 250)
     state["respond"] = lambda _: httpx.Response(200, content=b"x" * 251)
     with pytest.raises(
         RepositoryReadError, match=t("integrations.github.read.too_large")
     ):
-        await read(service)
+        await read(
+            service,
+            resource=resource,
+            identifier=identifier,
+            parameters={"node": "thread"}
+            if resource == "review_thread_comments"
+            else {},
+        )
 
 
 @pytest.mark.asyncio
