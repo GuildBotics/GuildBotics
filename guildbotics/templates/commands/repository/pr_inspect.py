@@ -41,7 +41,8 @@ async def main(
             thread["replyable"] = bool(roots)
         result["review_threads"] = threads
     if diff:
-        files = await reader.read("pull_request_files")
+        # Patches expand into per-line comment coordinates in the host response.
+        files = await reader.read("pull_request_files", page_size=5)
         if (
             result.get("changed_files") is not None
             and len(files) != result["changed_files"]

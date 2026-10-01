@@ -161,6 +161,11 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
     assert thread["resolved"] and thread["outdated"] and thread["replyable"]
     assert thread["reply_target_id"] == 10 and len(thread["comments"]) == 2
     assert all(
+        c[2]["parameters"] == {"page_size": 5}
+        for c in service.calls
+        if c[0] == "pull_request_files"
+    )
+    assert all(
         c[2]["parameters"] == {"node": "thread1"}
         for c in service.calls
         if c[0] == "review_thread_comments"
