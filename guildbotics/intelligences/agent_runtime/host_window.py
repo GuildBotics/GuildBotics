@@ -541,14 +541,17 @@ def _inference_failed(exc: Exception) -> HostCallError:
         getattr(exc, "response", None), "status_code", None
     )
     get_logger().warning("An inference call of a command failed (%s).", kind)
-    return HostCallError(
-        "failed",
+    message = (
         t(
-            "intelligences.inference.failed_with_status"
-            if status
-            else "intelligences.inference.failed",
+            "intelligences.inference.failed_with_status",
             error_type=kind,
             status=status,
-        ),
+        )
+        if status
+        else t("intelligences.inference.failed", error_type=kind)
+    )
+    return HostCallError(
+        "failed",
+        message,
         {"error_type": kind, **({"status_code": status} if status else {})},
     )
