@@ -7,7 +7,7 @@ HTTP_UNAUTHORIZED = 401
 
 
 class ResponseTooLarge(httpx.RequestError):
-    """A decoded response exceeded the client's byte limit."""
+    """A decoded response exceeded the request's byte limit."""
 
 
 async def _read_bounded(response: httpx.Response, limit: int) -> None:
@@ -66,8 +66,6 @@ def get_async_client(
     base_url: str,
     auth: httpx.Auth,
     owner: str,
-    *,
-    max_response_bytes: int | None = None,
 ) -> httpx.AsyncClient:
     """
     Create and return an async HTTP client with the specified base URL and headers.
@@ -87,6 +85,7 @@ def get_async_client(
         check_request(owner, base, request)
 
     async def response_hook(response: httpx.Response) -> None:
+        max_response_bytes = response.request.extensions.get("max_response_bytes")
         if max_response_bytes is not None:
             await _read_bounded(response, max_response_bytes)
         await raise_for_status_with_text(

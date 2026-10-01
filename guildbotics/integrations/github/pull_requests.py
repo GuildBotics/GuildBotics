@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -9,21 +10,23 @@ from urllib.parse import quote, urlparse
 from httpx import AsyncClient
 
 from guildbotics.entities import Person, Service, Team
+from guildbotics.integrations.code_hosting_service import (
+    MAX_PAGE_BYTES,
+    ReadinessQuery,
+    RepositoryReadPage,
+)
 from guildbotics.integrations.github.actions_client import (
     GitHubActionsClient,
     GitHubActionsClientError,
 )
 from guildbotics.integrations.github.github_utils import create_github_client
 from guildbotics.integrations.github.repository_scope import configured_owner
-from guildbotics.utils.process_limits import STREAM_READ_LIMIT
+from guildbotics.utils.i18n_tool import t
 
 GITHUB_RESOURCE_MIN_PART_COUNT = 4
 
 
 GITHUB_ACTIONS_RUN_MIN_PART_COUNT = 5
-
-
-DEFAULT_LOG_TAIL_BYTES = STREAM_READ_LIMIT // 32
 
 
 _FAILED_CONCLUSIONS = {
@@ -226,14 +229,43 @@ def _failed_actions_run_ids(check_runs: list[dict[str, Any]]) -> set[int]:
     return run_ids
 
 
-class GitHubPullRequests:
-    _max_response_bytes: int | None = None
+def _fit_log_tails(result: dict[str, Any]) -> None:
+    """Fit log tails after reserving the actual JSON page and job metadata."""
+    logs = result["failed_logs"]
+    if not logs:
+        return
+    tails = [item["log"] for item in logs]
+    for item in logs:
+        item["log_bytes"] = len(item["log"].encode())
+        item["log"] = ""
+    page = RepositoryReadPage(items=[result], target=result["target"])
+    remaining = MAX_PAGE_BYTES - len(json.dumps(page.model_dump()).encode())
+    if remaining < 0:
+        raise MemberCapabilityError(t("integrations.repository.too_large"))
+    budget = remaining // len(logs)
+    for item, tail in zip(logs, tails, strict=True):
+        low, high = 0, len(tail)
+        while low < high:
+            length = (low + high + 1) // 2
+            if len(json.dumps(tail[-length:]).encode()) - 2 <= budget:
+                low = length
+            else:
+                high = length - 1
+        item["log"] = tail[-low:] if low else ""
+        item["log_bytes"] = len(item["log"].encode())
+        if low < len(tail):
+            item["tail_limit_bytes"] = min(item["tail_limit_bytes"], item["log_bytes"])
+            item["truncated"] = True
 
+
+class GitHubPullRequests:
     def __init__(self, person: Person, team: Team) -> None:
         self.person = person
         self.team = team
         config = team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
-        self.base_url = str(config.get("api_base_url") or "https://api.github.com")
+        self.base_url = str(
+            config.get("api_base_url") or "https://api.github.com"
+        ).rstrip("/")
         self.owner = configured_owner(team.project)
         self._client: AsyncClient | None = None
 
@@ -247,13 +279,10 @@ class GitHubPullRequests:
         url: str,
         *,
         failed_logs: bool = False,
-        log_tail_bytes: int = DEFAULT_LOG_TAIL_BYTES,
+        log_tail_bytes: int = ReadinessQuery.model_fields["log_tail_bytes"].default,
     ) -> dict[str, Any]:
         """Return the checks for a PR head and optional failed Actions logs."""
-        if log_tail_bytes < 1 or log_tail_bytes > STREAM_READ_LIMIT:
-            raise MemberCapabilityError(
-                f"log_tail_bytes must be between 1 and {STREAM_READ_LIMIT}."
-            )
+        ReadinessQuery(failed_logs=failed_logs, log_tail_bytes=log_tail_bytes)
         resource = self.parse_url(url, expected_kind="pull")
         pr = await self._pull_request(resource)
         readiness_applies = _pull_request_readiness_applies(pr)
@@ -342,6 +371,7 @@ class GitHubPullRequests:
             }
             if failed_action_logs is not None:
                 result["failed_logs"] = failed_action_logs
+                _fit_log_tails(result)
             return result
         except GitHubActionsClientError as exc:
             raise MemberCapabilityError(str(exc)) from exc
@@ -376,6 +406,7 @@ class GitHubPullRequests:
         }
         if failed_action_logs is not None:
             result["failed_logs"] = failed_action_logs
+            _fit_log_tails(result)
         return result
 
     async def _failed_action_logs(
@@ -446,13 +477,11 @@ class GitHubPullRequests:
         # Cancelled and stale matrix jobs are usually fallout from the real
         # failure. Return them only when there is no primary failure to inspect.
         selected_jobs = primary_failed_jobs or failed_jobs
-        # Leave room for JSON escaping and per-job metadata inside the broker's
-        # output boundary. With a small failed set this remains the requested
-        # per-job tail; a large matrix is divided fairly instead of producing
-        # truncated, invalid JSON at the broker boundary.
+        # Bound the initial downloads; exact serialized metadata and escaping
+        # are accounted for after the final head/base check by _fit_log_tails.
         effective_tail_bytes = min(
             log_tail_bytes,
-            max(1, STREAM_READ_LIMIT // (8 * len(selected_jobs))),
+            max(1, MAX_PAGE_BYTES // len(selected_jobs)),
         )
         logs: list[dict[str, Any]] = []
         for run_id, run_attempt, artifact_names, job in selected_jobs:
@@ -591,7 +620,6 @@ class GitHubPullRequests:
                 self.person,
                 self.base_url,
                 self.owner,
-                max_response_bytes=self._max_response_bytes,
             )
         return self._client
 

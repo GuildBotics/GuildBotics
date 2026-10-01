@@ -9,6 +9,7 @@ from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 # Room for JSON escaping in CLI, member result, and host envelope.
 MAX_PAGE_BYTES = STREAM_READ_LIMIT // 16
+MAX_LOG_TAIL_BYTES = MAX_PAGE_BYTES // 10
 
 
 class RepositoryReadError(RuntimeError):
@@ -17,6 +18,11 @@ class RepositoryReadError(RuntimeError):
 
 class ReadModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ReadinessQuery(ReadModel):
+    failed_logs: bool = False
+    log_tail_bytes: int = Field(default=MAX_LOG_TAIL_BYTES, ge=1, le=MAX_LOG_TAIL_BYTES)
 
 
 class DependencyAlertQuery(ReadModel):

@@ -1,4 +1,5 @@
 en:
   incomplete: "Could not retrieve the complete %{resource} result within the supported limit. Read individual pages with member repository read."
   flag: "Use true or false for boolean arguments."
-  log_size: "log_tail_bytes must be a positive integer (at most 65536)."
+  log_size: "log_tail_bytes must be a positive integer (at most %{maximum})."
+  number: "number must be a positive issue or pull request number."

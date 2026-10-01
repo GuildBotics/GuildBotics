@@ -76,7 +76,8 @@ def test_reference_includes_standard_work_procedure():
     assert "does not by itself authorize closing the issue" in text
     assert "the issue closes when a human merges the PR" not in text
     assert "files[].commentable_lines" in text
-    assert "path`, `line`, `side`" in text
+    assert "`line`, `side`" in text
+    assert "take `path` from the containing file" in text
     assert "--start-line" in text
     assert "--start-side" in text
     assert "reply_target_id" in text

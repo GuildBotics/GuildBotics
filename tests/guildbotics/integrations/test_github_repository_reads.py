@@ -1,6 +1,7 @@
 """GitHub reads keep their approved destination and bounded authenticated client."""
 
 import httpx
+import json
 import pytest
 import pytest_asyncio
 
@@ -9,11 +10,200 @@ from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.github import code_hosting_service as hosting
 from guildbotics.integrations.github.async_client import get_async_client
 from guildbotics.integrations.github.github_utils import GitHubTokenAuth
-from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 REPO = "GuildBotics/GuildBotics"
 BASE = "https://github.example.test/api/v3/"
 PATH = f"/api/v3/repos/{REPO}/dependabot/alerts"
+
+
+@pytest.fixture(params=["en", "ja"])
+def read_language(request):
+    previous = get_language()
+    set_language(request.param)
+    try:
+        yield
+    finally:
+        set_language(previous)
+
+
+def readiness_payloads():
+    return {
+        "pulls/7": {
+            "number": 7,
+            "title": "PR",
+            "state": "open",
+            "head": {"sha": "head", "ref": "topic", "repo": {"full_name": REPO}},
+            "base": {"ref": "main"},
+        },
+        "branches/main": {"commit": {"sha": "base"}},
+        "compare/base...head": {"behind_by": 0},
+        "commits/head/check-runs": {
+            "check_runs": [
+                {"name": "test", "status": "completed", "conclusion": "failure"}
+            ]
+        },
+        "commits/head/status": {"statuses": []},
+        "actions/runs": {"workflow_runs": [{"id": 1, "conclusion": "failure"}]},
+        "actions/runs/1/jobs": {
+            "jobs": [{"id": 1, "name": "test", "conclusion": "failure"}]
+        },
+        "actions/runs/1/artifacts": {"artifacts": []},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("large_path", [*readiness_payloads(), "actions/jobs/1/logs"])
+async def test_readiness_uses_host_transport_for_all_internal_reads(reader, large_path):
+    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+    from guildbotics.integrations.code_hosting_service import MAX_PAGE_BYTES
+
+    service, state, requests = reader
+    payloads = readiness_payloads()
+
+    def respond(request):
+        path = request.url.path.split(f"/repos/{REPO}/")[1]
+        if path.endswith("/logs"):
+            return httpx.Response(
+                200,
+                content=b"x" * (MAX_PAGE_BYTES + 1)
+                if path == large_path
+                else b"failure",
+            )
+        payload = dict(payloads[path])
+        if path == large_path:
+            payload["unused_large_field"] = "x" * (MAX_PAGE_BYTES + 1)
+        return httpx.Response(200, json=payload)
+
+    state["respond"] = respond
+    page = await service.read(
+        "pull_request_readiness", REPO, identifier="7", parameters={"failed_logs": True}
+    )
+    host = MemberGitHubCapabilityService(service.person, service.team)
+    try:
+        expected = await host.pr_checks(
+            f"https://github.example.test/{REPO}/pull/7", failed_logs=True
+        )
+    finally:
+        await host.aclose()
+    assert page.items == [expected]
+    assert page.items[0]["readiness"] == "blocked"
+    assert len(json.dumps(page.model_dump()).encode()) <= MAX_PAGE_BYTES
+    assert all("max_response_bytes" not in r.extensions for r in requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key,headers", [("forbidden", {}), ("rate_limit", {"x-ratelimit-remaining": "0"})]
+)
+async def test_readiness_actions_errors_keep_structured_diagnostics(
+    reader, key, headers
+):
+    service, state, _ = reader
+    payloads = readiness_payloads()
+
+    def respond(request):
+        path = request.url.path.split(f"/repos/{REPO}/")[1]
+        return (
+            httpx.Response(403, text="secret-value", headers=headers)
+            if path == "commits/head/check-runs"
+            else httpx.Response(200, json=payloads[path])
+        )
+
+    state["respond"] = respond
+    with pytest.raises(RepositoryReadError) as error:
+        await service.read("pull_request_readiness", REPO, identifier="7")
+    assert str(error.value) == t(
+        f"integrations.github.read.{key}",
+        permission="Pull requests / Contents / Checks / Commit statuses / Actions",
+    )
+    assert "secret-value" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource,permission",
+    [
+        ("issue_projects", "Projects"),
+        ("pull_request_threads", "Pull requests"),
+        ("review_thread_comments", "Pull requests"),
+    ],
+)
+@pytest.mark.parametrize(
+    "kind,key",
+    [
+        ("FORBIDDEN", "forbidden"),
+        ("INSUFFICIENT_SCOPES", "forbidden"),
+        ("NOT_FOUND", "not_found"),
+        ("RATE_LIMITED", "rate_limit"),
+        ("UNKNOWN", "response"),
+    ],
+)
+async def test_graphql_errors_are_safe_resource_diagnostics(
+    reader, resource, permission, kind, key, read_language
+):
+    service, state, _ = reader
+    state["respond"] = lambda _: httpx.Response(
+        200,
+        json={
+            "data": {"partial": "ignored"},
+            "errors": [{"type": kind, "message": "secret-value"}],
+        },
+    )
+    with pytest.raises(RepositoryReadError) as error:
+        await service.read(
+            resource,
+            REPO,
+            identifier="7",
+            parameters={"node": "thread"}
+            if resource == "review_thread_comments"
+            else {},
+        )
+    assert str(error.value) == t(
+        f"integrations.github.read.{key}", permission=permission
+    )
+    assert "secret-value" not in str(error.value)
+
+
+@pytest.mark.parametrize("text", ["\x1b[31m\x00\n", "日本語🙂"])
+@pytest.mark.parametrize("state", ["open", "closed"])
+def test_log_budget_counts_escaped_tails_and_repeated_metadata(text, state):
+    from guildbotics.integrations.github.pull_requests import _fit_log_tails
+    from guildbotics.integrations.code_hosting_service import (
+        MAX_PAGE_BYTES,
+        RepositoryReadPage,
+    )
+
+    result = {
+        "target": {"title": "PR"},
+        "readiness": "blocked" if state == "open" else "not_applicable",
+        "checks": [{"name": "test"}],
+        "failed_logs": [
+            {
+                "log": text * 10000,
+                "log_bytes": len((text * 10000).encode()),
+                "tail_limit_bytes": 65536,
+                "truncated": False,
+                "artifact_names": ["artifact" * 1000],
+                "name": "job" + str(i),
+            }
+            for i in range(12)
+        ],
+    }
+    _fit_log_tails(result)
+    assert (
+        len(
+            json.dumps(
+                RepositoryReadPage(items=[result], target=result["target"]).model_dump()
+            ).encode()
+        )
+        <= MAX_PAGE_BYTES
+    )
+    assert len(result["failed_logs"]) == 12
+    assert all(
+        item["truncated"] and item["log"] and (text * 10000).endswith(item["log"])
+        for item in result["failed_logs"]
+    )
 
 
 @pytest.mark.asyncio
@@ -96,18 +286,14 @@ async def test_inspection_rest_pages_rebuild_original_routes(
     if resource == "pull_request_files":
         assert first.items[0]["commentable_lines"] == [
             {
-                "path": "a.py",
                 "line": 1,
                 "side": "LEFT",
                 "left_line": 1,
-                "content": "old",
             },
             {
-                "path": "a.py",
                 "line": 1,
                 "side": "RIGHT",
                 "right_line": 1,
-                "content": "new",
             },
         ]
     if resource == "issue_timeline":
@@ -272,6 +458,73 @@ async def test_nested_thread_comments_verify_parent_and_paginate(reader):
 
 
 @pytest.mark.asyncio
+async def test_large_thread_returns_metadata_before_comment_pagination(reader):
+    import re
+
+    service, state, _ = reader
+
+    def respond(request):
+        query = json.loads(request.content)["query"]
+        size = int(re.search(r"comments\(first:(\d+)\)", query)[1])
+        comments = [
+            {"databaseId": i, "body": "x" * 60000, "replyTo": None} for i in range(size)
+        ]
+        thread = {
+            "id": "thread",
+            "isResolved": False,
+            "isOutdated": False,
+            "comments": _connection(comments, "next"),
+        }
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "repository": {
+                        "pullRequest": {"reviewThreads": _connection([thread])}
+                    }
+                }
+            },
+        )
+
+    state["respond"] = respond
+    page = await service.read(
+        "pull_request_threads", REPO, identifier="7", parameters={"page_size": 1}
+    )
+    assert page.items[0]["comments_complete"] is False
+    assert len(page.items[0]["comments"]) == 1
+
+
+@pytest.mark.parametrize(
+    "code_url,expected",
+    [
+        ("https://enterprise.test/api/v3/", "https://enterprise.test/api/v3"),
+        ("", "https://api.github.com"),
+    ],
+)
+def test_common_reads_and_member_actions_share_the_configured_endpoint(
+    code_url, expected
+):
+    from guildbotics.capabilities.member_github import MemberGitHubCapabilityService
+
+    person = Person(person_id="aiko", name="Aiko")
+    team = Team(
+        members=[],
+        project=Project(
+            name="demo",
+            services={
+                "code_hosting_service": {"name": "github", "api_base_url": code_url},
+                "ticket_manager": {
+                    "name": "github",
+                    "base_url": "https://old.test/api/v3",
+                },
+            },
+        ),
+    )
+    assert hosting.GitHubCodeHostingService(person, team).base_url == expected
+    assert MemberGitHubCapabilityService(person, team).base_url == expected
+
+
+@pytest.mark.asyncio
 async def test_graphql_partial_data_and_project_field_overflow_fail_explicitly(reader):
     service, state, _ = reader
     project = {
@@ -318,7 +571,7 @@ async def test_common_readiness_is_the_host_service_used_by_push_and_completion(
     assert observed == [
         (
             f"https://github.example.test/{REPO}/pull/7",
-            {"failed_logs": True, "log_tail_bytes": 8192},
+            {"failed_logs": True, "log_tail_bytes": 65536},
         )
     ]
 
@@ -332,12 +585,11 @@ async def reader(monkeypatch):
         requests.append(request)
         return state["respond"](request)
 
-    async def create(_person, base_url, owner, *, max_response_bytes):
+    async def create(_person, base_url, owner):
         client = get_async_client(
             base_url,
             GitHubTokenAuth("secret-value"),
             owner,
-            max_response_bytes=max_response_bytes,
         )
         client._transport = httpx.MockTransport(respond)
         client._mounts = {}
@@ -530,7 +782,7 @@ async def test_real_continuation_is_bound_to_original_request_and_api(
     ],
 )
 async def test_production_hook_errors_are_sanitized_and_redirects_not_followed(
-    reader, status, headers, key
+    reader, status, headers, key, read_language
 ):
     service, state, requests = reader
     state["respond"] = lambda _: httpx.Response(
@@ -538,7 +790,12 @@ async def test_production_hook_errors_are_sanitized_and_redirects_not_followed(
     )
     with pytest.raises(RepositoryReadError) as error:
         await read(service)
-    assert str(error.value) == t(f"integrations.github.read.{key}", status=status)
+    expected = t(
+        f"integrations.github.read.{key}", status=status, permission="Dependabot alerts"
+    )
+    if status == 404:
+        expected += " " + t("integrations.github.read.alerts_disabled")
+    assert str(error.value) == expected
     assert "secret-value" not in str(error.value)
     assert len(requests) == 1
 
@@ -557,7 +814,7 @@ async def test_bad_collection_shapes_fail(reader, body):
 @pytest.mark.asyncio
 async def test_raw_limit_is_enforced_by_authenticated_client(reader, monkeypatch):
     service, state, _ = reader
-    monkeypatch.setattr(service, "_max_response_bytes", 250)
+    monkeypatch.setattr(hosting, "MAX_PAGE_BYTES", 250)
     state["respond"] = lambda _: httpx.Response(200, content=b"x" * 251)
     with pytest.raises(
         RepositoryReadError, match=t("integrations.github.read.too_large")

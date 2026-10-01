@@ -14,7 +14,6 @@ from guildbotics.capabilities.member_github import (
     _append_issue_link,
     _preserve_issue_links,
 )
-from guildbotics.integrations.github.pull_requests import DEFAULT_LOG_TAIL_BYTES
 from guildbotics.entities.team import Person, Project, Role, Team
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -34,7 +33,6 @@ LATEST_REVIEW_COMMENT_ID = 102
 def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary():
     assert MAX_ARTIFACT_BYTES == 100 * 1024 * 1024
     assert MAX_ARTIFACT_BYTES > STREAM_READ_LIMIT
-    assert DEFAULT_LOG_TAIL_BYTES == STREAM_READ_LIMIT // 32
 
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -830,7 +828,7 @@ async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
     assert result["readiness"] == "not_applicable"
     assert result["rollup"] == "failure"
     assert result["checks"][0]["conclusion"] == "failure"
-    assert result["failed_logs"] == [{"run_id": 9, "log": "failure"}]
+    assert result["failed_logs"] == [{"run_id": 9, "log": "failure", "log_bytes": 7}]
     assert result["completion_blockers"] == []
     assert not any(
         "/branches/" in endpoint or "/compare/" in endpoint
@@ -1133,6 +1131,40 @@ async def test_task_completion_adds_pull_requests_linked_from_an_issue(monkeypat
 
     assert calls == ["https://github.com/owner/repo/pull/7"]
     assert len(results) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_page", [False, True])
+async def test_task_completion_rejects_incomplete_issue_timeline(after_page):
+    from guildbotics.integrations.github.github_utils import GITHUB_PAGE_SIZE
+
+    service = _service()
+    fake = FakeClient()
+    endpoint = "/repos/owner/repo/issues/1/timeline"
+    fake.get_sequences[endpoint] = (
+        [
+            [
+                {
+                    "source": {
+                        "issue": {
+                            "html_url": "https://github.com/owner/repo/pull/7",
+                            "pull_request": {},
+                        }
+                    }
+                }
+            ]
+            * GITHUB_PAGE_SIZE
+        ]
+        if after_page
+        else []
+    ) + [[]]
+    fake.get_status_sequences[endpoint] = ([200] if after_page else []) + [403]
+    service._client = fake
+    with pytest.raises(MemberCapabilityError):
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/issues/1", []
+        )
+    assert len(fake.gets) == (2 if after_page else 1)
 
 
 @pytest.mark.asyncio

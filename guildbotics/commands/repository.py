@@ -13,9 +13,14 @@ class RepositoryReader:
     """A single inspection's aggregate bound, shared by all of its resources."""
 
     def __init__(self, context: Any, repo: str, number: str) -> None:
+        try:
+            if int(number) <= 0:
+                raise ValueError
+        except ValueError:
+            raise CommandError(t("commands.repository.inspect.number")) from None
         self.service = context.get_code_hosting_service()
         self.repo = repo
-        self.number = str(number)
+        self.number = str(int(number))
         self.bytes = 0
 
     async def read(self, resource: str, **parameters: Any) -> list[dict[str, Any]]:

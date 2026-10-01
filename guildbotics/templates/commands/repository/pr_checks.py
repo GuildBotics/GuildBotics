@@ -4,6 +4,10 @@ from typing import Any
 
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.repository import RepositoryReader, display, flag
+from guildbotics.integrations.code_hosting_service import (
+    MAX_LOG_TAIL_BYTES,
+    ReadinessQuery,
+)
 from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
@@ -20,12 +24,15 @@ async def main(
     repo: str,
     number: str,
     failed_logs: str = "false",
-    log_tail_bytes: str = "8192",
+    log_tail_bytes: str = str(ReadinessQuery.model_fields["log_tail_bytes"].default),
 ) -> str:
     try:
         size = int(log_tail_bytes)
+        ReadinessQuery(log_tail_bytes=size)
     except ValueError:
-        raise CommandError(t("commands.repository.inspect.log_size")) from None
+        raise CommandError(
+            t("commands.repository.inspect.log_size", maximum=MAX_LOG_TAIL_BYTES)
+        ) from None
     return display(
         await RepositoryReader(context, repo, number).one(
             "pull_request_readiness",

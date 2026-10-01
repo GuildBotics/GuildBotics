@@ -52,7 +52,7 @@ comments(first:$size, after:$after) { """
         )
     else:
         item, connection = "pullRequest", "reviewThreads"
-        fields = "id isResolved isOutdated comments(first:100) { " + _COMMENTS + " }"
+        fields = "id isResolved isOutdated comments(first:1) { " + _COMMENTS + " }"
     return (
         "query($owner:String!, $repo:String!, $number:Int!, $after:String, $size:Int!) {"
         f"repository(owner:$owner, name:$repo) {{ {item}(number:$number) {{"

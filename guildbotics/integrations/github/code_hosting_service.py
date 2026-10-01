@@ -15,6 +15,7 @@ from guildbotics.integrations.code_hosting_service import (
     CodeHostingService,
     DependencyAlert,
     DependencyAlertQuery,
+    ReadinessQuery,
     ReadModel,
     RepositoryReadError,
     RepositoryReadPage,
@@ -42,18 +43,11 @@ class PageQuery(ReadModel):
     node: str = Field(default="", max_length=256)
 
 
-class ReadinessQuery(ReadModel):
-    failed_logs: bool = False
-    log_tail_bytes: int = Field(default=8192, ge=1, le=65536)
-
-
 _CURSOR_LIMIT = 2048
 _CONTINUATION_LIMIT = 8192
 
 
 class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
-    _max_response_bytes = MAX_PAGE_BYTES
-
     async def read(
         self,
         resource: str,
@@ -123,9 +117,14 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
             path += f"/{identifier}"
         client = await self._get_client()
         try:
-            response = await client.get(path, params=query, follow_redirects=False)
+            response = await client.get(
+                path,
+                params=query,
+                follow_redirects=False,
+                extensions={"max_response_bytes": MAX_PAGE_BYTES},
+            )
             if response.status_code != HTTPStatus.OK:
-                raise _http_error(response)
+                raise _http_error(response, resource)
             data = response.json()
             if identifier:
                 data = [data]
@@ -138,7 +137,7 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         except ResponseTooLarge:
             raise RepositoryReadError(t("integrations.github.read.too_large")) from None
         except httpx.HTTPStatusError as exc:
-            raise _http_error(exc.response) from None
+            raise _http_error(exc.response, resource) from None
         except httpx.RequestError:
             raise RepositoryReadError(t("integrations.github.read.transport")) from None
         except (AttributeError, TypeError, ValueError, KeyError):
@@ -182,12 +181,13 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     "graphql",
                     json={"query": graph_query(resource), "variables": variables},
                     follow_redirects=False,
+                    extensions={"max_response_bytes": MAX_PAGE_BYTES},
                 )
                 if response.status_code != HTTPStatus.OK:
-                    raise _http_error(response)
+                    raise _http_error(response, resource)
                 payload = response.json()
                 if payload.get("errors"):
-                    raise ValueError
+                    raise _graphql_error(payload["errors"], resource)
                 connection = graph_connection(resource, payload["data"])
                 data = connection["nodes"]
                 info = connection["pageInfo"]
@@ -208,9 +208,14 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
                     if resource in DETAIL_RESOURCES
                     else {"per_page": conditions["page_size"], "page": cursor or "1"}
                 )
-                response = await client.get(path, params=params, follow_redirects=False)
+                response = await client.get(
+                    path,
+                    params=params,
+                    follow_redirects=False,
+                    extensions={"max_response_bytes": MAX_PAGE_BYTES},
+                )
                 if response.status_code != HTTPStatus.OK:
-                    raise _http_error(response)
+                    raise _http_error(response, resource)
                 data = response.json()
                 if resource in DETAIL_RESOURCES:
                     data = [data]
@@ -275,9 +280,18 @@ class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
         except ResponseTooLarge:
             raise RepositoryReadError(t("integrations.github.read.too_large")) from None
         except MemberCapabilityError as exc:
-            raise RepositoryReadError(str(exc)) from exc
+            cause: BaseException | None = exc
+            while cause is not None:
+                if isinstance(cause, httpx.HTTPStatusError):
+                    raise _http_error(cause.response, resource) from None
+                if isinstance(cause, httpx.RequestError):
+                    raise RepositoryReadError(
+                        t("integrations.github.read.transport")
+                    ) from None
+                cause = cause.__cause__
+            raise RepositoryReadError(str(exc)) from None
         except httpx.HTTPStatusError as exc:
-            raise _http_error(exc.response) from None
+            raise _http_error(exc.response, resource) from None
         except httpx.RequestError:
             raise RepositoryReadError(t("integrations.github.read.transport")) from None
         except (AttributeError, TypeError, ValueError, KeyError):
@@ -343,7 +357,46 @@ def _continuation(response: httpx.Response, request: dict[str, Any]) -> str | No
     ).decode()
 
 
-def _http_error(response: httpx.Response) -> RepositoryReadError:
+_PERMISSIONS = {
+    "dependency_alerts": "Dependabot alerts",
+    "issues": "Issues",
+    "issue_comments": "Issues / Pull requests",
+    "issue_timeline": "Issues / Pull requests",
+    "issue_projects": "Projects",
+    "pull_requests": "Pull requests",
+    "pull_request_reviews": "Pull requests",
+    "pull_request_files": "Pull requests",
+    "pull_request_threads": "Pull requests",
+    "review_thread_comments": "Pull requests",
+    "pull_request_readiness": "Pull requests / Contents / Checks / Commit statuses / Actions",
+}
+
+
+def _access_message(kind: str, resource: str) -> str:
+    message = t(f"integrations.github.read.{kind}", permission=_PERMISSIONS[resource])
+    if kind == "not_found" and resource == "dependency_alerts":
+        message += " " + t("integrations.github.read.alerts_disabled")
+    return message
+
+
+def _graphql_error(errors: Any, resource: str) -> RepositoryReadError:
+    kinds = {item.get("type") for item in errors if isinstance(item, dict)}
+    for kind, key in (
+        ("RATE_LIMITED", "rate_limit"),
+        ("FORBIDDEN", "forbidden"),
+        ("INSUFFICIENT_SCOPES", "forbidden"),
+        ("NOT_FOUND", "not_found"),
+    ):
+        if kind in kinds:
+            return RepositoryReadError(
+                _access_message(key, resource)
+                if key in {"forbidden", "not_found"}
+                else t(f"integrations.github.read.{key}")
+            )
+    return RepositoryReadError(t("integrations.github.read.response"))
+
+
+def _http_error(response: httpx.Response, resource: str) -> RepositoryReadError:
     status = response.status_code
     if status == HTTPStatus.TOO_MANY_REQUESTS or (
         status == HTTPStatus.FORBIDDEN
@@ -355,8 +408,8 @@ def _http_error(response: httpx.Response) -> RepositoryReadError:
         return RepositoryReadError(t("integrations.github.read.rate_limit"))
     message = {
         401: t("integrations.github.read.authentication"),
-        403: t("integrations.github.read.forbidden"),
-        404: t("integrations.github.read.not_found"),
+        403: _access_message("forbidden", resource),
+        404: _access_message("not_found", resource),
         422: t("integrations.github.read.rejected"),
     }.get(status, t("integrations.github.read.http", status=status))
     return RepositoryReadError(message)

@@ -359,14 +359,16 @@ guildbotics run repository/issue_inspect --person alice repo=org/repo number=42
 # PR の情報・レビューの判定と会話・コメント可能な差分座標
 guildbotics run repository/pr_inspect --person alice repo=org/repo number=43 include_comments=true include_diff=true
 # host が確認した完了可否と、失敗した Actions のログ末尾
-guildbotics run repository/pr_checks --person alice repo=org/repo number=43 failed_logs=true log_tail_bytes=8192
+guildbotics run repository/pr_checks --person alice repo=org/repo number=43 failed_logs=true log_tail_bytes=65536
 ```
 
 結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`python -m guildbotics.runtime.command_entry repository/pr_inspect repo=org/repo number=43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", repo="org/repo", number="43")` でも呼べます。
 
-各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。Project のフィールドは 1 項目 100 件までで、超過もエラーです。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。大きな結果は `member repository read` でページごとに確認してください。
+各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。Project のフィールドは 1 項目 100 件までで、超過もエラーです。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member repository read` でページごとに確認してください。
 
-共通の取得リソースは `issues`、`pull_requests`、`issue_comments`、`issue_timeline`、`issue_projects`、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`、`review_thread_comments`、`pull_request_readiness` です。いずれも `identifier` に Issue または PR の番号を指定します。一覧は `page_size`（1〜100、既定 30）を受け取り、`review_thread_comments` は取得済みスレッドの `node` も必要です。個別の Issue・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host が GitHub を再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
+共通の取得リソースは `issues`、`pull_requests`、`issue_comments`、`issue_timeline`、`issue_projects`、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`、`review_thread_comments`、`pull_request_readiness` です。いずれも `identifier` に Issue または PR の番号を指定します。一覧は `page_size`（1〜100、既定 30）を受け取り、`review_thread_comments` は取得済みスレッドの `node` も必要です。個別の Issue・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536、既定 65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host が GitHub を再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
+
+readiness は host サービス自身の通信を使うため、内部の compare 応答には参照ページ用の受信上限を適用しません。返すページの上限は維持し、JSON のエスケープと付帯情報を除いた残りを失敗ログで分け合います。短くしたログは `truncated=true` と `tail_limit_bytes` で分かります。GitHub の権限エラーは必要な権限名を示し、HTTP が成功でも GraphQL の権限不足・レート制限はエラーとして案内します。
 
 共通のサービス・結果型は `integrations/code_hosting_service.py` に置き、host の integration factory が設定から実装を選びます。コマンド側は既存の member grant 越しに同じインターフェースを使います。認証、許可した API 経路、応答の変換、ページ送りはサービス固有の実装が担当します。continuation は API の接続先と取得条件に結び付けられ、認可情報を持たず、読み取りのたびに検証されます。トークンは host に保持します。ページ送りのリンクからは一意な `after`（アラート）または `page`（REST の一覧）だけを取り出し、元の許可済み経路と条件で次の要求を組み立てます。GitHub が `/repositories/{id}/...` という URL を返しても、その URL はリクエストしません。リダイレクトも追いません。リソース追加時は共通契約・サービス側の対応・テストを追加します。任意の URL・HTTP メソッド・ヘッダー・GraphQL は受け付けず、アラートの状態変更もできません。既存の CI Dependabot digest は別の定期ワークフローです。
 

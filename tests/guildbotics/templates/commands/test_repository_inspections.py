@@ -275,3 +275,30 @@ async def test_empty_issue_data_is_complete():
 def test_inspections_are_read_only(name):
     path = get_template_path() / f"commands/repository/{name}.py"
     assert parse_command_access(load_command_metadata(path, "en")).read_only
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["issue_inspect", "pr_inspect", "pr_checks"])
+@pytest.mark.parametrize("number", ["abc", "0", "-1", "1.2"])
+async def test_command_number_errors_name_the_command_argument(name, number):
+    service = Pages({})
+    with pytest.raises(CommandError) as error:
+        await command(name).main(service.context(), "org/repo", number)
+    assert str(error.value) == t("commands.repository.inspect.number")
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", ["abc", "0", "-1", "65537", "100000"])
+async def test_command_log_size_errors_explain_the_range(size):
+    from guildbotics.integrations.code_hosting_service import MAX_LOG_TAIL_BYTES
+
+    service = Pages({})
+    with pytest.raises(CommandError) as error:
+        await command("pr_checks").main(
+            service.context(), "org/repo", "7", log_tail_bytes=size
+        )
+    assert str(error.value) == t(
+        "commands.repository.inspect.log_size", maximum=MAX_LOG_TAIL_BYTES
+    )
+    assert service.calls == []

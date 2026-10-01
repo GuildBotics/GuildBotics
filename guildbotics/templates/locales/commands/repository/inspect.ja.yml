@@ -1,4 +1,5 @@
 ja:
   incomplete: "%{resource} を上限内で完全に取得できませんでした。member repository read でページごとに確認してください。"
   flag: "真偽値の引数には true または false を指定してください。"
-  log_size: "log_tail_bytes には正の整数（最大 65536）を指定してください。"
+  log_size: "log_tail_bytes には正の整数（最大 %{maximum}）を指定してください。"
+  number: "number には Issue または PR の正の番号を指定してください。"

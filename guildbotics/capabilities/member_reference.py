@@ -106,7 +106,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "pull_request_files, pull_request_threads, review_thread_comments, "
                 "pull_request_readiness. Collections accept page_size (1-100); "
                 "review_thread_comments also requires node from pull_request_threads. "
-                "Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536). "
+                "Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). "
                 "URLs, HTTP methods, headers, and GraphQL are not accepted.",
             ),
         ],
@@ -146,7 +146,8 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "guildbotics run repository/pr_checks --person <person> repo=<owner/repo> number=<n> "
                 "[failed_logs=true] [log_tail_bytes=<n>]",
                 "Read a PR head's CI rollup, base freshness, completion readiness, "
-                "and optional failed Actions log tails.",
+                "and optional failed Actions log tails (65536 bytes per job by default, "
+                "reduced when jobs share the serialized page budget).",
             ),
             (
                 "guildbotics member github pr create --person <person> --repo <owner/repo> --head <branch> "
@@ -366,7 +367,7 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "When creating new PR inline feedback, first inspect the PR with "
     "`repository/pr_inspect include_diff=true`, then use `member github pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
-    "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`).",
+    "(`line`, `side`, and optional `--start-line` / `--start-side`); take `path` from the containing file.",
     "When addressing existing PR review threads, reply with `member github pr reply` "
     "using the `reply_target_id` from `repository/pr_inspect include_comments=true`.",
     "After opening or updating a PR, inspect its CI and completion readiness with "

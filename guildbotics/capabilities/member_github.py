@@ -10,7 +10,6 @@ from shutil import copyfileobj
 from typing import IO, Any
 from urllib.parse import quote, urlparse
 
-from httpx import AsyncClient
 from markdown_it import MarkdownIt
 from pydantic import TypeAdapter, ValidationError
 
@@ -46,7 +45,6 @@ from guildbotics.integrations.github.pull_requests import (
 )
 from guildbotics.integrations.github.repository_scope import (
     ADD_PROJECT_ITEM,
-    configured_owner,
 )
 from guildbotics.runtime.member_invocation import (
     GuestProcessError,
@@ -65,20 +63,11 @@ _REVIEW_EVENTS = {
 
 class MemberGitHubCapabilityService(GitHubPullRequests):
     def __init__(self, person: Person, team: Team) -> None:
-        self.person = person
-        self.team = team
+        super().__init__(person, team)
         ticket_config = team.project.get_service_config(Service.TICKET_MANAGER)
-        code_config = team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
-        self.base_url = str(
-            code_config.get("api_base_url")
-            or ticket_config.get("base_url")
-            or "https://api.github.com"
-        ).rstrip("/")
-        self.owner = configured_owner(team.project)
         self.project_owner = str(ticket_config.get("owner") or self.owner)
         self.project_id = str(ticket_config.get("project_id") or "")
         self.project_url = str(ticket_config.get("url") or "")
-        self._client: AsyncClient | None = None
         self._project_node_id: str | None = None
 
     async def context(self, check_credentials: bool = False) -> dict[str, Any]:

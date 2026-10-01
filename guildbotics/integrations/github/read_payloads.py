@@ -44,7 +44,7 @@ def _review_summary(person: Person, review: dict[str, Any]) -> dict[str, Any]:
 def _pull_request_file_summary(file: dict[str, Any]) -> dict[str, Any]:
     path = str(file.get("filename") or "")
     patch = str(file.get("patch") or "")
-    coordinates = _commentable_lines_from_patch(path, patch)
+    coordinates = _commentable_lines_from_patch(patch)
     additions = sum(
         line["side"] == "RIGHT" and "left_line" not in line for line in coordinates
     )
@@ -80,7 +80,7 @@ def _graphql_review_comment_summary(
     }
 
 
-def _commentable_lines_from_patch(path: str, patch: str) -> list[dict[str, Any]]:
+def _commentable_lines_from_patch(patch: str) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
     left_line: int | None = None
     right_line: int | None = None
@@ -93,16 +93,13 @@ def _commentable_lines_from_patch(path: str, patch: str) -> list[dict[str, Any]]
         if left_line is None or right_line is None or raw_line.startswith("\\"):
             continue
         marker = raw_line[:1]
-        content = raw_line[1:] if marker in {" ", "+", "-"} else raw_line
         if marker == " ":
             lines.append(
                 {
-                    "path": path,
                     "line": right_line,
                     "side": "RIGHT",
                     "left_line": left_line,
                     "right_line": right_line,
-                    "content": content,
                 }
             )
             left_line += 1
@@ -110,22 +107,18 @@ def _commentable_lines_from_patch(path: str, patch: str) -> list[dict[str, Any]]
         elif marker == "+":
             lines.append(
                 {
-                    "path": path,
                     "line": right_line,
                     "side": "RIGHT",
                     "right_line": right_line,
-                    "content": content,
                 }
             )
             right_line += 1
         elif marker == "-":
             lines.append(
                 {
-                    "path": path,
                     "line": left_line,
                     "side": "LEFT",
                     "left_line": left_line,
-                    "content": content,
                 }
             )
             left_line += 1
