@@ -373,7 +373,11 @@ _PERMISSIONS = {
 
 
 def _access_message(kind: str, resource: str) -> str:
-    message = t(f"integrations.github.read.{kind}", permission=_PERMISSIONS[resource])
+    message = (
+        t("integrations.github.read.forbidden", permission=_PERMISSIONS[resource])
+        if kind == "forbidden"
+        else t("integrations.github.read.not_found", permission=_PERMISSIONS[resource])
+    )
     if kind == "not_found" and resource == "dependency_alerts":
         message += " " + t("integrations.github.read.alerts_disabled")
     return message
@@ -381,18 +385,12 @@ def _access_message(kind: str, resource: str) -> str:
 
 def _graphql_error(errors: Any, resource: str) -> RepositoryReadError:
     kinds = {item.get("type") for item in errors if isinstance(item, dict)}
-    for kind, key in (
-        ("RATE_LIMITED", "rate_limit"),
-        ("FORBIDDEN", "forbidden"),
-        ("INSUFFICIENT_SCOPES", "forbidden"),
-        ("NOT_FOUND", "not_found"),
-    ):
-        if kind in kinds:
-            return RepositoryReadError(
-                _access_message(key, resource)
-                if key in {"forbidden", "not_found"}
-                else t(f"integrations.github.read.{key}")
-            )
+    if "RATE_LIMITED" in kinds:
+        return RepositoryReadError(t("integrations.github.read.rate_limit"))
+    if kinds & {"FORBIDDEN", "INSUFFICIENT_SCOPES"}:
+        return RepositoryReadError(_access_message("forbidden", resource))
+    if "NOT_FOUND" in kinds:
+        return RepositoryReadError(_access_message("not_found", resource))
     return RepositoryReadError(t("integrations.github.read.response"))
 
 
