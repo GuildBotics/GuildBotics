@@ -33,7 +33,6 @@ from guildbotics.capabilities.member_activity_events import (
 from guildbotics.capabilities.member_chat import MemberChatCapabilityService
 from guildbotics.capabilities.member_git import MemberGitWorkspaceService
 from guildbotics.capabilities.member_github import (
-    DEFAULT_LOG_TAIL_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
 )
@@ -1715,18 +1714,6 @@ def repository_read(
     )
 
 
-@issue.command(name="inspect")
-@_read_only_member_command
-@_person_option
-@click.option("--url", "issue_url", required=True, help="Issue URL.")
-@_markdown_format_option
-def issue_inspect(person: str, issue_url: str, output_format: str) -> None:
-    _run(
-        _github(person, lambda service: service.issue_inspect(issue_url)),
-        output_format=output_format,
-    )
-
-
 @issue.command(name="comment")
 @_person_option
 @click.option("--url", "issue_url", required=True, help="Issue URL.")
@@ -1864,75 +1851,6 @@ def issue_update(
 @github.group()
 def pr() -> None:
     """GitHub pull request operations."""
-
-
-@pr.command(name="inspect")
-@_read_only_member_command
-@_person_option
-@click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@click.option(
-    "--include-comments",
-    is_flag=True,
-    help=(
-        "Include conversation comments, review summaries, and review threads "
-        "with their reply target ids."
-    ),
-)
-@click.option(
-    "--include-diff",
-    is_flag=True,
-    help="Include the diff with commentable line coordinates.",
-)
-@_markdown_format_option
-def pr_inspect(
-    person: str,
-    pr_url: str,
-    include_comments: bool,
-    include_diff: bool,
-    output_format: str,
-) -> None:
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_inspect(pr_url, include_comments, include_diff),
-        ),
-        output_format=output_format,
-    )
-
-
-@pr.command(name="checks")
-@_read_only_member_command
-@_person_option
-@click.option("--url", "pr_url", required=True, help="Pull request URL.")
-@click.option(
-    "--failed-logs",
-    is_flag=True,
-    help="Include bounded log tails for failed GitHub Actions jobs.",
-)
-@click.option(
-    "--log-tail-bytes",
-    type=click.IntRange(min=1),
-    default=DEFAULT_LOG_TAIL_BYTES,
-    show_default=True,
-    help="Maximum bytes returned from the end of each failed job log.",
-)
-@_markdown_format_option
-def pr_checks(
-    person: str,
-    pr_url: str,
-    failed_logs: bool,
-    log_tail_bytes: int,
-    output_format: str,
-) -> None:
-    _run(
-        _github(
-            person,
-            lambda service: service.pr_checks(
-                pr_url, failed_logs=failed_logs, log_tail_bytes=log_tail_bytes
-            ),
-        ),
-        output_format=output_format,
-    )
 
 
 @pr.command(name="create")
@@ -2150,7 +2068,7 @@ def pr_review_comment(
     "--reply-target-id",
     required=True,
     type=int,
-    help="reply_target_id from 'pr inspect --include-comments'.",
+    help="reply_target_id from repository/pr_inspect include_comments=true.",
 )
 @_required_content_stdin_option
 @_json_format_option

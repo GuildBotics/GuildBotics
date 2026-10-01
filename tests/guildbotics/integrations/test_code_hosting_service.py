@@ -85,8 +85,7 @@ def adapter(monkeypatch):
             200, json=body[0] if request.url.path.endswith("/42") else body
         )
 
-    async def client(person, base_url, owner, *, max_response_bytes):
-        assert max_response_bytes == github.MAX_PAGE_BYTES
+    async def client(person, base_url, owner):
         identities.append((person.person_id, base_url, owner))
         result = httpx.AsyncClient(
             base_url=base_url, transport=httpx.MockTransport(respond)
@@ -94,7 +93,9 @@ def adapter(monkeypatch):
         clients.append(result)
         return result
 
-    monkeypatch.setattr(github, "create_github_client", client)
+    monkeypatch.setattr(
+        "guildbotics.integrations.github.pull_requests.create_github_client", client
+    )
     service = SimpleIntegrationFactory().create_code_hosting_service(
         logging.getLogger(), Person(person_id="aiko", name="Aiko"), team()
     )
@@ -115,7 +116,7 @@ async def test_provider_maps_conditions_and_all_result_fields(adapter, state, na
     page = await service.read(
         "dependency_alerts", "org/repo", parameters={"state": state, "page_size": 1}
     )
-    assert page.model_dump() == {
+    assert page.model_dump(exclude={"target"}) == {
         "continuation": None,
         "items": [
             {
@@ -141,7 +142,7 @@ async def test_provider_maps_conditions_and_all_result_fields(adapter, state, na
     }
     assert dict(requests[0].url.params) == {"state": native, "per_page": "1"}
     assert requests[0].url.path == "/api/v3/repos/org/repo/dependabot/alerts"
-    assert identities == [("aiko", "https://hosting.test/api/v3/", "")]
+    assert identities == [("aiko", "https://hosting.test/api/v3", "")]
     detail = await service.read("dependency_alerts", "org/repo", identifier="42")
     assert detail == page
     await service.aclose()

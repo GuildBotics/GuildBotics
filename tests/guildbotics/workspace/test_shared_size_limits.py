@@ -135,7 +135,7 @@ NOT_SHARED = {
     "guildbotics/intelligences/agent_runtime/environment.py:_MAX_LOG_LINE_BYTES": (
         "one line of a command's log, logged on the host"
     ),
-    "guildbotics/capabilities/member_github.py:DEFAULT_LOG_TAIL_BYTES": (
+    "guildbotics/integrations/code_hosting_service.py:MAX_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),
     "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (

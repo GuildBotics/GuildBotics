@@ -118,7 +118,9 @@ class GitHubAppAuth(httpx.Auth):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": ua,
         }
-        return httpx.Request("POST", refresh_url, headers=headers)
+        return httpx.Request(
+            "POST", refresh_url, headers=headers, extensions=request.extensions
+        )
 
     def _update_token_from_response(self, resp: httpx.Response) -> None:
         data = resp.json()
@@ -217,7 +219,7 @@ async def get_person_github_token(person: Person, base_url: str) -> str:
 
 
 async def create_github_client(
-    person: Person, base_url: str, owner: str, *, max_response_bytes: int | None = None
+    person: Person, base_url: str, owner: str
 ) -> httpx.AsyncClient:
     """
     Create an authenticated GitHub API client.
@@ -251,9 +253,7 @@ async def create_github_client(
             person.get_secret("github_access_token"), person_id=person.person_id
         )
 
-    client = get_async_client(
-        base_url=base_url, auth=auth, owner=owner, max_response_bytes=max_response_bytes
-    )
+    client = get_async_client(base_url=base_url, auth=auth, owner=owner)
     client.headers.update(
         {
             "Accept": "application/vnd.github.v3+json",

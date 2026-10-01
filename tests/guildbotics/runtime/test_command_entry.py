@@ -73,12 +73,59 @@ def _facts(tmp_path: Path) -> CommandFacts:
     )
 
 
+@pytest.mark.asyncio
+async def test_child_resolves_inside_existing_environment_and_uses_its_member(
+    config_dir, tmp_path
+):
+    path = config_dir / "commands" / "probe.py"
+    path.write_text(_PROBE, encoding="utf-8")
+    facts = _facts(tmp_path)
+    from dataclasses import replace
+
+    facts = replace(facts, access=CommandAccess(read_only=True))
+    reply = await command_entry.run(
+        _request(tmp_path / "not-the-child.py", tmp_path, wants_result=True),
+        facts,
+        HostClient("http://window.test/host", "token"),
+        child=True,
+    )
+    assert reply.failure is None
+    assert reply.result["person"] == "aiko"
+    assert reply.result["services"] == "WindowChatService"
+    assert facts.access.read_only
+
+
+@pytest.mark.asyncio
+async def test_child_rejects_cwd_outside_main_mounts(config_dir, tmp_path):
+    reply = await command_entry.run(
+        _request(config_dir / "commands" / "probe.py", tmp_path.parent),
+        _facts(tmp_path),
+        HostClient("http://window.test/host", "token"),
+        child=True,
+    )
+    from guildbotics.utils.i18n_tool import t
+
+    assert reply.failure.command
+    assert reply.failure.message == t(
+        "intelligences.agent_environment.runtime.outside_mounts",
+        path=tmp_path.parent.as_posix(),
+    )
+
+
+def test_child_cli_requires_existing_environment(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["command_entry", "repository/issue_inspect"])
+    monkeypatch.delenv(HOST_URL_ENV, raising=False)
+    monkeypatch.delenv(HOST_TOKEN_ENV, raising=False)
+    with pytest.raises(SystemExit, match="running GuildBotics command"):
+        command_entry.main()
+
+
 def _request(path: Path, cwd: Path, **fields) -> CommandRequest:
     return CommandRequest(
         path=str(path),
         name="probe",
         args=["name=Aiko"],
-        cwd=str(cwd),
+        cwd=cwd.as_posix(),
         **{
             "pipe": "the input",
             "invocation": {

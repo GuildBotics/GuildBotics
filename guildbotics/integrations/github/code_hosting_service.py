@@ -8,33 +8,46 @@ from http import HTTPStatus
 from typing import Any
 
 import httpx
+from pydantic import Field
 
-from guildbotics.entities import Person, Service, Team
 from guildbotics.integrations.code_hosting_service import (
     MAX_PAGE_BYTES,
     CodeHostingService,
     DependencyAlert,
     DependencyAlertQuery,
+    ReadinessQuery,
+    ReadModel,
     RepositoryReadError,
     RepositoryReadPage,
 )
 from guildbotics.integrations.github.async_client import ResponseTooLarge
-from guildbotics.integrations.github.github_utils import create_github_client
-from guildbotics.integrations.github.repository_scope import configured_owner
+from guildbotics.integrations.github.pull_requests import (
+    GitHubPullRequests,
+    GitHubResource,
+    MemberCapabilityError,
+    _work_target,
+)
+from guildbotics.integrations.github.read_resources import (
+    DETAIL_RESOURCES,
+    GRAPH_RESOURCES,
+    REST_RESOURCES,
+    graph_connection,
+    graph_query,
+    translate,
+)
 from guildbotics.utils.i18n_tool import t
+
+
+class PageQuery(ReadModel):
+    page_size: int = Field(default=30, ge=1, le=100)
+    node: str = Field(default="", max_length=256)
+
 
 _CURSOR_LIMIT = 2048
 _CONTINUATION_LIMIT = 8192
 
 
-class GitHubCodeHostingService(CodeHostingService):
-    def __init__(self, person: Person, team: Team) -> None:
-        self.person = person
-        self.owner = configured_owner(team.project)
-        config = team.project.get_service_config(Service.CODE_HOSTING_SERVICE)
-        self.base_url = str(config.get("api_base_url") or "https://api.github.com")
-        self._client: httpx.AsyncClient | None = None
-
+class GitHubCodeHostingService(GitHubPullRequests, CodeHostingService):
     async def read(
         self,
         resource: str,
@@ -44,7 +57,12 @@ class GitHubCodeHostingService(CodeHostingService):
         parameters: dict[str, Any] | None = None,
         continuation: str = "",
     ) -> RepositoryReadPage:
-        if resource != "dependency_alerts":
+        if resource not in {
+            "dependency_alerts",
+            "pull_request_readiness",
+            *REST_RESOURCES,
+            *GRAPH_RESOURCES,
+        }:
             raise RepositoryReadError(t("integrations.github.read.resource"))
         if not re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", repo
@@ -52,7 +70,34 @@ class GitHubCodeHostingService(CodeHostingService):
             raise RepositoryReadError(t("integrations.github.read.repository"))
         if identifier and not re.fullmatch(r"[1-9][0-9]{0,19}", identifier):
             raise RepositoryReadError(t("integrations.github.read.identifier"))
-        conditions = _parameters(identifier, parameters)
+        if resource != "dependency_alerts" and not identifier:
+            raise RepositoryReadError(t("integrations.github.read.identifier"))
+        try:
+            if parameters is not None and not isinstance(parameters, dict):
+                raise ValueError
+            if resource == "dependency_alerts":
+                conditions = _parameters(identifier, parameters)
+            elif resource == "pull_request_readiness":
+                conditions = ReadinessQuery.model_validate(
+                    parameters or {}
+                ).model_dump()
+            elif resource in DETAIL_RESOURCES:
+                if parameters not in (None, {}):
+                    raise ValueError
+                conditions = {}
+            else:
+                conditions = PageQuery.model_validate(
+                    parameters if parameters is not None else {}
+                ).model_dump()
+                if resource == "review_thread_comments":
+                    if not re.fullmatch(r"[A-Za-z0-9_=-]{1,256}", conditions["node"]):
+                        raise ValueError
+                elif conditions["node"]:
+                    raise ValueError
+        except ValueError:
+            raise RepositoryReadError(
+                t("integrations.github.read.parameters")
+            ) from None
         request = {
             "resource": resource,
             "repo": repo,
@@ -60,6 +105,8 @@ class GitHubCodeHostingService(CodeHostingService):
             "parameters": conditions,
             "api_base_url": self.base_url,
         }
+        if resource != "dependency_alerts":
+            return await self._read_resource(request, continuation)
         query = dict(conditions)
         if continuation:
             if identifier:
@@ -68,19 +115,16 @@ class GitHubCodeHostingService(CodeHostingService):
         path = f"repos/{repo}/dependabot/alerts"
         if identifier:
             path += f"/{identifier}"
-        if self._client is None:
-            self._client = await create_github_client(
-                self.person,
-                self.base_url,
-                self.owner,
-                max_response_bytes=MAX_PAGE_BYTES,
-            )
+        client = await self._get_client()
         try:
-            response = await self._client.get(
-                path, params=query, follow_redirects=False
+            response = await client.get(
+                path,
+                params=query,
+                follow_redirects=False,
+                extensions={"max_response_bytes": MAX_PAGE_BYTES},
             )
             if response.status_code != HTTPStatus.OK:
-                raise _http_error(response)
+                raise _http_error(response, resource)
             data = response.json()
             if identifier:
                 data = [data]
@@ -93,16 +137,165 @@ class GitHubCodeHostingService(CodeHostingService):
         except ResponseTooLarge:
             raise RepositoryReadError(t("integrations.github.read.too_large")) from None
         except httpx.HTTPStatusError as exc:
-            raise _http_error(exc.response) from None
+            raise _http_error(exc.response, resource) from None
         except httpx.RequestError:
             raise RepositoryReadError(t("integrations.github.read.transport")) from None
         except (AttributeError, TypeError, ValueError, KeyError):
             raise RepositoryReadError(t("integrations.github.read.response")) from None
 
-    async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+    async def _read_resource(
+        self, request: dict[str, Any], continuation: str
+    ) -> RepositoryReadPage:
+        resource, repo, identifier, conditions = (
+            request[k] for k in ("resource", "repo", "identifier", "parameters")
+        )
+        if continuation and resource in DETAIL_RESOURCES:
+            raise RepositoryReadError(t("integrations.github.read.continuation"))
+        cursor = _cursor(continuation, request) if continuation else ""
+        if (
+            resource in REST_RESOURCES
+            and cursor
+            and not re.fullmatch(r"[1-9][0-9]{0,5}", cursor)
+        ):
+            raise RepositoryReadError(t("integrations.github.read.continuation"))
+        client = await self._get_client()
+        try:
+            if resource == "pull_request_readiness":
+                result = await self.pr_checks(
+                    f"{self.web_base_url()}/{repo}/pull/{identifier}", **conditions
+                )
+                return RepositoryReadPage(items=[result], target=result["target"])
+            next_cursor = None
+            if resource in GRAPH_RESOURCES:
+                owner, name = repo.split("/")
+                variables = {
+                    "owner": owner,
+                    "repo": name,
+                    "number": int(identifier),
+                    "after": cursor or None,
+                    "size": conditions["page_size"],
+                }
+                if resource == "review_thread_comments":
+                    variables["node"] = conditions["node"]
+                response = await client.post(
+                    "graphql",
+                    json={"query": graph_query(resource), "variables": variables},
+                    follow_redirects=False,
+                    extensions={"max_response_bytes": MAX_PAGE_BYTES},
+                )
+                if response.status_code != HTTPStatus.OK:
+                    raise _http_error(response, resource)
+                payload = response.json()
+                if payload.get("errors"):
+                    raise _graphql_error(payload["errors"], resource)
+                connection = graph_connection(resource, payload["data"])
+                data = connection["nodes"]
+                info = connection["pageInfo"]
+                if info["hasNextPage"]:
+                    next_cursor = info["endCursor"]
+                    if (
+                        not isinstance(next_cursor, str)
+                        or not 0 < len(next_cursor) <= _CURSOR_LIMIT
+                        or next_cursor == cursor
+                    ):
+                        raise ValueError
+            else:
+                path = f"repos/{repo}/" + REST_RESOURCES[resource].format(
+                    identifier=identifier
+                )
+                params = (
+                    {}
+                    if resource in DETAIL_RESOURCES
+                    else {"per_page": conditions["page_size"], "page": cursor or "1"}
+                )
+                response = await client.get(
+                    path,
+                    params=params,
+                    follow_redirects=False,
+                    extensions={"max_response_bytes": MAX_PAGE_BYTES},
+                )
+                if response.status_code != HTTPStatus.OK:
+                    raise _http_error(response, resource)
+                data = response.json()
+                if resource in DETAIL_RESOURCES:
+                    data = [data]
+                elif response.links.get("next"):
+                    pages = httpx.URL(response.links["next"]["url"]).params.get_list(
+                        "page"
+                    )
+                    if (
+                        len(pages) != 1
+                        or not re.fullmatch(r"[1-9][0-9]{0,5}", pages[0])
+                        or int(pages[0]) <= int(cursor or "1")
+                    ):
+                        raise ValueError
+                    next_cursor = pages[0]
+            if not isinstance(data, list) or any(
+                not isinstance(item, dict) for item in data
+            ):
+                raise ValueError
+            target = None
+            if resource in {"issues", "pull_requests"}:
+                item = data[0]
+                if item.get("number") != int(identifier) or not isinstance(
+                    item.get("title"), str
+                ):
+                    raise ValueError
+                owner, name = repo.split("/")
+                ref = GitHubResource(
+                    owner,
+                    name,
+                    int(identifier),
+                    "pull" if resource == "pull_requests" else "issue",
+                )
+                target = _work_target(ref, item)
+                result = {
+                    **target,
+                    "body": item.get("body") or "",
+                    "state": item["state"],
+                    "assignees": [v["login"] for v in item.get("assignees", [])],
+                    "labels": [v["name"] for v in item.get("labels", [])],
+                }
+                if resource == "pull_requests":
+                    head = self._pull_request_head(ref, item)
+                    result.update(
+                        head=head.branch,
+                        head_repo=head.full_repo,
+                        head_owner=head.owner,
+                        head_repo_name=head.repo,
+                        head_sha=self._pull_request_head_sha(ref, item),
+                        base=(item.get("base") or {}).get("ref", ""),
+                        merged=item.get("merged_at") is not None,
+                        draft=bool(item.get("draft")),
+                        changed_files=item.get("changed_files"),
+                    )
+                data = [result]
+            return RepositoryReadPage(
+                items=[translate(resource, item, self.person) for item in data],
+                target=target,
+                continuation=_encode_cursor(next_cursor, request)
+                if next_cursor
+                else None,
+            )
+        except ResponseTooLarge:
+            raise RepositoryReadError(t("integrations.github.read.too_large")) from None
+        except MemberCapabilityError as exc:
+            cause: BaseException | None = exc
+            while cause is not None:
+                if isinstance(cause, httpx.HTTPStatusError):
+                    raise _http_error(cause.response, resource) from None
+                if isinstance(cause, httpx.RequestError):
+                    raise RepositoryReadError(
+                        t("integrations.github.read.transport")
+                    ) from None
+                cause = cause.__cause__
+            raise RepositoryReadError(str(exc)) from None
+        except httpx.HTTPStatusError as exc:
+            raise _http_error(exc.response, resource) from None
+        except httpx.RequestError:
+            raise RepositoryReadError(t("integrations.github.read.transport")) from None
+        except (AttributeError, TypeError, ValueError, KeyError):
+            raise RepositoryReadError(t("integrations.github.read.response")) from None
 
 
 def _parameters(identifier: str, parameters: dict[str, Any] | None) -> dict[str, Any]:
@@ -164,7 +357,44 @@ def _continuation(response: httpx.Response, request: dict[str, Any]) -> str | No
     ).decode()
 
 
-def _http_error(response: httpx.Response) -> RepositoryReadError:
+_PERMISSIONS = {
+    "dependency_alerts": "Dependabot alerts",
+    "issues": "Issues",
+    "issue_comments": "Issues / Pull requests",
+    "issue_timeline": "Issues / Pull requests",
+    "issue_projects": "Projects",
+    "pull_requests": "Pull requests",
+    "pull_request_reviews": "Pull requests",
+    "pull_request_files": "Pull requests",
+    "pull_request_threads": "Pull requests",
+    "review_thread_comments": "Pull requests",
+    "pull_request_readiness": "Pull requests / Contents / Checks / Commit statuses / Actions",
+}
+
+
+def _access_message(kind: str, resource: str) -> str:
+    message = (
+        t("integrations.github.read.forbidden", permission=_PERMISSIONS[resource])
+        if kind == "forbidden"
+        else t("integrations.github.read.not_found", permission=_PERMISSIONS[resource])
+    )
+    if kind == "not_found" and resource == "dependency_alerts":
+        message += " " + t("integrations.github.read.alerts_disabled")
+    return message
+
+
+def _graphql_error(errors: Any, resource: str) -> RepositoryReadError:
+    kinds = {item.get("type") for item in errors if isinstance(item, dict)}
+    if "RATE_LIMITED" in kinds:
+        return RepositoryReadError(t("integrations.github.read.rate_limit"))
+    if kinds & {"FORBIDDEN", "INSUFFICIENT_SCOPES"}:
+        return RepositoryReadError(_access_message("forbidden", resource))
+    if "NOT_FOUND" in kinds:
+        return RepositoryReadError(_access_message("not_found", resource))
+    return RepositoryReadError(t("integrations.github.read.response"))
+
+
+def _http_error(response: httpx.Response, resource: str) -> RepositoryReadError:
     status = response.status_code
     if status == HTTPStatus.TOO_MANY_REQUESTS or (
         status == HTTPStatus.FORBIDDEN
@@ -176,8 +406,8 @@ def _http_error(response: httpx.Response) -> RepositoryReadError:
         return RepositoryReadError(t("integrations.github.read.rate_limit"))
     message = {
         401: t("integrations.github.read.authentication"),
-        403: t("integrations.github.read.forbidden"),
-        404: t("integrations.github.read.not_found"),
+        403: _access_message("forbidden", resource),
+        404: _access_message("not_found", resource),
         422: t("integrations.github.read.rejected"),
     }.get(status, t("integrations.github.read.http", status=status))
     return RepositoryReadError(message)
@@ -215,3 +445,9 @@ def _alert(item: dict[str, Any]) -> DependencyAlert:
             "updated_at": item.get("updated_at"),
         }
     )
+
+
+def _encode_cursor(cursor: str, request: dict[str, Any]) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps({"request": request, "after": cursor}).encode()
+    ).decode()

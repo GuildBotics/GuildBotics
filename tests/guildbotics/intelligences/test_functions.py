@@ -51,14 +51,14 @@ def test_handle_github_ticket_prompt_keeps_only_trigger_specific_contract():
     # which carries --pr-url for PR review.
     assert "{prepare_command}" in body
     assert "--pr-url" in body
-    assert "--include-diff" in body
+    assert "include_diff=true" in body
     assert "commentable_lines" in body
     assert "pr review-comment" in body
     assert "path" in body
     assert "line" in body
     assert "side" in body
     assert "reply_target_id" in body
-    assert "member github pr checks" in body
+    assert "repository/pr_checks" in body
     assert "`readiness` is `ready`" in body
     assert "checked head SHA changed" in body
     # Envelope and shared-procedure content lives in the injected contract and

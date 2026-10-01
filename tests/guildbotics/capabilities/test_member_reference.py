@@ -26,14 +26,14 @@ def test_reference_covers_every_member_domain():
     # All capability domains are listed so any member can act across them
     # regardless of which workflow invoked it.
     assert "guildbotics member git commit" in text
-    assert "--include-diff" in text
+    assert "include_diff=true" in text
     assert "guildbotics member github pr create" in text
     assert "[--issue-url <url> [--closes-issue|--refs-issue]]" in text
     assert "--issue-url appends Refs #<n> unless --closes-issue is set." in text
     assert "guildbotics member github pr update" in text
     assert "guildbotics member github pr review-comment" in text
-    assert "guildbotics member github pr checks" in text
-    assert "--failed-logs" in text
+    assert "guildbotics run repository/pr_checks" in text
+    assert "failed_logs=true" in text
     assert "guildbotics member github run artifact download" in text
     assert "remove repository files after inspection" in text
     assert "--content-file" in text
@@ -76,12 +76,13 @@ def test_reference_includes_standard_work_procedure():
     assert "does not by itself authorize closing the issue" in text
     assert "the issue closes when a human merges the PR" not in text
     assert "files[].commentable_lines" in text
-    assert "path`, `line`, `side`" in text
+    assert "`line`, `side`" in text
+    assert "take `path` from the containing file" in text
     assert "--start-line" in text
     assert "--start-side" in text
     assert "reply_target_id" in text
     assert "After opening or updating a PR" in text
-    assert "member github pr checks --failed-logs" in text
+    assert "repository/pr_checks failed_logs=true" in text
     assert "check CI again" in text
     assert "unless `readiness` is `ready`" in text
     assert "head must not be behind the current base" in text
@@ -141,7 +142,7 @@ def test_reference_states_cross_cutting_rules():
     assert "autonomous workflow runs must propose policy" in text
     assert "use memory as the primary basis for the answer" in text
     assert "Never display, infer, store, or copy secrets" in text
-    assert "All GitHub and Slack access, reads and writes alike" in text
+    assert "GitHub and Slack access, reads and writes alike" in text
     assert "Never use `gh`" in text
     assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.

@@ -8,11 +8,9 @@ from zipfile import ZipFile
 import pytest
 
 from guildbotics.capabilities.member_github import (
-    DEFAULT_LOG_TAIL_BYTES,
     MAX_ARTIFACT_BYTES,
     MemberCapabilityError,
     MemberGitHubCapabilityService,
-    PR_INSPECT_FEEDBACK_SOURCES,
     _append_issue_link,
     _preserve_issue_links,
 )
@@ -35,7 +33,6 @@ LATEST_REVIEW_COMMENT_ID = 102
 def test_ci_download_limits_keep_artifacts_bounded_outside_the_stream_boundary():
     assert MAX_ARTIFACT_BYTES == 100 * 1024 * 1024
     assert MAX_ARTIFACT_BYTES > STREAM_READ_LIMIT
-    assert DEFAULT_LOG_TAIL_BYTES == STREAM_READ_LIMIT // 32
 
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -214,25 +211,6 @@ async def _open_pull_request(_resource):
     return {"state": "open", "user": {"login": "bot"}}
 
 
-@pytest.mark.asyncio
-async def test_pr_inspect_reports_the_uniform_work_target():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        **_pull_request_payload(7, "Show the work target"),
-        "head": {
-            "sha": "abc123",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        },
-    }
-    service._client = fake
-
-    result = await service.pr_inspect("https://github.com/owner/repo/pull/7", False)
-
-    assert result["target"] == _pull_target(7, "Show the work target")
-
-
 def _pull_with_head(number: int, title: str) -> dict:
     return {
         **_pull_request_payload(number, title),
@@ -302,7 +280,10 @@ async def test_non_idempotent_writers_never_read_after_the_write(name, call):
     fake.get_payloads["/repos/owner/repo/pulls"] = []
     fake.post_payloads["/repos/owner/repo/issues"] = {"number": 43, "html_url": "u"}
     fake.post_payloads["/repos/owner/repo/pulls"] = {"number": 8, "html_url": "u"}
-    fake.graphql_payloads.append(_review_threads_payload())
+    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
+        "id": 101,
+        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+    }
     service._client = fake
 
     result = await call(service)
@@ -486,7 +467,10 @@ async def test_pr_reply_uses_pull_replies_endpoint():
     service = _service()
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.graphql_payloads.append(_review_threads_payload())
+    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
+        "id": 101,
+        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+    }
     service._client = fake
 
     result = await service.pr_reply(
@@ -631,22 +615,6 @@ async def test_pr_review_comment_rejects_invalid_multiline_range():
             "RIGHT",
             13,
             "RIGHT",
-        )
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_rejects_unexpected_pull_request_payload():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = []
-    service._client = fake
-
-    with pytest.raises(
-        MemberCapabilityError,
-        match="Unexpected GitHub pull request response for owner/repo#7",
-    ):
-        await service.pr_inspect(
-            "https://github.com/owner/repo/pull/7", include_comments=False
         )
 
 
@@ -819,95 +787,6 @@ async def test_pr_checks_waits_when_checks_have_not_registered_for_the_head():
 
 
 @pytest.mark.asyncio
-async def test_pr_inspect_uses_commit_ancestry_for_out_of_date_status():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads.update(
-        {
-            "/repos/owner/repo/pulls/7": {
-                "title": "Same tree, different ancestry",
-                "head": {
-                    "sha": "head123",
-                    "ref": "feature",
-                    "repo": {"full_name": "owner/repo"},
-                },
-                "base": {"sha": "old-base", "ref": "main"},
-            },
-            "/repos/owner/repo/branches/main": {"commit": {"sha": "current-base"}},
-            "/repos/owner/repo/compare/current-base...head123": {
-                "status": "diverged",
-                "ahead_by": 1,
-                "behind_by": 2,
-                "files": [],
-            },
-        }
-    )
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=False
-    )
-
-    assert result["base_sha"] == "current-base"
-    assert result["head_sha"] == "head123"
-    assert result["behind_by"] == 2
-    assert result["out_of_date"] is True
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_degrades_when_freshness_is_unavailable():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "head": {
-            "sha": "head123",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        },
-        "base": {"sha": "old-base", "ref": "main"},
-    }
-    fake.get_status_codes["/repos/owner/repo/branches/main"] = 404
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=False
-    )
-
-    assert result["base_sha"] is None
-    assert result["head_sha"] == "head123"
-    assert result["behind_by"] is None
-    assert result["out_of_date"] is None
-    assert "status 404" in result["freshness_error"]
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_skips_freshness_for_closed_pull_requests():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "state": "closed",
-        "head": {
-            "sha": "head123",
-            "ref": "feature",
-            "repo": {"full_name": "owner/repo"},
-        },
-        "base": {"sha": "old-base", "ref": "deleted-base"},
-    }
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=False
-    )
-
-    assert result["base_sha"] is None
-    assert result["behind_by"] is None
-    assert result["out_of_date"] is None
-    assert not any(
-        "/branches/" in endpoint for endpoint, _params, _headers in fake.gets
-    )
-
-
-@pytest.mark.asyncio
 async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
     service = _service()
     fake = FakeClient()
@@ -949,7 +828,7 @@ async def test_pr_checks_preserves_ci_for_closed_pull_requests(monkeypatch):
     assert result["readiness"] == "not_applicable"
     assert result["rollup"] == "failure"
     assert result["checks"][0]["conclusion"] == "failure"
-    assert result["failed_logs"] == [{"run_id": 9, "log": "failure"}]
+    assert result["failed_logs"] == [{"run_id": 9, "log": "failure", "log_bytes": 7}]
     assert result["completion_blockers"] == []
     assert not any(
         "/branches/" in endpoint or "/compare/" in endpoint
@@ -1255,6 +1134,40 @@ async def test_task_completion_adds_pull_requests_linked_from_an_issue(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("after_page", [False, True])
+async def test_task_completion_rejects_incomplete_issue_timeline(after_page):
+    from guildbotics.integrations.github.github_utils import GITHUB_PAGE_SIZE
+
+    service = _service()
+    fake = FakeClient()
+    endpoint = "/repos/owner/repo/issues/1/timeline"
+    fake.get_sequences[endpoint] = (
+        [
+            [
+                {
+                    "source": {
+                        "issue": {
+                            "html_url": "https://github.com/owner/repo/pull/7",
+                            "pull_request": {},
+                        }
+                    }
+                }
+            ]
+            * GITHUB_PAGE_SIZE
+        ]
+        if after_page
+        else []
+    ) + [[]]
+    fake.get_status_sequences[endpoint] = ([200] if after_page else []) + [403]
+    service._client = fake
+    with pytest.raises(MemberCapabilityError):
+        await service.task_completion_readiness(
+            "https://github.com/owner/repo/issues/1", []
+        )
+    assert len(fake.gets) == (2 if after_page else 1)
+
+
+@pytest.mark.asyncio
 async def test_task_completion_checks_only_open_pull_requests_from_issue_timeline():
     service = _service()
     fake = FakeClient()
@@ -1522,7 +1435,10 @@ async def test_pr_reply_allows_outdated_thread():
     service = _service()
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.graphql_payloads.append(_review_threads_payload(outdated=True))
+    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
+        "id": 101,
+        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+    }
     service._client = fake
 
     result = await service.pr_reply(
@@ -1544,7 +1460,10 @@ async def test_pr_reply_allows_resolved_thread():
     service = _service()
     fake = FakeClient()
     fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
-    fake.graphql_payloads.append(_review_threads_payload(resolved=True))
+    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = {
+        "id": 101,
+        "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+    }
     service._client = fake
 
     result = await service.pr_reply(
@@ -1562,528 +1481,34 @@ async def test_pr_reply_allows_resolved_thread():
 
 
 @pytest.mark.asyncio
-async def test_pr_inspect_includes_review_thread_resolution_fields():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "title": "PR",
-        "body": "Body",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
-    fake.graphql_payloads.append(_review_threads_payload(resolved=True))
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=True
-    )
-
-    assert result["review_threads"][0]["root_comment_id"] == ROOT_REVIEW_COMMENT_ID
-    assert result["review_threads"][0]["latest_comment_id"] == LATEST_REVIEW_COMMENT_ID
-    assert result["review_threads"][0]["resolved"] is True
-    assert result["review_threads"][0]["replyable"] is True
-    assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_includes_review_summaries_without_inline_comments():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "PR")
-    fake.get_payloads["/repos/owner/repo/pulls/7/reviews"] = [
-        {
-            "id": 201,
-            "body": "Please re-request this review.",
-            "state": "COMMENTED",
-            "submitted_at": "2026-01-01T00:02:00Z",
-            "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-201",
-            "commit_id": "abc123",
-            "user": {"login": "reviewer"},
-        }
-    ]
-    fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
-    fake.graphql_payloads.append(_review_threads_payload())
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=True
-    )
-
-    assert result["review_summaries"] == [
-        {
-            "id": 201,
-            "body": "Please re-request this review.",
-            "author": "reviewer",
-            "author_type": "User",
-            "state": "COMMENTED",
-            "submitted_at": "2026-01-01T00:02:00Z",
-            "html_url": "https://github.com/owner/repo/pull/7#pullrequestreview-201",
-            "commit_id": "abc123",
-        }
-    ]
-    assert PR_INSPECT_FEEDBACK_SOURCES <= result.keys()
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_pages_through_conversation_comments_and_review_summaries():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_with_head(7, "PR")
-    comments_endpoint = "/repos/owner/repo/issues/7/comments"
-    reviews_endpoint = "/repos/owner/repo/pulls/7/reviews"
-    fake.get_sequences[comments_endpoint] = [
-        [
-            {
-                "id": index,
-                "body": f"comment {index}",
-                "user": {"login": "reviewer"},
-            }
-            for index in range(100)
-        ],
-        [{"id": 100, "body": "latest comment", "user": {"login": "reviewer"}}],
-    ]
-    fake.get_sequences[reviews_endpoint] = [
-        [
-            {
-                "id": index,
-                "body": f"review {index}",
-                "user": {"login": "reviewer"},
-            }
-            for index in range(100)
-        ],
-        [{"id": 100, "body": "latest review", "user": {"login": "reviewer"}}],
-    ]
-    fake.graphql_payloads.append(_review_threads_payload())
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=True
-    )
-
-    assert result["conversation_comments"][-1]["body"] == "latest comment"
-    assert result["review_summaries"][-1]["body"] == "latest review"
-    assert [call[:2] for call in fake.gets if call[0] == comments_endpoint] == [
-        (comments_endpoint, {"per_page": 100, "page": 1}),
-        (comments_endpoint, {"per_page": 100, "page": 2}),
-    ]
-    assert [call[:2] for call in fake.gets if call[0] == reviews_endpoint] == [
-        (reviews_endpoint, {"per_page": 100, "page": 1}),
-        (reviews_endpoint, {"per_page": 100, "page": 2}),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_include_diff_returns_commentable_lines():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "title": "PR",
-        "body": "Body",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    fake.get_payloads["/repos/owner/repo/pulls/7/files"] = [
-        {
-            "filename": "guildbotics/example.py",
-            "status": "modified",
-            "additions": 2,
-            "deletions": 1,
-            "changes": 3,
-            "patch": "@@ -1,2 +1,3 @@\n unchanged\n-old\n+new\n+extra",
-        }
-    ]
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7",
-        include_comments=False,
-        include_diff=True,
-    )
-
-    assert result["files"] == [
-        {
-            "path": "guildbotics/example.py",
-            "status": "modified",
-            "additions": 2,
-            "deletions": 1,
-            "changes": 3,
-            "commentable_lines": [
-                {
-                    "path": "guildbotics/example.py",
-                    "line": 1,
-                    "side": "RIGHT",
-                    "left_line": 1,
-                    "right_line": 1,
-                    "content": "unchanged",
-                },
-                {
-                    "path": "guildbotics/example.py",
-                    "line": 2,
-                    "side": "LEFT",
-                    "left_line": 2,
-                    "content": "old",
-                },
-                {
-                    "path": "guildbotics/example.py",
-                    "line": 2,
-                    "side": "RIGHT",
-                    "right_line": 2,
-                    "content": "new",
-                },
-                {
-                    "path": "guildbotics/example.py",
-                    "line": 3,
-                    "side": "RIGHT",
-                    "right_line": 3,
-                    "content": "extra",
-                },
-            ],
-        }
-    ]
-    assert fake.gets[-1] == (
-        "/repos/owner/repo/pulls/7/files",
-        {"per_page": 100, "page": 1},
-        None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_includes_fork_head_repository():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "title": "PR",
-        "body": "Body",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {
-            "ref": "feature",
-            "repo": {
-                "full_name": "contributor/repo",
-                "name": "repo",
-                "owner": {"login": "contributor"},
-            },
-        },
-        "base": {"ref": "main"},
-    }
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=False
-    )
-    head = await service.get_pr_head("https://github.com/owner/repo/pull/7")
-
-    assert result["head"] == "feature"
-    assert result["head_repo"] == "contributor/repo"
-    assert result["head_owner"] == "contributor"
-    assert result["head_repo_name"] == "repo"
-    assert head.full_repo == "contributor/repo"
-    assert head.branch == "feature"
-
-
-@pytest.mark.asyncio
-async def test_pr_inspect_marks_outdated_thread_replyable():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/pulls/7"] = {
-        "title": "PR",
-        "body": "Body",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/7",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    fake.get_payloads["/repos/owner/repo/issues/7/comments"] = []
-    fake.graphql_payloads.append(_review_threads_payload(outdated=True))
-    service._client = fake
-
-    result = await service.pr_inspect(
-        "https://github.com/owner/repo/pull/7", include_comments=True
-    )
-
-    assert result["review_threads"][0]["outdated"] is True
-    assert result["review_threads"][0]["replyable"] is True
-    assert result["review_threads"][0]["reply_target_id"] == ROOT_REVIEW_COMMENT_ID
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_pages_through_comments():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    comments_endpoint = "/repos/owner/repo/issues/42/comments"
-    fake.get_sequences[comments_endpoint] = [
-        [
-            {
-                "id": index,
-                "body": f"comment {index}",
-                "user": {"login": "reviewer"},
-            }
-            for index in range(100)
-        ],
-        [{"id": 100, "body": "latest comment", "user": {"login": "reviewer"}}],
-    ]
-    fake.get_payloads["/repos/owner/repo/issues/42/timeline"] = []
-    service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert result["comments"][-1]["body"] == "latest comment"
-    assert [call[:2] for call in fake.gets if call[0] == comments_endpoint] == [
-        (comments_endpoint, {"per_page": 100, "page": 1}),
-        (comments_endpoint, {"per_page": 100, "page": 2}),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_pages_through_linked_pull_request_timeline():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
-    timeline_endpoint = "/repos/owner/repo/issues/42/timeline"
-    fake.get_sequences[timeline_endpoint] = [
-        [{"event": "labeled"} for _ in range(100)],
-        [
-            {
-                "source": {
-                    "issue": {
-                        "pull_request": {},
-                        "html_url": "https://github.com/owner/repo/pull/5",
-                    }
-                }
-            }
-        ],
-    ]
-    fake.get_payloads["/repos/owner/repo/pulls/5"] = {
-        "title": "PR",
-        "body": "",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/5",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert [item["number"] for item in result["linked_pull_request_candidates"]] == [5]
-    assert [call for call in fake.gets if call[0] == timeline_endpoint] == [
-        (
-            timeline_endpoint,
-            {"per_page": 100, "page": 1},
-            {"Accept": "application/vnd.github+json"},
-        ),
-        (
-            timeline_endpoint,
-            {"per_page": 100, "page": 2},
-            {"Accept": "application/vnd.github+json"},
-        ),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_keeps_timeline_results_before_a_later_page_fails():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
-    timeline_endpoint = "/repos/owner/repo/issues/42/timeline"
-    linked_event = {
-        "source": {
-            "issue": {
-                "pull_request": {},
-                "html_url": "https://github.com/owner/repo/pull/5",
-            }
-        }
-    }
-    fake.get_sequences[timeline_endpoint] = [
-        [linked_event, *({"event": "labeled"} for _ in range(99))],
+@pytest.mark.parametrize(
+    "root",
+    [
         [],
-    ]
-    fake.get_status_sequences[timeline_endpoint] = [200, 502]
-    fake.get_payloads["/repos/owner/repo/pulls/5"] = {
-        "title": "PR",
-        "body": "",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/5",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert [item["number"] for item in result["linked_pull_request_candidates"]] == [5]
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_treats_an_unavailable_timeline_as_no_candidates():
+        {
+            "id": 101,
+            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/8",
+        },
+        {
+            "id": 101,
+            "in_reply_to_id": 99,
+            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+        },
+        {
+            "id": 102,
+            "pull_request_url": "https://api.github.com/repos/owner/repo/pulls/7",
+        },
+    ],
+)
+async def test_reply_requires_the_requested_root_comment_on_this_pr(root):
     service = _service()
     fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
-    fake.get_status_codes["/repos/owner/repo/issues/42/timeline"] = 404
+    fake.get_payloads["/repos/owner/repo/pulls/7"] = _pull_request_payload(7, "T")
+    fake.get_payloads["/repos/owner/repo/pulls/comments/101"] = root
     service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert result["linked_pull_request_candidates"] == []
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_returns_linked_pull_request_candidates():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
-    fake.get_payloads["/repos/owner/repo/issues/42/timeline"] = [
-        {
-            "source": {
-                "issue": {
-                    "pull_request": {},
-                    "html_url": "https://github.com/owner/repo/pull/5",
-                }
-            }
-        }
-    ]
-    fake.get_payloads["/repos/owner/repo/pulls/5"] = {
-        "title": "PR",
-        "body": "",
-        "state": "open",
-        "merged_at": None,
-        "draft": False,
-        "html_url": "https://github.com/owner/repo/pull/5",
-        "head": {"ref": "feature", "repo": {"full_name": "owner/repo"}},
-        "base": {"ref": "main"},
-    }
-    service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert result["project_metadata"] == {}
-    assert result["linked_pull_request_candidates"] == [
-        {
-            "number": 5,
-            "url": "https://github.com/owner/repo/pull/5",
-            "title": "PR",
-            "state": "open",
-            "merged": False,
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_issue_inspect_returns_project_metadata_when_available():
-    service = _service()
-    fake = FakeClient()
-    fake.get_payloads["/repos/owner/repo/issues/42"] = {
-        "title": "Issue",
-        "body": "Body",
-        "state": "open",
-        "html_url": "https://github.com/owner/repo/issues/42",
-        "assignees": [],
-        "labels": [],
-    }
-    fake.get_payloads["/repos/owner/repo/issues/42/comments"] = []
-    fake.get_payloads["/repos/owner/repo/issues/42/timeline"] = []
-    fake.graphql_payloads.append(
-        {
-            "data": {
-                "repository": {
-                    "issue": {
-                        "projectItems": {
-                            "nodes": [
-                                {
-                                    "id": "PVTI_1",
-                                    "project": {
-                                        "title": "Tasks",
-                                        "number": 1,
-                                        "url": "https://github.com/orgs/owner/projects/1",
-                                    },
-                                    "fieldValues": {
-                                        "nodes": [
-                                            {
-                                                "name": "Ready",
-                                                "field": {"name": "Status"},
-                                            }
-                                        ]
-                                    },
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        }
-    )
-    service._client = fake
-
-    result = await service.issue_inspect("https://github.com/owner/repo/issues/42")
-
-    assert result["project_metadata"] == {
-        "items": [
-            {
-                "item_id": "PVTI_1",
-                "project_title": "Tasks",
-                "project_number": 1,
-                "project_url": "https://github.com/orgs/owner/projects/1",
-                "fields": [{"field": "Status", "value": "Ready"}],
-            }
-        ]
-    }
+    with pytest.raises(MemberCapabilityError, match="not replyable"):
+        await service.pr_reply("https://github.com/owner/repo/pull/7", 101, "Fixed")
+    assert not fake.posts
 
 
 @pytest.mark.asyncio
@@ -3195,48 +2620,6 @@ async def test_reaction_add_uses_target_specific_endpoint():
             {"Accept": "application/vnd.github+json"},
         )
     ]
-
-
-def _review_threads_payload(resolved=False, outdated=False):
-    return {
-        "data": {
-            "repository": {
-                "pullRequest": {
-                    "reviewThreads": {
-                        "nodes": [
-                            {
-                                "isResolved": resolved,
-                                "isOutdated": outdated,
-                                "comments": {
-                                    "nodes": [
-                                        {
-                                            "databaseId": ROOT_REVIEW_COMMENT_ID,
-                                            "body": "Please fix",
-                                            "createdAt": "2026-01-01T00:00:00Z",
-                                            "url": "https://github.com/owner/repo/pull/7#discussion_r101",
-                                            "author": {"login": "reviewer"},
-                                            "replyTo": None,
-                                        },
-                                        {
-                                            "databaseId": LATEST_REVIEW_COMMENT_ID,
-                                            "body": "More context",
-                                            "createdAt": "2026-01-01T00:01:00Z",
-                                            "url": "https://github.com/owner/repo/pull/7#discussion_r102",
-                                            "author": {"login": "reviewer"},
-                                            "replyTo": {
-                                                "databaseId": ROOT_REVIEW_COMMENT_ID
-                                            },
-                                        },
-                                    ]
-                                },
-                            }
-                        ],
-                        "pageInfo": {"endCursor": None, "hasNextPage": False},
-                    }
-                }
-            }
-        }
-    }
 
 
 class _Guest:

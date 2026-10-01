@@ -51,6 +51,8 @@ Do not ask the user to repeat the person ID, and do not switch to another member
 
 Treat the user's currently open repository as the shared pair-programming workspace.
 
+Use the bundled `repository/issue_inspect`, `repository/pr_inspect`, and `repository/pr_checks` commands through the desktop-managed CLI's `run` entry. Pass `--person <person_id> repo=<owner/repo> number=<n>`; their complete usage and the workflow-internal invocation are in `member context` / `member help`.
+
 - Do not run `member git prepare` or clone into the member workspace. The member's own clones are worked on only inside the isolated environment of a running GuildBotics command, so member-mode git is refused in this session; for isolated work, delegate it as described below.
 - Do not switch branches, reset, clean, or pull automatically. If the current branch or repository does not match the work, stop and ask the user before making git workspace changes.
 - Stage with plain git; create branches with plain git (`git switch -c <branch>`) when the user asks. The member git commands only add the member identity and credential.
@@ -78,7 +80,7 @@ Run `member git commit` without `member git push` when the user asks for a local
 ## Definition of Done
 
 Before sending your final interactive reply, complete the standard work procedure from the member capabilities in the user's current repository: verification of code changes, the requested publishing steps (commit, push, PR, comments, replies, or reactions), and memory maintenance.
-When the work created, reused, or updated an open PR, run `guildbotics member github pr checks` after the final push and do not report completion unless its `readiness` is `ready`. Successful observed checks alone are insufficient: the PR head must include the current base and the checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
+When the work created, reused, or updated an open PR, run `guildbotics run repository/pr_checks` after the final push and do not report completion unless its `readiness` is `ready`. Successful observed checks alone are insufficient: the PR head must include the current base and the checked head SHA must still be current. Closed and merged PRs return `readiness=not_applicable`, while their CI rollup, checks, and failed logs remain available for inspection. `rollup=no_checks` remains visible and is ready only when the current base also has no checks; checks on the base make an empty head a registration-pending blocker.
 Then write the final reply in the active member's voice.
 
 ## Interactive Memory Obligations

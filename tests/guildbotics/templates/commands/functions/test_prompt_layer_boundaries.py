@@ -347,7 +347,7 @@ def test_ticket_prompt_clarifies_summary_is_not_github_substitute():
 def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
     for language in ("en", "ja"):
         body = _prompt_body("handle_github_ticket", language)
-        assert "member github pr checks" in body, language
+        assert "repository/pr_checks" in body, language
         assert "`readiness`" in body, language
         assert "head SHA" in body, language
         assert "--status done" in body, language

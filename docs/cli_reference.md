@@ -76,13 +76,10 @@ For concepts (workspaces, custom commands, scheduling, secrets), see the
 | [`guildbotics member github issue`](#guildbotics-member-github-issue) | GitHub issue operations. |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
 | [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
-| [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
 | [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
 | [`guildbotics member github pr`](#guildbotics-member-github-pr) | GitHub pull request operations. |
-| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
@@ -1102,7 +1099,6 @@ guildbotics member github issue [OPTIONS] COMMAND [ARGS]...
 | --- | --- |
 | [`guildbotics member github issue comment`](#guildbotics-member-github-issue-comment) | Comment on an issue in the member voice. |
 | [`guildbotics member github issue create`](#guildbotics-member-github-issue-create) | Open a follow-up issue a human asked for. |
-| [`guildbotics member github issue inspect`](#guildbotics-member-github-issue-inspect) | Read an issue and its comments. |
 | [`guildbotics member github issue update`](#guildbotics-member-github-issue-update) | Change an issue's body, title, labels, or state; empty content removes the body. |
 
 ## `guildbotics member github issue comment`
@@ -1143,21 +1139,6 @@ guildbotics member github issue create [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
-## `guildbotics member github issue inspect`
-
-Read an issue and its comments.
-
-```text
-guildbotics member github issue inspect [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Issue URL. [required] |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
 ## `guildbotics member github issue update`
 
 Change an issue's body, title, labels, or state; empty content removes the body.
@@ -1195,31 +1176,12 @@ guildbotics member github pr [OPTIONS] COMMAND [ARGS]...
 
 | Subcommand | Summary |
 | --- | --- |
-| [`guildbotics member github pr checks`](#guildbotics-member-github-pr-checks) | Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails. |
 | [`guildbotics member github pr comment`](#guildbotics-member-github-pr-comment) | Comment on a PR conversation. |
 | [`guildbotics member github pr create`](#guildbotics-member-github-pr-create) | Open a PR, or return the existing open PR for the same head and base branches. |
-| [`guildbotics member github pr inspect`](#guildbotics-member-github-pr-inspect) | Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates. |
 | [`guildbotics member github pr reply`](#guildbotics-member-github-pr-reply) | Reply to an inline review thread. |
 | [`guildbotics member github pr review`](#guildbotics-member-github-pr-review) | Submit a review verdict on the PR head as a GitHub review; a conversation comment does not consume a review request or make the member a reviewer. |
 | [`guildbotics member github pr review-comment`](#guildbotics-member-github-pr-review-comment) | Create a new inline review comment on a PR diff line. |
 | [`guildbotics member github pr update`](#guildbotics-member-github-pr-update) | Change a PR's body or title. |
-
-## `guildbotics member github pr checks`
-
-Read a PR head's CI rollup, base freshness, completion readiness, and optional failed Actions log tails.
-
-```text
-guildbotics member github pr checks [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--failed-logs` | Include bounded log tails for failed GitHub Actions jobs. |
-| `--log-tail-bytes INTEGER RANGE` | Maximum bytes returned from the end of each failed job log. [default: 327680; x\>=1] |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
 
 ## `guildbotics member github pr comment`
 
@@ -1261,23 +1223,6 @@ guildbotics member github pr create [OPTIONS]
 | `--format [json\|markdown]` | Output format. [default: json] |
 | `--help` | Show this message and exit. |
 
-## `guildbotics member github pr inspect`
-
-Read a PR, optionally including conversation comments, review summaries, review threads, and diff comment coordinates.
-
-```text
-guildbotics member github pr inspect [OPTIONS]
-```
-
-| Option | Description |
-| --- | --- |
-| `--person TEXT` | Person ID or name of the member. [required] |
-| `--url TEXT` | Pull request URL. [required] |
-| `--include-comments` | Include conversation comments, review summaries, and review threads with their reply target ids. |
-| `--include-diff` | Include the diff with commentable line coordinates. |
-| `--format [json\|markdown]` | Output format. [default: markdown] |
-| `--help` | Show this message and exit. |
-
 ## `guildbotics member github pr reply`
 
 Reply to an inline review thread.
@@ -1290,7 +1235,7 @@ guildbotics member github pr reply [OPTIONS]
 | --- | --- |
 | `--person TEXT` | Person ID or name of the member. [required] |
 | `--url TEXT` | Pull request URL. [required] |
-| `--reply-target-id INTEGER` | reply_target_id from 'pr inspect --include-comments'. [required] |
+| `--reply-target-id INTEGER` | reply_target_id from repository/pr_inspect include_comments=true. [required] |
 | `--content-stdin` | Read the command's entire free-form content from standard input. |
 | `--content-file FILE` | Read the command's entire free-form content from a UTF-8 file. |
 | `--format [json\|markdown]` | Output format. [default: json] |
@@ -1634,7 +1579,7 @@ guildbotics member repository [OPTIONS] COMMAND [ARGS]...
 
 ## `guildbotics member repository read`
 
-Read one bounded page through the configured code_hosting_service. dependency_alerts accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an identifier, it returns one alert and accepts no conditions or continuation. Results contain normalized items and continuation; reuse identical conditions for the next page. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. URLs, HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page through the configured code_hosting_service. dependency_alerts accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an identifier, it returns one alert and accepts no conditions or continuation. Results contain normalized items and continuation; reuse identical conditions for the next page. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Other resources require a numeric identifier: issues, pull_requests, issue_comments, issue_timeline, issue_projects, pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). URLs, HTTP methods, headers, and GraphQL are not accepted.
 
 ```text
 guildbotics member repository read [OPTIONS]
