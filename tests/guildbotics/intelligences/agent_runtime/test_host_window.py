@@ -1231,7 +1231,7 @@ async def test_read_only_repository_read_uses_the_member_grant(
     from guildbotics.editions.simple.simple_integration_factory import (
         SimpleIntegrationFactory,
     )
-    from guildbotics.integrations.github import code_hosting_service as provider
+    from guildbotics.integrations.github import pull_requests as provider
 
     context, person = member_cli.resolve_member_context("aiko")
     context.person = person

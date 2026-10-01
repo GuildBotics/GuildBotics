@@ -50,7 +50,7 @@ def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
     from guildbotics.cli import main
 
     monkeypatch.setattr(main, "callback", None)
-    arguments = ["github", "pr", "checks", "--help"]
+    arguments = ["repository", "read", "--help"]
     through_cli = CliRunner().invoke(
         main, ["member", *arguments], prog_name="guildbotics"
     )
@@ -58,11 +58,13 @@ def test_help_run_in_process_matches_the_cli(monkeypatch) -> None:
     exit_code, stdout, _stderr = _run(arguments)
 
     assert exit_code == 0
-    assert "[default: markdown]" in stdout
+    assert "[default: json]" in stdout
     # CliRunner forces its own width, so the text wraps differently; compare
     # what the settings decide instead.
     defaults = re.compile(r"\[default: [^\]]+\]")
-    assert defaults.findall(stdout) == defaults.findall(through_cli.output)
+    assert defaults.findall(" ".join(stdout.split())) == defaults.findall(
+        " ".join(through_cli.output.split())
+    )
 
 
 @pytest.mark.parametrize(
