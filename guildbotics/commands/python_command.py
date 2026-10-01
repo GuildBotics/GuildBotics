@@ -12,6 +12,7 @@ from guildbotics.commands.command_base import CommandBase
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.models import CommandOutcome
 from guildbotics.commands.utils import stringify_output
+from guildbotics.utils.i18n_tool import t
 
 
 class PythonCommand(CommandBase):
@@ -68,6 +69,13 @@ class PythonCommand(CommandBase):
             for idx in range(assigned_keywords, len(params)):
                 if params[idx].kind == inspect.Parameter.VAR_KEYWORD:
                     call_kwargs.update(kwargs)
+
+        try:
+            sig.bind(*call_args, **call_kwargs)
+        except TypeError as exc:
+            raise CommandError(
+                t("commands.python.arguments", command=self.spec.name, reason=str(exc))
+            ) from exc
 
         func_result = entry(*call_args, **call_kwargs)
         if inspect.iscoroutine(func_result):

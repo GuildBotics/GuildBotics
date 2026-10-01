@@ -705,7 +705,14 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
+If a required `main()` argument is missing, GuildBotics reports the argument name before entering the function. This also applies to your own Python commands. Desktop and CLI runs delegated to Desktop return `400 command_error` with the reason. A `TypeError` raised inside your function remains an implementation error.
+
+For anticipated failures in a Python command, raise `guildbotics.commands.errors.CommandError` with a message safe to show to the user. For example, catch `guildbotics.integrations.chat_service.ChatServiceError` from `context.get_chat_service()` and raise `CommandError(str(exc))`.
+
+API-key inference failures report the exception type and HTTP status when available, without the provider's raw error text. The bundled `examples/reports/tools/fetch_ai_news` command reports request failures with guidance to allow `news.google.com` in `intelligences/agent_environment.yml`.
+
 ### 7.2. Invoking other commands
+
 From a Python command, you can call another command with `context.invoke`.
 
 ```python

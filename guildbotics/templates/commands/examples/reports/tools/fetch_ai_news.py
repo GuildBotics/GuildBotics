@@ -9,6 +9,9 @@ from urllib.parse import quote_plus
 
 import requests
 
+from guildbotics.commands.errors import CommandError
+from guildbotics.utils.i18n_tool import t
+
 DEFAULT_QUERY = "AI OR OpenAI OR Anthropic OR Google AI"
 
 
@@ -20,13 +23,26 @@ def main(
     limit: str | int = 8,
     max_age_hours: str | int = 36,
 ) -> dict[str, Any]:
-    """Fetch recent AI news headlines from Google News RSS and return structured data."""
+    """Fetch recent AI news headlines from Google News RSS.
+
+    Raises:
+        CommandError: If the request fails; the environment must allow access
+            to news.google.com in its network configuration.
+    """
     _ = context  # unused in MVP sample but accepted for consistency with PythonCommand
     limit_n = _to_int(limit, 8, minimum=1, maximum=20)
     max_age_n = _to_int(max_age_hours, 36, minimum=1, maximum=24 * 14)
     feed_url = build_google_news_rss_url(query, language=language, country=country)
-    response = requests.get(feed_url, timeout=10)
-    response.raise_for_status()
+    try:
+        response = requests.get(feed_url, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise CommandError(
+            t(
+                "commands.examples.reports.fetch_ai_news.network",
+                error_type=type(exc).__name__,
+            )
+        ) from exc
     items = parse_google_news_rss(response.text, max_age_hours=max_age_n)
     return {
         "query": query,

@@ -1,0 +1,2 @@
+ja:
+  failed: "推論の呼び出しに失敗しました（%{error_type}）%{status}。"

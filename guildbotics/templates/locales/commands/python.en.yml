@@ -1,0 +1,2 @@
+en:
+  arguments: "Invalid arguments for Python command '%{command}': %{reason}"

@@ -20,10 +20,11 @@ import httpx
 import pytest
 
 from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.integrations.chat_service import ChatPostResult, ChatServiceError
 from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.window import (
     MemberCommandError,
@@ -1071,12 +1072,13 @@ async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
         brain = SimpleBrainFactory().create_brain(
             "aiko", "functions/reply", "en", logging.getLogger("test"), {"body": "Hi."}
         )
-        with pytest.raises(HostCallError) as failed:
+        with pytest.raises(CommandError) as failed:
             await brain.run("hello")
 
-    assert failed.value.category == "failed"
-    assert "sk-secret" not in json.dumps(failed.value.payload())
-    assert failed.value.details["error_type"] == "RuntimeError"
+    assert str(failed.value) == t(
+        "intelligences.inference.failed", error_type="RuntimeError", status=""
+    )
+    assert "sk-secret" not in str(failed.value)
     # Nor is it logged: the host's log is kept and shown.
     assert "sk-secret" not in caplog.text
     assert written[-1]["type"] == "span.failed"
@@ -1153,7 +1155,7 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
         ) as command:
             service = WindowChatService(command.client, "aiko")
             general = await service.resolve_channel_id("general")
-            with pytest.raises(MemberCommandError) as refused:
+            with pytest.raises(ChatServiceError) as refused:
                 await service.post_message("C9", "Good morning!")
     finally:
         lease.release()

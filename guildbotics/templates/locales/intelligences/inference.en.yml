@@ -1,0 +1,2 @@
+en:
+  failed: "The inference call failed (%{error_type})%{status}."

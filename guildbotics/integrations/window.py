@@ -19,6 +19,7 @@ from guildbotics.integrations.chat_service import (
     ChatIdentity,
     ChatPostResult,
     ChatService,
+    ChatServiceError,
 )
 from guildbotics.integrations.code_hosting_service import (
     CodeHostingService,
@@ -175,6 +176,7 @@ class WindowChatService(ChatService):
                 "json",
             ],
             stdin=stdin,
+            failure=ChatServiceError,
         )
 
 

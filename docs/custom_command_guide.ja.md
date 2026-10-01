@@ -715,7 +715,14 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
+`main()` の必須引数が不足している場合、GuildBotics は関数を呼び出す前に引数名を含む理由を返します。利用者が作成した Python コマンドにも適用されます。Desktop と Desktop に委譲した CLI では、理由付きの `400 command_error` になります。関数本体の中で発生した `TypeError` は実装上のエラーとして扱います。
+
+Python コマンドで想定内の失敗を伝えるには、利用者に見せてよい本文で `guildbotics.commands.errors.CommandError` を投げてください。例えば、`context.get_chat_service()` の `guildbotics.integrations.chat_service.ChatServiceError` を受け取り、`CommandError(str(exc))` に変換します。
+
+API キーを使う推論の失敗は、例外名と取得できた HTTP ステータスを表示し、プロバイダのエラー本文は表示しません。同梱の `examples/reports/tools/fetch_ai_news` は通信に失敗すると、`intelligences/agent_environment.yml` で `news.google.com` への通信許可を確認するよう案内します。
+
 ### 7.2. コマンドの呼び出し
+
 context.invoke を利用すると、Python コマンドから別のコマンドを呼び出せます。
 
 ```python

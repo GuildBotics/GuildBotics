@@ -1,0 +1,2 @@
+ja:
+  network: "Google News RSS の取得に失敗しました（%{error_type}）。ワークスペースのネットワーク設定（intelligences/agent_environment.yml）で news.google.com への通信を許可し、接続とサービスの稼働状況を確認してください。"
