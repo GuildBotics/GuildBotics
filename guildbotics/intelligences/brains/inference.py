@@ -19,7 +19,9 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from guildbotics.commands.errors import CommandError
 from guildbotics.intelligences.agent_runtime.host_client import (
+    HostCallError,
     HostClient,
     command_window,
 )
@@ -95,7 +97,7 @@ class _Window:
         self._client = client
 
     async def agno(self, person_id: str, call: AgnoCall) -> AgnoAnswer:
-        answer = await self._client.acall(
+        answer = await self._call(
             "agno",
             person_id=person_id,
             # A value JSON cannot carry reaches the prompt as its text.
@@ -104,4 +106,18 @@ class _Window:
         return AgnoAnswer.model_validate(answer)
 
     async def jev(self, call: JevCall) -> dict[str, Any]:
-        return dict(await self._client.acall("jev", call=call.model_dump(mode="json")))
+        return dict(await self._call("jev", call=call.model_dump(mode="json")))
+
+    async def _call(self, name: str, **arguments: Any) -> Any:
+        """Preserve the host's safe failure message, including window failures.
+
+        Raises:
+            CommandError: If the host reports that the call failed.
+            HostCallError: If the window refused the call or is unavailable.
+        """
+        try:
+            return await self._client.acall(name, **arguments)
+        except HostCallError as exc:
+            if exc.category != "failed":
+                raise
+            raise CommandError(str(exc)) from exc

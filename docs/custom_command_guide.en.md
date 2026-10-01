@@ -26,6 +26,7 @@ GuildBotics custom commands let you teach agents arbitrary procedures. You can c
   - [7. Using Python commands](#7-using-python-commands)
     - [7.1. Using arguments](#71-using-arguments)
     - [7.2. Invoking other commands](#72-invoking-other-commands)
+    - [7.3. Reporting failures to the user](#73-reporting-failures-to-the-user)
   - [8. Declaring a routine (patrol) command](#8-declaring-a-routine-patrol-command)
 
 
@@ -705,7 +706,10 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
+If a required `main()` argument is missing, GuildBotics reports the argument name before entering the function. This also applies to your own Python commands. For example, if `repository/security_alerts` reports that `repo` is missing, pass `repo=GuildBotics/GuildBotics`. Desktop shows the reason, and the CLI displays `Error: <reason>`. A `TypeError` raised inside your function remains an implementation error.
+
 ### 7.2. Invoking other commands
+
 From a Python command, you can call another command with `context.invoke`.
 
 ```python
@@ -735,6 +739,27 @@ async def main(context: Context):
 ```
 
 - Because `invoke` is asynchronous, call it with `await`. Therefore, define `main` as `async def`.
+
+### 7.3. Reporting failures to the user
+
+When a chat operation reports an anticipated failure, preserve its reason so the user can act on it:
+
+```python
+from guildbotics.commands.errors import CommandError
+from guildbotics.integrations.chat_service import ChatServiceError
+
+
+async def main(context, channel_id):
+    chat = context.get_chat_service()
+    try:
+        await chat.post_message(channel_id, "Report is ready.")
+    except ChatServiceError as exc:
+        raise CommandError(str(exc)) from exc
+```
+
+The service returned by `context.get_chat_service()` raises `ChatServiceError` from operations such as `post_message`. Converting it to `CommandError` makes Desktop show the reason and the CLI display `Error: <reason>`. Use a message safe to show to the user for other anticipated failures too.
+
+API-key inference failures show the exception type and the reported status when available, without the provider's raw error text. A reported status may be an SDK default even when no HTTP response was received; for example, Agno defaults to 502. Window failures retain their own reasons, such as a timeout or an oversized result. The bundled `examples/reports/tools/fetch_ai_news` command reports request failures with guidance to allow `news.google.com` in `intelligences/agent_environment.yml`.
 
 ## 8. Declaring a routine (patrol) command
 

@@ -997,7 +997,8 @@ async def test_read_antigravity_usage_raises_on_auth_exit_json_or_empty(
 
 
 def test_parse_copilot_quota_reads_measured_snapshots() -> None:
-    snapshot = parse_copilot_quota(_COPILOT_QUOTA_FIXTURE)
+    now = datetime(2026, 9, 18, 23, 42, 5, tzinfo=UTC)
+    snapshot = parse_copilot_quota(_COPILOT_QUOTA_FIXTURE, now=now)
 
     # Unlimited chat / completions have no meter; only the finite budget shows.
     assert snapshot.agent == "copilot"
@@ -1014,7 +1015,7 @@ def test_parse_copilot_quota_reads_measured_snapshots() -> None:
         )
     ]
     assert not snapshot.limit_reached
-    assert snapshot.checked_at
+    assert snapshot.checked_at == now.isoformat()
 
 
 @pytest.mark.parametrize(

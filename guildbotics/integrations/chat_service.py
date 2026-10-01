@@ -13,6 +13,10 @@ SEMANTIC_REACTIONS: tuple[SemanticReaction, ...] = (
 )
 
 
+class ChatServiceError(RuntimeError):
+    """An anticipated chat operation failure with a message fit for the user."""
+
+
 @dataclass(slots=True)
 class ChatIdentity:
     user_id: str

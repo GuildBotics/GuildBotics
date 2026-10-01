@@ -1,0 +1,2 @@
+ja:
+  arguments: "Python コマンド '%{command}' の引数が不正です: %{reason}"

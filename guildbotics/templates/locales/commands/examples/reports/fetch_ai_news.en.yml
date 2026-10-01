@@ -1,0 +1,2 @@
+en:
+  network: "Failed to fetch Google News RSS (%{error_type}). Allow news.google.com in the workspace network configuration (intelligences/agent_environment.yml), and check connectivity and service availability."

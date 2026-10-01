@@ -26,6 +26,7 @@ GuildBotics のカスタムコマンドは、エージェントに任意の処�
   - [7. Python コマンドの利用](#7-python-コマンドの利用)
     - [7.1. 引数の利用](#71-引数の利用)
     - [7.2. コマンドの呼び出し](#72-コマンドの呼び出し)
+    - [7.3. 失敗を利用者に伝える](#73-失敗を利用者に伝える)
   - [8. 巡回（routine）コマンドの宣言](#8-巡回routineコマンドの宣言)
 
 
@@ -715,7 +716,10 @@ kwarg[key1]: c
 kwarg[key2]: d
 ```
 
+`main()` の必須引数が不足している場合、GuildBotics は関数を呼び出す前に引数名を含む理由を返します。利用者が作成した Python コマンドにも適用されます。例えば、`repository/security_alerts` が `repo` の不足を伝えたら、`repo=GuildBotics/GuildBotics` を渡します。Desktop には理由が、CLI には `Error: <理由>` が表示されます。関数本体の中で発生した `TypeError` は実装上のエラーとして扱います。
+
 ### 7.2. コマンドの呼び出し
+
 context.invoke を利用すると、Python コマンドから別のコマンドを呼び出せます。
 
 ```python
@@ -745,6 +749,27 @@ async def main(context: Context):
 ```
 
 - invoke は非同期関数なので、`await` を付けて呼び出します。そのため、`main` 関数も `async def` として定義する必要があります。
+
+### 7.3. 失敗を利用者に伝える
+
+チャットの操作が想定内の失敗を報告したときは、利用者が対処できるように理由をそのまま伝えます。
+
+```python
+from guildbotics.commands.errors import CommandError
+from guildbotics.integrations.chat_service import ChatServiceError
+
+
+async def main(context, channel_id):
+    chat = context.get_chat_service()
+    try:
+        await chat.post_message(channel_id, "Report is ready.")
+    except ChatServiceError as exc:
+        raise CommandError(str(exc)) from exc
+```
+
+`context.get_chat_service()` で得たサービスの `post_message` などの呼び出しが `ChatServiceError` を投げます。これを `CommandError` に変換すると、Desktop には理由が、CLI には `Error: <理由>` が表示されます。ほかの想定内の失敗でも、利用者に見せてよい本文で `CommandError` を投げてください。
+
+API キーを使う推論の失敗は、例外名と取得できた「報告されたステータス」を表示し、プロバイダのエラー本文は表示しません。ステータスは HTTP 応答が無くても SDK の既定値の場合があります（例えば Agno の既定値は502です）。窓口の時間切れや結果サイズ超過は、それぞれの理由をそのまま表示します。同梱の `examples/reports/tools/fetch_ai_news` は通信に失敗すると、`intelligences/agent_environment.yml` で `news.google.com` への通信許可を確認するよう案内します。
 
 ## 8. 巡回（routine）コマンドの宣言
 

@@ -1,0 +1,3 @@
+ja:
+  failed: "推論の呼び出しに失敗しました（%{error_type}）。"
+  failed_with_status: "推論の呼び出しに失敗しました（%{error_type}、報告されたステータス %{status}）。"

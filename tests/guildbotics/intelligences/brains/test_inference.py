@@ -27,6 +27,57 @@ from guildbotics.intelligences.decisions.models import DecisionConfig
 from tests.conftest import FakeContext
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["agno", "jev"])
+@pytest.mark.parametrize("category", ["failed", "refused", "unavailable"])
+@pytest.mark.parametrize(
+    ("message", "details"),
+    [
+        ("The host call timed out.", {}),
+        ("The call's result is too large.", {}),
+        ("Host operation failed.", {}),
+        ("The inference call failed (ProviderError).", {"error_type": "ProviderError"}),
+        (
+            "The inference call failed (ProviderError, reported status 429).",
+            {"error_type": "ProviderError", "status_code": 429},
+        ),
+    ],
+)
+async def test_window_inference_failure_contract(method, category, message, details):
+    from unittest.mock import AsyncMock
+
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.intelligences.agent_runtime.host_client import HostCallError
+    from guildbotics.intelligences.brains.inference import AgnoCall, JevCall, _Window
+    from guildbotics.intelligences.effort import ResolvedEffort
+
+    error = HostCallError(category, message, details)
+    window = _Window(SimpleNamespace(acall=AsyncMock(side_effect=error)))
+    call = (
+        window.agno(
+            "aiko",
+            AgnoCall(
+                brain="test",
+                slot="default",
+                effort=ResolvedEffort(),
+                description="",
+                message="hi",
+            ),
+        )
+        if method == "agno"
+        else window.jev(JevCall(state={}, questions={}, model="jev-latest"))
+    )
+    with pytest.raises(
+        CommandError if category == "failed" else HostCallError
+    ) as caught:
+        await call
+    if category == "failed":
+        assert str(caught.value) == message
+        assert caught.value.__cause__ is error
+    else:
+        assert caught.value is error
+
+
 class _Model:
     """The model of every slot of ``person_id``: the answers a test scripts,
     and what it was asked."""

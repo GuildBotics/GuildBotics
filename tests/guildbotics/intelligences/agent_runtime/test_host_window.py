@@ -20,10 +20,11 @@ import httpx
 import pytest
 
 from guildbotics.capabilities.task_runs import TaskRunStore
+from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
 from guildbotics.entities.team import Person
-from guildbotics.integrations.chat_service import ChatPostResult
+from guildbotics.integrations.chat_service import ChatPostResult, ChatServiceError
 from guildbotics.integrations.code_hosting_service import RepositoryReadError
 from guildbotics.integrations.window import (
     MemberCommandError,
@@ -55,7 +56,10 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     IoEntry,
     SummaryEntry,
 )
-from guildbotics.intelligences.agent_runtime.host_window import HostWindow
+from guildbotics.intelligences.agent_runtime.host_window import (
+    HostWindow,
+    _inference_failed,
+)
 from guildbotics.intelligences.agent_runtime.member_broker import (
     MemberCapabilityBroker,
 )
@@ -80,7 +84,7 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     get_workspace_root,
 )
-from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.i18n_tool import set_language, t
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     command_at,
     settle_contract,
@@ -889,6 +893,8 @@ async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
     async def host(name: str, arguments: dict[str, Any]) -> Any:
         if name == "slow":
             await asyncio.sleep(1)
+        if name == "broken":
+            raise ValueError("Host operation failed.")
         return "x" * 128
 
     async with _served(host) as (client, url):
@@ -897,6 +903,8 @@ async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
             await slow.acall("slow")
         with pytest.raises(HostCallError) as too_much:
             await slow.acall("large")
+        with pytest.raises(HostCallError) as broken:
+            await slow.acall("broken")
 
     assert (timed_out.value.category, str(timed_out.value)) == (
         "failed",
@@ -905,6 +913,11 @@ async def test_a_call_that_takes_too_long_or_answers_too_much_fails(
     assert (too_much.value.category, str(too_much.value)) == (
         "failed",
         "The call's result is too large.",
+    )
+    assert (broken.value.category, str(broken.value), broken.value.details) == (
+        "failed",
+        "Host operation failed.",
+        {},
     )
 
 
@@ -1071,15 +1084,62 @@ async def test_a_failed_model_call_reaches_the_environment_by_its_kind_alone(
         brain = SimpleBrainFactory().create_brain(
             "aiko", "functions/reply", "en", logging.getLogger("test"), {"body": "Hi."}
         )
-        with pytest.raises(HostCallError) as failed:
+        with pytest.raises(CommandError) as failed:
             await brain.run("hello")
 
-    assert failed.value.category == "failed"
-    assert "sk-secret" not in json.dumps(failed.value.payload())
-    assert failed.value.details["error_type"] == "RuntimeError"
+    assert str(failed.value) == t(
+        "intelligences.inference.failed", error_type="RuntimeError"
+    )
+    assert "sk-secret" not in str(failed.value)
     # Nor is it logged: the host's log is kept and shown.
     assert "sk-secret" not in caplog.text
     assert written[-1]["type"] == "span.failed"
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize("source", ["exception", "http_response", "sdk_default"])
+def test_inference_failure_text_is_safe_and_localized(language, source, caplog):
+    from agno.exceptions import ModelProviderError
+
+    set_language(language)
+    secret = "synthetic-private-key"
+    status = None
+    if source == "http_response":
+        status = 429
+        error = httpx.HTTPStatusError(
+            secret,
+            request=httpx.Request("POST", "https://provider.test"),
+            response=httpx.Response(status),
+        )
+    elif source == "sdk_default":
+        error = ModelProviderError(secret)
+        # The SDK assigns a status even when there was no HTTP response.
+        status = error.status_code
+        assert status == 502
+    else:
+        error = RuntimeError(secret)
+
+    failure = _inference_failed(error)
+
+    assert failure.category == "failed"
+    assert failure.details == {
+        "error_type": type(error).__name__,
+        **({"status_code": status} if status else {}),
+    }
+    assert str(failure) == t(
+        "intelligences.inference.failed_with_status"
+        if status
+        else "intelligences.inference.failed",
+        error_type=type(error).__name__,
+        status=status,
+    )
+    assert "intelligences.inference" not in str(failure)
+    if status:
+        assert (
+            "報告されたステータス" if language == "ja" else "reported status"
+        ) in str(failure)
+    assert secret not in json.dumps(failure.payload())
+    assert secret not in caplog.text
 
 
 class _Chat:
@@ -1153,7 +1213,7 @@ async def test_a_read_only_command_can_read_its_chat_but_not_post(
         ) as command:
             service = WindowChatService(command.client, "aiko")
             general = await service.resolve_channel_id("general")
-            with pytest.raises(MemberCommandError) as refused:
+            with pytest.raises(ChatServiceError) as refused:
                 await service.post_message("C9", "Good morning!")
     finally:
         lease.release()
