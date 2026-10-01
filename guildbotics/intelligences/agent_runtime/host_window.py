@@ -83,6 +83,7 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     get_workspace_config_dir,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
 
 #: The kinds of work only a workflow run of that kind does.
@@ -531,8 +532,10 @@ class HostWindow:
 
 def _inference_failed(exc: Exception) -> HostCallError:
     """How a failed inference call reaches the command's environment: by its
-    kind, never its message, which may carry the credentials it was made with
-    (the host's log is kept and shown, so it is not written there either)."""
+    kind and reported status, never its message, which may carry credentials
+    (the host's log is kept and shown, so it is not written there either).
+    The reported status may be an SDK default without an HTTP response.
+    """
     kind = type(exc).__name__
     status = getattr(exc, "status_code", None) or getattr(
         getattr(exc, "response", None), "status_code", None
@@ -540,6 +543,12 @@ def _inference_failed(exc: Exception) -> HostCallError:
     get_logger().warning("An inference call of a command failed (%s).", kind)
     return HostCallError(
         "failed",
-        f"The inference call failed ({kind}).",
+        t(
+            "intelligences.inference.failed_with_status"
+            if status
+            else "intelligences.inference.failed",
+            error_type=kind,
+            status=status,
+        ),
         {"error_type": kind, **({"status_code": status} if status else {})},
     )

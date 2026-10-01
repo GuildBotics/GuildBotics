@@ -30,21 +30,28 @@ from tests.conftest import FakeContext
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["agno", "jev"])
 @pytest.mark.parametrize("category", ["failed", "refused", "unavailable"])
-@pytest.mark.parametrize("status", [None, 401, 429])
-async def test_window_inference_failure_contract(method, category, status):
+@pytest.mark.parametrize(
+    ("message", "details"),
+    [
+        ("The host call timed out.", {}),
+        ("The call's result is too large.", {}),
+        ("Host operation failed.", {}),
+        ("The inference call failed (ProviderError).", {"error_type": "ProviderError"}),
+        (
+            "The inference call failed (ProviderError, reported status 429).",
+            {"error_type": "ProviderError", "status_code": 429},
+        ),
+    ],
+)
+async def test_window_inference_failure_contract(method, category, message, details):
     from unittest.mock import AsyncMock
 
     from guildbotics.commands.errors import CommandError
     from guildbotics.intelligences.agent_runtime.host_client import HostCallError
     from guildbotics.intelligences.brains.inference import AgnoCall, JevCall, _Window
     from guildbotics.intelligences.effort import ResolvedEffort
-    from guildbotics.utils.i18n_tool import t
 
-    error = HostCallError(
-        category,
-        "The inference call failed (ProviderError).",
-        {"error_type": "ProviderError", "status_code": status},
-    )
+    error = HostCallError(category, message, details)
     window = _Window(SimpleNamespace(acall=AsyncMock(side_effect=error)))
     call = (
         window.agno(
@@ -65,11 +72,8 @@ async def test_window_inference_failure_contract(method, category, status):
     ) as caught:
         await call
     if category == "failed":
-        assert str(caught.value) == t(
-            "intelligences.inference.failed",
-            error_type="ProviderError",
-            status=f" (HTTP {status})" if status else "",
-        )
+        assert str(caught.value) == message
+        assert caught.value.__cause__ is error
     else:
         assert caught.value is error
 

@@ -27,7 +27,6 @@ from guildbotics.intelligences.agent_runtime.host_client import (
 )
 from guildbotics.intelligences.effort import ResolvedEffort
 from guildbotics.observability import SpanContext
-from guildbotics.utils.i18n_tool import t
 
 
 class AgnoCall(BaseModel):
@@ -110,10 +109,10 @@ class _Window:
         return dict(await self._call("jev", call=call.model_dump(mode="json")))
 
     async def _call(self, name: str, **arguments: Any) -> Any:
-        """Report inference failures using only the host's credential-free details.
+        """Preserve the host's safe failure message, including window failures.
 
         Raises:
-            CommandError: If inference failed on the host.
+            CommandError: If the host reports that the call failed.
             HostCallError: If the window refused the call or is unavailable.
         """
         try:
@@ -121,11 +120,4 @@ class _Window:
         except HostCallError as exc:
             if exc.category != "failed":
                 raise
-            status = exc.details.get("status_code")
-            raise CommandError(
-                t(
-                    "intelligences.inference.failed",
-                    error_type=exc.details.get("error_type", type(exc).__name__),
-                    status=f" (HTTP {status})" if status else "",
-                )
-            ) from exc
+            raise CommandError(str(exc)) from exc

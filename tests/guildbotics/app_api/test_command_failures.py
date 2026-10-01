@@ -24,6 +24,7 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     CommandFacts,
     CommandReply,
     CommandRequest,
+    HostCallError,
 )
 from guildbotics.intelligences.agent_runtime.host_window import _inference_failed
 from guildbotics.intelligences.brains import inference as inference_module
@@ -35,6 +36,12 @@ from guildbotics.intelligences.brains.agno_agent import (
 from guildbotics.intelligences.brains.jev import JevBrain
 from guildbotics.runtime import command_entry
 from guildbotics.utils.i18n_tool import set_language, t
+
+_WINDOW_FAILURES = {
+    "timeout": "The host call timed out.",
+    "large": "The call's result is too large.",
+    "host": "Host operation failed.",
+}
 
 
 @pytest.fixture
@@ -64,6 +71,17 @@ def command_api(tmp_path, monkeypatch, language):
         "def main():\n    raise TypeError('private implementation detail')\n",
         encoding="utf-8",
     )
+    (commands / "duplicate.py").write_text(
+        "def main(context, first, **kwargs):\n"
+        "    raise AssertionError('must not enter main')\n",
+        encoding="utf-8",
+    )
+    (commands / "python_brain.py").write_text(
+        "async def main(context, brain='default'):\n"
+        "    model = context.get_brain('probe', {'brain': brain, 'body': 'Answer.'}, None)\n"
+        '    return await model.run(\'{"state": {}, "questions": {}}\')\n',
+        encoding="utf-8",
+    )
     (commands / "agno.md").write_text("Answer hello.\n", encoding="utf-8")
     (commands / "jev.md").write_text(
         '---\nbrain: jev\n---\n{"state": {}, "questions": {}}\n',
@@ -91,6 +109,8 @@ def command_api(tmp_path, monkeypatch, language):
     class Window:
         async def acall(self, name, **kwargs):
             if name in {"agno", "jev"}:
+                if state.failure in _WINDOW_FAILURES:
+                    raise HostCallError("failed", _WINDOW_FAILURES[state.failure])
                 error = requests.HTTPError(
                     "private key sk-secret", response=SimpleNamespace(status_code=429)
                 )
@@ -143,8 +163,18 @@ def command_api(tmp_path, monkeypatch, language):
         ("repository/security_alerts", [], "", "repo"),
         ("custom", [], "", "required"),
         ("custom_async", [], "", "required"),
+        ("duplicate", ["one", "first=two"], "", "multiple values for argument 'first'"),
         ("agno", [], "", "inference"),
         ("jev", [], "", "inference"),
+        *[
+            ("python_brain", [f"brain={brain}"], "", "inference")
+            for brain in ("default", "jev")
+        ],
+        *[
+            ("python_brain", [f"brain={brain}"], failure, message)
+            for brain in ("default", "jev")
+            for failure, message in _WINDOW_FAILURES.items()
+        ],
         (
             "workflows/chat_post_command",
             ["service=discord", "channel_id=C1", "command=print"],
@@ -195,9 +225,9 @@ def test_anticipated_failure_reaches_desktop(
     if reason == "inference":
         assert (
             t(
-                "intelligences.inference.failed",
+                "intelligences.inference.failed_with_status",
                 error_type="HTTPError",
-                status=" (HTTP 429)",
+                status=429,
             )
             in message
         )
