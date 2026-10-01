@@ -51,7 +51,7 @@ def _write_interactive_session(workspace: Path) -> Path:
             last_seen_at="2026-07-01T10:00:00+00:00",
             expires_at="2026-07-01T10:30:00+00:00",
         ),
-        command="member github pr inspect",
+        command="member repository read",
         status="success",
         attributes={"github.title": TITLE, "github.repo": LONG},
     )

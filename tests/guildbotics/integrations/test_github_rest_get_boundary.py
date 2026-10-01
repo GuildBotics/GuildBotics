@@ -15,8 +15,20 @@ ROOT = Path(__file__).parents[3]
 EXPECTED_REST_GET_CLASSIFICATIONS = {
     (
         "guildbotics/integrations/github/code_hosting_service.py",
+        "_read_resource",
+        "client.get",
+        "path",
+    ): "bounded: one host-defined detail or page, with a condition-bound continuation",
+    (
+        "guildbotics/capabilities/member_github.py",
+        "pr_reply",
+        "client.get",
+        "f'/repos/{resource.full_repo}/pulls/comments/{reply_target_id}'",
+    ): "single_resource: validate the root review comment and its pull request before replying",
+    (
+        "guildbotics/integrations/github/code_hosting_service.py",
         "read",
-        "self._client.get",
+        "client.get",
         "path",
     ): "bounded: one alert or one size-limited page with an explicit continuation token",
     (
@@ -62,20 +74,20 @@ EXPECTED_REST_GET_CLASSIFICATIONS = {
         "f'/repos/{owner}/{repo}'",
     ): "single_resource: owner and repository identify one repository",
     (
-        "guildbotics/capabilities/member_github.py",
+        "guildbotics/integrations/github/pull_requests.py",
         "_item",
         "client.get",
         "f'/repos/{resource.owner}/{resource.repo}/{collection}/{resource.number}'",
     ): "single_resource: owner, repository, kind, and number identify one item",
     (
-        "guildbotics/capabilities/member_github.py",
+        "guildbotics/integrations/github/pull_requests.py",
         "_pull_request_freshness",
         "client.get",
         'f"/repos/{resource.owner}/{resource.repo}/compare/'
         "{quote(base_sha, safe='')}...{quote(head_sha, safe='')}\"",
     ): "single_resource: the base and head pair identify one comparison",
     (
-        "guildbotics/capabilities/member_github.py",
+        "guildbotics/integrations/github/pull_requests.py",
         "_pull_request_current_base_sha",
         "client.get",
         'f"/repos/{resource.owner}/{resource.repo}/branches/'

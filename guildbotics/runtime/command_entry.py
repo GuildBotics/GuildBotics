@@ -25,6 +25,7 @@ from pathlib import Path
 
 from pydantic_core import to_jsonable_python
 
+from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.runner import CommandRunner
 from guildbotics.editions.simple.simple_brain_factory import SimpleBrainFactory
@@ -37,6 +38,7 @@ from guildbotics.intelligences.agent_runtime.host_client import (
     CommandReply,
     CommandRequest,
     HostClient,
+    admits,
     command_window,
 )
 from guildbotics.intelligences.brains.cli_agent import CliAgentExecutionError
@@ -46,10 +48,15 @@ from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
+from guildbotics.utils.i18n_tool import t
 
 
 async def run(
-    request: CommandRequest, facts: CommandFacts, client: HostClient
+    request: CommandRequest,
+    facts: CommandFacts,
+    client: HostClient,
+    *,
+    child: bool = False,
 ) -> CommandReply:
     """Run ``request`` as the command ``facts`` describe, reaching the host
     through ``client``, and say how it ended."""
@@ -67,6 +74,15 @@ async def run(
         if person is None:
             raise CommandError(f"Person '{facts.person_id}' not found.")
         context = context.clone_for(person)
+        if child:
+            if not admits(facts.mounts, request.cwd):
+                raise CommandError(
+                    t(
+                        "intelligences.agent_environment.runtime.outside_mounts",
+                        path=request.cwd,
+                    )
+                )
+            request.path = str(resolve_named_command(context, request.name))
         if request.invocation is not None:
             context.shared_state[WORKFLOW_INVOCATION_KEY] = WorkflowInvocation(
                 **request.invocation
@@ -121,6 +137,21 @@ def main() -> None:
     command starts inherits: what the command or such a process prints goes
     to the log instead, and none of them holds the reply open.
     """
+    if len(sys.argv) > 1:
+        client = command_window()
+        if client is None:
+            raise SystemExit(t("runtime.command_entry.environment_required"))
+        request = CommandRequest(
+            path="", name=sys.argv[1], args=sys.argv[2:], cwd=Path.cwd().as_posix()
+        )
+        reply = asyncio.run(
+            run(request, CommandFacts.read(os.environ), client, child=True)
+        )
+        if reply.failure:
+            print(reply.failure.message, file=sys.stderr)
+            raise SystemExit(1)
+        print(reply.text_output)
+        return
     replies = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     handler = logging.StreamHandler(sys.stderr)

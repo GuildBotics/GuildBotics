@@ -3,6 +3,7 @@
 import json
 from typing import Any
 
+from guildbotics.capabilities.member_activity_events import record_member_work_target
 from guildbotics.integrations.code_hosting_service import (
     MAX_PAGE_BYTES,
     RepositoryReadError,
@@ -32,8 +33,12 @@ async def read_repository(
             continuation=continuation,
         )
         result = page.model_dump()
+        if page.target is None:
+            result.pop("target")
         if len(json.dumps(result).encode()) > MAX_PAGE_BYTES:
             raise RepositoryReadError(t("integrations.repository.too_large"))
+        if page.target is not None:
+            record_member_work_target(context.person, page.target, read_only=True)
         return result
     finally:
         await service.aclose()

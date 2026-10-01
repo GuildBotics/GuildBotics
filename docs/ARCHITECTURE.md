@@ -119,6 +119,14 @@ workflow (orchestration)
   which the agent's provider operations run and the only layer that resolves the
   member's credentials for them. It records run evidence (`task_runs.py`) for each
   side effect.
+- **Repository inspections** (`repository/issue_inspect`, `repository/pr_inspect`,
+  `repository/pr_checks`): bundled Python commands combine the pages returned by
+  the common code-hosting service. The existing member broker carries each read;
+  the host selects fixed REST routes or GraphQL documents, validates continuations,
+  and records observed work targets. `integrations/github/pull_requests.py` owns
+  readiness, shared by the inspection, push, and completion paths. An agent already
+  inside a command calls `python -m guildbotics.runtime.command_entry <name> <args>`
+  to run a child in that environment under the main command's access contract.
 
 Trust rules that follow from this shape:
 

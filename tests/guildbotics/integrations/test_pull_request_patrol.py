@@ -10,7 +10,6 @@ from typing import Any
 
 import pytest
 
-from guildbotics.capabilities.member_github import PR_INSPECT_FEEDBACK_SOURCES
 from guildbotics.integrations.chat_workflow_status import workflow_status_fields
 from guildbotics.integrations.github.github_utils import normalize_login
 from guildbotics.integrations.github.pull_request_patrol import (
@@ -180,10 +179,6 @@ def test_query_asks_for_everything_the_decision_reads():
         *PULL_REQUEST_FEEDBACK_SOURCE_QUERIES.values(),
     ):
         assert field in PULL_REQUEST_QUERY, field
-
-
-def test_patrol_and_pr_inspect_expose_the_same_feedback_sources():
-    assert PULL_REQUEST_FEEDBACK_SOURCES == PR_INSPECT_FEEDBACK_SOURCES
 
 
 # --- author role --------------------------------------------------------- #

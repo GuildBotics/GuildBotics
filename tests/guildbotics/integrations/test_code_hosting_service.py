@@ -94,7 +94,9 @@ def adapter(monkeypatch):
         clients.append(result)
         return result
 
-    monkeypatch.setattr(github, "create_github_client", client)
+    monkeypatch.setattr(
+        "guildbotics.integrations.github.pull_requests.create_github_client", client
+    )
     service = SimpleIntegrationFactory().create_code_hosting_service(
         logging.getLogger(), Person(person_id="aiko", name="Aiko"), team()
     )
@@ -115,7 +117,7 @@ async def test_provider_maps_conditions_and_all_result_fields(adapter, state, na
     page = await service.read(
         "dependency_alerts", "org/repo", parameters={"state": state, "page_size": 1}
     )
-    assert page.model_dump() == {
+    assert page.model_dump(exclude={"target"}) == {
         "continuation": None,
         "items": [
             {

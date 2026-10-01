@@ -13,13 +13,11 @@ from guildbotics.observability import (
 
 
 def test_join_trace_records_into_an_existing_trace_without_owning_it() -> None:
-    with join_trace(
-        "trace-parent", person_id="aiko", command="member github pr inspect"
-    ):
+    with join_trace("trace-parent", person_id="aiko", command="member repository read"):
         fields = correlation_fields()
         assert fields["trace_id"] == "trace-parent"
         assert fields["person_id"] == "aiko"
-        assert fields["command"] == "member github pr inspect"
+        assert fields["command"] == "member repository read"
         # No source of its own: a record falls back to its own default source.
         assert fields["source"] == ""
         assert fields["span_id"] is None

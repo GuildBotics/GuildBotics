@@ -105,7 +105,7 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
 
     store.record(
         session,
-        command="member github pr inspect",
+        command="member repository read",
         status="success",
         attributes={
             "github.title": "first target",
@@ -135,7 +135,7 @@ def test_session_store_keeps_one_record_per_session(tmp_path):
     assert record["source"] == "interactive"
     # The first command names the session; the last command's result is its
     # status; the first value of each target attribute is kept.
-    assert record["command"] == "member github pr inspect"
+    assert record["command"] == "member repository read"
     assert record["status"] == "failed"
     assert record["started_at"] == "2026-07-01T10:00:00+00:00"
     assert record["last_seen_at"] == "2026-07-01T10:09:00+00:00"
@@ -194,7 +194,7 @@ def test_session_targets_cross_the_shared_boundary_masked_and_bounded(
 
     record = store.record(
         _session(),
-        command="member github pr inspect",
+        command="member repository read",
         status="success",
         attributes={
             "github.title": "leaked sk-live-secret-12345 in title",

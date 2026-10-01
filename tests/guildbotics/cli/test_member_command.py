@@ -263,7 +263,8 @@ def test_member_context_outputs_no_secret(monkeypatch):
             [
                 "github",
                 "issue",
-                "inspect",
+                "comment",
+                "--content-stdin",
                 "--person",
                 "hana",
                 "--url",
@@ -283,7 +284,7 @@ def test_member_commands_reject_human_member(monkeypatch, argv):
         Person(person_id="hana", name="Hana", person_type="human"),
     )
 
-    result = CliRunner().invoke(member_module.member, argv)
+    result = CliRunner().invoke(member_module.member, argv, input="Body")
 
     assert result.exit_code != 0
     assert "Human member 'hana' cannot be used as an AI execution subject" in (
@@ -353,13 +354,74 @@ def test_member_command_lease_classification_uses_callback_metadata() -> None:
 
 def test_ci_inspection_commands_are_read_only() -> None:
     github = member_module.member.commands["github"]
-    pr = github.commands["pr"]
     run = github.commands["run"]
     artifact = run.commands["artifact"]
 
-    for command in (pr.commands["checks"], artifact.commands["download"]):
+    for command in (
+        member_module.member.commands["repository"].commands["read"],
+        artifact.commands["download"],
+    ):
         with click.Context(command):
             assert member_module._member_command_needs_lease() is False
+
+
+def test_inspection_cli_leaves_are_removed():
+    github = member_module.member.commands["github"]
+    assert "inspect" not in github.commands["issue"].commands
+    assert not {"inspect", "checks"} & github.commands["pr"].commands.keys()
+
+
+def test_repository_read_records_host_target_in_workflow_trace(
+    monkeypatch, bind_invocation
+):
+    from types import SimpleNamespace
+    from guildbotics.integrations.code_hosting_service import RepositoryReadPage
+
+    person = Person(person_id="aiko", name="Aiko", person_type="agent")
+    bind_invocation(run_id="run-1", trace_id="trace-parent")
+    target = {
+        "kind": "pull_request",
+        "repo": "owner/repo",
+        "number": 544,
+        "title": "Host observed title",
+        "html_url": "https://github.com/owner/repo/pull/544",
+    }
+
+    class Service:
+        async def read(self, *args, **kwargs):
+            return RepositoryReadPage(items=[{"title": target["title"]}], target=target)
+
+        async def aclose(self):
+            pass
+
+    context = FakeContext(person)
+    context.integration_factory = SimpleNamespace(
+        create_code_hosting_service=lambda *_: Service()
+    )
+    monkeypatch.setattr(member_module, "_resolve", lambda _: (context, person))
+    result = CliRunner().invoke(
+        member_module.member,
+        [
+            "repository",
+            "read",
+            "--person",
+            "aiko",
+            "--resource",
+            "pull_requests",
+            "--repo",
+            "owner/repo",
+            "--identifier",
+            "544",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    summary = DiagnosticsStore().get_summary("trace-parent")
+    assert summary["title"] == target["title"]
+    records = DiagnosticsStore().get_records("trace-parent")
+    assert [record["type"] for record in records] == ["github.work_target"]
+    [(action, attributes)] = _work_target_records()
+    assert action == "inspected" and attributes["github.number"] == "544"
+    assert _domain_event_records("type") == []
 
 
 def test_member_agent_conversation_reset_rotates_exact_session(monkeypatch, tmp_path):
@@ -610,7 +672,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
     async def failing():
         raise RuntimeError("boom")
 
-    member_module._run_interactive(inspect_pr(), session, "member github pr inspect")
+    member_module._run_interactive(inspect_pr(), session, "member repository read")
     with pytest.raises(RuntimeError):
         member_module._run_interactive(failing(), session, "member git push")
 
@@ -619,7 +681,7 @@ def test_interactive_session_record_keeps_the_targets_its_commands_named(
             encoding="utf-8"
         )
     )
-    assert record["command"] == "member github pr inspect"
+    assert record["command"] == "member repository read"
     assert record["status"] == "failed"
     # Only the targets are shared: the session's host attributes describe
     # this machine.
@@ -1947,74 +2009,6 @@ def test_member_git_publish_current_mode_rejects_workflow_task_run(
 
     assert result.exit_code != 0
     assert "only for interactive use" in result.output
-
-
-def test_member_github_pr_inspect_passes_include_diff(monkeypatch):
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    calls = {}
-
-    def fake_resolve_member_context(identifier):
-        assert identifier == "aiko"
-        return FakeContext(person), person
-
-    class FakeService:
-        def __init__(self, *_args):
-            pass
-
-        async def pr_inspect(self, pr_url, include_comments, include_diff):
-            calls.update(
-                {
-                    "pr_url": pr_url,
-                    "include_comments": include_comments,
-                    "include_diff": include_diff,
-                }
-            )
-            return {
-                "repo": "owner/repo",
-                "number": 7,
-                "files": [
-                    {
-                        "path": "guildbotics/example.py",
-                        "commentable_lines": [{"line": 12, "side": "RIGHT"}],
-                    }
-                ],
-            }
-
-        async def aclose(self):
-            calls["closed"] = True
-
-    monkeypatch.setattr(
-        member_module, "resolve_member_context", fake_resolve_member_context
-    )
-    monkeypatch.setattr(member_module, "MemberGitHubCapabilityService", FakeService)
-    runner = CliRunner()
-
-    result = runner.invoke(
-        member_module.member,
-        [
-            "github",
-            "pr",
-            "inspect",
-            "--person",
-            "aiko",
-            "--url",
-            "https://github.com/owner/repo/pull/7",
-            "--include-comments",
-            "--include-diff",
-            "--format",
-            "json",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert calls == {
-        "pr_url": "https://github.com/owner/repo/pull/7",
-        "include_comments": True,
-        "include_diff": True,
-        "closed": True,
-    }
-    payload = json.loads(result.output)
-    assert payload["files"][0]["commentable_lines"] == [{"line": 12, "side": "RIGHT"}]
 
 
 def test_member_github_pr_create_passes_base(monkeypatch):
@@ -3892,7 +3886,6 @@ def _work_target_records():
 @pytest.mark.parametrize(
     ("arguments", "read_only"),
     [
-        (["pr", "inspect", "--url", "https://github.com/owner/repo/pull/544"], True),
         (
             [
                 "pr",
@@ -3919,7 +3912,6 @@ def test_member_github_commands_declare_their_work_target(
     _fake_github_service(
         monkeypatch,
         person,
-        pr_inspect={"repo": "owner/repo", "number": 544, "target": target},
         pr_comment={"comment_id": 1, "target": target},
     )
 
@@ -3936,48 +3928,3 @@ def test_member_github_commands_declare_their_work_target(
     assert attributes["github.number"] == "544"
     # A read is diagnostics only: it never becomes shared activity.
     assert _domain_event_records("type") == []
-
-
-def test_workflow_member_command_records_into_the_turns_trace(
-    monkeypatch, bind_invocation
-):
-    # The broker hands the workflow's trace over; the command's records then
-    # belong to that execution instead of to a trace of their own.
-    person = Person(person_id="aiko", name="Aiko", person_type="agent")
-    bind_invocation(run_id="run-1", trace_id="trace-parent")
-    _fake_github_service(
-        monkeypatch,
-        person,
-        pr_inspect={
-            "target": {
-                "kind": "pull_request",
-                "repo": "owner/repo",
-                "number": 544,
-                "title": "Show the work target",
-                "html_url": "https://github.com/owner/repo/pull/544",
-            }
-        },
-    )
-
-    result = CliRunner().invoke(
-        member_module.member,
-        [
-            "github",
-            "pr",
-            "inspect",
-            "--person",
-            "aiko",
-            "--url",
-            "https://github.com/owner/repo/pull/544",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    summary = DiagnosticsStore().get_summary("trace-parent")
-    assert summary is not None
-    assert summary["title"] == "Show the work target"
-    assert summary["person_id"] == "aiko"
-    # The turn's owner records the boundary; the member command must not.
-    assert [
-        item["type"] for item in DiagnosticsStore().get_records("trace-parent")
-    ] == ["github.work_target"]

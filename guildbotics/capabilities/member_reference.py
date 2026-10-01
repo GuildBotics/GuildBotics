@@ -101,6 +101,12 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "normalized items and continuation; reuse identical conditions for "
                 "the next page. For formatted or JSON alerts, run "
                 "repository/security_alerts in a ready command environment. "
+                "Other resources require a numeric identifier: issues, pull_requests, "
+                "issue_comments, issue_timeline, issue_projects, pull_request_reviews, "
+                "pull_request_files, pull_request_threads, review_thread_comments, "
+                "pull_request_readiness. Collections accept page_size (1-100); "
+                "review_thread_comments also requires node from pull_request_threads. "
+                "Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536). "
                 "URLs, HTTP methods, headers, and GraphQL are not accepted.",
             ),
         ],
@@ -109,7 +115,7 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "GitHub",
         [
             (
-                "guildbotics member github issue inspect --person <person> --url <issue_url>",
+                "guildbotics run repository/issue_inspect --person <person> repo=<owner/repo> number=<n>",
                 "Read an issue and its comments.",
             ),
             (
@@ -131,14 +137,14 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
                 "removes the body.",
             ),
             (
-                "guildbotics member github pr inspect --person <person> --url <pr_url> "
-                "[--include-comments] [--include-diff]",
+                "guildbotics run repository/pr_inspect --person <person> repo=<owner/repo> number=<n> "
+                "[include_comments=true] [include_diff=true]",
                 "Read a PR, optionally including conversation comments, review summaries, "
                 "review threads, and diff comment coordinates.",
             ),
             (
-                "guildbotics member github pr checks --person <person> --url <pr_url> "
-                "[--failed-logs] [--log-tail-bytes <n>]",
+                "guildbotics run repository/pr_checks --person <person> repo=<owner/repo> number=<n> "
+                "[failed_logs=true] [log_tail_bytes=<n>]",
                 "Read a PR head's CI rollup, base freshness, completion readiness, "
                 "and optional failed Actions log tails.",
             ),
@@ -316,7 +322,15 @@ _CAPABILITY_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 ]
 
 _STANDARD_WORK_PROCEDURE: list[str] = [
-    "Inspect first: read the current issue / PR / thread with the member inspect "
+    "Run bundled inspections on the host with `guildbotics run repository/issue_inspect "
+    "--person <person> repo=<owner/repo> number=<n>` (or repository/pr_inspect, "
+    "repository/pr_checks). Inside a workflow or delegated command's isolated "
+    "environment, use `python -m guildbotics.runtime.command_entry "
+    "repository/issue_inspect repo=<owner/repo> number=<n>` instead: it runs inside "
+    "the existing environment, inherits the main command's access contract and "
+    "member, and uses its member broker. Do not start a host run from there. "
+    "Commands return JSON. A failed or incomplete read is not an empty result.",
+    "Inspect first: read the current issue / PR / thread with the bundled repository inspections or member chat inspect "
     "commands before acting. Fields owned by GitHub or Slack (state, assignees, "
     "labels, PR links, bodies, comments, review threads) are canonical in that "
     "inspect output.",
@@ -350,14 +364,14 @@ _STANDARD_WORK_PROCEDURE: list[str] = [
     "PR into a feature branch, follow the manual-close rule below. `Closes` only "
     "states intent and does not by itself authorize closing the issue.",
     "When creating new PR inline feedback, first inspect the PR with "
-    "`member github pr inspect --include-diff`, then use `member github pr "
+    "`repository/pr_inspect include_diff=true`, then use `member github pr "
     "review-comment` with explicit diff coordinates from `files[].commentable_lines` "
     "(`path`, `line`, `side`, and optional `--start-line` / `--start-side`).",
     "When addressing existing PR review threads, reply with `member github pr reply` "
-    "using the `reply_target_id` from `pr inspect --include-comments`.",
+    "using the `reply_target_id` from `repository/pr_inspect include_comments=true`.",
     "After opening or updating a PR, inspect its CI and completion readiness with "
-    "`member github pr checks`. "
-    "If a check fails, use `member github pr checks --failed-logs` to "
+    "`repository/pr_checks`. "
+    "If a check fails, use `repository/pr_checks failed_logs=true` to "
     "identify the cause, fix failures caused by the change, publish the fix, and "
     "check CI again. Do not report the work complete unless `readiness` is `ready`: "
     "for every open PR, every observed check must succeed, the head must not be behind "
@@ -420,7 +434,8 @@ _REVIEW_FEEDBACK_PROCEDURE: dict[str, list[str]] = {
 }
 
 _CROSS_CUTTING_RULES: list[str] = [
-    "All GitHub and Slack access, reads and writes alike, goes through the "
+    "GitHub inspections use the bundled repository commands. All underlying "
+    "GitHub and Slack access, reads and writes alike, goes through the "
     "corresponding `guildbotics member ...` commands. Never use `gh`, raw "
     "GitHub/Slack tokens or APIs, or raw Slack HTTP calls. When a needed read has "
     "no member command, ask a human for the information instead of using `gh` or "
@@ -512,6 +527,7 @@ _COMMAND_SUMMARIES: dict[str, str] = {
     _usage_command_path(usage): purpose
     for _, commands in _CAPABILITY_GROUPS
     for usage, purpose in commands
+    if usage.startswith("guildbotics member ")
 }
 
 

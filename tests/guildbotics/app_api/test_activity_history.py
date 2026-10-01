@@ -439,7 +439,7 @@ def test_inspected_target_kept_by_the_session_record_is_not_a_link() -> None:
     inspected = _lifecycle(
         "t-int",
         source="interactive",
-        command="member github pr inspect",
+        command="member repository read",
         attributes={
             "github.action": "inspected",
             "github.kind": "pull_request",
@@ -551,7 +551,7 @@ def test_interactive_session_titles_from_its_recorded_target_or_command() -> Non
     targeted = _lifecycle(
         "t-int",
         source="interactive",
-        command="member github pr inspect",
+        command="member repository read",
         attributes={"github.title": "利用枠の表示", "github.kind": "pull_request"},
     )
     assert _title(targeted) == "利用枠の表示"

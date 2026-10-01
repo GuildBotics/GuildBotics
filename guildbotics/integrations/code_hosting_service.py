@@ -1,7 +1,7 @@
 """Provider-independent repository reads available to members and commands."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,10 +49,13 @@ class DependencyAlert(ReadModel):
 
 
 class RepositoryReadPage(ReadModel):
-    """One page of dependency alerts, including for a single-item request."""
+    """One bounded resource page, with a host-observed work target when present."""
 
-    items: list[DependencyAlert]
+    items: list[
+        Annotated[DependencyAlert | dict[str, Any], Field(union_mode="left_to_right")]
+    ]
     continuation: str | None = None
+    target: dict[str, Any] | None = None
 
 
 class CodeHostingService(ABC):
@@ -66,10 +69,14 @@ class CodeHostingService(ABC):
         parameters: dict[str, Any] | None = None,
         continuation: str = "",
     ) -> RepositoryReadPage:
-        """Read dependency_alerts; detail reads accept no parameters or continuation.
+        """Read a host-defined resource; never accept URLs or executable queries.
 
-        Collection parameters follow DependencyAlertQuery. A continuation belongs
-        to the same provider, repository, resource and conditions that returned it.
+        dependency_alerts follows DependencyAlertQuery. Issue and pull-request
+        resources require their number as identifier; collection reads take
+        page_size (1-100) and thread comments also take a thread node identifier.
+        Readiness accepts failed_logs and log_tail_bytes (1-65536).
+        A continuation belongs to the same provider, repository, resource,
+        identifier, and conditions that returned it.
         """
 
     @abstractmethod

@@ -38,6 +38,7 @@ GRAPHQL = "gated: GraphQL"
 
 #: ``(module, function, method)`` of every write, and what judges it.
 WRITES = {
+    ("integrations/github/code_hosting_service.py", "_read_resource", "post"): GRAPHQL,
     ("capabilities/github_activity_events.py", "_project_items", "post"): GRAPHQL,
     ("capabilities/member_github.py", "issue_create", "post"): REPOSITORY,
     ("capabilities/member_github.py", "issue_update", "patch"): REPOSITORY,
@@ -206,9 +207,8 @@ def test_every_github_client_is_given_the_configured_owner() -> None:
 
     assert callers == {
         ("capabilities/github_activity_events.py", "poll"),
-        ("capabilities/member_github.py", "_get_client"),
+        ("integrations/github/pull_requests.py", "_get_client"),
         ("integrations/github/github_ticket_manager.py", "login"),
-        ("integrations/github/code_hosting_service.py", "read"),
     }
 
 
