@@ -228,7 +228,7 @@ def _parse_relative_retry_delta(text: str) -> timedelta | None:
     matches = list(
         re.finditer(
             r"(?P<value>\d+)\s*"
-            r"(?P<unit>second|seconds|minute|minutes|hour|hours|s|m|h)\b",
+            r"(?P<unit>seconds?|minutes?|hours?|[smh])(?=\d|\b)",
             normalized,
             re.IGNORECASE,
         )

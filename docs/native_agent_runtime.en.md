@@ -781,13 +781,27 @@ decisions.
 Antigravity is classified from its terminal `result` event: a `status` other than
 `SUCCESS` is a failure, and the accompanying `error` field decides the category.
 `agy` reports quota and credential failures in that one string rather than in a
-separate code field: 1.1.10 wrote prose, and 1.2.13 prefixes the upstream status and
-HTTP code (`UNAUTHENTICATED (code 401): ...`,
-`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`, observed by replacing the
-inference answer at the gateway). So that one field is matched against a small
-anchored pattern set kept in the adapter; the recovery time it may carry (`Resets in 1h23m`) is passed through the
-same normalization every other tool uses. A rate limit does not rotate the session;
+separate code field. A real quota exhaustion on 1.2.13 returned the plain message
+`Individual quota reached. ... Resets in 25h57m34s.`. Responses with upstream status
+and HTTP code prefixes (`UNAUTHENTICATED (code 401): ...`,
+`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`) were also observed by
+replacing the inference answer at the gateway. That one field is matched against
+a small pattern set kept in the adapter. The recovery time it may carry is passed
+through the same normalization every other tool uses. Joined units such as
+`Resets in 25h57m34s` contribute all hours, minutes, and seconds to the recovery time.
+A rate limit does not rotate the session;
 authentication, protocol, and process failures do.
+
+On 2026-10-02, a real quota exhaustion on 1.2.13 returned a terminal event in about
+nine seconds despite an upstream 429 containing
+`RetryInfo.retryDelay: "93454.995843114s"`. The captured
+[fixture](../tests/guildbotics/intelligences/agent_runtime/fixtures/antigravity_quota_1_2_13.json)
+tests classification, and the opt-in provider contract test replays that 429 and
+requires termination within 30 seconds. Replay rebases only the absolute
+`quotaResetTimeStamp` to the current time plus the captured `retryDelay`, keeping
+the reset in the future as calendar time passes. The captured fixture stays unchanged.
+This observation covers that quota
+response; it does not establish a termination time for every 429 response.
 
 When a reset timestamp is available, ticket selection and the chat pending queue defer
 the next attempt until that exact time. They do not consume in-process completion

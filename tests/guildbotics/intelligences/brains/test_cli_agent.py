@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 import pytest
 
@@ -231,10 +232,24 @@ async def test_cli_agent_authentication_failure_records_credential_failure(
     ]
 
 
-def test_normalize_retry_after_handles_composite_relative_duration():
-    retry_after_at = cli_agent.normalize_cli_agent_retry_after("Resets in 2h30m15s")
-
-    assert retry_after_at
+@pytest.mark.parametrize(
+    ("text", "seconds"),
+    [
+        ("Resets in 2h30m15s", 9015),
+        ("Resets in 25h57m34s", 93454),
+        ("Resets in 1h23m", 4980),
+        ("Resets in 2m15s", 135),
+        ("Resets in 2H 30M 15S", 9015),
+        ("Please wait 1 hour 2 minutes 3 seconds", 3723),
+        ("Please wait 30 seconds", 30),
+        ("Resets in 0s", 0),
+        ("Resets in 2months", None),
+        ("2h30m15s", None),
+    ],
+)
+def test_relative_retry_duration(text, seconds):
+    expected = timedelta(seconds=seconds) if seconds is not None else None
+    assert cli_agent._parse_relative_retry_delta(text) == expected
 
 
 def test_normalize_retry_after_handles_date_text():
