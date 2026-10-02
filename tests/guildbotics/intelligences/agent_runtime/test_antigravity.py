@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,15 +31,14 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.brains import cli_agent
 from guildbotics.intelligences.brains.cli_agent import normalize_cli_agent_retry_after
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
+from tests.guildbotics.intelligences.agent_runtime.antigravity_fixtures import (
+    QUOTA_FIXTURE,
+    quota_response,
+)
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "antigravity_stream_1_1_10.jsonl"
 ).read_text()
-QUOTA_FIXTURE = json.loads(
-    (Path(__file__).parent / "fixtures" / "antigravity_quota_1_2_13.json").read_text(
-        encoding="utf-8"
-    )
-)
 
 _HELP_TEXT = (
     b"--print --output-format stream-json --conversation "
@@ -471,18 +471,61 @@ def test_observed_quota_preserves_the_whole_reset_delay(monkeypatch) -> None:
     )
 
 
-def test_result_error_classification() -> None:
-    assert _result_error({"status": "SUCCESS"}) is None
-    auth = _result_error({"status": "ERROR", "error": "401 Unauthorized"})
-    assert auth is not None
-    assert auth.category is AgentRuntimeErrorCategory.AUTHENTICATION
-    assert auth.rotate_session is True
-    timed_out = _result_error(
-        {"status": "ERROR", "error": "timeout waiting for response"}
+@pytest.mark.parametrize("year", [2000, 2100])
+def test_quota_replay_keeps_the_captured_delay_in_the_future(year) -> None:
+    captured = deepcopy(QUOTA_FIXTURE)
+    now = datetime(year, 1, 1, tzinfo=UTC)
+    response = quota_response(now)
+    assert QUOTA_FIXTURE == captured
+    metadata = response["error"]["details"][0]["metadata"]
+    assert datetime.fromisoformat(metadata["quotaResetTimeStamp"]) == now + timedelta(
+        seconds=93454, microseconds=995843
     )
-    assert timed_out is not None
-    assert timed_out.category is AgentRuntimeErrorCategory.PROCESS
-    assert timed_out.rotate_session is True
+    # The absolute timestamp is the only replay adjustment; the capture is intact.
+    metadata["quotaResetTimeStamp"] = "2026-10-03T12:57:47Z"
+    assert response == captured["upstream"]
+
+
+@pytest.mark.parametrize(
+    ("message", "category", "rotate", "retry_hint"),
+    [
+        (
+            "API error (attempt 5): RESOURCE_EXHAUSTED (code 429): "
+            "Resource has been exhausted (e.g. check quota).",
+            AgentRuntimeErrorCategory.RATE_LIMITED,
+            False,
+            None,
+        ),
+        (
+            "RESOURCE_EXHAUSTED (code 429): Resets in 1h23m.",
+            AgentRuntimeErrorCategory.RATE_LIMITED,
+            False,
+            "Resets in 1h23m",
+        ),
+        (
+            "UNAUTHENTICATED (code 401): Request had invalid authentication credentials.",
+            AgentRuntimeErrorCategory.AUTHENTICATION,
+            True,
+            None,
+        ),
+        ("401 Unauthorized", AgentRuntimeErrorCategory.AUTHENTICATION, True, None),
+        ("timeout waiting for response", AgentRuntimeErrorCategory.PROCESS, True, None),
+    ],
+)
+def test_result_error_classification(message, category, rotate, retry_hint) -> None:
+    error = _result_error({"status": "ERROR", "error": message})
+    assert error is not None
+    assert error.category is category
+    assert error.rotate_session is rotate
+    assert str(error) == message
+    assert error.details == {
+        "status": "ERROR",
+        **({"retry_after_text": retry_hint} if retry_hint is not None else {}),
+    }
+
+
+def test_result_success_and_missing_error() -> None:
+    assert _result_error({"status": "SUCCESS"}) is None
     invalid = _result_error({"status": "ERROR", "error": ""})
     assert invalid is not None
     assert "'ERROR'" in str(invalid)

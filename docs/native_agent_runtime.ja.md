@@ -682,6 +682,8 @@ Antigravityでは、終端の`result`イベントで判定します。`status`�
 `RetryInfo.retryDelay: "93454.995843114s"` があっても約9秒で終端イベントを返しました。
 この応答を保存した [fixture](../tests/guildbotics/intelligences/agent_runtime/fixtures/antigravity_quota_1_2_13.json)
 で分類を検証し、任意実行のprovider接続テストでは同じ429応答を返して30秒以内の終了を確認します。
+再生時は、絶対時刻の `quotaResetTimeStamp` だけを現在時刻と記録された `retryDelay` の和に置き換え、
+日付が進んでも利用枠の復帰を待つ応答として検証します。採取したfixture自体は変更しません。
 この観測は当該利用枠切れ応答についてのもので、すべての429応答の終了時間を保証するものではありません。
 
 再開可能な時刻を取得できた場合は、その時刻まで対象チケットの選択と保留中のチャット処理を

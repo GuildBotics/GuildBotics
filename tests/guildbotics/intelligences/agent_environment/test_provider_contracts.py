@@ -20,6 +20,7 @@ import shlex
 import tempfile
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,6 +46,10 @@ from guildbotics.intelligences.agent_runtime.codex import (
 )
 from guildbotics.intelligences.cli_agents import cli_agent_info
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from tests.guildbotics.intelligences.agent_runtime.antigravity_fixtures import (
+    QUOTA_FIXTURE,
+    quota_response,
+)
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
 _REAL_HOME = Path.home()
@@ -697,10 +702,12 @@ _ANTIGRAVITY_LOGIN = {
 }
 
 
-async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
+async def test_antigravity_replays_quota_promptly_through_the_gateway(
     boot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A turn as GuildBotics sets it up: the stand-in files a synthetic login
+    """Replay quota exhaustion within 30s, checking API and userinfo routing.
+
+    A turn as GuildBotics sets it up: the stand-in files a synthetic login
     lends, CLOUD_CODE_URL over TLS, the gateway's CA trusted beside the
     system's, and the userinfo host relayed to the gateway."""
     tool = cli_agent_info("antigravity")
@@ -712,20 +719,13 @@ async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
         lambda _: {tool.provision.auth: json.dumps(_ANTIGRAVITY_LOGIN).encode()},
     )
     lent = LentLogin(tool, None)  # type: ignore[arg-type]
+
     # Captured from a real quota exhaustion on 1.2.13. The long RetryInfo
     # must end the turn promptly, rather than keep it asleep until timeout.
-    quota = json.loads(
-        (
-            Path(__file__).parent.parent
-            / "agent_runtime"
-            / "fixtures"
-            / "antigravity_quota_1_2_13.json"
-        ).read_text(encoding="utf-8")
-    )
-
     def answer(host: str, method: str, path: str):
         if path.startswith("/v1internal:streamGenerateContent"):
-            _, headers, body = json_answer(quota["upstream"])
+            # Rebase only the absolute reset time so the capture never expires.
+            _, headers, body = json_answer(quota_response(datetime.now(UTC)))
             return 429, headers, body
         return _antigravity_answer(host, method, path)
 
@@ -762,7 +762,8 @@ async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
     assert time.monotonic() - started < 30, output
     events = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
     result = next(event["result"] for event in events if event["event"] == "result")
-    assert {key: result[key] for key in quota["result"]} == quota["result"], output
+    expected = QUOTA_FIXTURE["result"]
+    assert {key: result[key] for key in expected} == expected, output
 
     userinfo = recorder.requests("/oauth2/v2/userinfo")
     assert {s.host for s in userinfo} == {"www.googleapis.com"}, recorder.seen

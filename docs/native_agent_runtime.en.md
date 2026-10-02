@@ -797,7 +797,10 @@ nine seconds despite an upstream 429 containing
 `RetryInfo.retryDelay: "93454.995843114s"`. The captured
 [fixture](../tests/guildbotics/intelligences/agent_runtime/fixtures/antigravity_quota_1_2_13.json)
 tests classification, and the opt-in provider contract test replays that 429 and
-requires termination within 30 seconds. This observation covers that quota
+requires termination within 30 seconds. Replay rebases only the absolute
+`quotaResetTimeStamp` to the current time plus the captured `retryDelay`, keeping
+the reset in the future as calendar time passes. The captured fixture stays unchanged.
+This observation covers that quota
 response; it does not establish a termination time for every 429 response.
 
 When a reset timestamp is available, ticket selection and the chat pending queue defer
