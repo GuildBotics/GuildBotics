@@ -81,7 +81,14 @@ def workflow_rate_limit_notice_text(retry_after: WorkflowRateLimit) -> str:
     suffix, display = rate_limit_reset_display(
         retry_after.retry_after_at, retry_after.retry_after_text
     )
-    return t(
-        f"commands.workflows.common.rate_limited_escalation{suffix}",
-        retry_after=display,
-    )
+    if suffix == "_with_reset":
+        return t(
+            "commands.workflows.common.rate_limited_escalation_with_reset",
+            retry_after=display,
+        )
+    if suffix == "_with_hint":
+        return t(
+            "commands.workflows.common.rate_limited_escalation_with_hint",
+            retry_after=display,
+        )
+    return t("commands.workflows.common.rate_limited_escalation")
