@@ -687,7 +687,8 @@ def _workflow_status_notice_text(
         return workflow_rate_limit_notice_text(
             WorkflowRateLimit(
                 retry_after_at=retry_after_at, retry_after_text=retry_after_text
-            )
+            ),
+            workflow="chat",
         )
     return t("commands.workflows.chat_conversation_workflow.incomplete_escalation")
 

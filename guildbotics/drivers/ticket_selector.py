@@ -169,7 +169,7 @@ class TicketSelector:
                 subject_id=ticket_url,
             )
         else:
-            body = workflow_rate_limit_notice_text(rate_limit)
+            body = workflow_rate_limit_notice_text(rate_limit, workflow="ticket")
             payload = workflow_status_fields(
                 reason="rate_limited",
                 person_id=person_id,

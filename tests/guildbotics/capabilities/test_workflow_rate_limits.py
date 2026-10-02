@@ -1,4 +1,3 @@
-import i18n  # type: ignore
 import pytest
 
 from guildbotics.capabilities.workflow_rate_limits import (
@@ -68,39 +67,50 @@ def test_workflow_rate_limit_from_exception_returns_none_for_plain_exception():
     assert workflow_rate_limit_from_exception(RuntimeError("fail")) is None
 
 
+@pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
+@pytest.mark.parametrize("workflow", ["ticket", "chat"])
 @pytest.mark.parametrize(
-    ("language", "automatic_retry", "unknown_restart"),
-    [
-        ("en", "retry automatically at or after this time", "restart time is unknown"),
-        ("ja", "この時刻以降に自動再試行します", "再開時刻は不明です"),
-    ],
+    "at, hint", [("2026-07-04T02:44:00Z", "11:44 AM"), ("", "Resets in 1h"), ("", "")]
 )
-def test_workflow_rate_limit_notice_matches_retry_behavior(
-    language: str, automatic_retry: str, unknown_restart: str
-) -> None:
-    previous_locale = i18n.get("locale")
-    previous_fallback = i18n.get("fallback")
-    try:
-        from guildbotics.utils.i18n_tool import set_language
+def test_notice_explains_the_workflow_retry(
+    notice_language, workflow, at, hint, local_rate_limit_timezone
+):
+    notice = workflow_rate_limit_notice_text(
+        WorkflowRateLimit(at, hint), workflow=workflow
+    )
+    if workflow == "chat":
+        guidance = t("commands.workflows.common.rate_limited_retry_chat")
+        assert (
+            "再試行回数が残っていれば"
+            if notice_language == "ja"
+            else "if attempts remain"
+        ) in guidance
+    elif at:
+        guidance = t("commands.workflows.common.rate_limited_retry_at")
+        assert (
+            "この時刻以降に自動再試行します"
+            if notice_language == "ja"
+            else "retry automatically at or after this time"
+        ) in guidance
+    else:
+        guidance = t("commands.workflows.common.rate_limited_retry_ticket")
+        assert (
+            "新しいコメントが付くまで"
+            if notice_language == "ja"
+            else "until a new comment is added"
+        ) in guidance
+    assert guidance in notice
+    if at:
+        assert "2026-07-04 11:44:00+09:00" in notice
+        assert hint not in notice
+    else:
+        assert hint in notice
+        assert (
+            "復帰時刻は不明です" if notice_language == "ja" else "reset time is unknown"
+        ) in notice
 
-        set_language(language)
-        scheduled = workflow_rate_limit_notice_text(
-            WorkflowRateLimit("2026-07-04T11:44:00+09:00", "11:44 AM")
-        )
-        unscheduled = workflow_rate_limit_notice_text(WorkflowRateLimit())
-    finally:
-        i18n.set("locale", previous_locale)
-        i18n.set("fallback", previous_fallback)
 
-    assert "2026-07-04 11:44:00+09:00" in scheduled
-    assert "11:44 AM" not in scheduled
-    assert automatic_retry in scheduled
-    assert unknown_restart in unscheduled
-    assert "not be retried automatically" not in scheduled
-    assert "自動再試行しません" not in scheduled
-
-
-@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
 @pytest.mark.parametrize(
     ("at", "hint", "suffix", "display"),
     [
@@ -110,32 +120,34 @@ def test_workflow_rate_limit_notice_matches_retry_behavior(
             "_with_reset",
             "2026-10-03 15:30:12+09:00",
         ),
-        ("2026-10-03T06:30:12Z", "", "_with_reset", "2026-10-03 06:30:12+00:00"),
+        ("2026-10-03T06:30:12Z", "", "_with_reset", "2026-10-03 15:30:12+09:00"),
         ("", "Resets in 25h57m34s", "_with_hint", "Resets in 25h57m34s"),
         ("", "", "", ""),
         ("invalid", "Resets in 1h", "_with_hint", "Resets in 1h"),
         ("invalid", "", "", ""),
+        ("2026-10-03T06:30:12", "Resets in 1h", "_with_hint", "Resets in 1h"),
+        ("2026-10-03T06:30:12", "", "", ""),
     ],
 )
-def test_notice_selects_reset_information(language, at, hint, suffix, display):
-    notice = workflow_rate_limit_notice_text
-    previous_locale = i18n.get("locale")
-    previous_fallback = i18n.get("fallback")
-    try:
-        from guildbotics.utils.i18n_tool import set_language
-
-        set_language(language)
-        key = f"commands.workflows.common.rate_limited_escalation{suffix}"
-        expected = t(key, retry_after=display)
-        assert expected != key
-        assert notice(WorkflowRateLimit(at, hint)) == expected
-        if suffix != "_with_reset":
-            assert (
-                "再開時刻は不明です" if language == "ja" else "restart time is unknown"
-            ) in expected
-    finally:
-        i18n.set("locale", previous_locale)
-        i18n.set("fallback", previous_fallback)
+def test_notice_selects_reset_information(
+    notice_language, at, hint, suffix, display, local_rate_limit_timezone
+):
+    key = f"commands.workflows.common.rate_limited_escalation{suffix}"
+    expected = t(
+        key,
+        retry_after=display,
+        retry_guidance=t("commands.workflows.common.rate_limited_retry_chat"),
+    )
+    assert expected != key
+    assert (
+        workflow_rate_limit_notice_text(WorkflowRateLimit(at, hint), workflow="chat")
+        == expected
+    )
+    assert display in expected
+    if suffix != "_with_reset":
+        assert (
+            "復帰時刻は不明です" if notice_language == "ja" else "reset time is unknown"
+        ) in expected
 
 
 def test_record_workflow_rate_limited(monkeypatch):

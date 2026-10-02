@@ -156,12 +156,14 @@ def test_terminal_workflow_failures_use_emitted_error(event_type: str) -> None:
             "_with_reset",
             "2026-10-03 15:30:12+09:00",
         ),
-        ("2026-10-03T06:30:12Z", "", "_with_reset", "2026-10-03 06:30:12+00:00"),
+        ("2026-10-03T06:30:12Z", "", "_with_reset", "2026-10-03 15:30:12+09:00"),
         ("", "Resets in 25h57m34s", "_with_hint", "Resets in 25h57m34s"),
         ("", "", "", ""),
     ],
 )
-def test_rate_limit_summary_selects_reset_information(at, hint, suffix, display):
+def test_rate_limit_summary_selects_reset_information(
+    at, hint, suffix, display, local_rate_limit_timezone
+):
     presentation = normalize_trace_presentation(
         _event(
             "workflow.rate_limited",

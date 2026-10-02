@@ -11,6 +11,7 @@ This module does **not** call any provider API.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.observability.diagnostics_events import record_correlated_event
@@ -76,19 +77,31 @@ def record_workflow_rate_limited(
     )
 
 
-def workflow_rate_limit_notice_text(retry_after: WorkflowRateLimit) -> str:
+def workflow_rate_limit_notice_text(
+    retry_after: WorkflowRateLimit, *, workflow: Literal["ticket", "chat"]
+) -> str:
     """Build the human-readable rate-limit notice for a ticket or chat comment."""
     suffix, display = rate_limit_reset_display(
         retry_after.retry_after_at, retry_after.retry_after_text
     )
+    if workflow == "chat":
+        guidance = t("commands.workflows.common.rate_limited_retry_chat")
+    elif suffix == "_with_reset":
+        guidance = t("commands.workflows.common.rate_limited_retry_at")
+    else:
+        guidance = t("commands.workflows.common.rate_limited_retry_ticket")
     if suffix == "_with_reset":
         return t(
             "commands.workflows.common.rate_limited_escalation_with_reset",
             retry_after=display,
+            retry_guidance=guidance,
         )
     if suffix == "_with_hint":
         return t(
             "commands.workflows.common.rate_limited_escalation_with_hint",
             retry_after=display,
+            retry_guidance=guidance,
         )
-    return t("commands.workflows.common.rate_limited_escalation")
+    return t(
+        "commands.workflows.common.rate_limited_escalation", retry_guidance=guidance
+    )

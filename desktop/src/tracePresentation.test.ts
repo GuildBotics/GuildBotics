@@ -70,12 +70,7 @@ describe("trace presentation", () => {
   });
 
   it.each([
-    [
-      "",
-      "",
-      "Rate limited. The restart time is unknown.",
-      "Rate limit 中です。再開時刻は不明です。",
-    ],
+    ["", "", "Rate limited. The reset time is unknown.", "Rate limit 中です。復帰時刻は不明です。"],
     [
       "_with_reset",
       "2026-10-03 15:30:12+09:00",
@@ -85,8 +80,8 @@ describe("trace presentation", () => {
     [
       "_with_hint",
       "Resets in 25h57m34s",
-      "Rate limited. The restart time is unknown. Tool message when the limit was detected: Resets in 25h57m34s.",
-      "Rate limit 中です。再開時刻は不明です。制限を検出した時点のツールの案内: Resets in 25h57m34s。",
+      "Rate limited. The reset time is unknown. Tool message when the limit was detected: Resets in 25h57m34s.",
+      "Rate limit 中です。復帰時刻は不明です。制限を検出した時点のツールの案内: Resets in 25h57m34s。",
     ],
   ])("renders rate-limit reset state %s in both languages", (suffix, reset, en, ja) => {
     const value = presentation({

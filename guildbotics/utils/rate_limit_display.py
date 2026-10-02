@@ -1,6 +1,6 @@
 """Select reset information for rate-limit notices and trace presentations."""
 
-from guildbotics.utils.timestamps import parse_iso_datetime
+from datetime import datetime
 
 
 def rate_limit_reset_display(
@@ -8,12 +8,15 @@ def rate_limit_reset_display(
 ) -> tuple[str, str]:
     """Return the message-key suffix and its reset value.
 
-    Preserve the timestamp's offset so a saved notice remains unambiguous.
+    Use the host's local time with its offset so a saved notice stays unambiguous.
     Provider wording is only a hint when no reset timestamp can be read.
     """
-    reset = parse_iso_datetime(retry_after_at)
-    if reset is not None:
-        return "_with_reset", reset.isoformat(sep=" ", timespec="seconds")
+    try:
+        reset = datetime.fromisoformat(retry_after_at.strip())
+    except ValueError:
+        reset = None
+    if reset is not None and reset.tzinfo is not None:
+        return "_with_reset", reset.astimezone().isoformat(sep=" ", timespec="seconds")
     if retry_after_text:
         return "_with_hint", retry_after_text
     return "", ""

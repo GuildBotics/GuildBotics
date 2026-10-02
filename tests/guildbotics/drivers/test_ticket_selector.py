@@ -104,7 +104,7 @@ def _invocation(task: Task, source: str = "routine") -> WorkflowInvocation:
     )
 
 
-def _rate_limit_error():
+def _rate_limit_error(at="2026-07-04T11:44:00+09:00", hint="11:44 AM"):
     from guildbotics.intelligences.brains.cli_agent import (
         CliAgentExecutionError,
         CliAgentExecutionResult,
@@ -118,8 +118,8 @@ def _rate_limit_error():
             returncode=75,
             error_category="rate_limited",
             error_details={
-                "retry_after_at": "2026-07-04T11:44:00+09:00",
-                "retry_after_text": "11:44 AM",
+                "retry_after_at": at,
+                "retry_after_text": hint,
             },
         ),
     )
@@ -246,15 +246,26 @@ async def test_failed_move_is_reported_like_a_failed_run():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["routine", "scheduled", "manual"])
+@pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
+@pytest.mark.parametrize(
+    "at, hint, suffix",
+    [
+        ("2026-07-04T02:44:00Z", "11:44 AM", "_with_reset"),
+        ("", "Resets in 1h", "_with_hint"),
+        ("", "", ""),
+    ],
+)
 async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
-    monkeypatch, source
+    monkeypatch, source, notice_language, at, hint, suffix, local_rate_limit_timezone
 ):
     manager = _TicketManager()
     recorded = _capture_rate_limit_events(monkeypatch)
 
     with trace_scope(source, trace_id="trace-3", person_id="aiko"):
         result = await TicketSelector(_Context(manager)).run(  # type: ignore[arg-type]
-            _Person(), _invocation(_task(), source), _failing(_rate_limit_error())
+            _Person(),
+            _invocation(_task(), source),
+            _failing(_rate_limit_error(at, hint)),
         )
 
     # Settled, not raised: the status comment keeps the ticket out of
@@ -262,8 +273,13 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
     # manual run shows the same notice.
     [comment] = manager.comments
     assert result == t(
-        "commands.workflows.common.rate_limited_escalation_with_reset",
-        retry_after="2026-07-04 11:44:00+09:00",
+        f"commands.workflows.common.rate_limited_escalation{suffix}",
+        retry_after="2026-07-04 11:44:00+09:00" if at else hint,
+        retry_guidance=t(
+            "commands.workflows.common.rate_limited_retry_at"
+            if at
+            else "commands.workflows.common.rate_limited_retry_ticket"
+        ),
     )
     assert result in comment
     status = parse_workflow_status_comment(comment)
@@ -271,7 +287,7 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
     assert (status.reason, status.run_id, status.retry_after_text) == (
         "rate_limited",
         "trace-3",
-        "11:44 AM",
+        hint,
     )
     [event] = recorded
     assert event["event_type"] == "workflow.rate_limited"
@@ -279,9 +295,8 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
     assert event["command"] == "workflows/ticket_driven_workflow"
     assert event["payload"]["run_id"] == "trace-3"
     assert event["payload"]["subject_id"] == ISSUE_URL
-    assert event["attributes"]["rate_limit.retry_after_at"] == (
-        "2026-07-04T11:44:00+09:00"
-    )
+    assert event["attributes"]["rate_limit.retry_after_at"] == at
+    assert status.retry_after_at == at
 
 
 @pytest.mark.asyncio

@@ -722,10 +722,10 @@ const resources = {
             scheduler_worker_failed:
               "{{source}} worker failed {{count}} consecutive times (limit: {{limit}}).",
             workflow_completed: "Run {{run}} completed (attempt {{attempt}}).",
-            workflow_rate_limited: "Rate limited. The restart time is unknown.",
+            workflow_rate_limited: "Rate limited. The reset time is unknown.",
             workflow_rate_limited_with_reset: "Rate limited. Reset time: {{retry_at}}.",
             workflow_rate_limited_with_hint:
-              "Rate limited. The restart time is unknown. Tool message when the limit was detected: {{retry_at}}.",
+              "Rate limited. The reset time is unknown. Tool message when the limit was detected: {{retry_at}}.",
             chat_dispatch_retry_scheduled:
               "Run {{run}} will retry at {{retry_at}} (attempt {{attempt}}/{{max_attempts}}).",
             credential_failed: "{{provider}} credential failed ({{code}}).",
@@ -3610,10 +3610,10 @@ const resources = {
             scheduler_worker_failed:
               "{{source}} ワーカーが連続 {{count}} 回失敗しました（上限: {{limit}} 回）。",
             workflow_completed: "Run {{run}} が完了しました（{{attempt}} 回目）。",
-            workflow_rate_limited: "Rate limit 中です。再開時刻は不明です。",
+            workflow_rate_limited: "Rate limit 中です。復帰時刻は不明です。",
             workflow_rate_limited_with_reset: "Rate limit 中です。復帰時刻: {{retry_at}}。",
             workflow_rate_limited_with_hint:
-              "Rate limit 中です。再開時刻は不明です。制限を検出した時点のツールの案内: {{retry_at}}。",
+              "Rate limit 中です。復帰時刻は不明です。制限を検出した時点のツールの案内: {{retry_at}}。",
             chat_dispatch_retry_scheduled:
               "Run {{run}} は {{retry_at}} に再試行します（{{attempt}}/{{max_attempts}} 回目）。",
             credential_failed: "{{provider}} の認証情報が失敗しました（{{code}}）。",

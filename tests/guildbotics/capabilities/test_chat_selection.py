@@ -143,6 +143,10 @@ class FakeInvokeContext(types.SimpleNamespace):
             shared_state={},
         )
         self.action = action
+        self.rate_limit_details = {
+            "retry_after_at": "2026-07-04T11:44:00+09:00",
+            "retry_after_text": "11:44 AM",
+        }
         self.incoming: IncomingChatEvent | None = None
         self.retry_context: dict | None = None
         self.logger.context = self
@@ -206,10 +210,7 @@ class FakeInvokeContext(types.SimpleNamespace):
                     stderr="rate limit",
                     returncode=75,
                     error_category="rate_limited",
-                    error_details={
-                        "retry_after_at": "2026-07-04T11:44:00+09:00",
-                        "retry_after_text": "11:44 AM",
-                    },
+                    error_details=self.rate_limit_details,
                 ),
             )
         if self.action == "crash":
@@ -1230,10 +1231,22 @@ async def test_non_final_agent_run_failure_bubbles_for_pending_backoff(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_posts_notice_and_leaves_event_pending(tmp_path):
+@pytest.mark.parametrize("notice_language", ["en", "ja"], indirect=True)
+@pytest.mark.parametrize(
+    "at, hint, suffix",
+    [
+        ("2026-07-04T02:44:00Z", "11:44 AM", "_with_reset"),
+        ("", "Resets in 1h", "_with_hint"),
+        ("", "", ""),
+    ],
+)
+async def test_rate_limit_posts_notice_and_leaves_event_pending(
+    tmp_path, notice_language, at, hint, suffix, local_rate_limit_timezone
+):
     service = FakeChatService()
     state_store = FileConversationStateStore(base_dir=tmp_path)
     ctx = FakeInvokeContext("rate_limit")
+    ctx.rate_limit_details = {"retry_after_at": at, "retry_after_text": hint}
     _set_incoming_event(ctx)
 
     with pytest.raises(CliAgentExecutionError):
@@ -1241,14 +1254,17 @@ async def test_rate_limit_posts_notice_and_leaves_event_pending(tmp_path):
 
     assert len(service.posts) == 1
     _channel_id, text, _thread_ts, metadata = service.posts[0]
-    assert "2026-07-04 11:44:00+09:00" in text
-    assert "11:44 AM" not in text
-    assert "2026-07-04T11:44:00+09:00" not in text
+    assert text == t(
+        f"commands.workflows.common.rate_limited_escalation{suffix}",
+        retry_after="2026-07-04 11:44:00+09:00" if at else hint,
+        retry_guidance=t("commands.workflows.common.rate_limited_retry_chat"),
+    )
     assert metadata is not None
     payload = metadata["event_payload"]
     assert payload["reason"] == "rate_limited"
     assert payload["routing"] == "suppress"
-    assert payload["retry_after_at"] == "2026-07-04T11:44:00+09:00"
+    assert payload.get("retry_after_at", "") == at
+    assert payload.get("retry_after_text", "") == hint
     assert (
         state_store.load_channel_cursor("slack", "alice", "C1").processed_event_ids
         == []
