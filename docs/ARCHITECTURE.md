@@ -262,7 +262,17 @@ start` and the Desktop-managed service contend on the same OS advisory lock at
   (`capabilities/workflow_rate_limits.py`) as a `workflow.rate_limited` diagnostics
   event. Ticket selection and
   the chat pending queue defer re-entry until the provider's exact reset timestamp
-  when one is available.
+  when one is available. Ticket and Slack notices and trace summaries display
+  that timestamp in the host machine's local time with its UTC offset (for
+  example, `2026-10-03T06:30:12Z` becomes `2026-10-03 15:30:12+09:00` in Tokyo),
+  ahead of the provider's wording. `utils/rate_limit_display.py` selects the
+  display value and message variant for all three. Without a readable timestamp,
+  they state that the reset time is unknown; timestamps without an offset also
+  count as unknown. Any provider wording is identified as the message at detection
+  time. A ticket with an unknown reset time waits for a new comment before it can
+  be selected again; chat retries automatically while attempts remain. The notices
+  explain these different retry rules. Display formatting does not change the raw
+  timestamp or the retry policy.
 - Diagnostics keep provider turn success, workflow completion evidence, and dispatch
   lifecycle as separate layers (`capabilities/workflow_completion_events.py`): a
   clean provider turn without a recorded completion raises
