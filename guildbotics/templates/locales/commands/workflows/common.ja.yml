@@ -1,6 +1,7 @@
 ja:
   rate_limited_escalation: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。再開時刻は不明です。再試行は workflow の retry policy に従います。"
-  rate_limited_escalation_with_reset: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。Reset: %{retry_after}。この時刻以降に自動再試行します。"
+  rate_limited_escalation_with_reset: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。復帰時刻: %{retry_after}。この時刻以降に自動再試行します。"
+  rate_limited_escalation_with_hint: "AI CLIツールが rate limit 中のため、この workflow を今は続行できません。再開時刻は不明です。制限を検出した時点のツールの案内: %{retry_after}。再試行は workflow の retry policy に従います。"
   agent_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}` で、この run の完了記録はまだ存在しません。別の run の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、この run ID に対する必須の完了コマンドを実行してください。"
   agent_chat_continuation: "既存の workflow conversation を現在の状態から続行してください。対象は workflow run ID `%{run_id}`、chat event ID `%{event_id}` で、この run の完了記録はまだ存在しません。別の run や別の event の完了をこの run の完了と見なさないでください。trigger event を再処理したり、完了済みの操作を繰り返したりせず、不足している作業を終えて、この run ID に対する必須の完了コマンドを実行してください。"
   workflow_contract: |-

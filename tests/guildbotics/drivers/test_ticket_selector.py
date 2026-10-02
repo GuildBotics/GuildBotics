@@ -13,7 +13,7 @@ from guildbotics.integrations.workflow_status_comment import (
 )
 from guildbotics.observability import current_trace, trace_scope
 from guildbotics.runtime.workflow_invocation import WorkflowInvocation
-from guildbotics.utils.i18n_tool import get_language, set_language
+from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 ISSUE_URL = "https://github.com/o/r/issues/1"
 
@@ -261,9 +261,9 @@ async def test_rate_limited_run_is_settled_with_a_status_comment_and_an_event(
     # selection until the reset, so the worker does not count an error. A
     # manual run shows the same notice.
     [comment] = manager.comments
-    assert result == (
-        "AI CLI tool is currently rate-limited, so this workflow cannot continue "
-        "now. Reset: 11:44 AM. It will retry automatically at or after this time."
+    assert result == t(
+        "commands.workflows.common.rate_limited_escalation_with_reset",
+        retry_after="2026-07-04 11:44:00+09:00",
     )
     assert result in comment
     status = parse_workflow_status_comment(comment)

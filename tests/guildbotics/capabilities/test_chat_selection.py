@@ -1241,7 +1241,8 @@ async def test_rate_limit_posts_notice_and_leaves_event_pending(tmp_path):
 
     assert len(service.posts) == 1
     _channel_id, text, _thread_ts, metadata = service.posts[0]
-    assert "11:44 AM" in text
+    assert "2026-07-04 11:44:00+09:00" in text
+    assert "11:44 AM" not in text
     assert "2026-07-04T11:44:00+09:00" not in text
     assert metadata is not None
     payload = metadata["event_payload"]

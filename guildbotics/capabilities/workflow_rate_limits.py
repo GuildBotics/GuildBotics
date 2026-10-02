@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from guildbotics.intelligences.common import find_cli_agent_execution_error
 from guildbotics.observability.diagnostics_events import record_correlated_event
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.rate_limit_display import rate_limit_reset_display
 
 
 @dataclass(frozen=True)
@@ -23,10 +24,6 @@ class WorkflowRateLimit:
 
     retry_after_at: str = ""
     retry_after_text: str = ""
-
-    @property
-    def retry_after_display(self) -> str:
-        return self.retry_after_text or self.retry_after_at
 
 
 def workflow_rate_limit_from_exception(
@@ -81,10 +78,10 @@ def record_workflow_rate_limited(
 
 def workflow_rate_limit_notice_text(retry_after: WorkflowRateLimit) -> str:
     """Build the human-readable rate-limit notice for a ticket or chat comment."""
-    display = retry_after.retry_after_display
-    if display:
-        return t(
-            "commands.workflows.common.rate_limited_escalation_with_reset",
-            retry_after=display,
-        )
-    return t("commands.workflows.common.rate_limited_escalation")
+    suffix, display = rate_limit_reset_display(
+        retry_after.retry_after_at, retry_after.retry_after_text
+    )
+    return t(
+        f"commands.workflows.common.rate_limited_escalation{suffix}",
+        retry_after=display,
+    )

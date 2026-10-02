@@ -1,6 +1,7 @@
 en:
   rate_limited_escalation: "AI CLI tool is currently rate-limited, so this workflow cannot continue now. The restart time is unknown. Retrying follows the workflow's retry policy."
-  rate_limited_escalation_with_reset: "AI CLI tool is currently rate-limited, so this workflow cannot continue now. Reset: %{retry_after}. It will retry automatically at or after this time."
+  rate_limited_escalation_with_reset: "AI CLI tool is currently rate-limited, so this workflow cannot continue now. Reset time: %{retry_after}. It will retry automatically at or after this time."
+  rate_limited_escalation_with_hint: "AI CLI tool is currently rate-limited, so this workflow cannot continue now. The restart time is unknown. Tool message when the limit was detected: %{retry_after}. Retrying follows the workflow's retry policy."
   agent_continuation: "Continue the existing workflow conversation from its current state. The target is workflow run ID `%{run_id}`, and no completion record exists for this run yet. Never treat another run's completion as this run's completion. Do not reprocess the triggering event or repeat completed actions. Finish the missing work, then run the required completion command for this exact run ID."
   agent_chat_continuation: "Continue the existing workflow conversation from its current state. The target is workflow run ID `%{run_id}` and chat event ID `%{event_id}`, and no completion record exists for this run yet. Never treat another run's or another event's completion as this run's completion. Do not reprocess the triggering event or repeat completed actions. Finish the missing work, then run the required completion command for this exact run ID."
   workflow_contract: |-

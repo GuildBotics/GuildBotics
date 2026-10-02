@@ -12,6 +12,7 @@ from guildbotics.intelligences.brains.cli_agent import (
     CliAgentExecutionError,
     CliAgentExecutionResult,
 )
+from guildbotics.utils.i18n_tool import t
 
 
 def _make_rate_limit_error() -> CliAgentExecutionError:
@@ -67,17 +68,6 @@ def test_workflow_rate_limit_from_exception_returns_none_for_plain_exception():
     assert workflow_rate_limit_from_exception(RuntimeError("fail")) is None
 
 
-def test_workflow_rate_limit_retry_after_display():
-    rl1 = WorkflowRateLimit("2026-07-04", "text")
-    assert rl1.retry_after_display == "text"
-
-    rl2 = WorkflowRateLimit("2026-07-04", "")
-    assert rl2.retry_after_display == "2026-07-04"
-
-    rl3 = WorkflowRateLimit("", "")
-    assert rl3.retry_after_display == ""
-
-
 @pytest.mark.parametrize(
     ("language", "automatic_retry", "unknown_restart"),
     [
@@ -102,11 +92,50 @@ def test_workflow_rate_limit_notice_matches_retry_behavior(
         i18n.set("locale", previous_locale)
         i18n.set("fallback", previous_fallback)
 
-    assert "11:44 AM" in scheduled
+    assert "2026-07-04 11:44:00+09:00" in scheduled
+    assert "11:44 AM" not in scheduled
     assert automatic_retry in scheduled
     assert unknown_restart in unscheduled
     assert "not be retried automatically" not in scheduled
     assert "自動再試行しません" not in scheduled
+
+
+@pytest.mark.parametrize("language", ["en", "ja"])
+@pytest.mark.parametrize(
+    ("at", "hint", "suffix", "display"),
+    [
+        (
+            "2026-10-03T15:30:12+09:00",
+            "Resets in 25h57m34s",
+            "_with_reset",
+            "2026-10-03 15:30:12+09:00",
+        ),
+        ("2026-10-03T06:30:12Z", "", "_with_reset", "2026-10-03 06:30:12+00:00"),
+        ("", "Resets in 25h57m34s", "_with_hint", "Resets in 25h57m34s"),
+        ("", "", "", ""),
+        ("invalid", "Resets in 1h", "_with_hint", "Resets in 1h"),
+        ("invalid", "", "", ""),
+    ],
+)
+def test_notice_selects_reset_information(language, at, hint, suffix, display):
+    notice = workflow_rate_limit_notice_text
+    previous_locale = i18n.get("locale")
+    previous_fallback = i18n.get("fallback")
+    try:
+        from guildbotics.utils.i18n_tool import set_language
+
+        set_language(language)
+        key = f"commands.workflows.common.rate_limited_escalation{suffix}"
+        expected = t(key, retry_after=display)
+        assert expected != key
+        assert notice(WorkflowRateLimit(at, hint)) == expected
+        if suffix != "_with_reset":
+            assert (
+                "再開時刻は不明です" if language == "ja" else "restart time is unknown"
+            ) in expected
+    finally:
+        i18n.set("locale", previous_locale)
+        i18n.set("fallback", previous_fallback)
 
 
 def test_record_workflow_rate_limited(monkeypatch):

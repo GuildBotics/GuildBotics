@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from guildbotics.runtime.live_state import LivePresentation
+from guildbotics.utils.rate_limit_display import rate_limit_reset_display
 
 TracePresentation = LivePresentation
 
@@ -348,15 +349,17 @@ def _workflow_presentation(
     label = _EXACT_EVENT_LABELS.get(event_type, "")
     error = _first_text(payload, "error", "message")
     command = str(item.get("command") or "")
+    suffix, retry_at = rate_limit_reset_display(
+        _first_text(payload, "retry_after_at"),
+        _first_text(payload, "retry_after_text"),
+    )
     params = {
         "run": payload.get("run_id", ""),
         "attempt": payload.get("attempt", 0),
         "max_attempts": payload.get("max_attempts", 0),
-        "retry_at": payload.get("retry_after_text")
-        or payload.get("retry_after_at")
-        or "",
+        "retry_at": retry_at,
     }
-    message_name = label
+    message_name = label + suffix if event_type == "workflow.rate_limited" else label
     return _presentation(
         label_key=_event_key(label) if label else "",
         label=event_type,
