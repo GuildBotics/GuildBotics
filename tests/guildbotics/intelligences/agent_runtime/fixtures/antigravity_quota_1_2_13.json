@@ -1,0 +1,30 @@
+{
+  "upstream": {
+    "error": {
+      "code": 429,
+      "message": "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 25h57m34s.",
+      "status": "RESOURCE_EXHAUSTED",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "QUOTA_EXHAUSTED",
+          "domain": "cloudcode-pa.googleapis.com",
+          "metadata": {
+            "uiMessage": "true",
+            "model": "gemini-3.8-flash-high",
+            "quotaResetDelay": "25h57m34.995843114s",
+            "quotaResetTimeStamp": "2026-10-03T12:57:47Z"
+          }
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.RetryInfo",
+          "retryDelay": "93454.995843114s"
+        }
+      ]
+    }
+  },
+  "result": {
+    "status": "ERROR",
+    "error": "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 25h57m34s."
+  }
+}

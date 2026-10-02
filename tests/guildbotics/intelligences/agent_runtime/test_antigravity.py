@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +27,18 @@ from guildbotics.intelligences.agent_runtime.models import (
     ConversationKey,
     ConversationRecord,
 )
+from guildbotics.intelligences.brains import cli_agent
 from guildbotics.intelligences.brains.cli_agent import normalize_cli_agent_retry_after
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "antigravity_stream_1_1_10.jsonl"
 ).read_text()
+QUOTA_FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "antigravity_quota_1_2_13.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 _HELP_TEXT = (
     b"--print --output-format stream-json --conversation "
@@ -428,12 +435,8 @@ async def test_quota_result_is_rate_limited_with_a_retry_hint(
                     "event": "result",
                     "result": {
                         "conversation_id": "c1",
-                        "status": "ERROR",
                         "response": "",
-                        "error": (
-                            "RESOURCE_EXHAUSTED: Individual quota reached. "
-                            "Resets in 1h23m."
-                        ),
+                        **QUOTA_FIXTURE["result"],
                     },
                 },
             ],
@@ -448,8 +451,24 @@ async def test_quota_result_is_rate_limited_with_a_retry_hint(
     error = excinfo.value
     assert error.category is AgentRuntimeErrorCategory.RATE_LIMITED
     assert error.rotate_session is False
-    assert error.details["retry_after_text"] == "Resets in 1h23m"
-    assert normalize_cli_agent_retry_after(error.details["retry_after_text"]) != ""
+    assert error.details["retry_after_text"] == "Resets in 25h57m34s"
+
+
+def test_observed_quota_preserves_the_whole_reset_delay(monkeypatch) -> None:
+    now = datetime(2026, 10, 2, 11, 0, 12, tzinfo=UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+
+    monkeypatch.setattr(cli_agent, "datetime", Clock)
+    error = _result_error(QUOTA_FIXTURE["result"])
+    assert error is not None
+    reset = normalize_cli_agent_retry_after(error.details["retry_after_text"])
+    assert datetime.fromisoformat(reset) == now + timedelta(
+        hours=25, minutes=57, seconds=34
+    )
 
 
 def test_result_error_classification() -> None:

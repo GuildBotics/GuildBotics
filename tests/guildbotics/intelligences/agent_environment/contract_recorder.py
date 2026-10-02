@@ -190,6 +190,12 @@ class Recorder:
                 length = int(self.headers.get("content-length") or 0)
                 if length:
                     self.rfile.read(length)
+                elif self.headers.get("transfer-encoding", "").lower() == "chunked":
+                    while size := int(self.rfile.readline().split(b";", 1)[0], 16):
+                        self.rfile.read(size)
+                        self.rfile.read(2)
+                    while self.rfile.readline() not in (b"\r\n", b""):
+                        pass
                 host = (self.headers.get("host") or "").rsplit(":", 1)[0]
                 recorder.seen.append(
                     Seen(

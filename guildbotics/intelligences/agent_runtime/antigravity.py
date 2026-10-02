@@ -82,9 +82,8 @@ _COMMAND_TOOLS = frozenset({"run_command", "send_command_input", "command_status
 _PATH_PARAMETERS = ("TargetFile", "AbsolutePath", "DirectoryPath", "SearchPath")
 
 #: Last-resort classification of a terminal ``error`` string. ``agy`` reports
-#: quota and credential failures as prose, so until a structured code shows up
-#: in a real exhaustion these anchored patterns are the actual guard. Add a
-#: fixture the first time a genuine payload is observed.
+#: quota and credential failures as prose. The real 1.2.13 quota fixture has
+#: "Individual quota reached" without an upstream status or HTTP code prefix.
 _RATE_LIMIT_PATTERN = re.compile(
     r"RESOURCE_EXHAUSTED|Individual quota reached|quota exceeded", re.IGNORECASE
 )

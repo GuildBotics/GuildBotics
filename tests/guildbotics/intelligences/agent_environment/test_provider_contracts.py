@@ -644,7 +644,24 @@ def _antigravity_answer(host: str, method: str, path: str):
             }
         )
     if path.startswith("/v1internal:fetchAvailableModels"):
-        return json_answer({"models": {"gemini-3-flash": {"displayName": "Gemini"}}})
+        # A usable model, including the CLI's checkpoint model, lets the main
+        # inference run. A label alone only lets title generation reach us.
+        return json_answer(
+            {
+                "models": {
+                    "synthetic-model": {
+                        "displayName": "Synthetic model",
+                        "model": "MODEL_PLACEHOLDER_M50",
+                        "apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+                        "modelProvider": "MODEL_PROVIDER_GOOGLE",
+                        "maxTokens": 1048576,
+                        "maxOutputTokens": 8192,
+                    }
+                },
+                "defaultAgentModelId": "synthetic-model",
+                "agentModelSorts": [{"groups": [{"modelIds": ["synthetic-model"]}]}],
+            }
+        )
     if path.startswith("/oauth2/v2/userinfo"):
         return json_answer(
             {
@@ -695,7 +712,24 @@ async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
         lambda _: {tool.provision.auth: json.dumps(_ANTIGRAVITY_LOGIN).encode()},
     )
     lent = LentLogin(tool, None)  # type: ignore[arg-type]
-    recorder = Recorder(_antigravity_answer)
+    # Captured from a real quota exhaustion on 1.2.13. The long RetryInfo
+    # must end the turn promptly, rather than keep it asleep until timeout.
+    quota = json.loads(
+        (
+            Path(__file__).parent.parent
+            / "agent_runtime"
+            / "fixtures"
+            / "antigravity_quota_1_2_13.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    def answer(host: str, method: str, path: str):
+        if path.startswith("/v1internal:streamGenerateContent"):
+            _, headers, body = json_answer(quota["upstream"])
+            return 429, headers, body
+        return _antigravity_answer(host, method, path)
+
+    recorder = Recorder(answer)
     home = guest_path(_REAL_HOME.resolve())
     guest = await boot(
         recorder,
@@ -716,11 +750,19 @@ async def test_antigravity_reaches_its_api_and_its_userinfo_through_the_gateway(
         recorder.tls_port,
     )
 
-    await guest.sh(
-        "timeout 70 agy --print 'Synthetic fixture.' --output-format stream-json",
-        timeout=100,
-    )
-    await relay.kill()
+    started = time.monotonic()
+    try:
+        output = await guest.sh(
+            "agy --print 'Synthetic fixture.' --output-format stream-json "
+            "--print-timeout 60s",
+            timeout=75,
+        )
+    finally:
+        await relay.kill()
+    assert time.monotonic() - started < 30, output
+    events = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    result = next(event["result"] for event in events if event["event"] == "result")
+    assert {key: result[key] for key in quota["result"]} == quota["result"], output
 
     userinfo = recorder.requests("/oauth2/v2/userinfo")
     assert {s.host for s in userinfo} == {"www.googleapis.com"}, recorder.seen
