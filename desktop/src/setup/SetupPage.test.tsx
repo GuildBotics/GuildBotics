@@ -2938,8 +2938,6 @@ describe("MembersSection", () => {
     });
     renderSetupPage("/setup?section=members&tab=slack");
 
-    await screen.findByLabelText("Member ID");
-
     expect(
       await screen.findByRole("button", {
         name: t("setup.members.slackAppRegistration.register"),
@@ -2974,6 +2972,35 @@ describe("MembersSection", () => {
     expect(
       screen.queryByRole("button", { name: t("setup.members.slackAppRegistration.register") }),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps what was typed into the GitHub and Slack app registration panels across tabs", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTeam).mockResolvedValue({
+      project: { name: "Demo", language_code: "en", language_name: "English" },
+      default_person_id: "",
+      members: [],
+    });
+    renderSetupPage("/setup?section=members");
+    await screen.findByLabelText("Member ID");
+    const githubAppName = () =>
+      screen.getByRole("textbox", { name: t("setup.members.githubAppRegistration.appName") });
+    const slackAppName = () =>
+      screen.getByRole("textbox", { name: t("setup.members.slackAppRegistration.appName") });
+
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    await selectGitHubAccountType(user, "GitHub Apps");
+    await user.clear(githubAppName());
+    await fill(user, githubAppName(), "github-app");
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    await user.clear(slackAppName());
+    await fill(user, slackAppName(), "slack-app");
+
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
+    expect(githubAppName()).toHaveValue("github-app");
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
+    expect(slackAppName()).toHaveValue("slack-app");
   });
 
   it("resets the Slack app registration panel when switching members", async () => {
@@ -3035,8 +3062,7 @@ describe("MembersSection", () => {
     });
     renderSetupPage("/setup?section=members&tab=slack");
 
-    await screen.findByLabelText("Member ID");
-    await fill(user, screen.getByLabelText(t("setup.members.slackBotToken")), "xoxb-1");
+    await fill(user, await screen.findByLabelText(t("setup.members.slackBotToken")), "xoxb-1");
     await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-1");
     await user.click(
       screen.getByRole("button", { name: t("setup.members.slackTokenVerify.button") }),
@@ -4804,6 +4830,23 @@ describe("IntelligenceEditor (member override)", () => {
     // backend can reduce it to a member diff.
     expect(body.models?.some((model) => model.parameters?.id === "gpt-6")).toBe(true);
     expect("brain_mapping" in body).toBe(true);
+  });
+
+  it("saves AI settings edited before moving to another tab", async () => {
+    const user = userEvent.setup();
+    await openMemberIntelligenceAdvanced(user);
+    const modelIds = await screen.findAllByLabelText(
+      t("setup.intelligence.effort.modelAlwaysLabel"),
+    );
+    await user.clear(modelIds[0]);
+    await fill(user, modelIds[0], "gpt-6");
+
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.basic") }));
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
+    expect(body.models?.some((model) => model.parameters?.id === "gpt-6")).toBe(true);
   });
 
   it("switches a member model slot provider override", async () => {
