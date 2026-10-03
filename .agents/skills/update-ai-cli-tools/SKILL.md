@@ -23,25 +23,31 @@ it does not establish that the new releases work on a real device.
   Antigravity manifest. Never a prerelease, alpha, or `next` tag.
 - Fetch current versions on every run. If there are no newer releases, finish
   without file changes or a PR.
-- One Draft PR for the whole bump, separate from any other change. Check open
-  update PRs first: reuse this workflow's existing PR and branch, preserving
-  others' changes. If an equivalent update is already proposed, report its
-  link instead of creating a duplicate.
+- One Draft PR for the whole bump, separate from any other change. Use the
+  fixed head branch `codex/update-ai-cli-tools` and the remote default branch
+  as base. Reuse an open PR with that head and base, preserving human
+  verification commits and others' changes. Do not infer ownership from titles
+  or dates, or create a duplicate PR.
 - A tool whose release cannot be retrieved, or whose update cannot pass the
   non-device checks, stays on its current pin. Explain the failure and raise
   the others. Unperformed real-device checks do not prevent a bump or PR.
 - Do not build snapshots, start microVMs, run provider CLIs or real-device
   contract/smoke tests, or use saved provider logins. Do not request approval
   or wait for someone to perform these checks.
+- If a human later requests real-device checks on the update PR, use the
+  [verify-ai-cli-tools skill](../verify-ai-cli-tools/SKILL.md); do not invoke
+  it as part of this unattended workflow.
 - Not touched: `uv.lock`, `desktop/package-lock.json`, `desktop/src`. The tools
   are installed inside the snapshot by npm or an install script, never through
   the repository's dependency management.
 
 ## 1. Isolate the update and find the latest versions
 
-Work from the repository's current remote default branch in a dedicated
-worktree or checkout, on a `codex/` branch. When continuing this workflow's PR,
-use its branch. Keep a checkout served by Desktop or `guildbotics start`
+Work in a dedicated worktree or checkout on `codex/update-ai-cli-tools`.
+For an open update PR, continue its branch; if no open PR exists, base the
+new update on the current remote default branch. A retained branch from a
+closed PR may be recreated only after confirming it has no unpublished or
+unrelated work. Keep a checkout served by Desktop or `guildbotics start`
 unchanged: those processes can rebuild snapshots from its pins after restart.
 
 | Tool | Latest | Pin in `cli_agents.py` |
@@ -138,14 +144,12 @@ uv run --no-sync ruff format --check guildbotics tests
 uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
-env -u GUILDBOTICS_CONTRACT_PROBE -u GUILDBOTICS_GROK_SMOKE \
-  -u GUILDBOTICS_COPILOT_SMOKE -u GUILDBOTICS_ANTIGRAVITY_SMOKE \
-  uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_device'
+uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_device'
 ```
 
-The removed opt-in variables also prevent an inherited setting from enabling
-device checks during pytest configuration. Add non-device regression tests
-for any adapter behavior changed in this bump.
+Do not enable real-device opt-ins. The marker expression excludes every
+real-device test. Add non-device regression tests for any adapter behavior
+changed in this bump.
 
 Fix failures caused by this update or restore the affected tool's pin and
 associated changes, then rerun the affected checks on the final patch. Follow
@@ -168,6 +172,8 @@ attention. Explicitly state: **Real-device validation and snapshot build were
 not performed, as intended for this unattended workflow.** They are not a
 pending task or a condition for creating this PR. Do not call the new pins
 "verified" on the strength of unit tests.
+Immediately after the unverified statement, add: **For optional real-device
+verification during review, request `$verify-ai-cli-tools` on this PR.**
 
 After the merge, each device's snapshot turns `stale`: a running service
 rebuilds it once it runs the new code, and `guildbotics environment build`

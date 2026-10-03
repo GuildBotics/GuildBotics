@@ -328,10 +328,11 @@ root). Grok Build launches with
 environment's kernel lacks, and Grok refuses to start with a profile it cannot enforce), GitHub Copilot with
 `--no-remote-export` and `allow_all: on`, Antigravity with
 `--dangerously-skip-permissions`; none of them takes a flag from configuration,
-and a read-only turn launches them the same way. Which providers' inner sandboxes run on
-the microVM's kernel is confirmed per provider as each is provisioned; Codex
-is, through the bubblewrap it bundles (a bubblewrap installed in the image is
-preferred to it and cannot exec Codex's helper, so the image ships none).
+and a read-only turn launches them the same way. Codex uses its bundled bubblewrap
+(a bubblewrap installed in the image is preferred to it and cannot exec Codex's
+helper, so the image ships none). Whether a new pinned release's inner sandbox
+runs on the microVM's kernel is checked only when optional real-device
+verification is requested; unattended pin updates do not establish that it works.
 
 Only the provider's sessions and its account files that hold no credential
 survive a turn, bound from this device's store
@@ -395,10 +396,14 @@ takes Claude Code as the example; the tools differ as this table shows.
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
 API. What that relies on is checked by opt-in tests that run real microVMs with synthetic
-secrets; run them when a pinned version changes, and when the gateway or the way an
-environment is put together changes (on a device with a snapshot, with
+secrets when the gateway or the way an environment is put together changes.
+Real-device verification is optional for a pin update and is not part of the
+unattended update workflow. When a human requests it during PR review, use
+the [verify-ai-cli-tools skill](../.agents/skills/verify-ai-cli-tools/SKILL.md)
+to record the results on that PR after execution-specific approval and with
+the human watching. Run the tests on a device with a snapshot, with
 `GUILDBOTICS_CONTRACT_PROBE=1`, `GUILDBOTICS_CONFIG_DIR` at a workspace with the snapshot,
-and `-p no:xdist`). Nothing is sent off the device.
+and `-p no:xdist`. Nothing is sent off the device by these synthetic-secret tests.
 
 - `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`: the
   connection contracts. With the production stand-in and settings, which requests reach the
