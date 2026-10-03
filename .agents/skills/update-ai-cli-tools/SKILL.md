@@ -1,14 +1,19 @@
 ---
 name: update-ai-cli-tools
-description: Use when raising the versions of the AI CLI tools (Codex, Claude Code, Grok Build, GitHub Copilot, Antigravity) that GuildBotics pins in the agent environment.
+description: Update GuildBotics' pinned AI CLI tools to the latest stable releases and create a PR unattended, without real-device validation.
 ---
 
 # Updating the pinned AI CLI tools
 
-GuildBotics pins each AI CLI tool it provisions in the agent environment
-(`CliAgentProvision` in `guildbotics/intelligences/cli_agents.py`; its docstring
-says why). This is the procedure for raising those pins. It was last run end
-to end in PR #692.
+Invoke with `$update-ai-cli-tools` or "AI CLIツールを更新して".
+Check the official releases, update the pins, run the non-device quality
+checks, and create a Draft PR without asking for confirmation. Invoking this
+update workflow includes committing and pushing its branch and creating or
+updating its PR. Do not merge it.
+
+GuildBotics pins its provisioned tools in `CliAgentProvision` in
+`guildbotics/intelligences/cli_agents.py`. This workflow updates those pins;
+it does not establish that the new releases work on a real device.
 
 ## Scope
 
@@ -16,15 +21,28 @@ to end in PR #692.
   them when the user names the tools. "Latest" is what the tool's own default
   install gives: the npm `latest` dist-tag, Grok Build's `stable` channel, the
   Antigravity manifest. Never a prerelease, alpha, or `next` tag.
-- A tool whose latest release fails step 3 stays on its current pin in this
-  bump. Open an issue for it with what failed (a human approves the issue), and
-  raise the others. The bump does not wait for that tool.
-- One PR for the whole bump, separate from any other change.
+- Fetch current versions on every run. If there are no newer releases, finish
+  without file changes or a PR.
+- One Draft PR for the whole bump, separate from any other change. Check open
+  update PRs first: reuse this workflow's existing PR and branch, preserving
+  others' changes. If an equivalent update is already proposed, report its
+  link instead of creating a duplicate.
+- A tool whose release cannot be retrieved, or whose update cannot pass the
+  non-device checks, stays on its current pin. Explain the failure and raise
+  the others. Unperformed real-device checks do not prevent a bump or PR.
+- Do not build snapshots, start microVMs, run provider CLIs or real-device
+  contract/smoke tests, or use saved provider logins. Do not request approval
+  or wait for someone to perform these checks.
 - Not touched: `uv.lock`, `desktop/package-lock.json`, `desktop/src`. The tools
   are installed inside the snapshot by npm or an install script, never through
   the repository's dependency management.
 
-## 1. Find the latest versions and rewrite the pins
+## 1. Isolate the update and find the latest versions
+
+Work from the repository's current remote default branch in a dedicated
+worktree or checkout, on a `codex/` branch. When continuing this workflow's PR,
+use its branch. Keep a checkout served by Desktop or `guildbotics start`
+unchanged: those processes can rebuild snapshots from its pins after restart.
 
 | Tool | Latest | Pin in `cli_agents.py` |
 | --- | --- | --- |
@@ -51,100 +69,7 @@ the pinned URL, `linux_amd64`'s `sha512` on the `x86_64)` line and
 `linux_arm64`'s on the `aarch64)` line. If the manifests are gone, read the
 current `DOWNLOAD_BASE_URL` from the installer.
 
-## 2. Build the snapshot in a verification workspace
-
-The snapshot name is a hash of `build_steps()`, so new pins make every existing
-snapshot `stale`. Build and verify in a workspace of its own, never in one that
-a running Desktop or `guildbotics start` serves:
-
-- A build removes the workspace's other snapshots. A service running the old
-  pins rebuilds its own snapshot (`SnapshotUpkeep`) and removes yours.
-- In a development setup, Desktop and `~/.guildbotics/bin/guildbotics` run from
-  this checkout. A running Desktop keeps the old pins in memory; after its next
-  restart it rebuilds the snapshot of the user's workspace with whatever pins
-  the checkout has. Tell the user before editing the pins.
-
-Logins are per device (`~/.guildbotics/data/agent_environment/<tool>/`), so the
-verification workspace uses the device's saved logins without any setup.
-
-```bash
-WS=<a new directory outside the repository>
-mkdir -p "$WS/.guildbotics/config"
-export GUILDBOTICS_CONFIG_DIR="$WS/.guildbotics/config"
-uv run --no-sync guildbotics environment build
-```
-
-Keep `GUILDBOTICS_CONFIG_DIR` set for every command below: without it, the
-smoke tests run against the workspace the device has selected.
-
-The build downloads from npm, `x.ai` and `storage.googleapis.com`; its log shows
-`grok --version` and `agy --version`. A failed build is remembered
-(`<snapshot>.failed`) until the pins change or `environment build` runs again;
-the service does not retry it. When a pin is put back after step 3, build again
-and rerun that tool's checks on the final set of pins.
-
-## 3. Real-device checks
-
-Each of these carries the `real_device` marker. Before running any of them, show
-the user what runs, what leaves the device and what quota it spends, and get
-explicit approval; run them only while the user can watch. Run one at a time,
-without `pytest-xdist` (`-p no:xdist`): the credential checks count the microVMs
-that appear while they run.
-
-| Check | What it observes | Account and quota |
-| --- | --- | --- |
-| Contract suite | Each tool's requests with a stand-in login: which reach the gateway, that nothing carrying it goes elsewhere, the stand-in format it accepts, refresh; GuildBotics and member git inside the microVM | None; nothing leaves the device |
-| Smoke: Grok Build, GitHub Copilot, Antigravity | A turn and its resume; Copilot's `account.getQuota` and Antigravity's `/usage` payloads | Saved login; spends quota |
-| One turn: Codex, Claude Code | The product path of a command (they have no smoke test) | Saved login; spends quota |
-
-**Contract suite — every bump:**
-
-```bash
-D=tests/guildbotics/intelligences/agent_environment
-GUILDBOTICS_CONTRACT_PROBE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
-  $D/test_provider_contracts.py $D/test_credential_boundary.py \
-  $D/test_guildbotics_in_environment.py $D/test_member_git_in_environment.py
-```
-
-A failure in `test_provider_contracts.py` is a change in the provider's
-contract, not a flaky test. Rerun the one test with `-l -vv` to read the CLI's
-replies, and print `recorder.seen` in it temporarily to see every request it
-made. Fix the tool's `credential_broker` (`routes`, `base_url_env`, `refresh`,
-`stand_in_*`) when the change fits the gateway; otherwise the tool stays on its
-pin (see Scope). To find the release that introduced a change, look for its
-message in each release's binary (`npm pack @openai/codex@<v>-linux-arm64`,
-then `strings`).
-
-**Smoke tests — each bumped tool that has one:**
-
-```bash
-S=tests/guildbotics/intelligences/agent_runtime/smoke
-GUILDBOTICS_GROK_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs $S/test_grok_smoke.py
-GUILDBOTICS_COPILOT_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs \
-  $S/test_copilot_smoke.py $S/test_copilot_usage_smoke.py
-GUILDBOTICS_ANTIGRAVITY_SMOKE=1 uv run --no-sync python -m pytest -p no:xdist -rs $S/test_antigravity_smoke.py
-```
-
-**One turn — Codex and Claude Code, whichever was bumped:**
-
-```bash
-C="$GUILDBOTICS_CONFIG_DIR"
-mkdir -p "$C/team/members/tester" "$C/commands" "$C/intelligences" "$WS/work"
-printf 'language: en\ndefault_person_id: tester\n' > "$C/team/project.yml"
-printf 'person_id: tester\nname: Tester\nis_active: false\nperson_type: agent\n' \
-  > "$C/team/members/tester/person.yml"
-printf -- '---\nbrain: agent\n---\n\nReply with exactly the word pong. Do not run any tools.\n' \
-  > "$C/commands/ping.md"
-for tool in codex claude; do
-  echo "default: cli_agents/$tool/default.yml" > "$C/intelligences/cli_agent_mapping.yml"
-  uv run --no-sync guildbotics run ping --person tester --cwd "$WS/work"
-done
-```
-
-The verification workspace is not the one Desktop serves, so `run` executes
-locally. Each prints `pong` when the turn works.
-
-## 4. Update what depends on the version
+## 2. Update what depends on the version
 
 Find every mention with these two searches. Together they cover the full
 version, the minor-only form (`Codex 0.153`), descriptions measured on a past
@@ -167,52 +92,87 @@ is noise.
 
 Treat each hit by what it claims:
 
-- **The pin, or a claim about the pinned version** ("Verified against",
-  "verified baselines", "pins", "動作確認済みの基準バージョン", "固定しており"):
-  set it to the new pin once step 3 passes for that tool.
+- **The pin, or a claim about the pinned version** ("pins", "固定しており"):
+  set it to the new pin. If the same sentence claims it was verified, split
+  the pin from the historical verification and keep that verification on
+  the version actually tested.
 - **An observation of one version** ("measured / observed on", "実測", a
-  version-named fixture, a comment quoting a tool's output): move it to the new
-  pin only when a check in step 3 observed that very thing (the table says what
-  each check observes); rename a re-recorded fixture and its references. If the
-  behavior changed, fix the code, the fixture and the description. Otherwise
-  leave it naming the version it was observed on. A sentence that says an
-  observed version is the pinned one ("1.0.86, the version the environment
-  pins") is split: the pin moves, the observation stays.
+  version-named fixture, "Verified against", "verified baselines",
+  "動作確認済みの基準バージョン", a comment quoting a tool's output): leave
+  it on the observed version. Do not rename fixtures or advance a measured
+  range to an untested release.
 - **A version requirement of the tool** ("before 2.1.246", "1.1.11 以降", "the
   1.0.83 server had no `account.getQuota`"): leave it.
 - **Never leave a description measured on a version newer than the pin.** The
   product runs the pin, so such a description says nothing about it. Raising
-  every tool to its latest removes the case; re-observe it on the new pin.
+  every tool to its latest normally removes the case. If a tool must stay on
+  an older pin, qualify the observation as outside that pin's verified behavior.
 
 Also check by hand:
 
 - The limitations `docs/native_agent_runtime.*.md` attributes to a tool's
   version (no `usage_update`, no context size, failures reported as prose, an
-  unverified capability): check whether the new pin lifts each one, from the
-  step 3 output or the tool's release notes, and update the description when
-  one is.
+  unverified capability): read the official release notes for relevant
+  changes. Attribute new behavior to those notes; keep the previous measured
+  limitation and make clear that its behavior on the new pin is unverified.
 - `guildbotics/templates/intelligences/cli_agents/*/default.yml`: choices read
-  from a tool's own answer (Copilot's effort levels, from `session/new`).
+  from a tool's own answer (Copilot's effort levels, from `session/new`) stay
+  unchanged unless official release information establishes a necessary change.
 - Codex: `docker/agent-environment/Dockerfile` removes the image's bubblewrap
   because Debian's 0.8.0 could not exec Codex's helper, and
-  `agent_runtime/codex.py` says so. The default image has no bubblewrap, so the
-  Codex turn in step 3 runs on Codex's bundled one (its log says "Codex could
-  not find bubblewrap on PATH"); a passing turn confirms that configuration.
+  `agent_runtime/codex.py` says so. Preserve this configuration; this workflow
+  does not test the new Codex release's bundled helper.
 
-## 5. Documentation and quality checks
+Make adapter or template changes only when supported by official release
+information or a reproducible non-device test. Do not invent protocol changes
+or weaken the credential boundary to make a bump pass.
+
+## 3. Documentation and non-device quality checks
 
 - `docs/native_agent_runtime.ja.md` and `.en.md` carry most of the hits above;
   keep ja and en in step, then run `lychee` as `AGENTS.md` says.
-- `ruff format --check guildbotics tests`, `ruff check guildbotics`,
-  `mypy guildbotics`, and `pytest tests/guildbotics/intelligences`.
+- Use Python 3.12 and the repository's existing dependencies. Run these checks:
 
-## 6. The PR
+```bash
+uv run --no-sync ruff format --check guildbotics tests
+uv run --no-sync ruff check guildbotics
+uv run --no-sync mypy guildbotics
+uv run --no-sync pylint guildbotics
+env -u GUILDBOTICS_CONTRACT_PROBE -u GUILDBOTICS_GROK_SMOKE \
+  -u GUILDBOTICS_COPILOT_SMOKE -u GUILDBOTICS_ANTIGRAVITY_SMOKE \
+  uv run --no-sync python -m pytest tests/guildbotics/intelligences -m 'not real_device'
+```
 
-The body lists each tool's old, latest and new version, the real-device checks
-that ran and their result, each tool held on its pin with its issue, the
-observations left on an older version, and the documented limitations the new
-pins lift.
+The removed opt-in variables also prevent an inherited setting from enabling
+device checks during pytest configuration. Add non-device regression tests
+for any adapter behavior changed in this bump.
+
+Fix failures caused by this update or restore the affected tool's pin and
+associated changes, then rerun the affected checks on the final patch. Follow
+AGENTS.md when diagnosing pre-existing failures: put its complete Issue draft
+in the PR or final report, without publishing an Issue or waiting for a reply.
+If checks cannot run in the available environment, preserve the patch and
+record the exact unperformed checks and reason in the Draft PR.
+
+## 4. Create the PR and report
+
+Commit and push only this update's changes and create or update its Draft PR.
+Do not stop at a local diff or ask permission to push or create the PR. If no
+tool can be raised, finish with the reasons and no empty PR. If GitHub access
+is unavailable, keep the local changes and report the specific blocker.
+
+The body lists each tool's old, latest and adopted version with official
+sources, the non-device checks and their results, held pins and their reasons,
+historical observations left unchanged, and release-note changes needing
+attention. Explicitly state: **Real-device validation and snapshot build were
+not performed, as intended for this unattended workflow.** They are not a
+pending task or a condition for creating this PR. Do not call the new pins
+"verified" on the strength of unit tests.
 
 After the merge, each device's snapshot turns `stale`: a running service
 rebuilds it once it runs the new code, and `guildbotics environment build`
 rebuilds it by hand.
+
+Report the version comparison, check results, held tools, and PR link. When
+nothing needs updating or attention, do not send a notification if the runner
+supports silent completion.
