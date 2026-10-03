@@ -236,10 +236,9 @@ class CliAgentProvision(BaseModel):
 
     ``package`` is the npm package the environment's snapshot installs, at
     the version GuildBotics chooses to ship with this adapter. A pin selects
-    a release; it does not imply real-device verification. A tool that is
-    not on npm names an ``install``
-    script instead, which pins its version the same way. A tool with neither
-    is not provisioned yet. Raising a pin follows
+    a release; it does not imply real-device verification. A tool that is not
+    on npm names an ``install`` script instead, which pins its version the
+    same way. A tool with neither is not provisioned yet. Raising a pin follows
     ``.agents/skills/update-ai-cli-tools/SKILL.md``; optional real-device
     verification of its PR follows ``.agents/skills/verify-ai-cli-tools/SKILL.md``.
 

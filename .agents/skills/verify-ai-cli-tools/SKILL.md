@@ -59,8 +59,8 @@ Keep both workspace variables set for every command below. The workspace
 root takes precedence over the config directory; an inherited root must not
 redirect the build or checks to a live workspace. The `tester` member is
 needed by the contract product-path tests and every tool's turn checks.
-This workspace has
-no matching Desktop, so its `guildbotics run` commands execute locally.
+This workspace has no matching Desktop, so its `guildbotics run` commands
+execute locally.
 The build log shows `grok --version` and `agy --version`. A failed build is
 remembered as `<snapshot>.failed` until the pins change or a build runs again;
 the service does not retry it.
@@ -155,3 +155,21 @@ PR head changed during verification, establish which results still apply;
 never attribute results from an earlier pin or adapter to the new one.
 Inspect CI and current-head/base readiness after the final push, and leave
 the PR for human review and merge.
+
+## 4. Remove the verification workspace
+
+After recording results and diagnostic evidence, wait for every build and
+check to finish, including failed or cancelled runs. From the PR checkout,
+remove the disposable workspace's snapshots through the product command,
+then remove the directory created by `mktemp` above. Device-wide logins are kept.
+
+```bash
+GUILDBOTICS_WORKSPACE_ROOT="${VERIFICATION_WS:?}" \
+GUILDBOTICS_CONFIG_DIR="$VERIFICATION_WS/.guildbotics/config" \
+  uv run --no-sync guildbotics environment remove &&
+  rm -rf -- "$VERIFICATION_WS" &&
+  unset GUILDBOTICS_WORKSPACE_ROOT GUILDBOTICS_CONFIG_DIR VERIFICATION_WS C
+```
+
+If snapshot removal fails or is interrupted, keep the workspace and its
+variables for diagnosis; do not delete its directory directly.
