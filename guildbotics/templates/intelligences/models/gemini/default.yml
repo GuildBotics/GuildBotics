@@ -17,4 +17,3 @@ effort_fields:
     type: model_id
 rate_limit:
   max_requests_per_minute: 5
-  max_requests_per_day: 20

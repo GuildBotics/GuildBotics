@@ -799,9 +799,6 @@ class MemberGitHubCapabilityService(GitHubPullRequests):
                 urls.append(canonical)
         return urls
 
-    async def get_pr_head_branch(self, url: str) -> str:
-        return (await self.get_pr_head(url)).branch
-
     async def get_pr_head(self, url: str) -> GitHubPullRequestHead:
         resource = self.parse_url(url, expected_kind="pull")
         return self._pull_request_head(resource, await self._pull_request(resource))

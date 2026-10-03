@@ -77,18 +77,19 @@ def _load_i18n_tool():
     return importlib.reload(i18n_tool)
 
 
-def test_all_t_call_sites_produce_translated_strings() -> None:
+@pytest.mark.parametrize("locale", ["en", "ja"])
+def test_all_t_call_sites_produce_translated_strings(locale: str) -> None:
     """Ensure every direct i18n_tool.t() call resolves to a translation."""
     import i18n  # type: ignore
 
     i18n_tool = _load_i18n_tool()
 
-    i18n_tool.set_language("en")
+    i18n_tool.set_language(locale)
 
     keys = _collect_t_call_keys()
     assert keys, "No i18n_tool.t() call sites were discovered."
 
-    placeholder_map = _build_placeholder_map(locale="en")
+    placeholder_map = _build_placeholder_map(locale=locale)
     missing_entries = sorted(key for key in keys if key not in placeholder_map)
     assert not missing_entries, f"Missing locale entries for keys: {missing_entries}"
 
@@ -103,6 +104,10 @@ def test_all_t_call_sites_produce_translated_strings() -> None:
             raise AssertionError(
                 f"Key {key} returned itself. load_path={i18n.load_path}"
             )
+
+
+def test_bundled_languages_have_the_same_keys_and_placeholders() -> None:
+    assert _build_placeholder_map("en") == _build_placeholder_map("ja")
 
 
 def _collect_t_call_keys() -> set[str]:

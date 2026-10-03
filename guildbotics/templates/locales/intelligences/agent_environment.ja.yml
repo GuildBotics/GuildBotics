@@ -70,8 +70,6 @@ ja:
     deny_too_broad: "拒否 '%{path}' はホームディレクトリまたはルート全体を閉じてしまいます"
     document_not_a_directory: "ドキュメントの許可 '%{path}' は存在しますがディレクトリではありません"
     document_outside_home: "ドキュメントの許可 '%{path}' はホームディレクトリの下になければなりません"
-    network_not_a_mapping: "%{where}: 'network' はマッピングでなければなりません"
-    network_invalid: "%{where}: 'network' が不正です: %{error}"
     not_a_mapping: "%{where}: マッピングでなければなりません"
     invalid: "%{where}: 許可の設定が不正です: %{error}"
     sensitive_home: "ホームディレクトリ"

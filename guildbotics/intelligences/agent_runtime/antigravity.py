@@ -54,7 +54,6 @@ _EFFORT_VALUES = frozenset({"low", "medium", "high"})
 _WORKSPACE_FLAG = "--add-dir"
 
 _MODELS_TIMEOUT_SECONDS = 10.0
-_HELP_TIMEOUT_SECONDS = 10.0
 #: Time ``agy``'s own ``--print-timeout`` is given beyond the adapter budget, so
 #: the CLI reports a structured timeout result before the outer watchdog fires.
 _TIMEOUT_GRACE_SECONDS = 60.0

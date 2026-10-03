@@ -24,7 +24,6 @@ from guildbotics.utils.secret_store import is_secret_key
 HUB_MISSING = "missing"
 HUB_CONFLICT = "conflict"
 HUB_LOCKED = "locked"
-HUB_UNAVAILABLE = "store_unavailable"
 HUB_INVALID = "invalid"
 
 

@@ -59,14 +59,3 @@ class AppApiError(Exception):
         if self.message_key is None:
             return self.reason or ""
         return api_error_message(self.message_key, language, self.params)
-
-    def with_status(self, status_code: int) -> AppApiError:
-        """Return the same error answered with a different status code."""
-        return AppApiError(
-            self.code,
-            self.message_key,
-            reason=self.reason,
-            params=self.params,
-            status_code=status_code,
-            context=self.context,
-        )

@@ -33,7 +33,6 @@ TEMPLATE_PATH = BASE_DIR / "templates"
 SAMPLE_COMMANDS_PATH = TEMPLATE_PATH / "sample_commands"
 GITHUB_URL = "https://github.com/"
 GITHUB_APPS_URL_MIN_PARTS = 8
-GITHUB_PROJECT_URL_MIN_PARTS = 7
 CRON_FIELD_COUNT = 5
 HTTP_OK = 200
 GITHUB_USER_LOOKUP_TIMEOUT_SECONDS = 10.0
@@ -78,13 +77,6 @@ class SetupServiceError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-class GitHubProjectReference(BaseModel):
-    project_type: str
-    owner: str
-    project_id: str
-    url: str
 
 
 class GitHubUserReference(BaseModel):
@@ -536,29 +528,6 @@ class SimpleProjectSetupService:
                 )
         updated = _write_default_person_id(config_dir, person_id)
         return ProjectSetupResult(files=[updated] if updated else [])
-
-    def parse_github_project_url(self, url: str) -> GitHubProjectReference:
-        url_parts = url.split("/")
-        if (
-            len(url_parts) < GITHUB_PROJECT_URL_MIN_PARTS
-            or not url.startswith(GITHUB_URL)
-            or url_parts[3] not in ["orgs", "users"]
-            or url_parts[5] != "projects"
-            or url_parts[6] == ""
-        ):
-            raise SetupServiceError(
-                "invalid_github_project_url", "Invalid GitHub project URL."
-            )
-
-        project_type = url_parts[3]
-        owner = url_parts[4]
-        project_id = url_parts[6].split("?")[0]
-        return GitHubProjectReference(
-            project_type=project_type,
-            owner=owner,
-            project_id=project_id,
-            url=f"{GITHUB_URL}{project_type}/{owner}/projects/{project_id}",
-        )
 
     @shared_write_operation
     def write_project(self, config: ProjectSetupInput) -> ProjectSetupResult:

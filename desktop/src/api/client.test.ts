@@ -39,17 +39,15 @@ import {
   startSlackAppRegistration,
   verifySlackTokens,
   subscribeEvents,
-  subscribeLogs,
   updateRuntimeDebug,
   updateTranscriptSettings,
   uploadCommandInputFile,
   uploadMemberAvatar,
   verify,
   type RuntimeEvent,
-  type RuntimeLog,
   type StreamStatus,
 } from "./client";
-import { makeRuntimeEvent, makeRuntimeLog } from "../test/factories";
+import { makeRuntimeEvent } from "../test/factories";
 
 type FetchArgs = { url: string; init: RequestInit };
 
@@ -800,32 +798,6 @@ describe("websocket subscriptions", () => {
 
     unsubscribe();
     expect(socket.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("connects to /logs with the encoded token and parses log messages", () => {
-    configureApi("a b&c", "http://127.0.0.1:8765");
-    const logs: RuntimeLog[] = [];
-    const statuses: StreamStatus[] = [];
-
-    subscribeLogs(
-      (log) => logs.push(log),
-      (status) => statuses.push(status),
-    );
-
-    const socket = MockWebSocket.instances[0];
-    expect(socket.url).toBe("ws://127.0.0.1:8765/logs?token=a%20b%26c");
-    expect(statuses).toEqual(["connecting"]);
-
-    const log = makeRuntimeLog({
-      level: "INFO",
-      message: "hello",
-      trace_id: "r1",
-      span_id: "s1",
-      source: "manual",
-      timestamp: "2026-06-05T00:00:00Z",
-    });
-    socket.onmessage?.({ data: JSON.stringify(log) });
-    expect(logs).toEqual([log]);
   });
 
   it("works without an onStatus callback", () => {

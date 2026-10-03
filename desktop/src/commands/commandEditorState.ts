@@ -161,7 +161,7 @@ export function deriveSaveStatus(
 }
 
 // Build the argument list for a run from the command file's declared/discovered
-// arguments plus free-form extra args, mirroring the catalog run behavior.
+// arguments plus free-form extra args.
 export function buildFileRunArgs(
   file: Pick<CommandFileDetail, "arguments" | "inputs"> | null,
   values: Record<string, string>,

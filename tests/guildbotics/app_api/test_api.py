@@ -1865,8 +1865,6 @@ def test_app_runtime_reload_workspace_env_before_context(monkeypatch, tmp_path) 
 
 def test_app_runtime_updates_transcript_settings(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", raising=False)
     runtime = AppRuntime(EventBus())
 
     status = runtime.update_transcript_settings(

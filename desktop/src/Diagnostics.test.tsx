@@ -19,7 +19,6 @@ import {
   getTranscriptSettings,
   runScenarioDiagnostics,
   subscribeEvents,
-  subscribeLogs,
   updateTranscriptSettings,
   updateRuntimeDebug,
   type ConfigStatus,
@@ -80,7 +79,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getGlobalRecords: vi.fn(),
     troubleshoot: vi.fn(),
     subscribeEvents: vi.fn(),
-    subscribeLogs: vi.fn(),
   };
 });
 
@@ -160,9 +158,6 @@ beforeEach(() => {
       trace_ids: ["trace-1"],
     });
   vi.mocked(subscribeEvents)
-    .mockReset()
-    .mockReturnValue(() => {});
-  vi.mocked(subscribeLogs)
     .mockReset()
     .mockReturnValue(() => {});
 });

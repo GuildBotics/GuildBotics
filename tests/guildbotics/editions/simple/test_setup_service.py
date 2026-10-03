@@ -94,18 +94,6 @@ def test_write_project_does_not_copy_samples_when_commands_exist(
     assert not (config_dir / "commands/translate.md").exists()
 
 
-def test_project_service_parses_github_urls() -> None:
-    service = SimpleProjectSetupService()
-
-    project = service.parse_github_project_url(
-        "https://github.com/orgs/GuildBotics/projects/12?pane=info"
-    )
-
-    assert project.owner == "GuildBotics"
-    assert project.project_id == "12"
-    assert project.url == "https://github.com/orgs/GuildBotics/projects/12"
-
-
 def test_write_person_creates_person_config_and_masks_secrets(tmp_path: Path) -> None:
     config_dir = tmp_path / ".guildbotics/config"
 

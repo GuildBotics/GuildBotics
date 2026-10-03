@@ -295,16 +295,6 @@ def publish_device_record(
     )
 
 
-def read_device_record(
-    device_id: str, workspace_root: Path | None = None
-) -> DeviceRecord | None:
-    """Return one shared device record, or None when the device is unknown."""
-    path = device_record_path(device_id, workspace_root)
-    if not path.exists():
-        return None
-    return DeviceRecord.model_validate_json(path.read_text(encoding="utf-8"))
-
-
 def list_device_records(workspace_root: Path | None = None) -> list[DeviceRecord]:
     """Return every shared device record, ordered by device identifier."""
     root = get_workspace_state_path("devices", workspace_root=workspace_root)

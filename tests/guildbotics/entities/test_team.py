@@ -2,14 +2,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from guildbotics.entities.task import Task
 from guildbotics.entities.team import (
     CommandSchedule,
     Person,
     Project,
-    Role,
     Service,
-    Team,
 )
 
 EXPECTED_SCHEDULE_COUNT = 2
@@ -19,7 +16,7 @@ EXPECTED_SCHEDULE_COUNT = 2
 # -----------------------------
 
 
-def test_project_get_available_services_and_names():
+def test_project_service_names_and_availability():
     project = Project(
         name="p",
         services={
@@ -29,11 +26,9 @@ def test_project_get_available_services_and_names():
         },
     )
 
-    available = project.get_available_services()
-
-    assert Service.FILE_STORAGE in available
-    assert Service.TICKET_MANAGER in available
-    assert Service.CODE_HOSTING_SERVICE not in available
+    assert project.is_available_service(Service.FILE_STORAGE)
+    assert project.is_available_service(Service.TICKET_MANAGER)
+    assert not project.is_available_service(Service.CODE_HOSTING_SERVICE)
     # Name is lower-cased by implementation
     assert project.get_service_name(Service.FILE_STORAGE) == "s3"
 
@@ -90,10 +85,6 @@ def test_project_accepts_description():
 # -----------------------------
 
 
-def make_task(title: str = "t") -> Task:
-    return Task(title=title, description="d")
-
-
 def test_person_get_scheduled_tasks_expands_all_schedules():
     schedules = ["0 9 ? ? ?", "15 10 ? ? ?"]
     person = Person(
@@ -107,25 +98,6 @@ def test_person_get_scheduled_tasks_expands_all_schedules():
     assert len(scheduled) == EXPECTED_SCHEDULE_COUNT
     assert all(s.command == "demo" for s in scheduled)
     assert sorted(s.schedule for s in scheduled) == sorted(schedules)
-
-
-def test_person_get_role_descriptions_filters_when_ids_provided():
-    person = Person(
-        person_id="u1",
-        name="Alice",
-        roles={
-            "dev": Role(id="dev", summary="s", description="Developer"),
-            "qa": Role(id="qa", summary="s", description="QA"),
-        },
-    )
-
-    # All when None
-    all_desc = person.get_role_descriptions()
-    assert all_desc == {"dev": "Developer", "qa": "QA"}
-
-    # Filtered when list provided
-    filtered = person.get_role_descriptions(["qa"])  # only QA
-    assert filtered == {"qa": "QA"}
 
 
 def test_person_secret_helpers(monkeypatch):
@@ -142,34 +114,3 @@ def test_person_secret_helpers(monkeypatch):
     monkeypatch.setenv(env_key, "secret-value")
     assert person.has_secret(key) is True
     assert person.get_secret(key) == "secret-value"
-
-
-# -----------------------------
-# Team tests
-# -----------------------------
-
-
-def test_team_get_role_members_and_available_ids():
-    project = Project(name="p")
-    alice = Person(
-        person_id="u1",
-        name="Alice",
-        roles={
-            "dev": Role(id="dev", summary="", description=""),
-            "reviewer": Role(id="reviewer", summary="", description=""),
-        },
-    )
-    bob = Person(
-        person_id="u2",
-        name="Bob",
-        roles={"dev": Role(id="dev", summary="", description="")},
-    )
-    team = Team(project=project, members=[alice, bob])
-
-    role_members = team.get_role_members()
-    assert set(role_members.keys()) == {"dev", "reviewer"}
-    assert {p.person_id for p in role_members["dev"]} == {"u1", "u2"}
-    assert [p.person_id for p in role_members["reviewer"]] == ["u1"]
-
-    available_ids = team.get_available_role_ids()
-    assert set(available_ids) == {"dev", "reviewer"}

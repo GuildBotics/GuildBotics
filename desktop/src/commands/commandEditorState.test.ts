@@ -4,6 +4,7 @@ import type { CommandFileDetail } from "../api/client";
 import {
   blockingMessageKey,
   buildFileRunArgs,
+  splitCommandLine,
   deriveSaveStatus,
   hasMissingRequiredArgument,
   loadEditorState,
@@ -53,6 +54,25 @@ describe("buildFileRunArgs", () => {
       inputs: { defined_args: "hidden", extra_args: "hidden", message: "optional" },
     });
     expect(buildFileRunArgs(file, { topic: "x" }, "y")).toEqual([]);
+  });
+
+  it("trims defined values and skips blank arguments", () => {
+    expect(buildFileRunArgs(detail(), { topic: " release ", mode: "   " }, "")).toEqual([
+      "release",
+    ]);
+  });
+
+  it("preserves quoted extra arguments", () => {
+    expect(buildFileRunArgs(detail(), { topic: "release" }, 'a "b c" key=value')).toEqual([
+      "release",
+      "a",
+      "b c",
+      "key=value",
+    ]);
+  });
+
+  it("accepts extra arguments when no command metadata is available", () => {
+    expect(buildFileRunArgs(null, { ignored: "x" }, "raw")).toEqual(["raw"]);
   });
 });
 
@@ -117,5 +137,24 @@ describe("editor state persistence", () => {
 
   it("returns defaults without a storage dir", () => {
     expect(loadEditorState(undefined).selectedFileId).toBeNull();
+  });
+});
+
+describe("splitCommandLine", () => {
+  it("splits on whitespace", () => {
+    expect(splitCommandLine("a b   c")).toEqual(["a", "b", "c"]);
+  });
+
+  it("preserves double-quoted segments", () => {
+    expect(splitCommandLine('a "b c" d')).toEqual(["a", "b c", "d"]);
+  });
+
+  it("preserves single-quoted segments", () => {
+    expect(splitCommandLine("a 'b c' d")).toEqual(["a", "b c", "d"]);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(splitCommandLine("")).toEqual([]);
+    expect(splitCommandLine("   ")).toEqual([]);
   });
 });

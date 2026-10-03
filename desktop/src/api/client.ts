@@ -840,13 +840,6 @@ export type MemberDeleteRequest = {
   config_dir: string;
 };
 
-export type RuntimeLog = Correlation & {
-  kind: "log";
-  level: string;
-  message: string;
-  timestamp: string;
-};
-
 export type StreamStatus = "connecting" | "connected" | "disconnected" | "error";
 
 export type RoutineCommandOptionsResponse = {
@@ -2032,21 +2025,6 @@ export function subscribeEvents(
   socket.onopen = () => onStatus?.("connected");
   socket.onmessage = (message) => {
     onEvent(JSON.parse(message.data) as RuntimeEvent);
-  };
-  socket.onerror = () => onStatus?.("error");
-  socket.onclose = () => onStatus?.("disconnected");
-  return () => socket.close();
-}
-
-export function subscribeLogs(
-  onLog: (log: RuntimeLog) => void,
-  onStatus?: (status: StreamStatus) => void,
-): () => void {
-  const socket = new WebSocket(`${websocketBase()}/logs?token=${encodeURIComponent(sessionToken)}`);
-  onStatus?.("connecting");
-  socket.onopen = () => onStatus?.("connected");
-  socket.onmessage = (message) => {
-    onLog(JSON.parse(message.data) as RuntimeLog);
   };
   socket.onerror = () => onStatus?.("error");
   socket.onclose = () => onStatus?.("disconnected");

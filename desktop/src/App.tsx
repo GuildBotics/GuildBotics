@@ -82,7 +82,6 @@ import {
   updateTranscriptSettings,
   verify as verifyConfiguration,
   type ChatReceiveResetResponse,
-  type CommandOption,
   type MemoryEvent,
   type RuntimeActiveWork,
   type RuntimeEvent,
@@ -3417,40 +3416,6 @@ export function CommandRunDetails({
       />
     </>
   );
-}
-
-export function buildCommandArgs(
-  option: CommandOption | null,
-  values: Record<string, string>,
-  extraArgs: string,
-): string[] {
-  const args: string[] = [];
-  if (option && option.inputs.defined_args !== "hidden") {
-    for (const argument of option.arguments) {
-      const value = values[argument.name]?.trim();
-      if (!value) {
-        continue;
-      }
-      if (argument.kind === "positional") {
-        args.push(value);
-      } else {
-        args.push(`${argument.name}=${value}`);
-      }
-    }
-  }
-  if (!option || option.inputs.extra_args === "optional") {
-    args.push(...splitCommandLine(extraArgs));
-  }
-  return args;
-}
-
-export function splitCommandLine(value: string): string[] {
-  const args: string[] = [];
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  for (const match of value.matchAll(pattern)) {
-    args.push(match[1] ?? match[2] ?? match[3] ?? "");
-  }
-  return args.filter(Boolean);
 }
 
 export function upsertCommandRecord(

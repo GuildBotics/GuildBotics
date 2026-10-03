@@ -77,11 +77,3 @@ def get_placeholders_from_args(
             placeholders[f"arg{i}"] = str(arg)
             placeholders[f"{i}"] = str(arg)
     return placeholders
-
-
-def get_body_from_prompt(prompt: dict, args: list[str]) -> str:
-    template_engine = prompt.get("template_engine", "default")
-    placeholders = get_placeholders_from_args(args)
-    return replace_placeholders(
-        prompt.get("body", "").strip(), placeholders, template_engine
-    )

@@ -16,17 +16,6 @@ def test_classvars_exist_and_values():
     assert Message.ASSISTANT == "Assistant"
 
 
-def test_to_simple_dict_user_and_assistant():
-    # User authored message
-    m_user = Message(content="hello", author="alice", author_type=Message.USER)
-    d_user = m_user.to_simple_dict()
-    assert d_user == {"User": "hello"}
-    # Assistant authored message
-    m_asst = Message(content="hi there", author="bot", author_type=Message.ASSISTANT)
-    d_asst = m_asst.to_simple_dict()
-    assert d_asst == {"Assistant": "hi there"}
-
-
 def test_reaction_basic_construction():
     # Defaults
     r_default = Reaction()

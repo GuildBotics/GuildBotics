@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import ts from "typescript";
 
 import i18n, {
   followAppLanguage,
@@ -128,6 +129,41 @@ describe("i18n resources", () => {
 
     expect(missingInJa).toEqual([]);
     expect(missingInEn).toEqual([]);
+  });
+
+  it("defines every literal translation used by the application in both languages", () => {
+    const sources = import.meta.glob<string>(["./**/*.ts", "./**/*.tsx"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    const keys = new Set<string>();
+    for (const [path, source] of Object.entries(sources)) {
+      if (/\.(test|spec)\./.test(path) || path.startsWith("./test/")) continue;
+      const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node)) {
+          const name = node.expression.getText(tree);
+          const key = node.arguments[0];
+          if ((name === "t" || name === "i18n.t") && key && ts.isStringLiteral(key)) {
+            keys.add(key.text);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(tree);
+    }
+
+    expect(keys.size).toBeGreaterThan(0);
+    for (const key of keys) {
+      for (const language of ["en", "ja"]) {
+        // Plural calls use a base key whose resources end in _one or _other.
+        const resource =
+          i18n.getResource(language, "translation", key) ??
+          i18n.getResource(language, "translation", `${key}_other`);
+        expect(resource, `${language}:${key}`).toBeTypeOf("string");
+      }
+    }
   });
 
   it("gives every assistant chat namespace the same leaf keys", () => {

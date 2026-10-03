@@ -91,21 +91,6 @@ class Project(BaseModel):
         """
         return self.get_service_name(service) != ""
 
-    def get_available_services(self) -> list[Service]:
-        """
-        Get a list of available services that can be created by this factory.
-        Returns:
-            list[Service]: A list of available services.
-        """
-        available_services = []
-        if self.is_available_service(Service.FILE_STORAGE):
-            available_services.append(Service.FILE_STORAGE)
-        if self.is_available_service(Service.TICKET_MANAGER):
-            available_services.append(Service.TICKET_MANAGER)
-        if self.is_available_service(Service.CODE_HOSTING_SERVICE):
-            available_services.append(Service.CODE_HOSTING_SERVICE)
-        return available_services
-
     def _get_language(self) -> Language:
         if self._language is None:
             tag = "en"
@@ -312,25 +297,6 @@ class Person(BaseModel):
             )
         return scheduled_commands
 
-    def get_role_descriptions(
-        self, role_ids: list[str] | None = None
-    ) -> dict[str, str]:
-        """
-        Get a description of the person's roles.
-        Args:
-            role_ids (list[str] | None): A list of role IDs to filter the descriptions. If None, all roles are included.
-
-        Returns:
-            dict[str, str]: A dictionary mapping role IDs to their descriptions.
-        """
-        if role_ids is None:
-            role_ids = list(self.roles.keys())
-        return {
-            role_id: role.description
-            for role_id, role in self.roles.items()
-            if role_id in role_ids
-        }
-
     # Person-scoped env keys (``to_person_env_key``) whose values are secrets;
     # IDs and file paths stay in plain configuration. GITHUB_PRIVATE_KEY holds
     # the App PEM content itself and is never published to the environment
@@ -423,27 +389,3 @@ class Team(BaseModel):
             if member.is_active and member.person_type != "human"
         )
         return candidates[0] if candidates else ""
-
-    def get_role_members(self) -> dict[str, list[Person]]:
-        """
-        Get a dictionary mapping role_ids to their members.
-
-        Returns:
-            dict[str, list[Person]]: A dictionary where keys are role IDs and values are lists of member objects.
-        """
-        role_members: dict[str, list[Person]] = {}
-        for member in self.members:
-            for role_id in member.roles:
-                if role_id not in role_members:
-                    role_members[role_id] = []
-                role_members[role_id].append(member)
-        return role_members
-
-    def get_available_role_ids(self) -> list[str]:
-        """
-        Get a list of all available roles in the team.
-
-        Returns:
-            list[str]: A list of role IDs representing the available roles.
-        """
-        return list(self.get_role_members().keys())
