@@ -3002,6 +3002,7 @@ function MembersSection({
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const hasActiveMember = activeMemberCount > 0;
+  const changedSaveHintId = useId();
   const [mode, setMode] = useState<"idle" | "add" | "edit">(initialMemberId ? "edit" : "idle");
   const [editingPersonId, setEditingPersonId] = useState<string | null>(initialMemberId ?? null);
   const [activeTab, setActiveTab] = useState<string | null>(initialTab ?? "basic");
@@ -4974,15 +4975,25 @@ function MembersSection({
                   </Button>
                 ) : null}
               </Box>
-              <Button
-                loading={
-                  savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
-                }
-                disabled={!canSubmit || memberChanged || memberLoading}
-                onClick={() => void handleSaveMember()}
-              >
-                {formMode === "edit" ? t("setup.members.saveButton") : t("setup.members.addButton")}
-              </Button>
+              <Stack gap="xs" align="flex-end">
+                {memberChanged ? (
+                  <Text id={changedSaveHintId} size="sm" c="dimmed">
+                    {t("setup.members.changedSaveHint")}
+                  </Text>
+                ) : null}
+                <Button
+                  loading={
+                    savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
+                  }
+                  disabled={!canSubmit || memberChanged || memberLoading}
+                  aria-describedby={memberChanged ? changedSaveHintId : undefined}
+                  onClick={() => void handleSaveMember()}
+                >
+                  {formMode === "edit"
+                    ? t("setup.members.saveButton")
+                    : t("setup.members.addButton")}
+                </Button>
+              </Stack>
             </Group>
           </>
         ) : null}

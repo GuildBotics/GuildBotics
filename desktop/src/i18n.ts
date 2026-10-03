@@ -1413,7 +1413,8 @@ const resources = {
           editingBadge: "Editing: {{id}}",
           changedTitle: "This member's settings have changed",
           changedBody:
-            "The saved settings changed while this form was open. Your entries are still here. Reload the latest settings to replace these entries before saving.",
+            "The saved settings changed while this form was open. Your entries are still here. Reload the latest settings to replace these entries before saving. This replaces entries in all tabs, including AI settings, GitHub, and Slack.",
+          changedSaveHint: "Settings have changed. Reload the latest settings above before saving.",
           reloadButton: "Reload latest settings",
           loadError: "Failed to load member details",
           resolveError: "Failed to resolve member identity",
@@ -3217,7 +3218,9 @@ const resources = {
           editingBadge: "編集中: {{id}}",
           changedTitle: "このメンバーの設定が変更されました",
           changedBody:
-            "このフォームを開いた後に、保存された設定が変更されました。入力はそのまま残っています。保存する前に、最新の設定を再読込して入力を置き換えてください。",
+            "このフォームを開いた後に、保存された設定が変更されました。入力はそのまま残っています。保存する前に、最新の設定を再読込して入力を置き換えてください。AI 設定・GitHub・Slack など、すべてのタブの入力が置き換わります。",
+          changedSaveHint:
+            "設定が変更されたため保存できません。上の案内から最新の設定を再読込してください。",
           reloadButton: "最新の設定を再読込",
           loadError: "メンバー詳細の取得に失敗しました",
           resolveError: "メンバー識別子の解決に失敗しました",

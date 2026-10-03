@@ -2592,6 +2592,10 @@ function lastMemberAddRequest() {
 }
 
 describe("MembersSection", () => {
+  afterEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
   it("can reload a deep-linked member after StrictMode remounts the subscription", async () => {
     const path = "team/members/alice/person.yml";
     vi.mocked(getMemberConfig).mockResolvedValue(
@@ -2620,6 +2624,7 @@ describe("MembersSection", () => {
 
     expect(name).toHaveValue("Unsaved name");
     expect(screen.queryByText(t("setup.members.changedTitle"))).not.toBeInTheDocument();
+    expect(screen.queryByText(t("setup.members.changedSaveHint"))).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeEnabled();
   });
 
@@ -2655,9 +2660,15 @@ describe("MembersSection", () => {
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeEnabled();
   });
 
-  it.each([false, true])(
-    "refreshes the member list after synchronization and preserves the draft (rejected: %s)",
-    async (rejected) => {
+  it.each(
+    [false, true].flatMap((rejected) =>
+      (["en", "ja"] as const).map((language) => ({ rejected, language })),
+    ),
+  )(
+    "refreshes the member list and explains reloading ($language, rejected: $rejected)",
+    async ({ rejected, language }) => {
+      await i18n.changeLanguage(language);
+      const t = i18n.getFixedT(language);
       const user = userEvent.setup();
       const revisionPath = "team/members/alice/person.yml";
       vi.mocked(getMemberConfig).mockResolvedValue(
@@ -2707,13 +2718,25 @@ describe("MembersSection", () => {
       const list = screen.getByRole("list", { name: t("setup.members.title") });
       expect(await within(list).findByText("Adopted name (alice)")).toBeInTheDocument();
       expect(await screen.findByText(t("setup.members.changedTitle"))).toBeInTheDocument();
+      const body = screen.getByText(t("setup.members.changedBody"));
+      expect(body).toHaveTextContent(language === "en" ? "all tabs" : "すべてのタブ");
+      for (const tab of ["AI", "GitHub", "Slack"]) expect(body).toHaveTextContent(tab);
       expect(name).toHaveValue("Unsaved name");
-      expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
+      const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
+      expect(save).toBeDisabled();
+      expect(save).toHaveAccessibleDescription(t("setup.members.changedSaveHint"));
+      expect(
+        within(save.closest(".form-footer") as HTMLElement).getByText(
+          t("setup.members.changedSaveHint"),
+        ),
+      ).toBeInTheDocument();
       expect(updateMemberConfig).not.toHaveBeenCalled();
 
       await user.click(screen.getByRole("button", { name: t("setup.members.reloadButton") }));
       await waitFor(() => expect(name).toHaveValue("Adopted name"));
       expect(screen.queryByText(t("setup.members.changedTitle"))).not.toBeInTheDocument();
+      expect(screen.queryByText(t("setup.members.changedSaveHint"))).not.toBeInTheDocument();
+      expect(save).not.toHaveAttribute("aria-describedby");
       await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
       await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
       expect(vi.mocked(updateMemberConfig).mock.calls[0][1].expected_revisions).toEqual({
