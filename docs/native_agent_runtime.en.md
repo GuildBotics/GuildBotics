@@ -112,7 +112,11 @@ itself is not in the snapshot: every command's microVM binds the running process
 `guildbotics` package (the checkout when running from source, the process's
 own build when packaged) read-only at `/opt/guildbotics/code/guildbotics`.
 It is not bound at its host path so that a turn working in the GuildBotics
-checkout itself does not find its `guildbotics/` covered read-only.
+checkout itself does not find its `guildbotics/` covered read-only. Only
+`/opt/guildbotics/venv` finds it there, through a `guildbotics.pth` the build
+writes into its `site-packages`; GuildBotics' code runs with `python -B` and
+no `PYTHONPATH`, so a project a turn tests with its own Python (the
+GuildBotics checkout among them) imports its own code, not the bound one.
 
 With the default base image (`node:22.23.2-bookworm`, arm64), the snapshot
 build takes about 35 s on macOS (base image already pulled). A snapshot holds

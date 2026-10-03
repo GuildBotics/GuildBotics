@@ -32,7 +32,7 @@ from guildbotics.intelligences.agent_environment.snapshot import (
 from guildbotics.intelligences.agent_environment.spec import build_environment_spec
 from guildbotics.intelligences.agent_environment.status import device_status
 from guildbotics.intelligences.agent_runtime.command_guest import EnvironmentGuest
-from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, CODE_ROOT
+from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 
 #: The home the snapshot was built with; the suite's own fixtures move HOME.
@@ -43,9 +43,9 @@ pytestmark = [
     pytest.mark.asyncio,
 ]
 
-#: How GuildBotics' code is run inside: the snapshot's Python, pointed at the
-#: mount, and nothing written beside the code (the mount is read-only).
-_PYTHON = f"PYTHONPATH={CODE_ROOT} PYTHONDONTWRITEBYTECODE=1 {VENV}/bin/python"
+#: How GuildBotics' code is run inside: the snapshot's Python, which finds the
+#: mount by itself, and nothing written beside the code (the mount is read-only).
+_PYTHON = f"{VENV}/bin/python -B"
 
 #: The inline ``to_pdf`` command, run the way the command runner runs it.
 _TO_PDF = """

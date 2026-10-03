@@ -88,7 +88,10 @@ GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコー�
 プロセス自身の`guildbotics`パッケージ（ソースから動かしているときはチェックアウト、配布版では自分の
 build）を、どのコマンドのmicroVMにも`/opt/guildbotics/code/guildbotics`へ読み取り専用でbindします。hostと
 同じパスにしないのは、GuildBoticsのチェックアウト自身を作業ディレクトリにしたturnで、その中の
-`guildbotics/`が読み取り専用で覆われないようにするためです。
+`guildbotics/`が読み取り専用で覆われないようにするためです。このコードを見つけるのは
+`/opt/guildbotics/venv`だけで、ビルドがその`site-packages`へ書く`guildbotics.pth`によります。
+GuildBoticsのコードは`PYTHONPATH`を使わず`python -B`で動かすので、turnが自分のPythonでテストする
+プロジェクト（GuildBoticsのチェックアウトも含む）は、bindされたコードではなく自分のコードをimportします。
 
 既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルドは、macOSで約35秒
 （ベースイメージ取得済み）です。snapshotが持つのはベースイメージに書き足した分（書き込み層
