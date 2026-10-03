@@ -111,14 +111,21 @@ async function lookUpLocalHub(page: Page): Promise<void> {
  * far side actually holds rather than against its own expectations.
  */
 function pushFromAnotherDevice(workspaceId: string, description: string): string {
+  return pushFileFromAnotherDevice(workspaceId, "config/team/project.yml", (content) =>
+    content.replace(/^description: .*$/m, `description: ${description}`),
+  );
+}
+
+function pushFileFromAnotherDevice(
+  workspaceId: string,
+  path: string,
+  update: (content: string) => string,
+): string {
   const clone = mkdtempSync(join(tmpdir(), "guildbotics-e2e-other-device-"));
   git(clone, "clone", hubRepository(workspaceId), ".");
-  const project = join(clone, "config", "team", "project.yml");
-  writeFileSync(
-    project,
-    readFileSync(project, "utf-8").replace(/^description: .*$/m, `description: ${description}`),
-  );
-  git(clone, "add", "config/team/project.yml");
+  const file = join(clone, path);
+  writeFileSync(file, update(readFileSync(file, "utf-8")));
+  git(clone, "add", path);
   git(clone, "commit", "-m", "from another device");
   git(clone, "push", "origin", "HEAD:main");
   const head = git(clone, "rev-parse", "HEAD").trim();
@@ -253,6 +260,38 @@ test("⑧ the set aside change is described but never handed over", async ({ pag
   await expect(page.getByText("config/team/project.yml").first()).toBeVisible();
   // What it held is not shown here, only where to find it.
   await expect(page.getByText(/recovery steps in the README/)).toBeVisible();
+});
+
+test("⑧ refreshes an open member editor after a competing change is set aside", async ({
+  page,
+}) => {
+  const { workspace_id: workspaceId } = await syncStatus();
+  const memberPath = "config/team/members/local-agent/person.yml";
+  const memberFile = join(ctx.configDir, "team", "members", "local-agent", "person.yml");
+  await page.goto("/#/setup?section=members&person_id=local-agent");
+  const name = page.getByLabel("Display name", { exact: true });
+  await expect(name).toHaveValue("Local Agent");
+  await name.fill("Unsaved member draft");
+
+  pushFileFromAnotherDevice(workspaceId as string, memberPath, (content) =>
+    content.replace(/^name: .*$/m, "name: Member from another device"),
+  );
+  writeFileSync(
+    memberFile,
+    readFileSync(memberFile, "utf-8").replace(/^name: .*$/m, "name: Member from this device"),
+  );
+  expect((await api("/workspace/sync/retry", { method: "POST" })).status).toBe(200);
+
+  const list = page.getByRole("list", { name: "Members", exact: true });
+  await expect(list.getByText("Member from another device (local-agent)")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText("This member's settings have changed")).toBeVisible();
+  await expect(name).toHaveValue("Unsaved member draft");
+  await page.getByRole("button", { name: "Reload latest settings" }).click();
+  await expect(name).toHaveValue("Member from another device");
+  await expect(page.getByText("This member's settings have changed")).toHaveCount(0);
+  expect(readFileSync(memberFile, "utf-8")).toContain("name: Member from another device");
 });
 
 test("⑩ takes in a change pushed straight to the hub, with nothing asked of the user", async ({

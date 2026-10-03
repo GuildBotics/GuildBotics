@@ -3427,24 +3427,47 @@ function MembersSection({
 
   // What the member form was composed against, sent back with the save so an
   // edit that arrived from another machine meanwhile is not replaced unseen.
-  const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions>({});
+  const [memberRevisions, setMemberRevisions] = useState<ConfigRevisions | null>(null);
+  const currentMember = useQuery({
+    queryKey: ["member-config", editingPersonId],
+    queryFn: () => getMemberConfig(editingPersonId!),
+    enabled: mode === "edit" && Boolean(editingPersonId),
+    staleTime: Infinity,
+  });
+  // Only a newly opened form takes the query's values. Background refreshes
+  // compare revisions below and leave all unsaved fields in place.
+  if (
+    mode === "edit" &&
+    memberRevisions === null &&
+    currentMember.isSuccess &&
+    !currentMember.isFetching
+  ) {
+    setMemberRevisions(currentMember.data.revisions);
+    fillFormFromMember(currentMember.data);
+  }
+  const memberChanged = Boolean(
+    memberRevisions &&
+    currentMember.data &&
+    (Object.keys(memberRevisions).length !== Object.keys(currentMember.data.revisions).length ||
+      Object.entries(memberRevisions).some(
+        ([path, revision]) => currentMember.data.revisions[path] !== revision,
+      )),
+  );
   const memberConfigMutation = useMutation({
-    mutationFn: getMemberConfig,
+    mutationFn: async (memberId: string) => {
+      // An earlier background read must not replace the explicitly reloaded snapshot.
+      await queryClient.cancelQueries({ queryKey: ["member-config", memberId] });
+      return getMemberConfig(memberId);
+    },
     onSuccess: (snapshot) => {
+      queryClient.setQueryData(["member-config", snapshot.person_id], snapshot);
       setMemberRevisions(snapshot.revisions);
       fillFormFromMember(snapshot);
       setMode("edit");
     },
   });
-  const requestMemberConfig = memberConfigMutation.mutate;
-  const initialMemberRequested = useRef(false);
-  useEffect(() => {
-    if (!initialMemberId || initialMemberRequested.current) {
-      return;
-    }
-    initialMemberRequested.current = true;
-    requestMemberConfig(initialMemberId);
-  }, [initialMemberId, requestMemberConfig]);
+  const memberLoading =
+    memberConfigMutation.isPending || (mode === "edit" && memberRevisions === null);
   const resolveMutation = useMutation({
     mutationFn: resolveMemberIdentity,
   });
@@ -3477,10 +3500,14 @@ function MembersSection({
       originalPersonId: string;
       body: MemberConfigUpdateRequest;
     }) => updateMemberConfig(originalPersonId, body),
-    onSuccess: (written) => {
+    onSuccess: async (written) => {
       // The screen stays open on the member that was just saved, so without
       // this its next save would be composed against the revision it replaced.
+      await queryClient.cancelQueries({ queryKey: ["member-config", editingPersonId] });
       setMemberRevisions(written.revisions);
+      queryClient.setQueryData<MemberConfig>(["member-config", editingPersonId], (current) =>
+        current ? { ...current, revisions: written.revisions } : current,
+      );
       queryClient.invalidateQueries({ queryKey: ["team"] });
       queryClient.invalidateQueries({ queryKey: ["command-options"] });
       queryClient.invalidateQueries({ queryKey: ["scheduler"] });
@@ -3819,7 +3846,7 @@ function MembersSection({
   };
 
   const handleSaveMember = async () => {
-    if (!canSubmit) {
+    if (!canSubmit || memberChanged || memberLoading) {
       return;
     }
     if (memberIntelligenceSaveRef.current && !memberIntelligenceSaveRef.current.valid) {
@@ -3830,6 +3857,7 @@ function MembersSection({
     try {
       const request = buildMemberRequest();
       if (formMode === "edit" && editingPersonId) {
+        if (!memberRevisions) return;
         await updateMemberMutation.mutateAsync({
           originalPersonId: editingPersonId,
           body: {
@@ -3881,10 +3909,11 @@ function MembersSection({
 
   const startEditMode = (memberId: string) => {
     memberDiagnosticsMutation.reset();
-    setMemberRevisions({});
+    setMemberRevisions(null);
     setEditingPersonId(memberId);
+    setMode("edit");
     showTab(initialTab ?? "basic");
-    memberConfigMutation.mutate(memberId);
+    void queryClient.invalidateQueries({ queryKey: ["member-config", memberId] });
   };
 
   const handleDeleteMember = async () => {
@@ -4032,6 +4061,32 @@ function MembersSection({
             <Text fw={600}>
               {formMode === "edit" ? t("setup.members.editTitle") : t("setup.members.addTitle")}
             </Text>
+            {formMode === "edit" && memberChanged ? (
+              <Alert color="warning" title={t("setup.members.changedTitle")}>
+                <Stack gap="xs">
+                  <Text size="sm">{t("setup.members.changedBody")}</Text>
+                  <Button
+                    variant="light"
+                    size="xs"
+                    loading={memberConfigMutation.isPending}
+                    onClick={() => {
+                      if (!editingPersonId) return;
+                      memberConfigMutation.mutate(editingPersonId, {
+                        onSuccess: () => {
+                          showTab("basic");
+                          setOpenedTabs(new Set(["basic"]));
+                          void queryClient.invalidateQueries({
+                            queryKey: ["intelligence-config", editingPersonId],
+                          });
+                        },
+                      });
+                    }}
+                  >
+                    {t("setup.members.reloadButton")}
+                  </Button>
+                </Stack>
+              </Alert>
+            ) : null}
             {/* Only the shown panel is mounted, except the ones whose editors
                 keep unsaved state of their own (AI settings, GitHub and Slack app
                 registration), which stay mounted once opened. They are hidden
@@ -4923,7 +4978,7 @@ function MembersSection({
                 loading={
                   savingMember || addMemberMutation.isPending || updateMemberMutation.isPending
                 }
-                disabled={!canSubmit}
+                disabled={!canSubmit || memberChanged || memberLoading}
                 onClick={() => void handleSaveMember()}
               >
                 {formMode === "edit" ? t("setup.members.saveButton") : t("setup.members.addButton")}
@@ -4931,9 +4986,9 @@ function MembersSection({
             </Group>
           </>
         ) : null}
-        {memberConfigMutation.error ? (
+        {memberConfigMutation.error || currentMember.error ? (
           <Alert color="danger" title={t("setup.members.loadError")}>
-            {memberConfigMutation.error.message}
+            {(memberConfigMutation.error ?? currentMember.error)?.message}
           </Alert>
         ) : null}
         {resolveMutation.error ? (

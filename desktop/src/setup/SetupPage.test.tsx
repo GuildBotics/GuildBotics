@@ -1,4 +1,5 @@
 import { createTheme } from "@mantine/core";
+import { StrictMode } from "react";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -26,6 +27,7 @@ import {
   getProjectStatusOptions,
   getRoleOptions,
   getTeam,
+  getWorkspaceSyncStatus,
   initConfig,
   resolveMemberIdentity,
   runScenarioDiagnostics,
@@ -47,6 +49,7 @@ import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } fr
 import i18n from "../i18n";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
+import { SyncAlerts } from "../sync/SyncAlerts";
 import {
   type ScheduledCommandDraft,
   SetupPage,
@@ -1476,7 +1479,7 @@ describe("SetupPage", () => {
   });
 });
 
-function renderSetupPage(path: string) {
+function renderSetupPage(path: string, withSyncAlerts = false, strict = false) {
   const theme = createTheme({
     primaryColor: "dark",
     defaultRadius: "md",
@@ -1484,16 +1487,19 @@ function renderSetupPage(path: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const content = (
     <TestMantineProvider theme={theme}>
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
+          {withSyncAlerts ? <SyncAlerts /> : null}
           <SetupPage />
         </MemoryRouter>
       </QueryClientProvider>
-    </TestMantineProvider>,
+    </TestMantineProvider>
   );
+  const view = render(strict ? <StrictMode>{content}</StrictMode> : content);
+  return { ...view, queryClient };
 }
 
 function environmentStatus(
@@ -1560,6 +1566,7 @@ function environmentStatus(
 
 function memberConfig() {
   return {
+    revisions: {},
     person_id: "alice",
     person_name: "Alice",
     person_type: "agent",
@@ -2585,6 +2592,136 @@ function lastMemberAddRequest() {
 }
 
 describe("MembersSection", () => {
+  it("can reload a deep-linked member after StrictMode remounts the subscription", async () => {
+    const path = "team/members/alice/person.yml";
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ revisions: { [path]: "before" } }),
+    );
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", false, true);
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    vi.mocked(getMemberConfig).mockResolvedValue(
+      memberConfigDetail({ person_name: "Adopted", revisions: { [path]: "adopted" } }),
+    );
+    await queryClient.invalidateQueries({ queryKey: ["member-config"] });
+    expect(await screen.findByText(t("setup.members.changedTitle"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.members.reloadButton") })).toBeEnabled();
+  });
+
+  it("keeps entries when synchronization leaves this member unchanged", async () => {
+    const snapshot = memberConfigDetail({ revisions: { "team/members/alice/person.yml": "same" } });
+    vi.mocked(getMemberConfig).mockResolvedValue(snapshot);
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    fireEvent.change(name, { target: { value: "Unsaved name" } });
+
+    await queryClient.invalidateQueries({ queryKey: ["member-config"] });
+
+    expect(name).toHaveValue("Unsaved name");
+    expect(screen.queryByText(t("setup.members.changedTitle"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeEnabled();
+  });
+
+  it("does not mark its own save stale when an older background read finishes", async () => {
+    const user = userEvent.setup();
+    const path = "team/members/alice/person.yml";
+    const snapshot = memberConfigDetail({ revisions: { [path]: "before" } });
+    let finishRead: (snapshot: MemberConfig) => void = () => {};
+    const delayedRead = new Promise<MemberConfig>((resolve) => {
+      finishRead = resolve;
+    });
+    vi.mocked(getMemberConfig).mockResolvedValueOnce(snapshot).mockReturnValueOnce(delayedRead);
+    vi.mocked(updateMemberConfig).mockResolvedValue(configWriteResponse({ [path]: "saved" }));
+    const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice");
+    const name = await screen.findByLabelText(t("setup.members.personName"));
+    await waitFor(() => expect(name).toHaveValue("Alice"));
+    fireEvent.change(name, { target: { value: "Own saved name" } });
+    void queryClient.invalidateQueries({ queryKey: ["member-config"] });
+    await waitFor(() => expect(getMemberConfig).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+    await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: t("setup.members.saveButton") }),
+      ).not.toHaveAttribute("data-loading"),
+    );
+    finishRead(snapshot);
+    await delayedRead;
+
+    expect(name).toHaveValue("Own saved name");
+    expect(screen.queryByText(t("setup.members.changedTitle"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeEnabled();
+  });
+
+  it.each([false, true])(
+    "refreshes the member list after synchronization and preserves the draft (rejected: %s)",
+    async (rejected) => {
+      const user = userEvent.setup();
+      const revisionPath = "team/members/alice/person.yml";
+      vi.mocked(getMemberConfig).mockResolvedValue(
+        memberConfigDetail({ revisions: { [revisionPath]: "before" } }),
+      );
+      const sync = {
+        ...(await getWorkspaceSyncStatus()),
+        enabled: true,
+        workspace_id: "workspace-a",
+        local_head: "before",
+        rejected_changes: [],
+      };
+      vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(sync);
+      const { queryClient } = renderSetupPage("/setup?section=members&person_id=alice", true);
+      const name = await screen.findByLabelText(t("setup.members.personName"));
+      await waitFor(() => expect(name).toHaveValue("Alice"));
+      await waitFor(() => expect(queryClient.getQueryData(["workspace-sync"])).toEqual(sync));
+      fireEvent.change(name, { target: { value: "Unsaved name" } });
+
+      const adopted = memberConfigDetail({
+        person_name: "Adopted name",
+        revisions: { [revisionPath]: "adopted" },
+      });
+      vi.mocked(getMemberConfig).mockResolvedValue(adopted);
+      const team = await getTeam();
+      vi.mocked(getTeam).mockResolvedValue({
+        ...team,
+        members: team.members.map((member) =>
+          member.person_id === "alice" ? { ...member, name: "Adopted name" } : member,
+        ),
+      });
+      // Deliver the next polling response without navigating or focusing the window.
+      queryClient.setQueryData(["workspace-sync"], {
+        ...sync,
+        local_head: "adopted",
+        rejected_changes: rejected
+          ? [
+              {
+                rejection_id: "held",
+                occurred_at: "2026-10-03T00:00:00Z",
+                paths: [`config/${revisionPath}`],
+              },
+            ]
+          : [],
+      });
+
+      const list = screen.getByRole("list", { name: t("setup.members.title") });
+      expect(await within(list).findByText("Adopted name (alice)")).toBeInTheDocument();
+      expect(await screen.findByText(t("setup.members.changedTitle"))).toBeInTheDocument();
+      expect(name).toHaveValue("Unsaved name");
+      expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
+      expect(updateMemberConfig).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: t("setup.members.reloadButton") }));
+      await waitFor(() => expect(name).toHaveValue("Adopted name"));
+      expect(screen.queryByText(t("setup.members.changedTitle"))).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
+      await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(updateMemberConfig).mock.calls[0][1].expected_revisions).toEqual({
+        [revisionPath]: "adopted",
+      });
+    },
+  );
+
   it("shows the add form when there are no members", async () => {
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },

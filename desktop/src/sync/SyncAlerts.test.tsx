@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getWorkspaceSecrets,
@@ -70,9 +70,10 @@ const held = {
   paths: ["config/team/project.yml"],
 };
 
-function renderAlerts() {
+function renderAlerts(initial?: WorkspaceSyncStatus) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  if (initial) client.setQueryData(["workspace-sync"], initial);
+  const view = render(
     <QueryClientProvider client={client}>
       <TestMantineProvider>
         <MemoryRouter>
@@ -81,11 +82,57 @@ function renderAlerts() {
       </TestMantineProvider>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getWorkspaceSecrets).mockResolvedValue(secrets());
+});
+
+afterEach(() => vi.useRealTimers());
+
+describe("member reads after synchronization", () => {
+  it.each([
+    ["an adopted head", { local_head: "adopted" }, true],
+    ["a newly set aside change", { rejected_changes: [held] }, true],
+    ["the same head with new progress", { last_success_at: "2026-10-03T00:00:00Z" }, false],
+    ["a different workspace", { workspace_id: "another-workspace", local_head: "other" }, false],
+  ] as const)("refreshes only when needed: %s", async (_label, next, changed) => {
+    const initial = status({ local_head: "original" });
+    vi.mocked(getWorkspaceSyncStatus).mockResolvedValue(initial);
+    const { client } = renderAlerts(initial);
+    await waitFor(() => expect(client.getQueryData(["workspace-sync"])).toEqual(initial));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await act(async () => client.setQueryData(["workspace-sync"], { ...initial, ...next }));
+
+    await waitFor(() =>
+      expect(invalidate.mock.calls.map(([filter]) => filter?.queryKey)).toEqual(
+        changed ? [["team"], ["member-config"]] : [],
+      ),
+    );
+    invalidate.mockClear();
+    await act(async () => client.setQueryData(["workspace-sync"], { ...initial, ...next }));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("notices an adopted head on the next five-second poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(getWorkspaceSyncStatus)
+      .mockResolvedValueOnce(status({ local_head: "original" }))
+      .mockResolvedValue(status({ local_head: "adopted" }));
+    const { client } = renderAlerts();
+    await waitFor(() =>
+      expect(client.getQueryData(["workspace-sync"])).toMatchObject({ local_head: "original" }),
+    );
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["team"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["member-config"] });
+  });
 });
 
 describe("the synchronization warning band", () => {

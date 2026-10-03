@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { NavLink } from "react-router";
 import { TriangleAlert } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import { getWorkspaceSecrets, getWorkspaceSyncStatus, retryWorkspaceSync } from "../api/client";
 import { SECRETS_QUERY_KEY, SECRETS_REFETCH_MS, secretAlert } from "./secretState";
@@ -32,6 +33,24 @@ export function SyncAlerts() {
     queryFn: getWorkspaceSyncStatus,
     refetchInterval: 5000,
   });
+  // A head change includes both adoption and reconciliation. Rejections are
+  // also observed because a short-lived local head can fall between polls.
+  // Refresh reads, never the editable form: it compares its own revisions.
+  const previous = useRef<{ workspace: string | null; revision: string } | null>(null);
+  useEffect(() => {
+    if (!status.data) return;
+    const workspace = status.data.workspace_id;
+    const revision = JSON.stringify([
+      status.data.local_head,
+      status.data.rejected_changes.map((change) => change.rejection_id).sort(),
+    ]);
+    const last = previous.current;
+    previous.current = { workspace, revision };
+    if (last?.workspace === workspace && last.revision !== revision) {
+      void queryClient.invalidateQueries({ queryKey: ["team"] });
+      void queryClient.invalidateQueries({ queryKey: ["member-config"] });
+    }
+  }, [queryClient, status.data]);
   const retry = useMutation({
     mutationFn: retryWorkspaceSync,
     onSuccess: (next) => queryClient.setQueryData(["workspace-sync"], next),

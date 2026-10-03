@@ -1411,6 +1411,10 @@ const resources = {
           deleteConfirmBody:
             "This will delete {{name}}'s member settings and related secrets from the OS secret store. This action cannot be undone.",
           editingBadge: "Editing: {{id}}",
+          changedTitle: "This member's settings have changed",
+          changedBody:
+            "The saved settings changed while this form was open. Your entries are still here. Reload the latest settings to replace these entries before saving.",
+          reloadButton: "Reload latest settings",
           loadError: "Failed to load member details",
           resolveError: "Failed to resolve member identity",
           addError: "Failed to add member",
@@ -3211,6 +3215,10 @@ const resources = {
           deleteConfirmBody:
             "{{name}} のメンバー設定と OS 秘密ストア内の関連シークレットを削除します。この操作は元に戻せません。",
           editingBadge: "編集中: {{id}}",
+          changedTitle: "このメンバーの設定が変更されました",
+          changedBody:
+            "このフォームを開いた後に、保存された設定が変更されました。入力はそのまま残っています。保存する前に、最新の設定を再読込して入力を置き換えてください。",
+          reloadButton: "最新の設定を再読込",
           loadError: "メンバー詳細の取得に失敗しました",
           resolveError: "メンバー識別子の解決に失敗しました",
           addError: "メンバー追加に失敗しました",
