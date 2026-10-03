@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   evaluateGrant,
@@ -134,6 +134,22 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/**
+ * A user on a fake clock. A typed path is judged once the typing settles;
+ * `settle` lets that debounce pass without waiting for it in real time.
+ */
+function userOnFakeClock() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  return {
+    user: userEvent.setup({ advanceTimers: vi.advanceTimersByTime }),
+    settle: () => vi.advanceTimersByTimeAsync(1000),
+  };
+}
+
 describe("directory access cards", () => {
   it("lists documents and, for this device, PATH directories, added paths, denies, and what stays closed", () => {
     render(
@@ -166,7 +182,7 @@ describe("directory access cards", () => {
   });
 
   it("adds a typed path as read/write or as a deny once the keystrokes settle, and removes them", async () => {
-    const user = userEvent.setup();
+    const { user, settle } = userOnFakeClock();
     const onLocal = vi.fn();
     render(<Harness onLocal={onLocal} />);
     const device = within(screen.getByTestId("grants:device"));
@@ -175,6 +191,7 @@ describe("directory access cards", () => {
     const add = device.getByRole("button", { name: t("setup.intelligence.grants.add") });
 
     await user.type(path, "..");
+    await settle();
     await device.findByText("'..' must name a directory");
     expect(add).toBeDisabled();
 
@@ -186,6 +203,7 @@ describe("directory access cards", () => {
         name: t("setup.intelligence.grants.accessLabels.read_write"),
       }),
     );
+    await settle();
     await waitFor(() => expect(add).toBeEnabled());
     await user.click(add);
     expect(onLocal).toHaveBeenLastCalledWith({
@@ -199,6 +217,7 @@ describe("directory access cards", () => {
     await user.click(
       await screen.findByRole("option", { name: t("setup.intelligence.deviceAccess.deny") }),
     );
+    await settle();
     await waitFor(() => expect(add).toBeEnabled());
     const judged = vi.mocked(evaluateGrant).mock.calls.map(([args]) => [args.scope, args.path]);
     expect(judged.filter(([, p]) => p.startsWith("/opt"))).toEqual([["deny", "/opt/homebrew/etc"]]);
@@ -387,7 +406,7 @@ describe("directory access cards", () => {
   });
 
   it("judges a typed document path, warns on sensitive ones, and adds it", async () => {
-    const user = userEvent.setup();
+    const { user, settle } = userOnFakeClock();
     const onShared = vi.fn();
     render(<Harness onShared={onShared} />);
     const documents = within(screen.getByTestId("grants:document"));
@@ -395,10 +414,12 @@ describe("directory access cards", () => {
     const add = documents.getByRole("button", { name: t("setup.intelligence.grants.add") });
 
     await user.type(path, "..");
+    await settle();
     await documents.findByText("'..' must name a directory");
 
     await user.clear(path);
     await user.type(path, ".ssh");
+    await settle();
     await documents.findByText(t("setup.intelligence.grants.sensitiveTitle"));
     await waitFor(() => expect(add).toBeEnabled());
     await user.click(add);

@@ -54,10 +54,11 @@ const pollClipboardMock = vi.fn();
 const clipboardImageFileMock = vi.fn();
 const releaseClipboardImageMock = vi.fn();
 const watchSupportedMock = vi.fn(async () => true);
-// Shorten the idle auto-run pause; three real seconds per case is not worth it.
+// Shorten the idle auto-run pause and the clipboard poll; three real seconds
+// per case, or 300ms per observed copy, is not worth it.
 vi.mock("./quickRunState", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./quickRunState")>();
-  return { ...actual, IDLE_RUN_MS: 200 };
+  return { ...actual, IDLE_RUN_MS: 200, CLIPBOARD_POLL_MS: 20 };
 });
 vi.mock("../hotkeys/hotkeyRuntime", () => ({
   hideQuickWindow: () => hideQuickWindowMock(),
