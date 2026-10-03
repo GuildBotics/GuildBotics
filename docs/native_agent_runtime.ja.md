@@ -255,9 +255,10 @@ Codexは環境のmountをそのまま写したpermission profileで動きます:
 rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
 `--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`、Antigravityは
 `--dangerously-skip-permissions`で起動し、設定からフラグは注入されません。読み取り専用ターンも
-同じ形で起動します。各プロバイダの内側sandboxがmicroVMのkernelで動くかはプロバイダを
-provisionするたびに実機で確認し、Codexは同梱のbubblewrapで動くことを確認済みです（imageに
-bubblewrapを入れると同梱のものより優先され、Codexのhelperを起動できないため、imageには入れません）。
+同じ形で起動します。Codexは同梱のbubblewrapを使います（imageにbubblewrapを入れると同梱のものより
+優先され、Codexのhelperを起動できないため、imageには入れません）。新しい固定版の内側sandboxが
+microVMのkernelで動くかは、任意の実機確認を依頼されたときに確かめます。無人の固定版更新では
+その動作を確認しません。
 
 ターンをまたいで残るのはプロバイダのセッションと、認証情報を含まないアカウント情報だけで、この端末の
 store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして全メンバーで共有します。
@@ -312,9 +313,12 @@ AI CLIツールのログインは、turnのmicroVMにも、この端末の平文
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
 turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。これを支える前提は、
-合成の秘密で実microVMを動かす任意実行のテストで確かめます。固定版を上げたときと、ゲートウェイや環境の
-組み立てを変えたときに実行します（snapshotのある端末で、`GUILDBOTICS_CONTRACT_PROBE=1`と、snapshotのある
-ワークスペースの`GUILDBOTICS_CONFIG_DIR`を付け、`-p no:xdist`で）。端末の外へは何も送りません。
+合成の秘密で実microVMを動かす任意実行のテストで確かめます。ゲートウェイや環境の組み立てを変えたときに
+実行します。固定版の更新では実機確認は任意で、無人の更新手順には含めません。PRレビュー中に人が依頼した
+場合は、[verify-ai-cli-toolsスキル](../.agents/skills/verify-ai-cli-tools/SKILL.md)を使い、実行ごとの承認と
+立ち会いのもとで確認し、そのPRに結果を記録します。テストはsnapshotのある端末で、
+`GUILDBOTICS_CONTRACT_PROBE=1`と、snapshotのあるワークスペースの`GUILDBOTICS_CONFIG_DIR`を付け、
+`-p no:xdist`で実行します。この合成の秘密を使うテストは、端末の外へ何も送りません。
 
 - `tests/guildbotics/intelligences/agent_environment/test_provider_contracts.py`：接続先の契約。
   本番の置換用の値と設定で、どの要求がゲートウェイへ届き、置換用の値がほかのどこへも運ばれないか。

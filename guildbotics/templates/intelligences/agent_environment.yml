@@ -2,8 +2,9 @@
 #
 # This file is shared between the devices of the workspace, and each device
 # builds the same environment from it. GuildBotics provides the base image
-# (Debian with Node.js, npm, git and uv) and installs the AI CLI tools at the
-# versions it was verified with.
+# (Debian with Node.js, npm, git and uv) and installs the AI CLI tools at
+# GuildBotics' pinned versions. A pin does not imply real-device verification;
+# that verification is optional and recorded separately on the update PR.
 #
 # A workspace may instead start from an image it built itself, for another
 # toolchain (a Python interpreter, Rust, a browser). Build it FROM the default
