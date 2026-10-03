@@ -1527,7 +1527,7 @@ async def test_the_command_runs_in_its_microvm_and_says_how_it_ended(
     """GuildBotics' own entry runs the request in the microVM with the
     snapshot's Python and the running code; what it logs is logged on the
     host at its own level, a line without one at the level before it."""
-    from guildbotics.intelligences.agent_environment.snapshot import CODE_ROOT, VENV
+    from guildbotics.intelligences.agent_environment.snapshot import VENV
     from guildbotics.intelligences.agent_runtime.host_client import CommandReply
 
     answer = CommandReply(text_output="done")
@@ -1541,10 +1541,8 @@ async def test_the_command_runs_in_its_microvm_and_says_how_it_ended(
 
     assert reply == answer
     assert entry.argv == (
-        "env",
-        f"PYTHONPATH={CODE_ROOT}",
-        "PYTHONDONTWRITEBYTECODE=1",
         f"{VENV}/bin/python",
+        "-B",
         "-m",
         "guildbotics.runtime.command_entry",
     )

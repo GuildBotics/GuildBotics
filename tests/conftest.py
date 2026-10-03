@@ -17,7 +17,13 @@ import pytest
 from _pytest.pathlib import rm_rf
 
 from guildbotics.entities.team import Person, Role
-from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
+from guildbotics.intelligences.agent_runtime.host_client import (
+    COMMAND_ENV,
+    HOST_TOKEN_ENV,
+    HOST_URL_ENV,
+    MEMBER_BROKER_TOKEN_ENV,
+)
+from guildbotics.utils.fileio import GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.i18n_tool import set_language
 from guildbotics.utils.import_utils import ClassResolver
 from tests.git_seed import WorkerGitSeed
@@ -42,6 +48,17 @@ REAL_DEVICE_OPT_INS = frozenset(
         "GUILDBOTICS_COPILOT_SMOKE",
         "GUILDBOTICS_GROK_SMOKE",
         "GUILDBOTICS_ANTIGRAVITY_SMOKE",
+    }
+)
+#: What a command's isolated environment is booted with and lends a turn's
+#: provider, apart from the workspace root every test sets for itself.
+COMMAND_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        HOST_URL_ENV,
+        HOST_TOKEN_ENV,
+        COMMAND_ENV,
+        GUILDBOTICS_CONFIG_DIR,
+        MEMBER_BROKER_TOKEN_ENV,
     }
 )
 _NETWORK_ENV = {
@@ -352,6 +369,12 @@ def _real_device_flag(item: pytest.Item) -> str | None:
     return marker.args[0]
 
 
+def _real_device_enabled(item: pytest.Item) -> bool:
+    """Whether ``item`` is a real-device test this run opted in to: one that
+    runs on this machine as it is, network and workspace alike."""
+    return _real_device_flag(item) in item.config.stash[_REAL_DEVICE_ENABLED]
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
@@ -379,9 +402,7 @@ def pytest_collection_modifyitems(
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
     guard = item.config.stash[_NETWORK_GUARD]
-    guard.activate(
-        item, exempt=_real_device_flag(item) in item.config.stash[_REAL_DEVICE_ENABLED]
-    )
+    guard.activate(item, exempt=_real_device_enabled(item))
     try:
         yield
     finally:
@@ -481,6 +502,22 @@ def _ignore_ambient_slack_tokens(monkeypatch):
     for name in list(os.environ):
         if name.endswith(("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _ignore_ambient_command_environment(request, monkeypatch):
+    """Keep tests off the variables of a command they are run inside.
+
+    An agent runs the suite inside its command's isolated environment, which
+    inherits them: the window to the host would carry each test's inference
+    out to the real host, and the configuration directory would point at the
+    real workspace's instead of the test's own. A real-device test opted in
+    to keeps them: the workspace it is pointed at is the one it checks.
+    """
+    if _real_device_enabled(request.node):
+        return
+    for name in COMMAND_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

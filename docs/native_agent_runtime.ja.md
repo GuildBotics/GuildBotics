@@ -88,7 +88,10 @@ GuildBotics自身のPython環境は、隔離環境の中でGuildBoticsのコー�
 プロセス自身の`guildbotics`パッケージ（ソースから動かしているときはチェックアウト、配布版では自分の
 build）を、どのコマンドのmicroVMにも`/opt/guildbotics/code/guildbotics`へ読み取り専用でbindします。hostと
 同じパスにしないのは、GuildBoticsのチェックアウト自身を作業ディレクトリにしたturnで、その中の
-`guildbotics/`が読み取り専用で覆われないようにするためです。
+`guildbotics/`が読み取り専用で覆われないようにするためです。このコードを見つけるのは
+`/opt/guildbotics/venv`だけで、ビルドがその`site-packages`へ書く`guildbotics.pth`によります。
+GuildBoticsのコードは`PYTHONPATH`を使わず`python -B`で動かすので、turnが自分のPythonでテストする
+プロジェクト（GuildBoticsのチェックアウトも含む）は、bindされたコードではなく自分のコードをimportします。
 
 既定のベースイメージ（`node:22.23.2-bookworm`、arm64）でのsnapshotのビルドは、macOSで約35秒
 （ベースイメージ取得済み）です。snapshotが持つのはベースイメージに書き足した分（書き込み層
@@ -738,7 +741,7 @@ GitHub Copilot CLIは、ACP標準の`usage_update`でセッション文脈量（
 
 GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
 提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
-GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.89を固定しており（1.0.83のserverには
+GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.91を固定しており（1.0.83のserverには
 `account.getQuota`が存在しません）、`connect`のあとに`account.getQuota`を呼ぶと
 `quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
 `entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
@@ -761,8 +764,8 @@ Antigravityはターンごとのトークン使用量（`input_tokens` / `output
 
 アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
 `agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.13
-を固定しており、構造化payloadもこの版で確認しています。`command.data.groups[].buckets[]` に
+会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.2.16
+を固定しており、構造化payloadは1.2.13で確認しています。`command.data.groups[].buckets[]` に
 モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
 既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /
 `5h` 以外の `window` は期間を推測せず、生の値をラベルに残して行を見分けられるようにします。

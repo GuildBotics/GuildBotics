@@ -72,10 +72,12 @@ UV_VERSION = "0.12.10"
 PYTHON_VERSION = "3.12"
 VENV = "/opt/guildbotics/venv"
 #: Where every microVM has the running process's own ``guildbotics`` package
-#: (the checkout run from, or this build's own bundle), read-only; its parent
-#: is what Python inside is pointed at. A place of GuildBotics' own rather
-#: than the host's path, so it never lands inside a directory of the user's
-#: that a turn works in.
+#: (the checkout run from, or this build's own bundle), read-only. Only
+#: :data:`VENV` finds it there, through a ``.pth`` the build writes: nothing
+#: in a process's environment points at it, so a project a turn works on --
+#: GuildBotics' own checkout among them -- imports its own code. A place of
+#: GuildBotics' own rather than the host's path, so it never lands inside a
+#: directory of the user's that a turn works in.
 CODE_ROOT = PurePosixPath("/opt/guildbotics/code")
 #: The dependencies of GuildBotics installed into :data:`VENV`: ``uv.lock``
 #: exported without what only the host uses (see the test that regenerates
@@ -194,6 +196,8 @@ def build_steps() -> tuple[BuildStep, ...]:
             "REQUIREMENTS\n"
             f"uv pip install --no-cache --python {VENV}"
             f" -r {VENV}/requirements.txt\n"
+            f"echo {CODE_ROOT}"
+            f" > {VENV}/lib/python{PYTHON_VERSION}/site-packages/guildbotics.pth\n"
             f"{VENV}/bin/python -c 'import weasyprint'",
         )
     )

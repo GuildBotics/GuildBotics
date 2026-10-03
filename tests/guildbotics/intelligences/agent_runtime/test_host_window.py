@@ -85,6 +85,7 @@ from guildbotics.utils.fileio import (
     get_workspace_root,
 )
 from guildbotics.utils.i18n_tool import set_language, t
+from tests.conftest import COMMAND_ENVIRONMENT_VARIABLES
 from tests.guildbotics.intelligences.agent_runtime.contract_doubles import (
     command_at,
     settle_contract,
@@ -707,6 +708,10 @@ async def test_the_microvm_is_told_the_command_and_its_window(tmp_path, monkeypa
         GUILDBOTICS_WORKSPACE_ROOT,
         GUILDBOTICS_CONFIG_DIR,
     }
+    # The suite run inside a command inherits them; each test sets them aside.
+    assert (
+        set(variables) - {GUILDBOTICS_WORKSPACE_ROOT} <= COMMAND_ENVIRONMENT_VARIABLES
+    )
 
 
 def test_a_guest_path_is_taken_back_to_the_host_path_it_spells(tmp_path) -> None:
