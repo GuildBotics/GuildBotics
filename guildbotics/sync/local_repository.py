@@ -322,10 +322,6 @@ class LocalSyncRepository:
             )
         return changes
 
-    def read_working_tree(self, path: str) -> bytes:
-        """Return the bytes currently on disk for a ``.guildbotics``-relative path."""
-        return (self.path / path).read_bytes()
-
     def read_blob(self, revision: str, path: str) -> bytes | None:
         """Return a file's bytes at ``revision``, or None when it is absent there.
 

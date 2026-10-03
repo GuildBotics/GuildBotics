@@ -4,7 +4,6 @@ from guildbotics.integrations.chat_service import ChatEvent
 from guildbotics.integrations.chat_workflow_status import (
     is_suppressed_chat_event,
     is_suppressed_workflow_status_metadata,
-    is_workflow_status_metadata,
     workflow_status_fields,
     workflow_status_metadata,
 )
@@ -22,7 +21,6 @@ def test_workflow_status_metadata_builds_suppressed_payload():
         )
     )
 
-    assert is_workflow_status_metadata(metadata) is True
     assert is_suppressed_workflow_status_metadata(metadata) is True
     assert metadata["event_type"] == "guildbotics.workflow_status"
     assert metadata["event_payload"]["reason"] == "rate_limited"
@@ -33,7 +31,9 @@ def test_workflow_status_metadata_builds_suppressed_payload():
 
 def test_other_or_malformed_metadata_is_not_suppressed():
     assert (
-        is_workflow_status_metadata({"event_type": "other", "event_payload": {}})
+        is_suppressed_workflow_status_metadata(
+            {"event_type": "other", "event_payload": {}}
+        )
         is False
     )
     assert (

@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -125,6 +126,40 @@ class _Manager(GitHubTicketManager):
         """Return the first patrol candidate for single-selection assertions."""
         candidates = await self.get_task_candidates()
         return candidates[0] if candidates else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "ja"])
+async def test_missing_custom_field_options_warning(language, monkeypatch, caplog):
+    manager = _Manager(items=[])
+    manager._custom_field_definitions = {
+        "Agent": {
+            "dataType": "SINGLE_SELECT",
+            "options": [
+                {"name": "Existing", "description": "Already configured"},
+                {"name": "Aiko", "description": "Developer"},
+                {"name": "Unassigned"},
+            ],
+        }
+    }
+    monkeypatch.setattr(
+        manager,
+        "_get_custom_fields",
+        AsyncMock(return_value={"Agent": {"options": {"Existing": "option-id"}}}),
+    )
+    set_language(language)
+    try:
+        with caplog.at_level(logging.WARNING):
+            await manager.ensure_custom_fields()
+        assert caplog.messages == [
+            t(
+                "integrations.github.github_ticket_manager.add_custom_field_options",
+                field="Agent",
+                options="\n  - Aiko: Developer\n  - Unassigned: ",
+            )
+        ]
+    finally:
+        set_language("en")
 
 
 def _item(

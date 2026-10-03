@@ -6,6 +6,7 @@ from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
@@ -23,7 +24,6 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_local_grants,
     load_shared_grants,
     parse_local_grants,
-    parse_network_policy,
     parse_shared_grants,
     redact_path,
     resolve_access,
@@ -40,7 +40,7 @@ def _native(masked: str) -> str:
 
 
 def test_an_absent_network_block_is_closed() -> None:
-    policy = parse_network_policy(None, where="x")
+    policy = NetworkPolicy()
 
     assert policy == NetworkPolicy()
     assert policy.model_dump(mode="json") == _CLOSED
@@ -53,7 +53,7 @@ def test_a_full_network_block_round_trips() -> None:
         "allow_local_network": True,
     }
 
-    policy = parse_network_policy(raw, where="x")
+    policy = NetworkPolicy.model_validate(raw)
 
     assert policy.model_dump(mode="json") == raw
 
@@ -63,10 +63,7 @@ def test_a_full_network_block_round_trips() -> None:
     [
         (
             "deny",
-            t(
-                "intelligences.agent_environment.grants.network_not_a_mapping",
-                where="AI CLI tool 'x'",
-            ),
+            "Input should be a valid dictionary",
         ),
         (
             {**_CLOSED, "mode": "allowlist"},
@@ -88,10 +85,8 @@ def test_a_full_network_block_round_trips() -> None:
     ],
 )
 def test_inconsistent_network_blocks_are_rejected(raw: object, message: str) -> None:
-    with pytest.raises(AccessContractError, match=re.escape(message)) as excinfo:
-        parse_network_policy(raw, where="AI CLI tool 'x'")
-
-    assert "AI CLI tool 'x'" in str(excinfo.value)
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        NetworkPolicy.model_validate(raw)
 
 
 def test_a_yaml_boolean_mode_is_rejected_rather_than_read_as_a_mode() -> None:
@@ -99,8 +94,8 @@ def test_a_yaml_boolean_mode_is_rejected_rather_than_read_as_a_mode() -> None:
     raw = yaml.safe_load("mode: off\nallowed_domains: []\nallow_local_network: false\n")
     assert raw["mode"] is False
 
-    with pytest.raises(AccessContractError):
-        parse_network_policy(raw, where="x")
+    with pytest.raises(ValidationError):
+        NetworkPolicy.model_validate(raw)
 
 
 # --- shared grants: documents --------------------------------------------------

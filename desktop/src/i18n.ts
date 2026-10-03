@@ -176,7 +176,6 @@ const resources = {
         devices: {
           title: "Devices",
           empty: "No device has joined this workspace yet.",
-          name: "Name",
           os: "OS",
           joinedAt: "Joined",
           id: "Device ID",
@@ -509,7 +508,6 @@ const resources = {
       },
       service: {
         title: "Service Runtime",
-        refresh: "Refresh",
         sourceTarget: "Include in service run",
         noTargetTitle: "No service selected",
         noTargetBody:
@@ -519,7 +517,6 @@ const resources = {
       },
       diagnostics: {
         title: "Diagnostics",
-        refresh: "Refresh",
         troubleshooting: {
           title: "Troubleshooting AI",
           open: "Ask AI",
@@ -536,7 +533,6 @@ const resources = {
           focusTrace: "Target: {{command}}",
           focusGlobal: "Target: Global / system",
           focusRecord: "Target: {{record}}",
-          focusMemory: "Target: Memory events",
           followTarget: "Follow selection",
           runner: "Troubleshooting AI: {{person}} — click to change",
           noMember: "Configure an active member before asking the troubleshooting AI.",
@@ -586,14 +582,10 @@ const resources = {
           source: "Source",
           search: "Search",
           searchPlaceholder: "trace id / command / error / #42 / GitHub URL...",
-          searchButton: "Search",
           searchClear: "Clear search",
           displayed: "Displayed",
           displayedValue: "Latest {{count}} executions (limit {{limit}})",
           ticket: {
-            label: "Ticket / PR",
-            placeholder: "#42 / owner/repo#42 / GitHub URL",
-            button: "Find",
             clear: "Clear ticket filter",
             filterTo: "Show all runs for this ticket",
             open: "Open on GitHub",
@@ -765,10 +757,6 @@ const resources = {
             finished: "Call finished",
             failed: "Call failed",
           },
-          kinds: {
-            io: "I/O",
-            memory: "Memory",
-          },
           global: {
             badge: "System",
             title: "Global / system",
@@ -825,7 +813,6 @@ const resources = {
         title: "First setup",
         configuredTitle: "Settings",
         saveInitial: "Create initial settings",
-        saveNow: "Save now",
         saveErrorTitle: "Save failed",
         initialCreated: {
           title: "Initial settings created",
@@ -888,17 +875,10 @@ const resources = {
           tabs: {
             models: "LLM & Models",
             cli: "AI CLI Tools",
-            brain: "Feature Assignments",
           },
           addBrain: "Add brain function",
-          deleteBrain: "Delete brain function",
           addLlmSlot: "Add LLM slot",
           addCliSlot: "Add CLI slot",
-          deleteSlot: "Delete slot",
-          brainName: "Brain function name",
-          slotName: "Slot name",
-          duplicateError: "This name already exists.",
-          emptyError: "Name cannot be empty.",
           title: "LLM / AI CLI tools",
           subtitle: "Set default AI provider and CLI tool for your team.",
           teamDefault: "Team default",
@@ -921,7 +901,6 @@ const resources = {
           apiKeyButtonLabel: "Configure {{provider}} API key",
           apiKeyMissingTooltip: "Click the key button to configure the API key.",
           keyPlaceholder: "Saved to the OS secret store after input",
-          keyConfiguredPlaceholder: "Configured",
           keyConfiguredDescription:
             "The saved value is hidden. Leave this field empty to keep the current key.",
           apiKeyConfigured: "API key set",
@@ -935,10 +914,7 @@ const resources = {
             "AI CLI tools run inside the agent execution environment. Log in to the selected tool on every device that runs turns.",
           openEnvironment: "Check in Agent execution environment",
           skillStatusTitle: "GuildBotics skill",
-          skillStatusDescription:
-            "Shows whether each AI CLI tool has the bundled GuildBotics skill installed.",
           skillStatusButtonLabel: "View {{agent}} GuildBotics skill status",
-          skillStatusLoading: "Checking",
           skillOverwrite: "Install latest version",
           skillUpdatedTitle: "GuildBotics skill updated",
           skillUpdatedBody: "The latest GuildBotics skill was applied.",
@@ -1095,7 +1071,6 @@ const resources = {
             sensitiveBody:
               "Granting {{path}} lets agents read what is under {{reason}}. Add it only if the work really needs it.",
             duplicate: "Already added.",
-            loadError: "Suggestions could not be loaded.",
           },
           advanced: "Advanced settings",
           createBeforeAdvanced: "Create the initial settings before editing detailed AI behavior.",
@@ -1109,16 +1084,8 @@ const resources = {
           inheritTeamDefaults: "Use team defaults",
           inheritingTitle: "Using team defaults",
           inheritingBody: "Uses team settings directly instead of individual configurations.",
-          modelMapping: "Model slots",
-          modelDefinitions: "Model definitions",
-          cliMapping: "AI CLI tool slots",
           brainMapping: "Feature assignments",
-          cliDefinitions: "AI CLI tool definitions",
           slot: "Slot",
-          model: "Model",
-          path: "Path",
-          modelClass: "Model class",
-          modelId: "Model ID",
           cliAgent: "AI CLI tool",
           feature: "Feature",
           engine: "Engine",
@@ -1197,8 +1164,6 @@ const resources = {
           },
           title: "Members",
           subtitle: "Manage team members and their roles.",
-          activeCountLabel: "Active members",
-          activeCountValue: "{{count}} configured",
           requiredTitle: "At least one active member is required",
           requiredBody:
             "GuildBotics cannot run without an active member. Add at least one member before finishing setup.",
@@ -1236,8 +1201,6 @@ const resources = {
             slack: "Slack",
             diagnostics: "Diagnostics",
           },
-          identity: "GitHub identity",
-          identityHint: "GitHub username",
           githubAppsUrl: "GitHub Apps URL for resolution",
           githubAppsUrlHint:
             "Enter the app settings URL, then click Resolve. This URL is not saved.",
@@ -1567,7 +1530,6 @@ const resources = {
           memberCharacterJoinWhenRequired: "Join-when guidance is required.",
           memberCharacterAvoidWhenRequired: "Avoid-when guidance is required.",
           memberCharacterContributionRequired: "Contribution style is required.",
-          memberGithubIdentityRequired: "Enter the GitHub identity, then click Resolve.",
           memberGithubAppsUrlRequired: "Enter the GitHub Apps URL, then click Resolve.",
           memberGithubIdentityNotFound:
             "Could not resolve this GitHub identity. Check the username, email, or GitHub Apps URL.",
@@ -1599,10 +1561,7 @@ const resources = {
         },
       },
       overview: {
-        title: "Runtime Control",
-        refresh: "Refresh",
         configuration: "Verification",
-        verify: "Run diagnostics",
         scenarioDiagnostics: {
           run: "Validate settings",
           notRun:
@@ -1680,15 +1639,6 @@ const resources = {
             title: "Slack channel history was readable",
             description: "Channel history was read without posting messages.",
           },
-        },
-        diagnostics: {
-          notRun:
-            "Optional lightweight diagnostics. Most setup problems are handled by form validation and save errors.",
-          running: "Checking settings...",
-          failed: "Diagnostics failed",
-          ok: "No obvious configuration issues",
-          okDescription: "{{count}} checks passed. This does not validate external LLM API keys.",
-          target: "Target",
         },
         diagnosticChecks: {
           config_project_file: {
@@ -1809,13 +1759,7 @@ const resources = {
         routine: "Command to run",
         routineIntervalMinutes: "Patrol interval (minutes)",
         maxConsecutiveErrors: "Stop after consecutive failures",
-        memberPatrolSettings: "Member patrol settings",
-        memberPatrolSettingsBody:
-          "Configure which patrol commands each member runs. Members without patrol commands do not run patrol work.",
         openMemberPatrolSettings: "Edit member settings",
-        requiresGithub: "GitHub required",
-        startGuardTitle: "This routine requires GitHub integration",
-        startGuardBody: "Enable GitHub integration in Setup before starting this routine.",
         startError: "Scheduler start failed",
         stopError: "Stop failed",
         runtimeError: "Runtime error",
@@ -1839,16 +1783,6 @@ const resources = {
             event_queue: "chat workflow",
           },
         },
-        streamStates: {
-          connecting: "Connecting",
-          connected: "Connected",
-          disconnected: "Disconnected",
-          error: "Error",
-        },
-        runtimeFields: {
-          startedAt: "Started",
-          stoppedAt: "Stopped",
-        },
         workerCard: {
           title: "Member workers",
           description:
@@ -1859,32 +1793,21 @@ const resources = {
           scheduledSource: "Scheduled",
           routineSource: "Routine",
           eventQueueSource: "Event queue",
-          maxConsecutiveErrors: "Failure limit",
         },
         routineSourceCard: {
           title: "Patrol commands",
           description: "Runs each member's configured patrol commands at the selected interval.",
           status: "Execution state",
-          interval: "Interval (minutes)",
         },
         scheduledSourceCard: {
           title: "Scheduled commands",
           description: "Runs member-level scheduled commands defined in member settings.",
           status: "Execution state",
-          members: "Active members",
-          settingsTitle: "Member schedules",
-          settingsBody: "You can also configure member-specific scheduled commands.",
         },
         eventsCard: {
           title: "Event triggers",
           description:
             "Receives external events and routes them to workflows. Currently supports chat events only.",
-          sourceStatus: "Event queue",
-          supportedEvents: "Supported events",
-          supportedEventsValue: "Chat messages",
-          workflow: "Workflow",
-          workflowValue: "Chat conversation workflow (fixed)",
-          listeners: "Listeners",
           subscriptions: "Subscriptions",
           workers: "Event workers",
           workerValue: "{{workers}}",
@@ -1894,7 +1817,6 @@ const resources = {
           authFailedBody:
             "Slack rejected the app-level token (Socket Mode) for: {{persons}}. These members cannot receive events until their SLACK_APP_TOKEN is fixed and the service is restarted.",
           chatReset: {
-            title: "Reset receive state",
             description:
               "Ignores every chat message up to now (including received but unprocessed ones). The next start handles only messages that arrive afterwards.",
             action: "Discard unprocessed messages",
@@ -1906,16 +1828,6 @@ const resources = {
             cancel: "Cancel",
             successBody: "Reset receive state for {{members}} member(s), {{channels}} channel(s).",
           },
-        },
-        routines: {
-          ticketDriven: "Ticket-driven workflow",
-        },
-        feedFilters: {
-          all: "All",
-          error: "Errors",
-          command: "Commands",
-          scheduler: "Member workers",
-          events: "Event listener",
         },
         start: "Run",
         stop: "Stop",
@@ -1980,7 +1892,6 @@ const resources = {
         output: "Output",
         events: "Events",
         noOutput: "No output.",
-        noRelatedEvents: "No related events for this request.",
         defaultPerson: "Default selection",
         noMembersTitle: "No active members",
         noMembersBody: "Enable at least one member in Settings before running commands.",
@@ -2091,7 +2002,6 @@ const resources = {
         commandLabel: "Hotkey",
         commandDescription:
           "Runs this command directly. The run window opens instead when an input is missing.",
-        commandSaved: "Hotkey saved",
         saveErrorTitle: "Could not save the hotkey",
         rejectedTitle: "Some hotkeys could not be registered",
         rejectedBody:
@@ -2297,7 +2207,6 @@ const resources = {
         devices: {
           title: "device 一覧",
           empty: "このワークスペースに参加した device はまだありません。",
-          name: "名前",
           os: "OS",
           joinedAt: "参加日時",
           id: "device ID",
@@ -2632,7 +2541,6 @@ const resources = {
         title: "はじめに",
         configuredTitle: "設定",
         saveInitial: "初期設定を作成",
-        saveNow: "今すぐ保存",
         saveErrorTitle: "保存に失敗しました",
         initialCreated: {
           title: "初期設定を作成しました",
@@ -2692,17 +2600,10 @@ const resources = {
           tabs: {
             models: "LLM・モデル設定",
             cli: "AI CLIツール定義",
-            brain: "ブレイン割り当て",
           },
           addBrain: "ブレイン機能を追加",
-          deleteBrain: "ブレイン機能を削除",
           addLlmSlot: "LLMスロットを追加",
           addCliSlot: "CLIスロットを追加",
-          deleteSlot: "スロットを削除",
-          brainName: "ブレイン機能名",
-          slotName: "スロット名",
-          duplicateError: "この名前は既に存在します。",
-          emptyError: "名前を入力してください。",
           title: "LLM・AI CLIツール",
           subtitle: "チーム全体で使うAIプロバイダとCLIツールの既定値を設定します。",
           teamDefault: "チーム既定",
@@ -2725,7 +2626,6 @@ const resources = {
           apiKeyButtonLabel: "{{provider}} APIキーを設定",
           apiKeyMissingTooltip: "キーのボタンからAPIキーを設定してください。",
           keyPlaceholder: "入力後に OS の秘密ストアへ保存",
-          keyConfiguredPlaceholder: "設定済み",
           keyConfiguredDescription:
             "保存済みの値は表示しません。空欄のままなら現在のキーを維持します。",
           apiKeyConfigured: "API key 設定済み",
@@ -2738,10 +2638,7 @@ const resources = {
             "AI CLIツールはエージェント実行環境の中で動きます。turn を実行する端末ごとに、選んだツールへログインしてください。",
           openEnvironment: "エージェント実行環境で確認",
           skillStatusTitle: "GuildBoticsスキル",
-          skillStatusDescription:
-            "各AI CLIツールに同梱版のGuildBoticsスキルが適用されているかを表示します。",
           skillStatusButtonLabel: "{{agent}} のGuildBoticsスキル状態を表示",
-          skillStatusLoading: "確認中",
           skillOverwrite: "最新版をインストールする",
           skillUpdatedTitle: "GuildBoticsスキルを更新しました",
           skillUpdatedBody: "最新版のGuildBoticsスキルを適用しました。",
@@ -2900,7 +2797,6 @@ const resources = {
             sensitiveBody:
               "{{path}} を許可すると、{{reason}} 配下をエージェントが読めるようになります。作業に本当に必要な場合だけ追加してください。",
             duplicate: "追加済みです。",
-            loadError: "候補を読み込めませんでした。",
           },
           advanced: "詳細設定",
           createBeforeAdvanced: "詳細なAI挙動を編集するには、先に初期設定を作成してください。",
@@ -2914,16 +2810,8 @@ const resources = {
           inheritTeamDefaults: "チーム既定を使う",
           inheritingTitle: "チーム既定を使用中",
           inheritingBody: "メンバー専用設定は行わず、チーム設定をそのまま使います。",
-          modelMapping: "モデルスロット",
-          modelDefinitions: "モデル定義",
-          cliMapping: "AI CLIツールスロット",
           brainMapping: "機能ごとの割り当て",
-          cliDefinitions: "AI CLIツール定義",
           slot: "スロット",
-          model: "モデル",
-          path: "パス",
-          modelClass: "モデルクラス",
-          modelId: "モデルID",
           cliAgent: "AI CLIツール",
           feature: "機能",
           engine: "エンジン",
@@ -3001,8 +2889,6 @@ const resources = {
           },
           title: "メンバー",
           subtitle: "チームメンバーと役割を管理します。",
-          activeCountLabel: "有効メンバー",
-          activeCountValue: "{{count}}人 設定済み",
           requiredTitle: "有効メンバーを1人以上設定してください",
           requiredBody:
             "有効メンバーが0人の状態ではGuildBoticsは実行できません。セットアップ完了前に1人以上追加してください。",
@@ -3040,8 +2926,6 @@ const resources = {
             slack: "Slack",
             diagnostics: "検証",
           },
-          identity: "GitHub識別子",
-          identityHint: "GitHubユーザー名",
           githubAppsUrl: "解決用 GitHub Apps URL",
           githubAppsUrlHint:
             "GitHub App の設定URLを入力して「解決」を実行します。このURLは保存されません。",
@@ -3374,7 +3258,6 @@ const resources = {
           memberCharacterJoinWhenRequired: "会話に参加する場面は必須です。",
           memberCharacterAvoidWhenRequired: "参加を控える場面は必須です。",
           memberCharacterContributionRequired: "参加時の貢献スタイルは必須です。",
-          memberGithubIdentityRequired: "GitHub識別子を入力し、「解決」を実行してください。",
           memberGithubAppsUrlRequired: "GitHub Apps URL を入力し、「解決」を実行してください。",
           memberGithubIdentityNotFound:
             "このGitHub識別子は解決できませんでした。ユーザー名、メール、GitHub Apps URL を確認してください。",
@@ -3410,7 +3293,6 @@ const resources = {
       },
       service: {
         title: "サービス実行",
-        refresh: "更新",
         sourceTarget: "サービス実行に含める",
         noTargetTitle: "開始対象が選択されていません",
         noTargetBody: "巡回・定期実行またはイベント起動を選択してから開始してください。",
@@ -3419,7 +3301,6 @@ const resources = {
       },
       diagnostics: {
         title: "診断",
-        refresh: "更新",
         troubleshooting: {
           title: "トラブルシューティングAI",
           open: "AIに相談",
@@ -3435,7 +3316,6 @@ const resources = {
           focusTrace: "対象: {{command}}",
           focusGlobal: "対象: Global / system",
           focusRecord: "対象: {{record}}",
-          focusMemory: "対象: メモリイベント",
           followTarget: "選択に追従",
           runner: "トラブルシューティングAI: {{person}} — クリックで変更",
           noMember: "トラブルシューティングAIを使うには、有効なメンバーを設定してください。",
@@ -3485,14 +3365,10 @@ const resources = {
           source: "ソース",
           search: "検索",
           searchPlaceholder: "trace id / コマンド / エラー / #42 / GitHub URL...",
-          searchButton: "検索",
           searchClear: "検索をクリア",
           displayed: "表示件数",
           displayedValue: "最新 {{count}} 件（上限 {{limit}} 件）",
           ticket: {
-            label: "チケット / PR",
-            placeholder: "#42 / owner/repo#42 / GitHub URL",
-            button: "表示",
             clear: "チケット絞り込みを解除",
             filterTo: "このチケットの全実行を表示",
             open: "GitHub で開く",
@@ -3665,10 +3541,6 @@ const resources = {
             finished: "呼び出し完了",
             failed: "呼び出し失敗",
           },
-          kinds: {
-            io: "入出力",
-            memory: "Memory",
-          },
           global: {
             badge: "システム",
             title: "Global / システム",
@@ -3722,10 +3594,7 @@ const resources = {
         },
       },
       overview: {
-        title: "運用ホーム",
-        refresh: "更新",
         configuration: "検証",
-        verify: "診断を実行",
         scenarioDiagnostics: {
           run: "設定を検証",
           notRun:
@@ -3804,16 +3673,6 @@ const resources = {
             title: "Slack チャンネル履歴を読み取れました",
             description: "メッセージを投稿せず、チャンネル履歴を読み取れました。",
           },
-        },
-        diagnostics: {
-          notRun:
-            "補助的な軽量診断です。初期設定の大半の問題はフォーム入力制限と保存エラーで扱います。",
-          running: "設定を診断しています...",
-          failed: "診断に失敗しました",
-          ok: "明らかな設定問題はありません",
-          okDescription:
-            "{{count}}件のチェックに問題はありません。外部 LLM API key の正当性は検証しません。",
-          target: "対象",
         },
         diagnosticChecks: {
           config_project_file: {
@@ -3937,14 +3796,7 @@ const resources = {
         routine: "実行するコマンド",
         routineIntervalMinutes: "巡回間隔（分）",
         maxConsecutiveErrors: "連続失敗で停止する回数",
-        memberPatrolSettings: "メンバー別巡回設定",
-        memberPatrolSettingsBody:
-          "メンバーごとに巡回実行コマンドを設定します。未設定のメンバーは巡回実行しません。",
         openMemberPatrolSettings: "メンバー設定を編集",
-        requiresGithub: "GitHub必須",
-        startGuardTitle: "このルーチンには GitHub 連携が必要です",
-        startGuardBody:
-          "チケット駆動ワークフローには GitHub 連携が必要です。設定画面で GitHub 連携を有効化してから開始してください。",
         startError: "自動運用の開始に失敗しました",
         stopError: "停止に失敗しました",
         runtimeError: "実行エラー",
@@ -3968,16 +3820,6 @@ const resources = {
             event_queue: "チャットワークフロー",
           },
         },
-        streamStates: {
-          connecting: "接続中",
-          connected: "接続済み",
-          disconnected: "切断",
-          error: "エラー",
-        },
-        runtimeFields: {
-          startedAt: "起動時刻",
-          stoppedAt: "停止時刻",
-        },
         workerCard: {
           title: "メンバーワーカー",
           description:
@@ -3988,32 +3830,21 @@ const resources = {
           scheduledSource: "スケジュール",
           routineSource: "巡回",
           eventQueueSource: "イベントキュー",
-          maxConsecutiveErrors: "失敗上限",
         },
         routineSourceCard: {
           title: "巡回実行コマンド",
           description: "メンバーごとに設定された巡回実行コマンドを、指定間隔ごとに実行します。",
           status: "実行状態",
-          interval: "間隔（分）",
         },
         scheduledSourceCard: {
           title: "定期実行コマンド",
           description: "メンバー設定に定義された定期実行コマンドを実行します。",
           status: "実行状態",
-          members: "有効メンバー",
-          settingsTitle: "メンバー別定期実行設定",
-          settingsBody: "メンバー固有の定期実行コマンドを設定することもできます。",
         },
         eventsCard: {
           title: "イベント起動",
           description:
             "外部イベントを受信し、対応するワークフローへ渡します。現在はチャットイベントのみ対応しています。",
-          sourceStatus: "イベントキュー",
-          supportedEvents: "対応イベント",
-          supportedEventsValue: "チャットメッセージ",
-          workflow: "起動ワークフロー",
-          workflowValue: "チャット会話ワークフロー（固定）",
-          listeners: "リスナー",
           subscriptions: "購読チャンネル",
           workers: "イベント処理ワーカー",
           workerValue: "{{workers}}",
@@ -4023,7 +3854,6 @@ const resources = {
           authFailedBody:
             "Slack が Socket Mode の App Token を拒否しました: {{persons}}。これらのメンバーは SLACK_APP_TOKEN を修正してサービスを再起動するまでイベントを受信できません。",
           chatReset: {
-            title: "受信状態のリセット",
             description:
               "現在までのチャットメッセージ（受信済み・未処理を含む）をすべて無視します。次回開始以降に届くメッセージだけを処理します。",
             action: "未処理の受信メッセージを破棄",
@@ -4036,16 +3866,6 @@ const resources = {
             successBody:
               "{{members}} 名のメンバー、{{channels}} 個のチャンネルの受信状態をリセットしました。",
           },
-        },
-        routines: {
-          ticketDriven: "チケット駆動ワークフロー",
-        },
-        feedFilters: {
-          all: "すべて",
-          error: "エラー",
-          command: "コマンド",
-          scheduler: "メンバーワーカー",
-          events: "イベント起動",
         },
         start: "実行",
         stop: "停止",
@@ -4110,7 +3930,6 @@ const resources = {
         output: "出力",
         events: "イベント",
         noOutput: "出力はありません。",
-        noRelatedEvents: "この request に関連するイベントはありません。",
         defaultPerson: "既定の選択",
         noMembersTitle: "有効なメンバーがいません",
         noMembersBody:
@@ -4223,7 +4042,6 @@ const resources = {
         commandLabel: "ホットキー",
         commandDescription:
           "押すとこのコマンドを直接実行します。入力が足りないときは実行ウィンドウが開きます。",
-        commandSaved: "ホットキーを保存しました",
         saveErrorTitle: "ホットキーを保存できませんでした",
         rejectedTitle: "登録できなかったホットキーがあります",
         rejectedBody: "{{accelerators}} は他のアプリが使用中です。別の組み合わせを選んでください。",

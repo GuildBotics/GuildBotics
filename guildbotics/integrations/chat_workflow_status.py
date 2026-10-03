@@ -7,8 +7,6 @@ comment (:mod:`~guildbotics.integrations.workflow_status_comment`).
 
 from __future__ import annotations
 
-from typing import Any
-
 from guildbotics.integrations.chat_service import ChatEvent
 
 WORKFLOW_STATUS_EVENT_TYPE = "guildbotics.workflow_status"
@@ -91,10 +89,6 @@ def normalize_workflow_status_metadata(metadata: object) -> dict[str, object]:
     }
 
 
-def is_workflow_status_metadata(metadata: object) -> bool:
-    return bool(normalize_workflow_status_metadata(metadata))
-
-
 def is_suppressed_workflow_status_metadata(metadata: object) -> bool:
     normalized = normalize_workflow_status_metadata(metadata)
     payload = normalized.get("event_payload")
@@ -106,9 +100,3 @@ def is_suppressed_workflow_status_metadata(metadata: object) -> bool:
 
 def is_suppressed_chat_event(event: ChatEvent) -> bool:
     return is_suppressed_workflow_status_metadata(event.metadata)
-
-
-def workflow_status_payload(metadata: object) -> dict[str, Any]:
-    normalized = normalize_workflow_status_metadata(metadata)
-    payload = normalized.get("event_payload")
-    return dict(payload) if isinstance(payload, dict) else {}

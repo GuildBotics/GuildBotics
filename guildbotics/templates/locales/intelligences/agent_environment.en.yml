@@ -77,8 +77,6 @@ en:
     deny_too_broad: "deny '%{path}' would close the whole home directory or root"
     document_not_a_directory: "document grant '%{path}' exists but is not a directory"
     document_outside_home: "document grant '%{path}' must stay below the home directory"
-    network_not_a_mapping: "%{where}: 'network' must be a mapping"
-    network_invalid: "%{where}: invalid 'network': %{error}"
     not_a_mapping: "%{where}: must be a mapping"
     invalid: "%{where}: invalid grants: %{error}"
     sensitive_home: "the home directory"

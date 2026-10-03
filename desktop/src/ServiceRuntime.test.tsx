@@ -51,7 +51,6 @@ vi.mock("./api/client", async (importOriginal) => {
     stopScheduler: vi.fn(),
     resetChatReceiveState: vi.fn(),
     subscribeEvents: vi.fn(() => () => {}),
-    subscribeLogs: vi.fn(() => () => {}),
   };
 });
 

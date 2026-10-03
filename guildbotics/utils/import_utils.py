@@ -30,30 +30,6 @@ def load_class(module_and_cls: str) -> type[Any]:
     return cast(type[Any], getattr(module_obj, cls_name))
 
 
-def load_function(module_and_func: str) -> Any:
-    """
-    Load a function from a module given its full path.
-
-    Args:
-        module_and_func (str): The full path to the function,
-            e.g., "module.submodule.function_name".
-
-    Returns:
-        Any: The function object.
-
-    Raises:
-        ImportError: If the module or function cannot be found.
-    """
-    module_path, func_name = module_and_func.rsplit(".", 1)
-    try:
-        module_obj = importlib.import_module(module_path)
-    except ModuleNotFoundError as e:
-        raise ImportError(f"Module '{module_path}' could not be imported") from e
-    if not hasattr(module_obj, func_name):
-        raise ImportError(f"Function '{func_name}' not found in module '{module_path}'")
-    return cast(Any, getattr(module_obj, func_name))
-
-
 def instantiate_class(
     module_and_cls: str, expected_type: type[Any] | None = None, **kwargs
 ) -> Any:

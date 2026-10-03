@@ -29,7 +29,6 @@ from guildbotics.app_api.models import (
 )
 from guildbotics.app_api.runtime import AppRuntime
 from guildbotics.entities import Person, Project, Role, Team
-from guildbotics.intelligences.cli_agents import CliAgentInfo
 from guildbotics.observability.diagnostics_store import DiagnosticsStore
 from guildbotics.utils.fileio import GUILDBOTICS_WORKSPACE_ROOT
 from guildbotics.utils.workspace_state import (
@@ -779,8 +778,6 @@ def test_team_summary_leaves_default_person_empty_without_candidates(
 def test_transcript_settings_defaults_and_usage(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_DETAIL", raising=False)
-    monkeypatch.delenv("GUILDBOTICS_TRANSCRIPT_RETENTION_DAYS", raising=False)
     runtime = AppRuntime(EventBus())
 
     status = runtime.get_transcript_settings()

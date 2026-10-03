@@ -239,7 +239,6 @@ async def test_a_restricted_model_is_asked_in_the_message_alone(monkeypatch) -> 
     "response_class",
     [
         "guildbotics.intelligences.common.MessageResponse",
-        "guildbotics.intelligences.common.DecisionResponseList",
         "guildbotics.commands.authoring.CommandAuthoringResult",
     ],
 )

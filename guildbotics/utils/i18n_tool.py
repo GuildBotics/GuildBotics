@@ -1,4 +1,3 @@
-import locale
 from pathlib import Path
 from typing import Any
 
@@ -49,14 +48,3 @@ def t(key: str, **kwargs: Any) -> str:
         str: The translated string.
     """
     return i18n.t(key, **kwargs)
-
-
-def get_system_default_language() -> str:
-    """
-    Get the system's default language code.
-    Example: 'ja_JP' → 'ja', 'en_US' → 'en'. If it cannot be determined, returns 'en'.
-    """
-    lang, _ = locale.getdefaultlocale()
-    if not lang:
-        return "en"
-    return lang.split("_")[0]

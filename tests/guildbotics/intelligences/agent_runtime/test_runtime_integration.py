@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from guildbotics.commands.metadata import CommandAccess
 from guildbotics.intelligences.agent_runtime import diagnostics
 from guildbotics.intelligences.agent_runtime.models import (
     AgentEvent,
@@ -678,7 +677,6 @@ def test_agent_diagnostics_redact_credentials_and_keep_correlation(
 
 def test_agent_diagnostics_skips_assistant_deltas(monkeypatch, tmp_path) -> None:
     recorded = []
-    monkeypatch.setenv("GUILDBOTICS_TRANSCRIPT_DETAIL", "standard")
     monkeypatch.setattr(
         diagnostics,
         "record_correlated_event",

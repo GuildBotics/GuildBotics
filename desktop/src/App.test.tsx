@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   App,
-  buildCommandArgs,
   commandFailureDetail,
   commandTraceRefetchInterval,
   DEFAULT_SERVICE_PREFERENCES,
@@ -25,7 +24,6 @@ import {
   ticketChipInfo,
   traceSubtitle,
   traceTitle,
-  splitCommandLine,
   isTerminalTraceStatus,
   traceStatusColor,
   traceDuration,
@@ -45,7 +43,7 @@ import {
   startScheduler,
   verify,
 } from "./api/client";
-import type { CommandOption, RuntimeEvent, RuntimeUnitStatus } from "./api/client";
+import type { RuntimeEvent, RuntimeUnitStatus } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
 import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
@@ -170,7 +168,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getSystemAlerts: vi.fn(async () => ({ alerts: [] })),
     dismissSystemAlert: vi.fn(async () => ({ alerts: [] })),
     subscribeEvents: vi.fn(() => () => {}),
-    subscribeLogs: vi.fn(() => () => {}),
   };
 });
 
@@ -397,98 +394,12 @@ describe("App", () => {
   });
 });
 
-describe("buildCommandArgs", () => {
-  function option(overrides: Partial<CommandOption> = {}): CommandOption {
-    return {
-      command: "demo",
-      label: "Demo",
-      description: "",
-      category: "function",
-      source: "workspace",
-      path: "/cmd.py",
-      arguments: [],
-      inputs: { defined_args: "auto", extra_args: "hidden", message: "optional" },
-      requirements: [],
-      ...overrides,
-    };
-  }
-
-  it("builds positional args and keyword args from option values", () => {
-    const opt = option({
-      arguments: [
-        { name: "first", kind: "positional", required: true, default: "" },
-        { name: "mode", kind: "keyword", required: false, default: "" },
-      ],
-    });
-
-    const args = buildCommandArgs(opt, { first: " hello ", mode: "fast" }, "");
-
-    expect(args).toEqual(["hello", "mode=fast"]);
-  });
-
-  it("skips empty or whitespace-only values", () => {
-    const opt = option({
-      arguments: [
-        { name: "first", kind: "positional", required: true, default: "" },
-        { name: "mode", kind: "keyword", required: false, default: "" },
-      ],
-    });
-
-    const args = buildCommandArgs(opt, { first: "", mode: "   " }, "");
-
-    expect(args).toEqual([]);
-  });
-
-  it("appends parsed extra args when enabled", () => {
-    const opt = option({
-      arguments: [{ name: "first", kind: "positional", required: true, default: "" }],
-      inputs: { defined_args: "auto", extra_args: "optional", message: "optional" },
-    });
-
-    const args = buildCommandArgs(opt, { first: "x" }, 'a "b c" key=value');
-
-    expect(args).toEqual(["x", "a", "b c", "key=value"]);
-  });
-
-  it("ignores hidden defined and extra args", () => {
-    const opt = option({
-      arguments: [{ name: "first", kind: "positional", required: true, default: "" }],
-      inputs: { defined_args: "hidden", extra_args: "hidden", message: "optional" },
-    });
-
-    expect(buildCommandArgs(opt, { first: "x" }, "--verbose")).toEqual([]);
-  });
-
-  it("returns only extra args when no option is selected", () => {
-    expect(buildCommandArgs(null, { ignored: "x" }, "raw")).toEqual(["raw"]);
-  });
-});
-
 describe("commandTraceRefetchInterval", () => {
   it("polls only while the selected command is running", () => {
     expect(commandTraceRefetchInterval("running")).toBe(1000);
     expect(commandTraceRefetchInterval("success")).toBe(false);
     expect(commandTraceRefetchInterval("failed")).toBe(false);
     expect(commandTraceRefetchInterval(undefined)).toBe(false);
-  });
-});
-
-describe("splitCommandLine", () => {
-  it("splits on whitespace", () => {
-    expect(splitCommandLine("a b   c")).toEqual(["a", "b", "c"]);
-  });
-
-  it("preserves double-quoted segments", () => {
-    expect(splitCommandLine('a "b c" d')).toEqual(["a", "b c", "d"]);
-  });
-
-  it("preserves single-quoted segments", () => {
-    expect(splitCommandLine("a 'b c' d")).toEqual(["a", "b c", "d"]);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(splitCommandLine("")).toEqual([]);
-    expect(splitCommandLine("   ")).toEqual([]);
   });
 });
 

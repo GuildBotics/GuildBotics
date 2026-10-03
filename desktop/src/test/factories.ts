@@ -1,4 +1,4 @@
-import type { RuntimeEvent, RuntimeLog, TraceRecord } from "../api/client";
+import type { RuntimeEvent, TraceRecord } from "../api/client";
 
 const CORRELATION_DEFAULTS = {
   trace_id: null,
@@ -17,17 +17,6 @@ export function makeRuntimeEvent(overrides: Partial<RuntimeEvent> = {}): Runtime
     ...CORRELATION_DEFAULTS,
     type: "command.started",
     payload: {},
-    timestamp: "2026-06-04T01:00:00Z",
-    ...overrides,
-  };
-}
-
-export function makeRuntimeLog(overrides: Partial<RuntimeLog> = {}): RuntimeLog {
-  return {
-    kind: "log",
-    ...CORRELATION_DEFAULTS,
-    level: "INFO",
-    message: "",
     timestamp: "2026-06-04T01:00:00Z",
     ...overrides,
   };

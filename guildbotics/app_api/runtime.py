@@ -231,12 +231,6 @@ ACTIVITY_SYNC_STATE_FILE = "activity_sync_weeks.json"
 ACTIVITY_SYNC_PERIOD_PARTS = 2
 
 
-class _UseProcessDataDir:
-    pass
-
-
-_USE_PROCESS_DATA_DIR = _UseProcessDataDir()
-
 #: Lines of build output the status card can show.
 ENVIRONMENT_BUILD_OUTPUT_LINES = 200
 

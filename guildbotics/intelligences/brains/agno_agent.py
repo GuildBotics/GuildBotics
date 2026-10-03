@@ -27,11 +27,9 @@ class RateLimit(BaseModel):
 
     Attributes:
         max_requests_per_minute (Optional[int]): Max requests allowed per minute.
-        max_requests_per_day (Optional[int]): Max requests allowed per day.
     """
 
     max_requests_per_minute: int | None = None
-    max_requests_per_day: int | None = None
 
 
 class ModelConfig(BaseModel):

@@ -9,9 +9,7 @@ import pytest
 
 from guildbotics.intelligences.agent_environment.contract import (
     NetworkPolicy,
-    parse_network_policy,
 )
-from guildbotics.intelligences.agent_runtime import codex as codex_module
 from guildbotics.intelligences.agent_runtime.codex import (
     CodexAppServerAdapter,
     _agent_error_from_rpc,
@@ -1033,17 +1031,9 @@ async def test_codex_reports_unsupported_effort_settings_instead_of_dropping_the
 
 
 def _network(mode: str, *domains: str, local: bool = False) -> NetworkPolicy:
-    return parse_network_policy(
+    return NetworkPolicy.model_validate(
         {"mode": mode, "allowed_domains": list(domains), "allow_local_network": local},
-        where="test",
     )
-
-
-def _codex_binary(tmp_path: Path) -> Path:
-    binary = tmp_path / "opt" / "codex" / "bin" / "codex"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("", encoding="utf-8")
-    return binary
 
 
 def test_overrides_are_spelled_as_toml_values() -> None:

@@ -41,7 +41,6 @@ from guildbotics.integrations.workflow_status_comment import (
     render_workflow_status_comment,
     suppresses_ticket_selection,
 )
-from guildbotics.intelligences.common import Labels
 from guildbotics.utils.i18n_tool import t
 
 HTTP_BAD_REQUEST = 400
@@ -1344,7 +1343,11 @@ class GitHubTicketManager(TicketManager):
                     message = t(
                         "integrations.github.github_ticket_manager.add_custom_field_options",
                         field=field_name,
-                        options=Labels(missing_options),
+                        options="\n"
+                        + "\n".join(
+                            f"  - {label}: {description}"
+                            for label, description in missing_options.items()
+                        ),
                     )
                     self.logger.warning(message)
 

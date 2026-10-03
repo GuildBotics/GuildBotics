@@ -2,7 +2,6 @@
 
 Covers normal paths and error scenarios for:
 - load_class
-- load_function
 - instantiate_class (including expected_type mismatch)
 """
 
@@ -23,7 +22,6 @@ if PROJECT_ROOT not in sys.path:
 from guildbotics.utils.import_utils import (
     instantiate_class,
     load_class,
-    load_function,
 )
 
 
@@ -32,7 +30,7 @@ def dummy_module() -> Iterator[str]:
     """Create and register a temporary dummy module for import tests.
 
     The fixture injects a package-like module `gb_test_mod` and a submodule
-    `gb_test_mod.sub` into ``sys.modules`` with a dummy class and function.
+    `gb_test_mod.sub` into ``sys.modules`` with a dummy class.
 
     Yields:
         str: The fully-qualified module path of the submodule.
@@ -52,14 +50,8 @@ def dummy_module() -> Iterator[str]:
         def __init__(self, value: int = 42) -> None:
             self.value = value
 
-    def dummy_function(x: int, y: int) -> int:
-        """Return a deterministic value for verification."""
-
-        return x + y
-
     # Attach symbols to submodule
     setattr(sub, "DummyClass", DummyClass)
-    setattr(sub, "dummy_function", dummy_function)
 
     # Wire module hierarchy and register
     setattr(pkg, "sub", sub)
@@ -95,30 +87,6 @@ def test_load_class_missing_symbol(dummy_module: str) -> None:
     with pytest.raises(ImportError) as exc:
         load_class(f"{dummy_module}.MissingClass")
     assert "Class 'MissingClass' not found" in str(exc.value)
-
-
-def test_load_function_success(dummy_module: str) -> None:
-    """load_function returns the function object for a valid path."""
-
-    func = load_function(f"{dummy_module}.dummy_function")
-    assert callable(func)
-    assert func(2, 3) == 5
-
-
-def test_load_function_missing_module() -> None:
-    """load_function raises ImportError when module does not exist."""
-
-    with pytest.raises(ImportError) as exc:
-        load_function("no.such.module.func")
-    assert "Module 'no.such.module' could not be imported" in str(exc.value)
-
-
-def test_load_function_missing_symbol(dummy_module: str) -> None:
-    """load_function raises ImportError when function is absent in module."""
-
-    with pytest.raises(ImportError) as exc:
-        load_function(f"{dummy_module}.missing_function")
-    assert "Function 'missing_function' not found" in str(exc.value)
 
 
 def test_instantiate_class_success(dummy_module: str) -> None:

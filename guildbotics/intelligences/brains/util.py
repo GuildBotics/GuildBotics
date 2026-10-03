@@ -6,12 +6,6 @@ from pydantic import BaseModel
 from guildbotics.utils.text_utils import get_json_str
 
 
-def to_header(title: str) -> str:
-    """Format a title as a header."""
-    line = "-" * 3
-    return f"{line}\n\n# {title}\n\n{line}\n"
-
-
 def to_plain_text(
     description: str | None,
     user_input: str | None,

@@ -38,7 +38,6 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.i18n_tool import t
 
 NetworkMode = Literal["deny", "allowlist", "unrestricted"]
-NETWORK_MODES: tuple[NetworkMode, ...] = ("deny", "allowlist", "unrestricted")
 GrantAccess = Literal["read", "read_write"]
 #: The workspace-shared file: the directories under the home directory every
 #: agent may use for documents.
@@ -110,29 +109,6 @@ class NetworkPolicy(BaseModel):
                 t("intelligences.agent_environment.grants.domains_need_allowlist")
             )
         return self
-
-
-def parse_network_policy(raw: Any, *, where: str) -> NetworkPolicy:
-    """Validate a declaration's ``network`` block; absent means closed."""
-    if raw is None:
-        return NetworkPolicy()
-    if not isinstance(raw, dict):
-        raise AccessContractError(
-            t(
-                "intelligences.agent_environment.grants.network_not_a_mapping",
-                where=where,
-            )
-        )
-    try:
-        return NetworkPolicy.model_validate(raw)
-    except ValidationError as exc:
-        raise AccessContractError(
-            t(
-                "intelligences.agent_environment.grants.network_invalid",
-                where=where,
-                error=exc,
-            )
-        ) from exc
 
 
 class DocumentGrant(BaseModel):

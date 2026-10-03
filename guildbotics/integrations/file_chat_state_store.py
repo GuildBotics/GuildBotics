@@ -673,12 +673,6 @@ def _to_non_negative_int(value: object) -> int:
     return max(0, parsed)
 
 
-def _to_str_object_dict(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): item for key, item in value.items() if str(key)}
-
-
 def _pending_event_to_item(pending: PendingChatEvent) -> dict[str, object]:
     return pending.to_record()
 

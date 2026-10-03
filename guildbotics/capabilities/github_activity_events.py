@@ -240,11 +240,6 @@ def _parse_github_timestamp(value: str) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def _timestamp_between(timestamp: str, start: datetime, end: datetime) -> bool:
-    occurred = _parse_github_timestamp(timestamp)
-    return occurred is not None and start <= occurred <= end
-
-
 def _existing_activity_ids(start: datetime, end: datetime) -> set[str]:
     return {
         str(attributes.get("github.activity_id"))

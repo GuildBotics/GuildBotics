@@ -65,12 +65,3 @@ class Message(BaseModel):
         default_factory=list,
         description="A list of file information associated with the message.",
     )
-
-    def to_simple_dict(self) -> dict:
-        """
-        Convert the message to a simple dictionary format.
-
-        Returns:
-            dict: A dictionary representation of the message with author type and content.
-        """
-        return {self.author_type: self.content}
