@@ -1,6 +1,8 @@
 import "@testing-library/jest-dom/vitest";
+import { createElement, forwardRef } from "react";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import type { TextareaProps } from "@mantine/core";
 
 afterEach(() => {
   cleanup();
@@ -44,12 +46,16 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-// jsdom implements no CSS Font Loading API, so `document.fonts` is undefined.
-// Mantine's autosizing Textarea subscribes to it to re-measure once webfonts
-// finish loading, and every component test that renders one throws without it.
-if (!document.fonts) {
-  Object.defineProperty(document, "fonts", {
-    writable: true,
-    value: { addEventListener: () => {}, removeEventListener: () => {} },
-  });
-}
+// jsdom has no layout, so an autosizing Textarea measures nothing, yet it runs
+// `getComputedStyle` on every commit and a large form pays for that on each
+// keystroke. Mantine means to render a plain textarea under test, but its build
+// inlined NODE_ENV as "development" into `getEnv()`, so its own
+// `autosize && getEnv() !== "test"` check never turns autosizing off. Remove
+// this once Mantine's Textarea stops autosizing under Vitest again.
+vi.mock("@mantine/core", async (importOriginal) => {
+  const mantine = await importOriginal<typeof import("@mantine/core")>();
+  const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>((props, ref) =>
+    createElement(mantine.Textarea, { ...props, autosize: false, ref }),
+  );
+  return { ...mantine, Textarea };
+});

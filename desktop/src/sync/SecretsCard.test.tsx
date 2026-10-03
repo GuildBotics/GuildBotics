@@ -83,9 +83,11 @@ describe("SecretsCard", () => {
   it("stays out of the way when the workspace has no hub", async () => {
     vi.mocked(getWorkspaceSecrets).mockResolvedValue(secrets({ enabled: false }));
 
-    renderCard();
+    const client = renderCard();
 
-    await expect(screen.findByText(t("sync.secrets.title"))).rejects.toThrow();
+    await waitFor(() => expect(getWorkspaceSecrets).toHaveBeenCalled());
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByText(t("sync.secrets.title"))).not.toBeInTheDocument();
   });
 
   it("names each key's state without showing anything else about it", async () => {

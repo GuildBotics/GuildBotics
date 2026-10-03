@@ -45,6 +45,7 @@ import {
 import { type AgentEnvironmentStatusResponse } from "../api/client";
 import { forceUpdateCliAgentSkill, getCliAgentSkillStatuses, restartBackend } from "../api/backend";
 import i18n from "../i18n";
+import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 import {
   type ScheduledCommandDraft,
@@ -410,7 +411,18 @@ beforeEach(() => {
 afterEach(() => {
   notifications.clean();
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  vi.useRealTimers();
 });
+
+// Settings are written only by the save button. A test that proves nothing is
+// written behind the user's back lets this much time pass on a fake clock, far
+// beyond any autosave debounce, instead of waiting for it in real time.
+const LONGER_THAN_ANY_AUTOSAVE_MS = 60_000;
+
+function userOnFakeClock() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
 
 describe("SetupPage", () => {
   it("opens the requested member and editor tab from a deep link", async () => {
@@ -517,7 +529,7 @@ describe("SetupPage", () => {
       name: t("setup.intelligence.environment.declaration.memory"),
     });
     await user.clear(memory);
-    await user.type(memory, "8192");
+    await fill(user, memory, "8192");
     await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
@@ -614,7 +626,7 @@ describe("SetupPage", () => {
     await screen.findByLabelText("Workspace");
 
     await user.click(screen.getByRole("button", { name: t("sync.clone.action") }));
-    await user.type(await screen.findByLabelText(t("sync.connect.endpoint")), "user@hub.local");
+    await fill(user, await screen.findByLabelText(t("sync.connect.endpoint")), "user@hub.local");
     await user.click(screen.getByRole("button", { name: t("sync.connect.inspect") }));
     await user.click(await screen.findByRole("button", { name: t("sync.clone.take") }));
 
@@ -680,7 +692,7 @@ describe("SetupPage", () => {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
       }),
     );
-    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
+    await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     await waitFor(() =>
       expect(
@@ -883,7 +895,7 @@ describe("SetupPage", () => {
     );
 
     const keyInput = await screen.findByLabelText("OpenAI API key");
-    await user.type(keyInput, "sk-test");
+    await fill(user, keyInput, "sk-test");
     expect(keyInput).toHaveValue("sk-test");
 
     expect(screen.getByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
@@ -1031,7 +1043,7 @@ describe("SetupPage", () => {
     await user.click(decision);
     await user.click(await screen.findByRole("option", { name: "Use GitHub" }));
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
-    await user.type(projectUrl, "https://github.com/orgs/acme/projects/9");
+    await fill(user, projectUrl, "https://github.com/orgs/acme/projects/9");
 
     // The GitHub section reads the URL from the Project section and fetches
     // the lane options for it on open.
@@ -1157,7 +1169,7 @@ describe("SetupPage", () => {
     await user.click(screen.getByRole("button", { name: "Project" }));
     const projectUrl = screen.getByLabelText(t("setup.github.projectUrl"));
     await user.clear(projectUrl);
-    await user.type(projectUrl, "not-a-valid-url");
+    await fill(user, projectUrl, "not-a-valid-url");
     await user.click(screen.getByRole("button", { name: "GitHub" }));
 
     expect(await screen.findByText(t("setup.github.projectUrlMissingHint"))).toBeInTheDocument();
@@ -1178,7 +1190,7 @@ describe("SetupPage", () => {
     // The Next button stays disabled until the current section is complete, so
     // fill in the required project description and make the GitHub decision
     // (which now lives in the Project section).
-    await user.type(screen.getByLabelText("Project description"), "Demo project");
+    await fill(user, screen.getByLabelText("Project description"), "Demo project");
     await user.click(screen.getByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
     const nextButton = screen.getByRole("button", { name: t("setup.status.next") });
@@ -1239,7 +1251,7 @@ describe("SetupPage", () => {
     // Complete every required section so the Create action becomes available:
     // project description, the provider API key, and a GitHub decision.
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
-    await user.type(screen.getByLabelText("Project description"), "Demo project");
+    await fill(user, screen.getByLabelText("Project description"), "Demo project");
     // The GitHub decision now lives in the Project section.
     await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
@@ -1249,7 +1261,7 @@ describe("SetupPage", () => {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
       }),
     );
-    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
+    await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     // Add one active member so the members section is complete; the add form is
     // shown by default and pre-filled with character defaults.
@@ -1283,7 +1295,7 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
-    await user.type(description, "Updated description");
+    await fill(user, description, "Updated description");
     await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
@@ -1294,7 +1306,7 @@ describe("SetupPage", () => {
   });
 
   it("does not write while the user is only typing", async () => {
-    const user = userEvent.setup();
+    const user = userOnFakeClock();
     renderSetupPage("/setup");
 
     const description = await screen.findByLabelText("Project description");
@@ -1302,12 +1314,12 @@ describe("SetupPage", () => {
     await user.clear(description);
     await user.type(description, "Half a thou");
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateProjectConfig).not.toHaveBeenCalled();
   });
 
   it("does not save when the form has a validation error", async () => {
-    const user = userEvent.setup();
+    const user = userOnFakeClock();
     renderSetupPage("/setup");
 
     const description = await screen.findByLabelText("Project description");
@@ -1315,7 +1327,7 @@ describe("SetupPage", () => {
     await user.clear(description);
     await saveSection(user);
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateProjectConfig).not.toHaveBeenCalled();
   });
 
@@ -1326,7 +1338,7 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
-    await user.type(description, "Updated description");
+    await fill(user, description, "Updated description");
     await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
@@ -1353,12 +1365,12 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
-    await user.type(description, "First");
+    await fill(user, description, "First");
     await saveSection(user);
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
 
     await user.clear(description);
-    await user.type(description, "Second");
+    await fill(user, description, "Second");
     await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(2));
@@ -1384,7 +1396,7 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.clear(description);
-    await user.type(description, "From the stale screen");
+    await fill(user, description, "From the stale screen");
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({ description: "From the other machine" }),
     );
@@ -2561,9 +2573,9 @@ async function fillRequiredMemberBasics(
   user: ReturnType<typeof userEvent.setup>,
   { personId = "bob", personName = "Bob" }: { personId?: string; personName?: string } = {},
 ) {
-  await user.type(await screen.findByLabelText("Member ID"), personId);
-  await user.type(screen.getByLabelText("Display name"), personName);
-  await user.type(screen.getByLabelText("Roles"), "product");
+  await fill(user, await screen.findByLabelText("Member ID"), personId);
+  await fill(user, screen.getByLabelText("Display name"), personName);
+  await fill(user, screen.getByLabelText("Roles"), "product");
   await user.click(await screen.findByRole("option", { name: /^product\b/ }));
 }
 
@@ -2769,11 +2781,13 @@ describe("MembersSection", () => {
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
-    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
-    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
-    fireEvent.change(screen.getByLabelText(t("setup.members.accessToken")), {
-      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
-    });
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    await fill(
+      user,
+      screen.getByLabelText(t("setup.members.accessToken")),
+      "ghp_0123456789abcdef0123456789abcdef0123",
+    );
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
@@ -2798,11 +2812,13 @@ describe("MembersSection", () => {
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
-    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
-    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
-    fireEvent.change(screen.getByLabelText(t("setup.members.accessToken")), {
-      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
-    });
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    await fill(
+      user,
+      screen.getByLabelText(t("setup.members.accessToken")),
+      "ghp_0123456789abcdef0123456789abcdef0123",
+    );
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
@@ -2900,7 +2916,7 @@ describe("MembersSection", () => {
     const nameInput = await screen.findByLabelText("Display name");
     await waitFor(() => expect(nameInput).toHaveValue("Alice"));
     await user.clear(nameInput);
-    await user.type(nameInput, "Alice Cooper");
+    await fill(user, nameInput, "Alice Cooper");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
@@ -2987,7 +3003,7 @@ describe("MembersSection", () => {
 
     // Hand-editing the name must not make the next member inherit it.
     await user.clear(appNameField());
-    await user.type(appNameField(), "custom-app");
+    await fill(user, appNameField(), "custom-app");
 
     await user.click(bobEdit);
     await screen.findByText(t("setup.members.editingBadge", { id: "bob" }));
@@ -3020,8 +3036,8 @@ describe("MembersSection", () => {
     renderSetupPage("/setup?section=members&tab=slack");
 
     await screen.findByLabelText("Member ID");
-    await user.type(screen.getByLabelText(t("setup.members.slackBotToken")), "xoxb-1");
-    await user.type(screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-1");
+    await fill(user, screen.getByLabelText(t("setup.members.slackBotToken")), "xoxb-1");
+    await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-1");
     await user.click(
       screen.getByRole("button", { name: t("setup.members.slackTokenVerify.button") }),
     );
@@ -3196,7 +3212,7 @@ describe("MembersSection", () => {
 
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
     const usernameField = await screen.findByLabelText(t("setup.members.githubUsername"));
-    await user.type(usernameField, "octocat");
+    await fill(user, usernameField, "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
 
     await waitFor(() => expect(resolveMemberIdentity).toHaveBeenCalled());
@@ -3224,7 +3240,7 @@ describe("MembersSection", () => {
     await screen.findByLabelText("Member ID");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
-    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "octocat");
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "octocat");
     await user.click(screen.getByRole("button", { name: t("setup.members.resolve") }));
 
     expect(
@@ -3370,10 +3386,10 @@ describe("MembersSection", () => {
     await fillRequiredMemberBasics(user, { personId: "bob", personName: "Bob" });
     await selectBasicMemberType(user, "Human");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
-    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bob");
-    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bob@example.com");
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bob");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bob@example.com");
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.slack") }));
-    await user.type(await screen.findByLabelText(t("setup.members.slackUserId")), "U012345678");
+    await fill(user, await screen.findByLabelText(t("setup.members.slackUserId")), "U012345678");
     await user.click(screen.getByRole("button", { name: t("setup.members.addButton") }));
 
     await waitFor(() => expect(addMemberConfig).toHaveBeenCalledTimes(1));
@@ -3405,19 +3421,18 @@ describe("MembersSection", () => {
     await fillRequiredMemberBasics(user, { personId: "bot", personName: "Bot" });
     await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.github") }));
     await selectGitHubAccountType(user, "Machine Account (Machine User)");
-    await user.type(await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
-    await user.type(screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
+    await fill(user, await screen.findByLabelText(t("setup.members.githubUsername")), "bot");
+    await fill(user, screen.getByLabelText(t("setup.members.gitEmail")), "bot@example.com");
 
     const tokenField = screen.getByLabelText(t("setup.members.accessToken"));
-    await user.type(tokenField, "bad-token");
+    await fill(user, tokenField, "bad-token");
     expect(
       await screen.findByText(t("setup.validation.githubAccessTokenInvalid")),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeDisabled();
 
-    fireEvent.change(tokenField, {
-      target: { value: "ghp_0123456789abcdef0123456789abcdef0123" },
-    });
+    await user.clear(tokenField);
+    await fill(user, tokenField, "ghp_0123456789abcdef0123456789abcdef0123");
     await waitFor(() =>
       expect(screen.getByRole("button", { name: t("setup.members.addButton") })).toBeEnabled(),
     );
@@ -3450,7 +3465,7 @@ describe("MembersSection", () => {
     fireEvent.keyDown(channelInput, { key: "Enter", isComposing: false });
     await screen.findByDisplayValue("開発");
 
-    await user.type(screen.getByLabelText(t("setup.members.slackBotToken")), "not-a-token");
+    await fill(user, screen.getByLabelText(t("setup.members.slackBotToken")), "not-a-token");
     expect(await screen.findByText(t("setup.validation.slackBotTokenInvalid"))).toBeInTheDocument();
   });
 
@@ -3744,8 +3759,8 @@ describe("PatrolSettingsEditor", () => {
     await user.click(await screen.findByRole("combobox", { name: t("commands.command") }));
     await user.click(await screen.findByRole("option", { name: /Report \(report\)/ }));
 
-    await user.type(await screen.findByLabelText("target *"), "weekly report");
-    await user.type(screen.getByLabelText("--format"), "pdf");
+    await fill(user, await screen.findByLabelText("target *"), "weekly report");
+    await fill(user, screen.getByLabelText("--format"), "pdf");
 
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
@@ -3763,8 +3778,8 @@ describe("PatrolSettingsEditor", () => {
     await user.click(screen.getByRole("button", { name: t("setup.members.patrol.addSchedule") }));
     await user.click(await screen.findByRole("radio", { name: t("commands.modeCustom") }));
 
-    await user.type(await screen.findByLabelText(t("commands.command")), "my/custom_command");
-    await user.type(screen.getByLabelText(t("commands.extraArgs")), "--verbose");
+    await fill(user, await screen.findByLabelText(t("commands.command")), "my/custom_command");
+    await fill(user, screen.getByLabelText(t("commands.extraArgs")), "--verbose");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
@@ -3813,7 +3828,7 @@ describe("PatrolSettingsEditor", () => {
 
     const cronField = await screen.findByLabelText(t("setup.members.patrol.cron"));
     await user.clear(cronField);
-    await user.type(cronField, "0 9 * *");
+    await fill(user, cronField, "0 9 * *");
 
     expect(await screen.findByText(t("setup.members.patrol.cronInvalid"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
@@ -4030,7 +4045,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await user.click(slotInput!);
     await user.clear(slotInput!);
-    await user.type(slotInput!, "renamed-slot");
+    await fill(user, slotInput!, "renamed-slot");
 
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
@@ -4110,7 +4125,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await user.click(slotInput!);
     await user.clear(slotInput!);
-    await user.type(slotInput!, "renamed-cli");
+    await fill(user, slotInput!, "renamed-cli");
 
     expect(slotInput).toHaveFocus();
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
@@ -4141,7 +4156,7 @@ describe("IntelligenceEditor (team default)", () => {
     await openTeamIntelligenceAdvanced(user);
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
-    await user.type(modelId, "gpt-6");
+    await fill(user, modelId, "gpt-6");
 
     await saveSection(user);
 
@@ -4166,7 +4181,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
-    await user.type(modelId, "gpt-6");
+    await fill(user, modelId, "gpt-6");
     await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
@@ -4203,11 +4218,11 @@ describe("IntelligenceEditor (team default)", () => {
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
 
     await user.clear(modelId);
-    await user.type(modelId, "gpt-6");
+    await fill(user, modelId, "gpt-6");
     await saveSection(user);
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     await user.clear(modelId);
-    await user.type(modelId, "gpt-7");
+    await fill(user, modelId, "gpt-7");
     await saveSection(user);
 
     await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(2));
@@ -4226,7 +4241,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
-    await user.type(modelId, "gpt-6");
+    await fill(user, modelId, "gpt-6");
 
     await saveSection(user);
 
@@ -4242,13 +4257,13 @@ describe("IntelligenceEditor (team default)", () => {
   });
 
   it("writes nothing until the save button is pressed", async () => {
-    const user = userEvent.setup();
+    const user = userOnFakeClock();
     await openTeamIntelligenceAdvanced(user);
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
-    await user.type(modelId, "X");
+    await fill(user, modelId, "X");
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
 
     await saveSection(user);
@@ -4329,7 +4344,7 @@ describe("IntelligenceEditor (team default)", () => {
     await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
     await user.click(screen.getByRole("option", { name: "Jev" }));
     const key = card.getByLabelText(t("decision.key"));
-    await user.type(key, "synthetic-new-key");
+    await fill(user, key, "synthetic-new-key");
     expect(saveDecisionCredential).not.toHaveBeenCalled();
     await saveSection(user);
     await waitFor(() =>
@@ -4353,7 +4368,7 @@ describe("IntelligenceEditor (team default)", () => {
       await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
       await user.click(screen.getByRole("option", { name: "Jev" }));
       if (kind === "hidden") {
-        await user.type(card.getByLabelText(t("decision.key")), "do-not-save-hidden-key");
+        await fill(user, card.getByLabelText(t("decision.key")), "do-not-save-hidden-key");
         await user.click(card.getByRole("combobox", { name: t("setup.intelligence.engine") }));
         await user.click(screen.getByRole("option", { name: "LLM" }));
         expect(card.queryByLabelText(t("decision.key"))).not.toBeInTheDocument();
@@ -4382,7 +4397,7 @@ describe("IntelligenceEditor (team default)", () => {
     await openTeamIntelligenceAdvanced(user);
     const card = within(document.getElementById("decision-settings")!);
     const key = card.getByLabelText(t("decision.key"));
-    await user.type(key, "synthetic-retry-key");
+    await fill(user, key, "synthetic-retry-key");
     await saveSection(user);
     await screen.findByText(t("decision.failed"));
     expect(key).toHaveValue("synthetic-retry-key");
@@ -4418,7 +4433,7 @@ describe("IntelligenceEditor (team default)", () => {
   });
 
   it("shows a JSON validation error and blocks the save for a malformed effort", async () => {
-    const user = userEvent.setup();
+    const user = userOnFakeClock();
     await openTeamIntelligenceAdvanced(user);
 
     await user.click(
@@ -4432,7 +4447,7 @@ describe("IntelligenceEditor (team default)", () => {
     await user.paste("{not json");
 
     expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
@@ -4463,7 +4478,7 @@ describe("IntelligenceEditor (team default)", () => {
     // The field withholds onChange while the text is malformed, so without the
     // validity wiring the pending autosave would still fire and silently
     // persist the last value that parsed -- not what is on screen.
-    const user = userEvent.setup();
+    const user = userOnFakeClock();
     await openTeamIntelligenceAdvanced(user);
 
     await user.click(
@@ -4477,7 +4492,7 @@ describe("IntelligenceEditor (team default)", () => {
     await user.paste(" oops");
 
     expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
@@ -4547,7 +4562,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     const modelId = await screen.findByLabelText(t("setup.intelligence.effort.modelAlwaysLabel"));
     await user.clear(modelId);
-    await user.type(modelId, "broken-model");
+    await fill(user, modelId, "broken-model");
     await saveSection(user);
 
     expect(await screen.findByText("write blew up")).toBeInTheDocument();
@@ -4723,7 +4738,7 @@ describe("IntelligenceEditor (member override)", () => {
     const user = userEvent.setup();
     await openMemberIntelligenceTab(user);
     const key = await screen.findByLabelText(t("decision.key"));
-    await user.type(key, "synthetic-member-key");
+    await fill(user, key, "synthetic-member-key");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
     await waitFor(() =>
       expect(saveDecisionCredential).toHaveBeenCalledWith(
@@ -4751,12 +4766,12 @@ describe("IntelligenceEditor (member override)", () => {
 
     const name = await screen.findByLabelText(t("setup.members.personName"));
     await user.clear(name);
-    await user.type(name, "First");
+    await fill(user, name, "First");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(1));
 
     await user.clear(name);
-    await user.type(name, "Second");
+    await fill(user, name, "Second");
     await user.click(screen.getByRole("button", { name: t("setup.members.saveButton") }));
 
     await waitFor(() => expect(updateMemberConfig).toHaveBeenCalledTimes(2));
@@ -4775,7 +4790,7 @@ describe("IntelligenceEditor (member override)", () => {
       t("setup.intelligence.effort.modelAlwaysLabel"),
     );
     await user.clear(modelIds[0]);
-    await user.type(modelIds[0], "gpt-6");
+    await fill(user, modelIds[0], "gpt-6");
 
     // External save mode: nothing persists until the member Save button is used.
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();

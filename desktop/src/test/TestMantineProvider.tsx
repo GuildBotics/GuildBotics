@@ -17,7 +17,8 @@ import { MantineProvider, type MantineProviderProps } from "@mantine/core";
  *   the one that scheduled it.
  * - `env="test"`, which Mantine reads to render transitions in their final
  *   state. It does not stop the timers on its own -- `useTransition` runs
- *   before the check -- so it is not a substitute for the setting above.
+ *   before the check -- so it is not a substitute for the setting above. It
+ *   does not turn off Textarea autosizing either; `src/test/setup.ts` does.
  */
 export function TestMantineProvider({ theme, ...props }: MantineProviderProps) {
   return <MantineProvider {...props} theme={{ ...theme, respectReducedMotion: true }} env="test" />;

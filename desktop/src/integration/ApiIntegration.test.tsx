@@ -11,6 +11,7 @@ import { configureApi } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
 import { SetupPage } from "../setup/SetupPage";
+import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
@@ -382,10 +383,10 @@ describe("Service Runtime integration (real client + mock server)", () => {
 
     const interval = screen.getByRole("textbox", { name: t("overview.routineIntervalMinutes") });
     await user.clear(interval);
-    await user.type(interval, "30");
+    await fill(user, interval, "30");
     const maxErrors = screen.getByRole("textbox", { name: t("overview.maxConsecutiveErrors") });
     await user.clear(maxErrors);
-    await user.type(maxErrors, "7");
+    await fill(user, maxErrors, "7");
 
     await user.click(screen.getByRole("button", { name: t("overview.start") }));
 
@@ -536,7 +537,7 @@ describe("Setup integration (real client + mock server)", () => {
     await screen.findByRole("heading", { name: "First setup" });
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
-    await user.type(screen.getByLabelText("Project description"), "Demo project");
+    await fill(user, screen.getByLabelText("Project description"), "Demo project");
     // The GitHub use/don't decision now lives in the Project section.
     await user.click(await screen.findByRole("combobox", { name: "GitHub integration" }));
     await user.click(await screen.findByRole("option", { name: "Do not use GitHub" }));
@@ -546,12 +547,12 @@ describe("Setup integration (real client + mock server)", () => {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
       }),
     );
-    await user.type(await screen.findByLabelText("OpenAI API key"), "sk-test");
+    await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
 
     await user.click(screen.getByRole("button", { name: "Members" }));
-    await user.type(await screen.findByLabelText("Member ID"), "alice");
-    await user.type(screen.getByLabelText("Display name"), "Alice");
-    await user.type(screen.getByLabelText("Roles"), "product");
+    await fill(user, await screen.findByLabelText("Member ID"), "alice");
+    await fill(user, screen.getByLabelText("Display name"), "Alice");
+    await fill(user, screen.getByLabelText("Roles"), "product");
     await user.click(await screen.findByRole("option", { name: /^product\b/ }));
     await user.click(screen.getByRole("button", { name: "Add member" }));
 
