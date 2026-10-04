@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
+import stat
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Literal
@@ -20,13 +21,25 @@ from guildbotics.intelligences.agent_environment.contract import (
     grant_spelling,
     load_local_grants,
     load_shared_grants,
+    protected_paths,
     resolve_access,
+    validate_mount_source,
 )
 from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.utils.advisory_lock import (
     lock_file_nonblocking,
-    open_lock_file,
     unlock_file,
+)
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.safe_paths import (
+    HostPathPermissionError,
+    UnsafePathError,
+    consume_host_file,
+    inspect_host_path,
+    normalize_host_path,
+    open_host_file,
+    resolve_host_links,
+    visit_host_directory,
 )
 
 #: Largest file the Desktop hands a command; not a shared file, so not derived
@@ -64,19 +77,38 @@ class CommandInputFileStore:
         self._root = root or exchange_tmp_dir()
         self._directory: Path | None = None
         self._session_lock: IO[str] | None = None
+        self._lock = threading.RLock()
+        self.problem = ""
 
     def start(self) -> None:
         """Create this session directory after recovering orphaned sessions."""
+        with self._lock:
+            try:
+                self._start()
+            except AccessContractError as exc:
+                self.problem = str(exc)
+                raise
+            self.problem = ""
+
+    def _start(self) -> None:
         if self._directory is not None:
             return
-        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._root.chmod(0o700)
+        self._root = validate_mount_source(
+            self._root, protected_paths(), grant=True, create=True
+        )
+        visit_host_directory(self._root, self._start_in_directory)
+
+    def _start_in_directory(self, descriptor: int | None) -> None:
+        """Create a session while the checked exchange ancestry remains open."""
         with _cleanup_lock(self._root):
-            _remove_orphaned_sessions(self._root)
-            directory = Path(
-                tempfile.mkdtemp(prefix=_SESSION_DIRECTORY_PREFIX, dir=self._root)
-            )
-            session_lock = open_lock_file(directory / _SESSION_LOCK_NAME)
+            _remove_orphaned_sessions(self._root, descriptor)
+            name = f"{_SESSION_DIRECTORY_PREFIX}{uuid4().hex}"
+            if descriptor is None:
+                inspect_host_path(self._root / name, create=True)
+            else:
+                os.mkdir(name, mode=0o700, dir_fd=descriptor)
+            directory = self._root / name
+            session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
             try:
                 lock_file_nonblocking(session_lock)
             except Exception:
@@ -96,6 +128,10 @@ class CommandInputFileStore:
 
     def close(self) -> None:
         """Remove everything owned by this App API session."""
+        with self._lock:
+            self._close()
+
+    def _close(self) -> None:
         directory = self._directory
         session_lock = self._session_lock
         self._directory = None
@@ -106,11 +142,15 @@ class CommandInputFileStore:
             finally:
                 session_lock.close()
         if directory is not None:
-            shutil.rmtree(directory, ignore_errors=True)
+            with suppress(AccessContractError, OSError):
+                visit_host_directory(
+                    directory.parent, lambda fd: _remove_session(directory, fd)
+                )
 
     def _session_directory(self) -> Path:
         if self._directory is None:
-            raise RuntimeError("Command input file store is not running.")
+            self.start()
+        assert self._directory is not None
         return self._directory
 
 
@@ -157,18 +197,64 @@ def copy_command_input_file(directory: Path, source: Path) -> Path:
     Raises:
         ValueError: If ``source`` is not a regular file or exceeds the limit.
     """
-    if not source.is_file():
+    name = source.name
+    source = _admit_input_path(source)
+    try:
+        info = source.stat()
+    except PermissionError as exc:
+        raise HostPathPermissionError(source) from exc
+    except FileNotFoundError as exc:
+        raise ValueError(t("safe_paths.file_missing", path=source)) from exc
+    if not stat.S_ISREG(info.st_mode):
         raise ValueError(f"'{source}' is not a file.")
-    _check_size(source.stat().st_size)
+    _check_size(info.st_size)
 
     def write(output: IO[bytes]) -> int:
-        with source.open("rb") as input_file:
-            shutil.copyfileobj(input_file, output)
-        return output.tell()
+        size = 0
 
-    return _write_command_input_file(
-        directory, f"{uuid4().hex[:8]}-{source.name}", write
-    )
+        def chunk(content: bytes) -> None:
+            nonlocal size
+            size += len(content)
+            _check_size(size)
+            output.write(content)
+
+        try:
+            consume_host_file(source, chunk)
+        except FileNotFoundError as exc:
+            raise ValueError(t("safe_paths.file_missing", path=source)) from exc
+        return size
+
+    return _write_command_input_file(directory, f"{uuid4().hex[:8]}-{name}", write)
+
+
+def _admit_input_path(source: Path) -> Path:
+    """A copy must never borrow the host's authority through a turn's link."""
+    denied = protected_paths()
+
+    def admit_link(link: Path, leaf: bool) -> None:
+        if leaf:
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
+        parent = inspect_host_path(link.parent)
+        if any(facts.contains(parent) for closed in denied for facts in closed.facts()):
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
+        # A current cwd cannot prove that a previous turn never wrote here.
+        # Trust only a parent that can never be granted: it contains a fixed
+        # credential/device path. Registered workspace state is removable.
+        if not any(
+            parent.contains(
+                inspect_host_path(
+                    closed.path, missing=True, directory=False, link_as_missing=True
+                )
+            )
+            for closed in denied
+            if closed.kind == "credentials"
+        ):
+            raise UnsafePathError(t("safe_paths.copy_link", path=link))
+
+    resolution = resolve_host_links(source, on_link=admit_link)
+    if resolution.cyclic:
+        raise UnsafePathError(t("safe_paths.copy_link", path=source))
+    return validate_mount_source(resolution.path, denied, grant=True, missing=True)
 
 
 def _check_size(size: int) -> None:
@@ -181,19 +267,42 @@ def _check_size(size: int) -> None:
 def _write_command_input_file(
     directory: Path, name: str, write: Callable[[IO[bytes]], int]
 ) -> Path:
-    directory.chmod(0o700)
+    directory = normalize_host_path(directory)
     destination = directory / name
     temporary = directory / f".{name}.upload"
-    try:
-        with temporary.open("xb") as output:
-            size = write(output)
-        if size == 0:
-            raise ValueError("File is empty.")
-        os.replace(temporary, destination)
-        destination.chmod(0o600)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return destination.resolve()
+
+    def save(fd: int | None) -> None:
+        try:
+            # Windows holds every ancestor without delete sharing; on POSIX
+            # the descriptor anchors the complete write/rename/cleanup.
+            handle = os.open(
+                temporary if fd is None else temporary.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=fd,
+            )
+            with os.fdopen(handle, "wb") as output:
+                size = write(output)
+            if size == 0:
+                raise ValueError("File is empty.")
+            os.replace(
+                temporary if fd is None else temporary.name,
+                destination if fd is None else destination.name,
+                src_dir_fd=fd,
+                dst_dir_fd=fd,
+            )
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary if fd is None else temporary.name, dir_fd=fd)
+
+    visit_host_directory(directory, save)
+    return destination
+
+
+def _remove_session(directory: Path, fd: int | None) -> None:
+    shutil.rmtree(
+        directory if fd is None else directory.name, dir_fd=fd, ignore_errors=True
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +330,7 @@ class CommandInputPath:
     reachable: bool
     guest_path: str
     grant: GrantSuggestion | None = None
+    problem: str = ""
 
 
 def command_cwd(cwd: Path | None) -> Path | None:
@@ -235,7 +345,7 @@ def command_cwd(cwd: Path | None) -> Path | None:
     expanded = cwd.expanduser()
     if not expanded.is_absolute():
         raise AppApiError("command_cwd_not_absolute", params={"cwd": str(cwd)})
-    return expanded
+    return normalize_host_path(expanded)
 
 
 def describe_command_input_paths(
@@ -251,19 +361,33 @@ def describe_command_input_paths(
         access = resolve_access(load_shared_grants(), load_local_grants(), create=False)
     except AccessContractError:
         access = None
-    home = Path.home().resolve()
+    home = normalize_host_path(Path.home())
     described = []
-    for path in paths:
+    for original in paths:
+        path = normalize_host_path(original)
         kind: InputPathKind = (
             "directory" if path.is_dir() else "file" if path.exists() else "missing"
         )
-        reachable = access is not None and access.reaches(path, cwd)
+        try:
+            reachable = access is not None and access.reaches(path, cwd)
+        except AccessContractError:
+            reachable = False
         grant = None
+        problem = ""
         if not reachable and kind != "missing":
-            real = path.resolve()
-            grant = _grant_for(real if kind == "directory" else real.parent, home)
+            try:
+                real = _admit_input_path(path)
+            except AccessContractError as exc:
+                problem = str(exc)
+            else:
+                directory = real if kind == "directory" else real.parent
+                with suppress(AccessContractError):
+                    validate_mount_source(directory, protected_paths(), grant=True)
+                    grant = _grant_for(directory, home)
         described.append(
-            CommandInputPath(path, kind, reachable, guest_path(path.absolute()), grant)
+            CommandInputPath(
+                path, kind, reachable, guest_path(path.absolute()), grant, problem
+            )
         )
     return described
 
@@ -278,7 +402,7 @@ def _grant_for(directory: Path, home: Path) -> GrantSuggestion | None:
 
 @contextmanager
 def _cleanup_lock(root: Path) -> Iterator[None]:
-    lock_file = open_lock_file(root / _CLEANUP_LOCK_NAME)
+    lock_file = open_host_file(root / _CLEANUP_LOCK_NAME)
     while True:
         try:
             lock_file_nonblocking(lock_file)
@@ -292,11 +416,16 @@ def _cleanup_lock(root: Path) -> Iterator[None]:
         lock_file.close()
 
 
-def _remove_orphaned_sessions(root: Path) -> None:
-    for directory in root.glob(f"{_SESSION_DIRECTORY_PREFIX}*"):
-        if directory.is_symlink() or not directory.is_dir():
+def _remove_orphaned_sessions(root: Path, descriptor: int | None) -> None:
+    for name in os.listdir(root if descriptor is None else descriptor):
+        if not name.startswith(_SESSION_DIRECTORY_PREFIX):
             continue
-        session_lock = open_lock_file(directory / _SESSION_LOCK_NAME)
+        directory = root / name
+        try:
+            inspect_host_path(directory)
+            session_lock = open_host_file(directory / _SESSION_LOCK_NAME)
+        except AccessContractError:
+            continue
         try:
             try:
                 lock_file_nonblocking(session_lock)
@@ -305,4 +434,7 @@ def _remove_orphaned_sessions(root: Path) -> None:
             unlock_file(session_lock)
         finally:
             session_lock.close()
-        shutil.rmtree(directory, ignore_errors=True)
+        if descriptor is None:
+            shutil.rmtree(directory, ignore_errors=True)
+        else:
+            shutil.rmtree(name, dir_fd=descriptor, ignore_errors=True)

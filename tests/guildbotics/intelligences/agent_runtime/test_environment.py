@@ -46,9 +46,9 @@ def _command(
     """A command of aiko, a member configured with ``tools`` (Claude Code by
     default), declaring ``access`` and working in ``cwd`` (``repository`` in
     the test's workspace by default)."""
-    return command_at(
-        cwd or get_workspace_root() / "repository", tools or {"claude"}, access
-    )
+    cwd = cwd or get_workspace_root() / "repository"
+    cwd.mkdir(parents=True, exist_ok=True)
+    return command_at(cwd, tools or {"claude"}, access)
 
 
 def test_no_adapter_starts_a_process_but_through_its_turn() -> None:
@@ -382,7 +382,9 @@ async def test_every_turn_has_the_running_code_read_only_apart_from_the_users(
         if mount != code
     )
     assert (
-        EnvironmentMount(guest_path(checkout), None if read_only else checkout, False)
+        EnvironmentMount(
+            guest_path(checkout), None if read_only else checkout, False, user=True
+        )
         in spec.mounts
     )
 
@@ -398,6 +400,75 @@ def test_a_directory_not_there_yet_is_neither_mounted_nor_named(tmp_path):
 
     assert "diagnostics" not in directories
     assert directories["config"] == guest_path(tmp_path / ".guildbotics" / "config")
+
+
+def test_linked_package_uses_one_canonical_root_for_code_and_templates(
+    tmp_path, symlinks
+):
+    import subprocess
+    import sys
+
+    from guildbotics.utils.fileio import PACKAGE_ROOT
+
+    linked = tmp_path / "launcher"
+    linked.symlink_to(PACKAGE_ROOT.parent, target_is_directory=True)
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import guildbotics; from guildbotics.utils.fileio import PACKAGE_ROOT, get_template_path; from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, code_path, command_path; assert sys.argv[1] in guildbotics.__file__; assert CODE_MOUNT.host == PACKAGE_ROOT; assert code_path(get_template_path()).startswith(CODE_MOUNT.guest); assert command_path(get_template_path() / 'ask.en.md').startswith(CODE_MOUNT.guest)"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(linked)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_installed_folder_name_does_not_change_guest_package_name(tmp_path, symlinks):
+    import subprocess
+    import sys
+
+    from guildbotics.utils.fileio import PACKAGE_ROOT
+
+    renamed = tmp_path / "renamed-install"
+    renamed.mkdir()
+    (renamed / "templates").symlink_to(
+        PACKAGE_ROOT / "templates", target_is_directory=True
+    )
+    code = "from pathlib import Path; import guildbotics.utils.fileio as f; f.PACKAGE_ROOT=Path(__import__('sys').argv[1]); from guildbotics.intelligences.agent_runtime.environment import CODE_MOUNT, code_path; assert CODE_MOUNT.host == f.PACKAGE_ROOT; assert CODE_MOUNT.guest == '/opt/guildbotics/code/guildbotics'; assert code_path(f.PACKAGE_ROOT / 'runtime/command_entry.py') == '/opt/guildbotics/code/guildbotics/runtime/command_entry.py'"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(renamed)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_boot_permission_refusal_is_a_command_error_and_closes_gateways(
+    monkeypatch, tmp_path
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    closed = []
+
+    class Gateway:
+        async def close(self):
+            closed.append(True)
+
+    shared = object.__new__(environment._SharedEnvironment)
+    shared._gateways = {"codex": Gateway()}
+    problem = HostPathPermissionError(tmp_path / "protected")
+
+    async def boot(self, host):
+        raise problem
+
+    monkeypatch.setattr(environment._SharedEnvironment, "_boot", boot)
+    with pytest.raises(CommandError) as failure:
+        await shared.boot(None)
+    assert str(failure.value) == str(problem)
+    assert closed == [True]
+    assert shared._gateways == {}
 
 
 def _jwt(claims: dict[str, object]) -> str:
@@ -471,14 +542,9 @@ async def test_a_brokered_turn_reaches_its_api_only_through_its_gateway(
 
     import httpx
 
-    from guildbotics.intelligences.agent_environment import provider_state
     from guildbotics.intelligences.agent_environment.spec import (
         GUEST_HOST_ALIAS,
         guest_home,
-    )
-    from guildbotics.intelligences.agent_runtime.models import (
-        AgentExecutionContext,
-        ConversationKey,
     )
 
     tool = environment.cli_agent_info(tool_name)
@@ -815,7 +881,7 @@ async def test_the_microvm_works_where_the_command_does_and_its_turns_in_the_clo
     settle_contract(
         monkeypatch,
         AccessContract(
-            access=ResolvedAccess(denied=(DeniedPath(path=state, builtin=True),))
+            access=ResolvedAccess(denied=(DeniedPath(path=state, kind="workspace"),))
         ),
     )
     _device(monkeypatch, tmp_path, "claude")
@@ -824,6 +890,14 @@ async def test_the_microvm_works_where_the_command_does_and_its_turns_in_the_clo
     clone = get_member_clone_path("aiko")
     in_clone = _turn(tmp_path, cwd=clone / "src")
     turn_context = _turn(tmp_path, cwd=cwd) if read_only else in_clone
+    if where == "workspace root" and not read_only:
+        from guildbotics.commands.errors import CommandError
+
+        with pytest.raises(CommandError):
+            async with _command(cwd=cwd):
+                pass
+        assert not _Booted.booted
+        return
     async with _command(cwd=cwd, access=CommandAccess(read_only=read_only)):
         turn = await environment.start_turn_environment(turn_context, "claude")
         await turn.close()
@@ -976,6 +1050,44 @@ def test_only_where_a_command_runs_is_a_command_environment_opened() -> None:
     )
 
     assert openers == {("guildbotics/drivers/command_runner.py", "run_in_environment")}
+
+
+def test_every_bind_and_microvm_entry_uses_the_checked_mount_boundary() -> None:
+    """New mounts or VM entries must explicitly join the common safety check."""
+    assert _call_sites(
+        lambda call: (
+            getattr(call.func, "attr", None) == "bind"
+            and getattr(getattr(call.func, "value", None), "id", None) == "Volume"
+        )
+    ) == {("guildbotics/intelligences/agent_environment/runtime.py", "_volumes")}
+    assert _call_sites(
+        lambda call: (
+            (
+                getattr(call.func, "attr", None) == "create"
+                and getattr(getattr(call.func, "value", None), "id", None) == "Sandbox"
+            )
+            or (
+                getattr(call.func, "attr", None) == "create"
+                and getattr(getattr(call.func, "value", None), "attr", None)
+                == "Sandbox"
+            )
+        )
+    ) == {
+        ("guildbotics/intelligences/agent_environment/runtime.py", "start"),
+        ("guildbotics/intelligences/agent_environment/runtime.py", "build_snapshot"),
+    }
+    assert _call_sites(
+        lambda call: getattr(call.func, "id", None) == "EnvironmentMount"
+    ) == {
+        ("guildbotics/intelligences/agent_environment/spec.py", "_mounts"),
+        ("guildbotics/intelligences/agent_environment/provider_state.py", "bind_state"),
+        (
+            "guildbotics/intelligences/agent_environment/provider_state.py",
+            "_state_root_spec",
+        ),
+        ("guildbotics/intelligences/agent_runtime/environment.py", "<module>"),
+        ("guildbotics/intelligences/agent_runtime/environment.py", "_inspected_mounts"),
+    }
 
 
 def test_every_command_runs_in_an_environment() -> None:
@@ -1139,12 +1251,12 @@ async def test_a_turn_the_running_microvm_was_not_started_for_is_refused(
 
     _device(monkeypatch, tmp_path, "claude", "codex")
     repository = tmp_path / "repository"
-    denied = repository / "private"
+    denied = tmp_path / "private"
     denied.mkdir(parents=True)
     settle_contract(
         monkeypatch,
         AccessContract(
-            access=ResolvedAccess(denied=(DeniedPath(path=denied, builtin=False),))
+            access=ResolvedAccess(denied=(DeniedPath(path=denied, kind="local"),))
         ),
     )
     turn = {
@@ -1674,7 +1786,9 @@ async def test_windows_temp_mount_is_refused_before_boot(
     _device(monkeypatch, tmp_path)
 
     with pytest.raises(CommandError) as failed:
-        async with _command(cwd=mounted if source == "cwd" else tmp_path):
+        async with _command(
+            cwd=mounted if source == "cwd" else tmp_path / "repository"
+        ):
             pass
 
     assert str(mounted) in str(failed.value)

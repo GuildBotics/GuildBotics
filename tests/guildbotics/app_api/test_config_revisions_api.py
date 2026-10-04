@@ -17,11 +17,195 @@ from guildbotics.app_api.events import EventBus
 from guildbotics.app_api.runtime import AppRuntime
 
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
 HTTP_CONFLICT = 409
+HTTP_UNPROCESSABLE_ENTITY = 422
 
 AUTH_HEADERS = {"X-GuildBotics-Session-Token": "secret"}
 PROJECT = "team/project.yml"
 CLI_MAPPING = "intelligences/cli_agent_mapping.yml"
+
+
+@pytest.mark.parametrize(
+    "person_id",
+    [
+        "/private/keys",
+        "../../keys",
+        "a/b",
+        "a\\b",
+        "",
+        "con",
+        "aux",
+        "nul",
+        "com1",
+        "lpt1",
+    ],
+)
+def test_intelligence_api_rejects_invalid_member_before_any_read_write_or_delete(
+    client, config_dir, person_id
+):
+    sentinel = config_dir / "intelligences/keep"
+    sentinel.write_text("keep")
+    before = {
+        str(p.relative_to(config_dir)): p.read_bytes()
+        for p in config_dir.rglob("*")
+        if p.is_file()
+    }
+    response = client.get(
+        "/config/intelligences", headers=AUTH_HEADERS, params={"person_id": person_id}
+    )
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    response = client.put(
+        "/config/intelligences",
+        headers=AUTH_HEADERS,
+        json={
+            "config_dir": str(config_dir),
+            "person_id": person_id,
+            "inherit_team_defaults": True,
+        },
+    )
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert {
+        str(p.relative_to(config_dir)): p.read_bytes()
+        for p in config_dir.rglob("*")
+        if p.is_file()
+    } == before
+
+
+@pytest.mark.parametrize(
+    "stored_name",
+    ["con", "aux", "nul", "alice", "Alice", "alice.bak", "alice backup", "あいこ"],
+)
+@pytest.mark.parametrize("action", ["rename", "delete"])
+def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
+    client, config_dir, stored_name, action
+):
+    import os
+
+    from guildbotics.loader.yaml.yaml_team_loader import YamlTeamLoader
+    from guildbotics.utils.person_id import MemberConfigError
+
+    if os.name == "nt" and stored_name in {"con", "aux", "nul"}:
+        pytest.skip("Windows cannot create a legacy reserved directory")
+    member = config_dir / "team/members" / stored_name
+    member.mkdir(parents=True)
+    person = member / "person.yml"
+    person.write_text(
+        f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(MemberConfigError) as error:
+        YamlTeamLoader(str(config_dir / "team")).load()
+    assert error.value.filename == str(person)
+    assert str(person) in str(error.value)
+    listing = client.get("/team", headers=AUTH_HEADERS)
+    assert stored_name in [p["person_id"] for p in listing.json()["members"]]
+    assert str(person) in listing.json()["problem"]
+    read = client.get(f"/config/members/{stored_name}", headers=AUTH_HEADERS)
+    assert read.status_code == HTTP_OK
+    assert read.json()["person_id"] == stored_name
+    revisions = read.json()["revisions"]
+    if action == "rename":
+        repaired = "alice" if stored_name == "Alice" else "repaired"
+        response = client.put(
+            f"/config/members/{stored_name}",
+            headers=AUTH_HEADERS,
+            json=_member_payload(
+                config_dir,
+                revisions,
+                original_person_id=stored_name,
+                person_id=repaired,
+            ),
+        )
+        assert response.status_code == HTTP_OK
+        names = [child.name for child in member.parent.iterdir()]
+        assert stored_name not in names
+        assert repaired in names
+        assert (
+            safe_load(
+                (config_dir / "team/members" / repaired / "person.yml").read_text(
+                    encoding="utf-8"
+                )
+            )["person_id"]
+            == repaired
+        )
+    else:
+        response = client.request(
+            "DELETE",
+            f"/config/members/{stored_name}",
+            headers=AUTH_HEADERS,
+            json={"config_dir": str(config_dir), "expected_revisions": revisions},
+        )
+        assert response.status_code == HTTP_OK
+        assert not member.exists()
+    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+
+
+@pytest.mark.parametrize("action", ["rename", "delete"])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "[alice]",
+        "person_id: [",
+        "person_id: alice\naccount_info: null\nprofile: null\nroutine_commands: null\n",
+        "person_id: alice\naccount_info: []\nprofile: []\nroutine_commands: 123\n",
+        "person_id: alice\nprofile:\n  roles: {123: architect}\n  character: {123: invalid}\n",
+    ],
+)
+def test_invalid_member_data_remains_listed_and_repairable(
+    client, config_dir, content, action
+):
+    member = config_dir / "team/members/broken"
+    member.mkdir(parents=True)
+    person = member / "person.yml"
+    person.write_text(content, encoding="utf-8")
+    listing = client.get("/team", headers=AUTH_HEADERS)
+    assert listing.status_code == HTTP_OK
+    assert "broken" in [p["person_id"] for p in listing.json()["members"]]
+    assert str(person) in listing.json()["problem"]
+    read = client.get("/config/members/broken", headers=AUTH_HEADERS)
+    assert read.status_code == HTTP_OK
+    if action == "rename":
+        response = client.put(
+            "/config/members/broken",
+            headers=AUTH_HEADERS,
+            json=_member_payload(
+                config_dir,
+                read.json()["revisions"],
+                original_person_id="broken",
+                person_id="repaired",
+            ),
+        )
+    else:
+        response = client.request(
+            "DELETE",
+            "/config/members/broken",
+            headers=AUTH_HEADERS,
+            json={
+                "config_dir": str(config_dir),
+                "expected_revisions": read.json()["revisions"],
+            },
+        )
+    assert response.status_code == HTTP_OK
+    assert client.get("/team", headers=AUTH_HEADERS).json().get("problem", "") == ""
+
+
+def test_directories_without_member_config_are_not_runtime_members(client, config_dir):
+    (config_dir / "team/members/alice.bak").mkdir(parents=True)
+    listing = client.get("/team", headers=AUTH_HEADERS)
+    assert listing.status_code == HTTP_OK
+    assert listing.json().get("problem", "") == ""
+    assert listing.json()["members"] == []
+
+
+@pytest.mark.parametrize("name", ["Alice", "alice.bak", "alice backup", "あいこ"])
+def test_repair_read_requires_an_actual_stored_member(client, config_dir, name):
+    directory = config_dir / "team/members" / name
+    directory.mkdir(parents=True)
+    response = client.get(f"/config/members/{name}", headers=AUTH_HEADERS)
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert not list(directory.iterdir())
 
 
 @pytest.fixture
@@ -519,5 +703,5 @@ def test_a_revision_naming_something_outside_config_is_a_bad_request(
         json=_project_payload(config_dir, {"../state/workspace.json": "abc"}),
     )
 
-    assert response.status_code == 400
+    assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["code"] == "config_revision_invalid"

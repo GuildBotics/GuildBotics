@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
 import os
 import sys
-from types import SimpleNamespace
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -55,6 +55,7 @@ def test_restore_active_workspace_applies_backend_workspace(
     monkeypatch.chdir(startup)
     _isolate_runtime_environment(monkeypatch)
     write_active_workspace(workspace)
+    active_workspace_file().with_name("workspaces.json").unlink()
 
     restored = _restore_active_workspace()
     AppRuntime(
@@ -68,6 +69,70 @@ def test_restore_active_workspace_applies_backend_workspace(
         workspace / ".guildbotics" / "config"
     )
     assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(workspace)
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    assert workspace in registered_workspaces()
+
+
+@pytest.mark.parametrize("problem", ["overlap", "registry", "link"])
+def test_main_recovers_invalid_selection_without_admitting_workspace(
+    captured_launch, monkeypatch, tmp_path, problem, symlinks
+):
+    from guildbotics.utils.workspace_state import REGISTERED_WORKSPACES_FILE
+
+    _isolate_runtime_environment(monkeypatch)
+    selected = tmp_path / "home/Documents/GuildBotics/team"
+    selected.mkdir(parents=True)
+    write_active_workspace(selected)
+    if problem == "registry":
+        active_workspace_file().with_name(REGISTERED_WORKSPACES_FILE).write_text("{")
+    elif problem == "link":
+        selected.rename(selected.with_name("real"))
+        selected.symlink_to(selected.with_name("real"), target_is_directory=True)
+    monkeypatch.setenv(TOKEN_ENV, "session-token")
+    monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
+    server.main()
+    assert captured_launch["create_app"]["workspace_problem"]
+    assert GUILDBOTICS_WORKSPACE_ROOT not in os.environ
+    assert GUILDBOTICS_CONFIG_DIR not in os.environ
+
+
+def test_explicit_restore_registers_selected_workspace(tmp_path, monkeypatch):
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    monkeypatch.chdir(tmp_path)
+    _isolate_runtime_environment(monkeypatch)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(selected))
+    assert _restore_active_workspace() == selected
+    assert selected in registered_workspaces()
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        "config/intelligences/cli_agent_filesystem_grants.yml",
+        "local/cli_agent_filesystem_grants.yml",
+    ],
+)
+def test_malformed_grants_do_not_prevent_desktop_startup(
+    captured_launch, monkeypatch, tmp_path, file
+):
+    monkeypatch.chdir(tmp_path)
+    _isolate_runtime_environment(monkeypatch)
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    write_active_workspace(selected)
+    path = selected / ".guildbotics" / file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("documents: [")
+    monkeypatch.setenv(TOKEN_ENV, "session-token")
+    monkeypatch.setattr(sys, "argv", ["guildbotics-app-api"])
+    server.main()
+    assert captured_launch["create_app"]["workspace_problem"] == ""
+    assert os.environ[GUILDBOTICS_WORKSPACE_ROOT] == str(selected)
+    assert os.environ[GUILDBOTICS_CONFIG_DIR] == str(selected / ".guildbotics/config")
 
 
 def test_restored_runtime_switches_workspace_root(tmp_path: Path, monkeypatch) -> None:

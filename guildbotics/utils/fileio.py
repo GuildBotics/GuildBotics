@@ -12,6 +12,10 @@ CONFIG_PATH = ".guildbotics/config"
 GUILDBOTICS_WORKSPACE_ROOT = "GUILDBOTICS_WORKSPACE_ROOT"
 GUILDBOTICS_CONFIG_DIR = "GUILDBOTICS_CONFIG_DIR"
 
+# Installed launchers may enter through a symlink/junction. Canonicalize the
+# trusted package once, before any mount inspection, and share that spelling.
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+
 
 class WorkspaceNotConfiguredError(RuntimeError):
     """Raised when a workspace path is required but none is selected."""
@@ -25,7 +29,7 @@ def find_package_subdir(subpath: Path) -> Path:
     Returns:
         Path: The path to the found subdirectory.
     """
-    current = Path(__file__).resolve().parent
+    current = PACKAGE_ROOT
     while True:
         candidate = current / subpath
         if candidate.exists():
@@ -144,7 +148,9 @@ def resolve_from_existing_ancestor(path: Path) -> Path:
 
 def workspace_root_from_config_dir(config_dir: Path) -> Path | None:
     """Return the workspace root when ``config_dir`` is ``<ws>/.guildbotics/config``."""
-    resolved = resolve_from_existing_ancestor(config_dir)
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    resolved = inspect_host_path(config_dir, missing=True).path
     if resolved.name == "config" and resolved.parent.name == ".guildbotics":
         return resolved.parent.parent
     return None
@@ -161,10 +167,14 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
     The process cwd and member working clones are never used as a workspace.
     """
     if workspace_root is not None:
-        return resolve_from_existing_ancestor(workspace_root)
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        return inspect_host_path(workspace_root, missing=True).path
     configured = os.getenv(GUILDBOTICS_WORKSPACE_ROOT, "").strip()
     if configured:
-        return resolve_from_existing_ancestor(Path(configured))
+        from guildbotics.utils.safe_paths import inspect_host_path
+
+        return inspect_host_path(Path(configured), missing=True).path
     config_dir = os.getenv(GUILDBOTICS_CONFIG_DIR, "").strip()
     if config_dir:
         derived = workspace_root_from_config_dir(Path(config_dir))
@@ -178,7 +188,9 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
 
 def apply_workspace_root(workspace_root: Path) -> Path:
     """Publish the selected workspace root and its config dir."""
-    resolved = resolve_from_existing_ancestor(workspace_root)
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    resolved = inspect_host_path(workspace_root, missing=True).path
     os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(resolved)
     os.environ[GUILDBOTICS_CONFIG_DIR] = str(resolved / ".guildbotics" / "config")
     return resolved
@@ -226,7 +238,11 @@ def get_workspace_local_path(
 
 def get_member_clone_path(person_id: str, workspace_root: Path | None = None) -> Path:
     """Return the member working clone directory (not synchronized)."""
-    return get_workspace_local_path("clones", person_id, workspace_root=workspace_root)
+    from guildbotics.utils.person_id import validate_person_id
+
+    return get_workspace_local_path(
+        "clones", validate_person_id(person_id), workspace_root=workspace_root
+    )
 
 
 def get_workspace_work_path(
@@ -350,7 +366,12 @@ def get_person_config_path(
     Returns:
         Path: The absolute path to the configuration file.
     """
-    p = get_config_path(f"team/members/{person_id}/{path_str}", language_code)
+
+    from guildbotics.utils.person_id import person_config_directory
+
+    p = get_config_path(
+        (person_config_directory(person_id) / path_str).as_posix(), language_code
+    )
     if p.exists():
         return p
     return get_config_path(path_str, language_code)
@@ -379,7 +400,11 @@ def load_person_slot_mapping(person_id: str, path_str: str) -> dict:
         team_mapping = load_yaml_file(team_path)
         if isinstance(team_mapping, dict):
             mapping.update(team_mapping)
-    member_path = get_config_path(f"team/members/{person_id}/{path_str}")
+    from guildbotics.utils.person_id import person_config_directory
+
+    member_path = get_config_path(
+        (person_config_directory(person_id) / path_str).as_posix()
+    )
     if member_path.exists() and member_path != team_path:
         member_mapping = load_yaml_file(member_path)
         if isinstance(member_mapping, dict):
@@ -501,9 +526,11 @@ def get_intelligence_roots(
 ) -> list[Path]:
     """Resolve member, team, and template intelligence configuration roots in priority order."""
     roots: list[Path] = []
-    if person_id:
+    from guildbotics.utils.person_id import person_config_directory
+
+    if person_id is not None:
         roots.append(
-            config_dir / "team/members" / person_id / "intelligences" / sub_dir
+            config_dir / person_config_directory(person_id) / "intelligences" / sub_dir
         )
     roots.append(config_dir / "intelligences" / sub_dir)
     roots.append(get_template_path() / "intelligences" / sub_dir)

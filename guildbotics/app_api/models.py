@@ -41,6 +41,7 @@ from guildbotics.intelligences.agent_runtime.usage_snapshots import (
 from guildbotics.intelligences.effort import validate_effort_overlay
 from guildbotics.intelligences.llm_providers import LlmProviderInfo
 from guildbotics.runtime.live_state import LivePresentation
+from guildbotics.utils.person_id import MemberDirectoryName, OptionalPersonId, PersonId
 
 
 class CliAgentLastTurn(BaseModel):
@@ -81,6 +82,8 @@ class ShutdownResponse(BaseModel):
 
 
 class ConfigStatus(BaseModel):
+    workspace_problem: str = ""
+    input_store_problem: str = ""
     cwd: Path
     workspace: Path | None
     config_dir: Path | None
@@ -402,6 +405,7 @@ class TeamSummary(BaseModel):
     # active non-human member in person ID order. It is "" only when the team
     # has no member that can execute commands.
     default_person_id: str = ""
+    problem: str = ""
 
 
 class MemberDeleteRequest(BaseModel):
@@ -533,6 +537,7 @@ class CommandInputPathStatus(BaseModel):
     #: input field carries.
     guest_path: str
     grant: CommandInputGrantSuggestion | None = None
+    problem: str = ""
 
 
 class CommandInputPathsResponse(BaseModel):
@@ -1191,8 +1196,6 @@ class GrantEvaluation(BaseModel):
     valid: bool
     reason: str = ""
     present: bool = False
-    #: Why the path holds credentials or provider state, or "".
-    sensitive: str = ""
 
 
 class EnvironmentGrantStatus(BaseModel):
@@ -1409,7 +1412,7 @@ class IntelligenceConfigResponse(BaseModel):
 class IntelligenceConfigUpdateRequest(BaseModel):
     config_dir: Path
     expected_revisions: dict[str, str] = Field(default_factory=dict)
-    person_id: str | None = None
+    person_id: PersonId | None = None
     inherit_team_defaults: bool = False
     #: None keeps each intelligence setting as it is; a value replaces it.
     model_mapping: dict[str, str] | None = None
@@ -1507,7 +1510,7 @@ class ProjectConfigUpdateRequest(GitHubProjectInput):
 class DefaultPersonUpdateRequest(BaseModel):
     # Empty clears the setting; resolution then falls back to the first active
     # non-human member in person ID order.
-    person_id: str = ""
+    person_id: OptionalPersonId = ""
 
 
 class MemberResolveRequest(BaseModel):
@@ -1545,6 +1548,6 @@ class SlackTokenVerifyRequest(BaseModel):
     app_token: str = ""
     # Member being edited, if any. An empty token field means "keep the stored
     # one" on save, so verification resolves that member's stored token.
-    person_id: str = ""
+    person_id: MemberDirectoryName | Literal[""] = ""
     # Channels as currently edited in the form, checked for bot membership.
     channels: list[str] = Field(default_factory=list)

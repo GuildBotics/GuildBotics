@@ -123,6 +123,164 @@ def _client(runtime: "RuntimeStub") -> TestClient:
     return TestClient(create_app(session_token="secret", runtime=runtime))
 
 
+def test_registered_workspaces_are_authenticated_and_removal_preserves_files(
+    tmp_path: Path,
+) -> None:
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    workspace = tmp_path / "registered"
+    workspace.mkdir()
+    register_workspace(workspace)
+    client = _client(RuntimeStub(tmp_path))
+    assert client.get("/device/workspaces").status_code == HTTP_UNAUTHORIZED
+    assert (
+        client.request(
+            "DELETE", "/device/workspaces", json={"workspace_dir": str(workspace)}
+        ).status_code
+        == HTTP_UNAUTHORIZED
+    )
+    response = client.get("/device/workspaces", headers=AUTH_HEADERS)
+    assert response.status_code == HTTP_OK
+    assert str(workspace) in response.json()
+    response = client.request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(workspace)},
+    )
+    assert response.status_code == HTTP_OK
+    assert str(workspace) not in response.json()
+    assert workspace not in registered_workspaces()
+    assert workspace.is_dir()
+
+
+def test_selected_workspace_registration_cannot_be_removed(tmp_path):
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    register_workspace(tmp_path)
+    response = _client(RuntimeStub(tmp_path)).request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(tmp_path)},
+    )
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["code"] == "unsafe_host_path"
+    assert tmp_path in registered_workspaces()
+
+
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("fault", ["permission", "link"])
+def test_registration_removal_needs_no_access_to_obsolete_path(
+    tmp_path, monkeypatch, active, fault
+):
+    from guildbotics.utils import safe_paths
+    from guildbotics.utils.safe_paths import HostPathPermissionError, UnsafePathError
+    from guildbotics.utils.workspace_state import (
+        register_workspace,
+        registered_workspaces,
+    )
+
+    path = tmp_path / "obsolete"
+    register_workspace(path)
+    original = safe_paths.inspect_host_path
+
+    def inspect(path_arg, *args, **kwargs):
+        if path_arg == path:
+            raise (
+                HostPathPermissionError(path)
+                if fault == "permission"
+                else UnsafePathError("linked ancestor")
+            )
+        return original(path_arg, *args, **kwargs)
+
+    monkeypatch.setattr(safe_paths, "inspect_host_path", inspect)
+    response = _client(RuntimeStub(path if active else tmp_path)).request(
+        "DELETE",
+        "/device/workspaces",
+        headers=AUTH_HEADERS,
+        json={"workspace_dir": str(path)},
+    )
+    assert response.status_code == (HTTP_BAD_REQUEST if active else HTTP_OK)
+    assert (path in registered_workspaces()) is active
+
+
+@pytest.mark.parametrize("problem", ["registry", "permission"])
+def test_api_starts_unselected_when_input_store_cannot_be_initialized(
+    tmp_path, monkeypatch, problem
+):
+    from guildbotics.app_api import api
+    from guildbotics.utils.fileio import (
+        GUILDBOTICS_CONFIG_DIR,
+        GUILDBOTICS_WORKSPACE_ROOT,
+    )
+    from guildbotics.utils.safe_paths import HostPathPermissionError, UnsafePathError
+
+    for key in (GUILDBOTICS_CONFIG_DIR, GUILDBOTICS_WORKSPACE_ROOT):
+        monkeypatch.delenv(key, raising=False)
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+
+    def fail():
+        raise (
+            UnsafePathError("registry is invalid")
+            if problem == "registry"
+            else HostPathPermissionError(tmp_path / "inputs")
+        )
+
+    monkeypatch.setattr(store, "_start", fail)
+    with TestClient(
+        api.create_app(session_token="secret", command_input_file_store=store)
+    ) as client:
+        response = client.get("/config/status", headers=AUTH_HEADERS)
+        assert response.status_code == HTTP_OK
+        assert response.json()["workspace"] is None
+        assert response.json()["workspace_problem"] == ""
+        assert response.json()["input_store_problem"]
+
+
+def test_status_poll_retries_only_failed_input_store(tmp_path, monkeypatch):
+    from guildbotics.utils.safe_paths import HostPathPermissionError
+
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    original = store._start
+    attempts = []
+    refused = True
+
+    def start():
+        attempts.append(True)
+        if refused:
+            raise HostPathPermissionError(tmp_path / "inputs")
+        original()
+
+    monkeypatch.setattr(store, "_start", start)
+    with TestClient(
+        create_app(
+            session_token="secret",
+            runtime=RuntimeStub(tmp_path),
+            command_input_file_store=store,
+        )
+    ) as client:
+        first = client.get("/config/status", headers=AUTH_HEADERS)
+        assert first.json()["input_store_problem"]
+        refused = False
+        recovered = client.get("/config/status", headers=AUTH_HEADERS)
+        assert recovered.json()["input_store_problem"] == ""
+        count = len(attempts)
+        assert (
+            client.get("/config/status", headers=AUTH_HEADERS).json()[
+                "input_store_problem"
+            ]
+            == ""
+        )
+        assert len(attempts) == count
+
+
 def _runtime_status(
     *,
     scheduler_state: str = "stopped",
@@ -162,6 +320,10 @@ class RuntimeStub:
 
     def get_config_status(self) -> ConfigStatus:
         return self.config_status
+
+    @property
+    def selected_workspace(self) -> Path | None:
+        return self.config_status.workspace
 
     async def fetch_project_status_options(
         self, request: ProjectStatusOptionsRequest
@@ -891,18 +1053,20 @@ def test_command_input_paths_report_what_a_turn_would_reach(
     reachable = home / "Documents/GuildBotics/tmp/a.png"
     reachable.parent.mkdir(parents=True)
     reachable.write_bytes(b"x")
-    unreachable = tmp_path / "shot.png"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unreachable = outside / "shot.png"
     unreachable.write_bytes(b"x")
 
     with TestClient(app) as client:
         response = client.post(
             "/commands/input-paths",
             headers=AUTH_HEADERS,
-            json={"paths": [str(reachable), str(unreachable), str(tmp_path)]},
+            json={"paths": [str(reachable), str(unreachable), str(outside)]},
         )
 
     assert response.status_code == HTTP_OK
-    device = {"scope": "device", "path": str(tmp_path.resolve())}
+    device = {"scope": "device", "path": str(outside.resolve())}
     assert response.json() == {
         "paths": [
             {
@@ -911,6 +1075,7 @@ def test_command_input_paths_report_what_a_turn_would_reach(
                 "reachable": True,
                 "guest_path": guest_path(reachable),
                 "grant": None,
+                "problem": "",
             },
             {
                 "path": str(unreachable),
@@ -918,13 +1083,15 @@ def test_command_input_paths_report_what_a_turn_would_reach(
                 "reachable": False,
                 "guest_path": guest_path(unreachable),
                 "grant": device,
+                "problem": "",
             },
             {
-                "path": str(tmp_path),
+                "path": str(outside),
                 "kind": "directory",
                 "reachable": False,
-                "guest_path": guest_path(tmp_path),
+                "guest_path": guest_path(outside),
                 "grant": device,
+                "problem": "",
             },
         ]
     }

@@ -31,7 +31,7 @@ en:
     nothing_loaded: "The archive %{path} holds no image."
   filesystem:
     unavailable: "This GuildBotics cannot access directory '%{path}': %{error}"
-    macos_documents: "Allow the app that launched this GuildBotics%{app} to access the Documents folder in System Settings > Privacy & Security > Files & Folders."
+    macos_documents: "This GuildBotics cannot access '%{path}'. Allow the app that launched this GuildBotics%{app} to access the Documents folder in System Settings > Privacy & Security > Files & Folders."
     launching_app: " (currently %{app})"
     permission_denied: "This GuildBotics cannot list '%{path}'. Allow its launching app or user to access this directory."
   declaration:

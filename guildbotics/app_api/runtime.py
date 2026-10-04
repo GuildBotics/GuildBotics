@@ -158,7 +158,11 @@ from guildbotics.entities import Person, Project, Service, Team
 from guildbotics.integrations.chat_profile import get_chat_subscriptions
 from guildbotics.integrations.file_chat_state_store import FileConversationStateStore
 from guildbotics.integrations.github.github_ticket_manager import GitHubTicketManager
-from guildbotics.intelligences.agent_environment.contract import exchange_dir
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    exchange_dir,
+    validate_workspace_location,
+)
 from guildbotics.intelligences.agent_environment.runtime import (
     AgentEnvironmentError,
     doctor,
@@ -299,8 +303,10 @@ class AppRuntime:
         stop_timeout_seconds: float = 10.0,
         diagnostics_store: DiagnosticsStore | None = None,
         load_workspace_environment: bool = False,
+        workspace_problem: str = "",
     ) -> None:
         self._event_bus = event_bus
+        self.workspace_problem = workspace_problem
         self._diagnostics_store = diagnostics_store
         self._system_service_run_id = new_id()
         self._system_alerts = SystemAlertService(diagnostics_store)
@@ -355,15 +361,16 @@ class AppRuntime:
         """Expose the process-wide sync/relay service to the API composition root."""
         return self._workspace_sync
 
-    def get_config_status(self) -> ConfigStatus:
+    @property
+    def selected_workspace(self) -> Path | None:
+        """The selected name, without opening potentially obsolete files."""
         try:
-            workspace: Path | None = get_workspace_root()
+            return get_workspace_root()
         except WorkspaceNotConfiguredError:
-            # First launch: no workspace is selected yet. Never fall back to
-            # the process cwd — it may be a source checkout, and reporting it
-            # would let Setup create `.guildbotics/` there without an explicit
-            # choice.
-            workspace = None
+            return None
+
+    def get_config_status(self) -> ConfigStatus:
+        workspace = self.selected_workspace
         config_dir = get_primary_config_dir() or (
             workspace / ".guildbotics" / "config" if workspace is not None else None
         )
@@ -371,6 +378,7 @@ class AppRuntime:
             config_dir / "team" / "project.yml" if config_dir is not None else None
         )
         return ConfigStatus(
+            workspace_problem=self.workspace_problem,
             cwd=exchange_dir(),
             workspace=workspace,
             config_dir=config_dir,
@@ -393,7 +401,16 @@ class AppRuntime:
             return self._set_workspace(workspace_dir)
 
     def _set_workspace(self, workspace_dir: Path) -> ConfigStatus:
-        workspace = workspace_dir.expanduser().resolve()
+        try:
+            workspace = validate_workspace_location(workspace_dir)
+        except AccessContractError as exc:
+            if isinstance(exc.__cause__, NotADirectoryError):
+                raise AppApiError(
+                    "workspace_not_directory",
+                    context={"workspace_dir": str(workspace_dir)},
+                    status_code=400,
+                ) from exc
+            raise
         if not workspace.exists():
             raise AppApiError(
                 "workspace_not_found",
@@ -438,17 +455,26 @@ class AppRuntime:
             self._diagnostics_store.start_system_session(self._system_service_run_id)
             self._diagnostics_store.start_maintenance()
         self._workspace_sync.activate()
+        self.workspace_problem = ""
         return self.get_config_status()
 
     def get_team_summary(self) -> TeamSummary:
+        from guildbotics.utils.person_id import MemberConfigError
+
         members: Sequence[Person | PersonConfigSummary]
+        problem = ""
         try:
             context = self._get_context()
-        except AppApiError:
+        except (AppApiError, MemberConfigError) as exc:
             status = self.get_config_status()
-            if status.project_file_exists:
+            if status.project_file_exists and not isinstance(exc, MemberConfigError):
                 raise
-            project = Project()
+            problem = str(exc) if isinstance(exc, MemberConfigError) else ""
+            project = (
+                Project.model_validate(load_yaml_file(status.project_file))
+                if problem and status.project_file is not None
+                else Project()
+            )
             members = (
                 SimplePersonSetupService().list_person_configs(
                     config_dir=status.config_dir
@@ -482,6 +508,7 @@ class AppRuntime:
                 for member in members
             ],
             default_person_id=default_person_id,
+            problem=problem,
         )
 
     def get_command_options(self, person: str | None = None) -> CommandOptionsResponse:
@@ -1904,12 +1931,15 @@ class AppRuntime:
 
 def _command_roots(person_id: str) -> list[Path]:
     """Physical roots whose logical command names seed the general catalog."""
+    from guildbotics.utils.person_id import person_config_directory
+
+    member_root = person_config_directory(person_id) / "commands"
     try:
         primary = get_primary_config_path(Path())
     except WorkspaceNotConfiguredError:
         return []
     return [
-        primary / "team" / "members" / person_id / "commands",
+        primary / member_root,
         get_shared_commands_root(),
     ]
 
@@ -2476,5 +2506,9 @@ def _assistant_cwd(name: str) -> Path:
     """Where a Desktop assistant's turns work: its own directory under
     ``.guildbotics/local/work``."""
     cwd = get_workspace_work_path(name, workspace_root=get_workspace_root())
-    cwd.mkdir(parents=True, exist_ok=True)
-    return cwd
+    from guildbotics.intelligences.agent_environment.contract import (
+        protected_paths,
+        validate_mount_source,
+    )
+
+    return validate_mount_source(cwd, protected_paths(), create=True)

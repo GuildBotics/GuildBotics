@@ -89,7 +89,7 @@ In environments without the desktop app (headless servers and the like), install
 Launching the desktop app opens **Project** setup, where you configure:
 
 - The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
-- The workspace folder
+- The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside the exchange folder `~/Documents/GuildBotics`
 - The project description
 - Whether to use GitHub integration
 
@@ -166,6 +166,8 @@ You can also ask another member for a one-off task during the session:
 ```text
 Ask bob to review the current changes, including uncommitted edits.
 ```
+
+Use a repository that contains no workspace state as the working directory for `ask`. If the working repository is also your workspace, move the workspace elsewhere before delegating work.
 
 The active member runs the built-in `ask` command and relays bob's result. Bob sees the same working tree; if you ask him to fix something, his edits appear there too. Select the workspace in GuildBotics first, and prepare bob's isolated agent environment and AI CLI login on this machine under **Setup → Agent execution environment**. The host CLI login used for your interactive session is separate. Reviews can take several minutes; an unavailable environment or login is reported back in the session.
 

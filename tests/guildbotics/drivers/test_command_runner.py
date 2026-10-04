@@ -439,7 +439,9 @@ async def test_the_environment_is_shaped_for_every_tool_the_member_is_configured
 
 def _unreadable(name: str):
     def fail(*_):
-        raise PermissionError(13, "Permission denied", name)
+        from guildbotics.utils.safe_paths import HostPathPermissionError
+
+        raise HostPathPermissionError(Path(name))
 
     return fail
 

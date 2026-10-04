@@ -43,10 +43,11 @@ from guildbotics.intelligences.agent_environment.contract import (
     ResolvedAccess,
     ResolvedGrant,
     SharedGrants,
+    load_local_grants,
+    load_shared_grants,
     local_path_missing,
     redact_path,
     resolve_access,
-    sensitive_grant_reason,
 )
 from guildbotics.intelligences.agent_environment.image import (
     IMAGE,
@@ -297,7 +298,10 @@ def evaluate_grant(
             return _invalid(scope, path, access, _reason(exc))
         try:
             resolved = resolve_access(
-                SharedGrants(documents=[grant]), LocalGrants(), home, create=False
+                SharedGrants(documents=[*load_shared_grants().documents, grant]),
+                load_local_grants(),
+                home,
+                create=False,
             )
         except AccessContractError as exc:
             return _invalid(scope, path, access, str(exc))
@@ -307,7 +311,6 @@ def evaluate_grant(
             access=access,
             valid=True,
             present=resolved.documents[-1].present,
-            sensitive=sensitive_grant_reason(path, home),
         )
     if scope == "deny":
         try:
@@ -315,7 +318,13 @@ def evaluate_grant(
         except ValidationError as exc:
             return _invalid(scope, path, "", _reason(exc))
         try:
-            resolve_access(SharedGrants(), local, home)
+            existing = load_local_grants()
+            resolve_access(
+                load_shared_grants(),
+                LocalGrants(paths=existing.paths, deny=[*existing.deny, *local.deny]),
+                home,
+                create=False,
+            )
         except AccessContractError as exc:
             return _invalid(scope, path, "", str(exc))
         return GrantEvaluation(scope="deny", path=path, valid=True, present=True)
@@ -326,16 +335,23 @@ def evaluate_grant(
     except ValidationError as exc:
         return _invalid("local", path, access, _reason(exc))
     try:
-        resolve_access(SharedGrants(), local, home)
+        existing = load_local_grants()
+        resolved = resolve_access(
+            load_shared_grants(),
+            LocalGrants(paths=[*existing.paths, *local.paths], deny=existing.deny),
+            home,
+            create=False,
+        )
     except AccessContractError as exc:
         return _invalid("local", path, access, str(exc))
+    if not resolved.paths[-1].present:
+        return _invalid("local", path, access, local_path_missing(path))
     return GrantEvaluation(
         scope="local",
-        path=path,
+        path=resolved.paths[-1].grant,
         access=access,
         valid=True,
         present=True,
-        sensitive=sensitive_grant_reason(path, home),
     )
 
 

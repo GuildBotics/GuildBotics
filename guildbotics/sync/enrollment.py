@@ -313,6 +313,9 @@ def clone_workspace(
         EnrollmentError: When the hub cannot be reached, or the copy does not
             contain a workspace identity.
     """
+    from guildbotics.utils.workspace_state import register_workspace
+
+    workspace_root = register_workspace(workspace_root)
     repository = LocalSyncRepository(workspace_root)
     with _as_enrollment_error("The workspace could not be taken from the hub"):
         repository.clone(remote_url)
@@ -334,7 +337,10 @@ def _prepare(workspace_root: Path | None) -> tuple[LocalSyncRepository, CommitOu
     join commits once more inside its own lock, for whatever was saved while
     the hub was being reached.
     """
+    from guildbotics.utils.workspace_state import register_workspace
+
     repository = LocalSyncRepository(workspace_root)
+    register_workspace(repository.workspace_root)
     repository.verify_boundary()
     repository.initialize()
     ensure_workspace_identity(repository.workspace_root)

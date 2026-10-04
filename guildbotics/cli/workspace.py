@@ -7,6 +7,10 @@ from typing import Any
 import click
 
 from guildbotics.cli._options import format_option
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    validate_workspace_location,
+)
 from guildbotics.utils.workspace_state import (
     read_active_workspace,
     workspace_status_payload,
@@ -30,9 +34,11 @@ def workspace() -> None:
 def use_workspace(workspace_dir: Path, output_format: str) -> None:
     """Persist the active workspace for desktop and external AI CLI tools."""
     try:
-        state = write_active_workspace(workspace_dir)
+        state = write_active_workspace(validate_workspace_location(workspace_dir))
     except NotADirectoryError as exc:
         raise click.ClickException(f"workspace does not exist: {exc}") from exc
+    except AccessContractError as exc:
+        raise click.ClickException(str(exc)) from exc
     _print(workspace_status_payload(state), output_format)
 
 

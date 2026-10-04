@@ -146,6 +146,10 @@ def _collect_t_call_keys() -> set[str]:
 def _resolve_t_aliases(tree: ast.AST) -> set[str]:
     aliases: set[str] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "t":
+            # Include local lazy translators, whose imports cannot run during
+            # workspace selection without creating an initialization cycle.
+            aliases.add(node.name)
         if (
             isinstance(node, ast.ImportFrom)
             and node.module == "guildbotics.utils.i18n_tool"

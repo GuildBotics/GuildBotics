@@ -349,6 +349,36 @@ directory (the path stays in the input, and the grants screen opens with that di
 in its path field, from the quick-run window too via the host's `open_main_window`), or
 dismisses the file.
 
+Host bind sources are judged in `utils/safe_paths.py` and
+`intelligences/agent_environment/contract.py`: directory-relative no-follow
+opens provide ancestry identities and anchor directory creation. Windows uses
+relative handles and refuses reparse points. The contract's protected-path table
+includes absent credential directories, device state, all registered workspace
+state, and local denies. Sources containing protected state are refused; user
+working directories and grants also refuse descendants. Explicit host-owned children such as member
+clones remain mountable. `spec.py` checks every host mount and `runtime._volumes`
+checks again before passing the same name to `Volume.bind`, without resolving
+links or using tmpfs covers. `utils/workspace_state.py` owns the device registry
+(`data/workspaces.json`); Desktop lists and unregisters entries through
+`/device/workspaces`. Workspace admission rejects locations under the target's grants
+or the exchange directory before registration or initialization.
+Admission permits unavailable grant configuration so editing and synchronization
+can repair it; command contract loading remains strict. Protected link names and
+intermediate links and actual destinations share one component-wise interpretation
+for mounts and input previews; loops protect every traversed name. Copy sources
+must remain outside protected state. Leaf links are refused. Ancestor links are
+accepted only when their parent contains fixed credential state and therefore
+cannot be shared with a turn; writable grants and working directories also refuse
+such links. Final reads use no-follow opens. `HostPathPermissionError` keeps the
+absolute denied component, its protected owner when relevant, and localized guidance
+within the common `UnsafePathError` contract.
+Input-store failures belong to the store, separate from workspace selection,
+and status polling retries failed startup. Member IDs are single validated path
+components for both revisions and IO. Invalid stored IDs stop runtime loading with
+the filename; the editor addresses existing safe directory names to rename or delete
+them. The installed package always mounts at
+`/opt/guildbotics/code/guildbotics` regardless of its physical directory name.
+
 ### Model effort
 
 Effort is the single provider-neutral vocabulary for how hard a model should

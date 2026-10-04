@@ -172,6 +172,46 @@ vi.mock("./api/client", async (importOriginal) => {
 });
 
 describe("App", () => {
+  it("renders the shared workspace and input-store refusal once", async () => {
+    const status = await getConfigStatus();
+    vi.mocked(getConfigStatus).mockResolvedValue({
+      ...status,
+      workspace_problem: "Registry is invalid",
+      input_store_problem: "Registry is invalid",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findAllByText("Registry is invalid")).toHaveLength(1);
+  });
+  it("clears a recovered input-store alert without changing workspace", async () => {
+    const status = await getConfigStatus();
+    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+      ...status,
+      input_store_problem: "Input folder is unavailable",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findByText("Input folder is unavailable")).toBeInTheDocument();
+    await waitFor(
+      () => expect(screen.queryByText("Input folder is unavailable")).not.toBeInTheDocument(),
+      { timeout: 4000 },
+    );
+  });
+  it("shows the refused workspace reason while leaving setup accessible", async () => {
+    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+      cwd: "/exchange",
+      workspace: null,
+      config_dir: null,
+      project_file: null,
+      project_file_exists: false,
+      storage_dir: null,
+      workspace_problem: "Workspace registry needs repair",
+    });
+    window.location.hash = "#/service";
+    renderApp();
+    expect(await screen.findByText("Workspace registry needs repair")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Setup/ })).toBeInTheDocument();
+  });
   it("renders the service page with runtime controls", async () => {
     window.location.hash = "#/service";
     renderApp();

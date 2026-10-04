@@ -1,9 +1,30 @@
-import { Button, Card, Code, CopyButton, Group, Stack, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Code,
+  CopyButton,
+  Group,
+  Modal,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Server } from "lucide-react";
 
-import { createDeviceSshKey, createHub, getDeviceSshKey, getHubStatus } from "../api/client";
+import {
+  createDeviceSshKey,
+  createHub,
+  getDeviceSshKey,
+  getHubStatus,
+  getRegisteredWorkspaces,
+  getConfigStatus,
+  unregisterWorkspace,
+} from "../api/client";
 
 /**
  * Settings that belong to this machine rather than to a workspace: its SSH
@@ -20,7 +41,97 @@ export function DeviceSettings() {
       </Text>
       <SshKeyCard />
       <HostThisMachineCard />
+      <RegisteredWorkspacesCard />
     </Stack>
+  );
+}
+
+function RegisteredWorkspacesCard() {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const [removing, setRemoving] = useState<string | null>(null);
+  const locations = useQuery({
+    queryKey: ["registered-workspaces"],
+    queryFn: getRegisteredWorkspaces,
+  });
+  const remove = useMutation({
+    mutationFn: unregisterWorkspace,
+    onSuccess: (paths) => {
+      client.setQueryData(["registered-workspaces"], paths);
+      setRemoving(null);
+      void client.invalidateQueries({ queryKey: ["agent-environment-status"] });
+    },
+  });
+  const error = locations.error;
+  return (
+    <Card withBorder radius="md" p="md">
+      <Stack gap="sm">
+        <Title order={4}>{t("sync.registeredWorkspaces.title")}</Title>
+        <Text size="sm" c="dimmed">
+          {t("sync.registeredWorkspaces.body")}
+        </Text>
+        {error ? <Alert color="danger">{error.message}</Alert> : null}
+        {locations.data?.length === 0 ? (
+          <Text size="sm">{t("sync.registeredWorkspaces.empty")}</Text>
+        ) : null}
+        {locations.data?.map((path) => (
+          <Group key={path} justify="space-between">
+            <Code style={{ overflowWrap: "anywhere" }}>{path}</Code>
+            {path === config.data?.workspace ? (
+              <Badge>{t("sync.registeredWorkspaces.active")}</Badge>
+            ) : null}
+            <Button
+              size="xs"
+              variant="light"
+              color="danger"
+              loading={remove.isPending && remove.variables === path}
+              disabled={
+                remove.isPending ||
+                config.isPending ||
+                config.isError ||
+                path === config.data?.workspace
+              }
+              onClick={() => {
+                remove.reset();
+                setRemoving(path);
+              }}
+              aria-label={t("sync.registeredWorkspaces.remove", { path })}
+            >
+              {t("sync.registeredWorkspaces.removeLabel")}
+            </Button>
+          </Group>
+        ))}
+        <Modal
+          opened={removing !== null}
+          onClose={() => !remove.isPending && setRemoving(null)}
+          closeOnEscape={!remove.isPending}
+          closeOnClickOutside={!remove.isPending}
+          title={t("sync.registeredWorkspaces.removeLabel")}
+        >
+          <Stack>
+            <Text>{t("sync.registeredWorkspaces.confirm", { path: removing })}</Text>
+            {remove.error ? <Alert color="danger">{remove.error.message}</Alert> : null}
+            <Group justify="flex-end">
+              <Button
+                variant="default"
+                disabled={remove.isPending}
+                onClick={() => setRemoving(null)}
+              >
+                {t("sync.registeredWorkspaces.cancel")}
+              </Button>
+              <Button
+                color="danger"
+                loading={remove.isPending}
+                onClick={() => removing && remove.mutate(removing)}
+              >
+                {t("sync.registeredWorkspaces.confirmLabel")}
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
+      </Stack>
+    </Card>
   );
 }
 

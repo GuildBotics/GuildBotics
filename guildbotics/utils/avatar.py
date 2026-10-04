@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from guildbotics.utils.person_id import person_config_directory
+
 # Pure (dependency-light) avatar file helpers. Kept free of FastAPI/httpx so
 # that lower layers such as the edition/setup services can locate avatar files
 # without depending on the App API module.
@@ -10,7 +12,7 @@ SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
 def get_member_avatar_dir(config_dir: Path, person_id: str) -> Path:
-    return config_dir / "team" / "members" / person_id
+    return config_dir / person_config_directory(person_id)
 
 
 def find_avatar_file(config_dir: Path, person_id: str) -> Path | None:

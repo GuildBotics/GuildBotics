@@ -161,6 +161,8 @@ from guildbotics.editions.simple.setup_service import (
     SimpleProjectSetupService,
     github_app_key_dir,
     person_config_paths,
+    stored_person_config_dir,
+    stored_person_config_paths,
 )
 from guildbotics.editions.simple.slack_app_setup import (
     SlackAppRegistrationInfo,
@@ -175,8 +177,15 @@ from guildbotics.utils.fileio import (
     get_template_path,
     load_yaml_file,
 )
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.person_id import MemberConfigError, MemberDirectoryName, PersonId
+from guildbotics.utils.safe_paths import UnsafePathError
 from guildbotics.utils.shared_write_lock import SharedWriteBusyError
 from guildbotics.utils.sync_lock import SyncRepositoryBusyError
+from guildbotics.utils.workspace_state import (
+    registered_workspaces,
+    unregister_workspace,
+)
 
 TOKEN_HEADER = "X-GuildBotics-Session-Token"
 #: The header the Desktop sends naming its display language, so error
@@ -233,6 +242,7 @@ def create_app(
     diagnostics_store: DiagnosticsStore | None = None,
     command_input_file_store: CommandInputFileStore | None = None,
     restore_workspace_environment: bool = False,
+    workspace_problem: str = "",
 ) -> FastAPI:
     token = session_token or secrets.token_urlsafe(32)
     store = diagnostics_store or DiagnosticsStore()
@@ -244,6 +254,7 @@ def create_app(
             bus,
             diagnostics_store=store,
             load_workspace_environment=True,
+            workspace_problem=workspace_problem,
         )
     else:
         app_runtime = AppRuntime(bus, diagnostics_store=store)
@@ -271,7 +282,9 @@ def create_app(
         uvicorn_error_logger = logging.getLogger("uvicorn.error")
         added_app_handler = False
         added_uvicorn_handler = False
-        input_file_store.start()
+        # The input store owns this retryable refusal, not workspace selection.
+        with contextlib.suppress(UnsafePathError):
+            input_file_store.start()
         try:
             store.start_system_session(system_service_run_id)
             store.start_maintenance()
@@ -328,6 +341,12 @@ def create_app(
         500: {"model": ApiError},
     }
 
+    @app.exception_handler(UnsafePathError)
+    async def unsafe_path_handler(
+        request: Request, exc: UnsafePathError
+    ) -> JSONResponse:
+        return _error_response(400, "unsafe_host_path", str(exc), {})
+
     @app.exception_handler(AppApiError)
     async def app_api_error_handler(request: Request, exc: AppApiError) -> JSONResponse:
         # The one place a message becomes text: rendered from the error's
@@ -376,6 +395,12 @@ def create_app(
         # The exception's own sentence is the reason, passed through verbatim.
         return _error_response(409, "workspace_not_configured", str(exc), {})
 
+    @app.exception_handler(MemberConfigError)
+    async def member_config_error_handler(_, exc: MemberConfigError) -> JSONResponse:
+        return _error_response(
+            400, "member_config_invalid", str(exc), {"path": exc.filename}
+        )
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(
         request: Request, exc: RequestValidationError
@@ -408,6 +433,35 @@ def create_app(
                 "invalid_session_token",
                 status_code=401,
             )
+
+    @app.get("/device/workspaces", response_model=list[str], responses=error_responses)
+    def device_workspaces(_: None = Depends(require_token)) -> list[str]:
+        return [str(path) for path in registered_workspaces()]
+
+    @app.delete(
+        "/device/workspaces", response_model=list[str], responses=error_responses
+    )
+    def remove_device_workspace(
+        request: WorkspaceChangeRequest, _: None = Depends(require_token)
+    ) -> list[str]:
+        from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
+
+        selected = app_runtime.selected_workspace
+        if selected is not None:
+            same = normalize_host_path(selected) == normalize_host_path(
+                request.workspace_dir
+            )
+            if not same:
+                try:
+                    current = inspect_host_path(selected, missing=True)
+                    removing = inspect_host_path(request.workspace_dir, missing=True)
+                    same = current.contains(removing) and removing.contains(current)
+                except UnsafePathError:
+                    pass  # Obsolete registrations must remain removable.
+            if same:
+                raise UnsafePathError(t("safe_paths.active_workspace"))
+        unregister_workspace(request.workspace_dir)
+        return [str(path) for path in registered_workspaces()]
 
     @app.post("/hub/secrets/{workspace_id}/{operation}", include_in_schema=False)
     async def hub_secret_transfer(
@@ -446,7 +500,12 @@ def create_app(
 
     @app.get("/config/status", response_model=ConfigStatus, responses=error_responses)
     def config_status(_: None = Depends(require_token)) -> ConfigStatus:
-        return app_runtime.get_config_status()
+        if input_file_store.problem:
+            with contextlib.suppress(UnsafePathError):
+                input_file_store.start()
+        return app_runtime.get_config_status().model_copy(
+            update={"input_store_problem": input_file_store.problem}
+        )
 
     @app.post("/workspace", response_model=ConfigStatus, responses=error_responses)
     def workspace_change(
@@ -741,6 +800,7 @@ def create_app(
                         if entry.grant
                         else None
                     ),
+                    problem=entry.problem,
                 )
                 for entry in describe_command_input_paths(
                     request.paths, command_cwd(request.cwd)
@@ -1189,7 +1249,7 @@ def create_app(
         responses=error_responses,
     )
     def config_intelligences(
-        person_id: str | None = None,
+        person_id: PersonId | None = None,
         _: None = Depends(require_token),
     ) -> IntelligenceConfigResponse:
         config_dir = _resolve_existing_config_dir(app_runtime)
@@ -1402,14 +1462,15 @@ def create_app(
         responses=error_responses,
     )
     def config_member(
-        person_id: str,
+        person_id: MemberDirectoryName,
         _: None = Depends(require_token),
     ) -> PersonConfigSnapshot:
         config_dir = _resolve_member_config_dir(app_runtime)
-        revisions = config_repository(config_dir).revisions(
-            person_config_paths(person_id)
-        )
         try:
+            stored_person_config_dir(config_dir, person_id)
+            revisions = config_repository(config_dir).revisions(
+                stored_person_config_paths(person_id)
+            )
             snapshot: PersonConfigSnapshot = (
                 SimplePersonSetupService().read_person_config(
                     config_dir=config_dir,
@@ -1426,7 +1487,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_update(
-        person_id: str,
+        person_id: MemberDirectoryName,
         request: PersonUpdateInput,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
@@ -1463,7 +1524,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_delete(
-        person_id: str,
+        person_id: MemberDirectoryName,
         request: MemberDeleteRequest,
         _: None = Depends(require_token),
     ) -> ConfigWriteResponse:
@@ -1476,7 +1537,7 @@ def create_app(
                     person_id=person_id,
                 ),
                 report=lambda: config_repository(config_dir).revisions(
-                    person_config_paths(person_id)
+                    stored_person_config_paths(person_id)
                 ),
             )
         except SetupServiceError as exc:
@@ -1632,7 +1693,7 @@ def create_app(
         responses={**error_responses, 404: {"model": ApiError}},
     )
     def config_member_avatar(
-        person_id: str,
+        person_id: PersonId,
         token_query: str | None = Query(default=None, alias="token"),
         provided: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
     ) -> Response:
@@ -1659,7 +1720,7 @@ def create_app(
         responses=error_responses,
     )
     def config_member_avatar_upload(
-        person_id: str,
+        person_id: PersonId,
         file: UploadFile = File(...),  # noqa: B008
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
@@ -1695,7 +1756,7 @@ def create_app(
         responses=error_responses,
     )
     async def config_member_avatar_github(
-        person_id: str,
+        person_id: PersonId,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)
@@ -1738,7 +1799,7 @@ def create_app(
         responses=error_responses,
     )
     async def config_member_avatar_slack(
-        person_id: str,
+        person_id: PersonId,
         _: None = Depends(require_token),
     ) -> AvatarMutationResponse:
         config_dir = _resolve_member_config_dir(app_runtime)

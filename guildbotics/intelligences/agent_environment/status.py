@@ -11,7 +11,6 @@ set of words.
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -54,7 +53,7 @@ from guildbotics.intelligences.cli_agents import (
     CliAgentInfo,
 )
 from guildbotics.utils.i18n_tool import t
-from guildbotics.utils.processes import launching_app_name
+from guildbotics.utils.safe_paths import filesystem_permission_problem
 
 #: Which part of the device a refusal is about, so whoever shows it can point
 #: at what to do: the runtime this device lacks, the shared declaration (or
@@ -270,19 +269,6 @@ def filesystem_status() -> tuple[ResolvedAccess, str]:
             error=exc,
         )
     return access, ""
-
-
-def filesystem_permission_problem(path: Path) -> str:
-    """Describe a permission refusal in the same words for every caller."""
-    if sys.platform == "darwin" and path.is_relative_to(Path.home() / "Documents"):
-        app = launching_app_name()
-        return t(
-            "intelligences.agent_environment.filesystem.macos_documents",
-            app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
-            if app
-            else "",
-        )
-    return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
 def _tool_status(agent: CliAgentInfo) -> ToolStatus:

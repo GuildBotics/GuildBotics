@@ -1,6 +1,5 @@
 import {
   ActionIcon,
-  Alert,
   Badge,
   Button,
   Card,
@@ -342,18 +341,6 @@ function AccessCard({
             {t("setup.intelligence.grants.add")}
           </Button>
         </Group>
-        {judged?.valid && judged.sensitive ? (
-          <Alert
-            color="warning"
-            variant="light"
-            title={t("setup.intelligence.grants.sensitiveTitle")}
-          >
-            {t("setup.intelligence.grants.sensitiveBody", {
-              path: typed,
-              reason: judged.sensitive,
-            })}
-          </Alert>
-        ) : null}
         {judged?.valid && !judged.present && scope === "document" ? (
           <Text size="xs" c="dimmed">
             {t("setup.intelligence.grants.absentHere")}

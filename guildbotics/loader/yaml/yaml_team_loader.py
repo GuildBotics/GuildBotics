@@ -1,9 +1,17 @@
 from pathlib import Path
 
+from yaml import YAMLError
+
 from guildbotics.entities import Person, Project, Team
 from guildbotics.loader import TeamLoader
 from guildbotics.loader.yaml.yaml_role_loader import YamlRoleLoader
 from guildbotics.utils.fileio import get_config_path, load_yaml_file
+from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.person_id import (
+    MemberConfigError,
+    iter_member_config_directories,
+    validate_member_directory_name,
+)
 
 
 class YamlTeamLoader(TeamLoader):
@@ -31,12 +39,22 @@ class YamlTeamLoader(TeamLoader):
         if members_dir.exists():
             role_loader = YamlRoleLoader(project.get_language_code())
             Person.DEFINED_ROLES = role_loader.load_all()
-            for d in members_dir.iterdir():
-                if not d.is_dir():
-                    continue
-
-                person_data = load_yaml_file(d / "person.yml")
-                person = Person.model_validate(person_data)
+            for d in iter_member_config_directories(members_dir):
+                try:
+                    validate_member_directory_name(d.name)
+                    person_data = load_yaml_file(d / "person.yml")
+                    person = Person.model_validate(person_data)
+                except YAMLError as exc:
+                    raise MemberConfigError(
+                        d / "person.yml", ValueError(t("member_config.invalid_yaml"))
+                    ) from exc
+                except ValueError as exc:
+                    raise MemberConfigError(d / "person.yml", exc) from exc
+                if person.person_id != d.name:
+                    raise MemberConfigError(
+                        d / "person.yml",
+                        ValueError(t("member_config.directory_mismatch")),
+                    )
                 role_loader.extract_roles_from_profile(person)
 
                 members.append(person)

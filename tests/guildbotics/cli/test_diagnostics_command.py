@@ -34,11 +34,12 @@ def _record(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Seed a workspace data root with an index and two transcripts."""
-    run_dir = tmp_path / ".guildbotics" / "local" / "run"
+    root = tmp_path / "workspace"
+    run_dir = root / ".guildbotics" / "local" / "run"
     sessions = run_dir / "sessions"
     sessions.mkdir(parents=True)
-    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(tmp_path))
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(GUILDBOTICS_WORKSPACE_ROOT, str(root))
+    monkeypatch.chdir(root)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
 
@@ -83,7 +84,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         ),
         encoding="utf-8",
     )
-    return tmp_path
+    return root
 
 
 def _run(*args: str) -> dict[str, Any]:

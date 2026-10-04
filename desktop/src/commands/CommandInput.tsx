@@ -230,11 +230,17 @@ export function CommandInput({
             <Group key={entry.path} gap="xs" wrap="nowrap">
               <Text size="xs" ff="monospace" style={{ flex: 1, wordBreak: "break-all" }}>
                 {entry.path}
+                {entry.problem ? (
+                  <Text component="span" style={{ display: "block" }} size="xs" c="red">
+                    {entry.problem}
+                  </Text>
+                ) : null}
               </Text>
               {entry.kind === "file" ? (
                 <Button
                   size="compact-xs"
                   variant="light"
+                  disabled={Boolean(entry.problem)}
                   onClick={() => void settleUnreachable(entry, "copy")}
                 >
                   {t("commands.inputPathCopy")}

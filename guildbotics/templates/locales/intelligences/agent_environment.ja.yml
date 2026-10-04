@@ -24,7 +24,7 @@ ja:
     nothing_loaded: "アーカイブ %{path} に image がありません。"
   filesystem:
     unavailable: "この GuildBotics はディレクトリ「%{path}」にアクセスできません: %{error}"
-    macos_documents: "この GuildBotics を起動しているアプリ%{app}に、システム設定 → プライバシーとセキュリティ → ファイルとフォルダ で書類フォルダへのアクセスを許可してください。"
+    macos_documents: "この GuildBotics は「%{path}」にアクセスできません。起動しているアプリ%{app}に、システム設定 → プライバシーとセキュリティ → ファイルとフォルダ で書類フォルダへのアクセスを許可してください。"
     launching_app: "（いまは %{app}）"
     permission_denied: "この GuildBotics は「%{path}」を列挙できません。起動しているアプリまたはユーザーに、このディレクトリへのアクセスを許可してください。"
   declaration:

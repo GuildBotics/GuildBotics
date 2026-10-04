@@ -70,6 +70,18 @@ const resources = {
         },
       },
       sync: {
+        registeredWorkspaces: {
+          title: "Registered workspaces",
+          body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
+          empty: "No workspaces are registered on this device.",
+          removeLabel: "Remove registration",
+          remove: "Remove registration for {{path}}",
+          active: "Selected",
+          confirm:
+            "Remove {{path}} from this device’s protected workspaces? Its files remain, but agents may access the location if you grant its directory later.",
+          confirmLabel: "Confirm removal",
+          cancel: "Cancel",
+        },
         indicator: {
           aria: "Synchronization: {{state}}",
         },
@@ -1067,9 +1079,6 @@ const resources = {
             choose: "Choose a directory",
             accessFor: "Access to {{path}}",
             remove: "Remove {{path}}",
-            sensitiveTitle: "This directory holds credentials or provider state",
-            sensitiveBody:
-              "Granting {{path}} lets agents read what is under {{reason}}. Add it only if the work really needs it.",
             duplicate: "Already added.",
           },
           advanced: "Advanced settings",
@@ -2102,6 +2111,18 @@ const resources = {
         },
       },
       sync: {
+        registeredWorkspaces: {
+          title: "登録済みのワークスペース",
+          body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
+          empty: "この端末に登録されたワークスペースはありません。",
+          removeLabel: "登録を外す",
+          remove: "{{path}}の登録を外す",
+          active: "選択中",
+          confirm:
+            "{{path}}をこの端末の保護対象から外しますか？ファイルは残りますが、あとでディレクトリへのアクセスを許可すると、エージェントがこの場所へアクセスできます。",
+          confirmLabel: "登録解除を確定",
+          cancel: "キャンセル",
+        },
         indicator: {
           aria: "同期: {{state}}",
         },
@@ -2110,7 +2131,7 @@ const resources = {
           subtitle: "自分で用意した Hub を経由して、このワークスペースを他のマシンと共有します。",
         },
         device: {
-          title: "device・Hub 設定",
+          title: "端末とHub 設定",
           subtitle:
             "ワークスペースではなく、このマシン自体に属する設定です。Hub 役のマシンでは、ここ以外の設定は必要ありません。",
         },
@@ -2253,7 +2274,7 @@ const resources = {
           failed: "サービスオーナーを読み取れませんでした",
         },
         sshKey: {
-          title: "この device の SSH 鍵",
+          title: "この端末の SSH 鍵",
           body: "この公開鍵を Hub マシンの authorized_keys へ追加してください。GuildBotics が代行はしません。その操作自体が、そのマシンへのアクセス権を持っていることの証明になるためです。",
           create: "鍵を作成する",
           copy: "コピー",
@@ -2578,7 +2599,7 @@ const resources = {
           shortcuts: "ショートカット",
           sync: "同期",
           verification: "検証",
-          device: "device・Hub",
+          device: "端末とHub",
         },
         verification: {
           title: "検証",
@@ -2793,9 +2814,6 @@ const resources = {
             choose: "ディレクトリを選択",
             accessFor: "{{path}} のアクセス",
             remove: "{{path}} を削除",
-            sensitiveTitle: "認証情報やプロバイダの状態を含むディレクトリです",
-            sensitiveBody:
-              "{{path}} を許可すると、{{reason}} 配下をエージェントが読めるようになります。作業に本当に必要な場合だけ追加してください。",
             duplicate: "追加済みです。",
           },
           advanced: "詳細設定",

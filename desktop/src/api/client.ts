@@ -36,6 +36,8 @@ export function memberAvatarUrl(personId: string, cacheBust?: number | string): 
 }
 
 export type ConfigStatus = {
+  workspace_problem?: string;
+  input_store_problem?: string;
   cwd: string;
   workspace: string | null;
   config_dir: string | null;
@@ -68,6 +70,7 @@ export type TeamSummary = {
   // else the first active non-human member in person id order. Empty only when
   // no member can execute commands.
   default_person_id: string;
+  problem?: string;
 };
 
 export type RuntimeMemberRoutine = {
@@ -313,6 +316,7 @@ export type CommandInputPathStatus = {
   /** The path as the agent inside the environment names it: what the input field carries. */
   guest_path: string;
   grant: CommandInputGrantSuggestion | null;
+  problem: string;
 };
 
 export type CommandInputPathsResponse = {
@@ -945,7 +949,6 @@ export type GrantEvaluation = {
   valid: boolean;
   reason: string;
   present: boolean;
-  sensitive: string;
 };
 
 // A document or local path grant as it resolves on this device. `path` is for
@@ -1470,6 +1473,14 @@ export async function trustHub(body: HubTrustRequest): Promise<HubConnection> {
 
 export async function getDeviceSshKey(): Promise<DeviceSshKey> {
   return request("/hub/ssh-key");
+}
+
+export async function getRegisteredWorkspaces(): Promise<string[]> {
+  return request("/device/workspaces");
+}
+
+export async function unregisterWorkspace(workspace: string): Promise<string[]> {
+  return request("/device/workspaces", { method: "DELETE", body: { workspace_dir: workspace } });
 }
 
 export async function createDeviceSshKey(): Promise<DeviceSshKey> {

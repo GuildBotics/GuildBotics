@@ -160,6 +160,51 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into the isolated environment ([microsandbox #1692](https://github.com/superradcompany/microsandbox/issues/1692)). If any directory mounted for a command is there -- the working directory of a writable command, a filesystem grant, the workspace itself, or GuildBotics' data under the home directory -- the command is refused at startup with the path and the reason. Move the directory outside the OS temporary directory and try again.
 
+Every host mount source is opened one path component at a time without following
+symbolic links or Windows reparse points, before GuildBotics reads or creates
+anything there. Use the real directory path. On macOS, only the fixed OS aliases
+`/tmp`, `/var`, and `/etc` are saved as `/private/...`. The checked name is passed
+unchanged to microsandbox; it is checked again immediately before startup.
+
+A host source containing a protected directory is refused, including a read-only
+source. Protected directories include credentials, `~/.guildbotics`, every
+registered workspace's `.guildbotics`, and device-local `deny` entries, even when
+absent. User working directories and grants also refuse paths inside protected directories. Share a safe child
+directory instead of a parent containing private data; a `deny` does not carve a
+hole in a larger mount. Existing filesystem objects are compared by identity,
+so another spelling of the same directory does not bypass this check.
+
+Opening, creating, or joining a workspace registers its location on this device.
+Credential symlinks protect their original location, intermediate links, and actual destination; they
+do not prevent commands in unrelated directories. Loops stop after 40 link hops.
+Missing or non-directory components before `..` remain untraversable; their inspected
+prefix stays protected without blocking unrelated locations. The trusted installed package
+is canonicalized once before inspection, and code and templates share that root.
+The **Device and hub → Registered workspaces** list includes inactive workspaces;
+remove an entry only when its state no longer needs protection. Removing the entry
+does not delete files. The selected workspace cannot be unregistered, and removing
+another entry requires confirmation. Invalid startup selections leave Desktop
+running with no workspace selected and show the refusal reason. Unavailable old
+locations can still be unregistered. Malformed grants allow workspace selection
+for editing or synchronization, but commands remain refused until repaired.
+Copy sources must remain outside protected state. Leaf links are refused. Ancestor
+links such as `~/Dropbox/report.pdf` are accepted only when the parent contains fixed
+credential state and cannot be shared with a turn; otherwise select the file in its
+real directory. The preview shows the refusal and offers no unsafe grant. Status
+polling retries an unavailable input store and clears its dedicated alert after recovery.
+Member IDs accept lowercase letters, digits, `_` and `-`, excluding Windows reserved names.
+Invalid stored configurations show their filename and can be edited, renamed or deleted
+in setup, while runtime loading remains refused until repair. Existing directory names
+such as `Alice`, `alice.bak`, names with internal spaces, and Unicode names are addressable
+for repair. Names with separators, drive or stream suffixes, control characters, or trailing
+dots or spaces must be renamed or removed on disk using the reported filename.
+Directories without `person.yml` are not members. Copying checks the 20MiB
+limit throughout the read, including files that grow during the copy. Workspace
+locations must be outside their own grants and
+the exchange directory. Move an existing workspace out of those locations before
+opening it. Host-created hard links to protected files are not distinguished by copy
+admission; turns cannot create such links because protected files are not mounted.
+
 - **Working directory**: the command's working directory is bound
   read/write at the same path it has on the host (a read-only command gets an
   empty directory of the microVM's own there instead). A command the host
@@ -174,8 +219,9 @@ On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into 
   member's clone (`<workspace>/.guildbotics/local/clones/<person_id>`), where
   the turns of ticket and chat work run, is bound read/write at its host
   path too, created first when missing. It is opened for its own sake, so it
-  is mounted even under the cover over the workspace's `.guildbotics` when
-  the command works in the workspace root. Only the running member's clone
+  is an explicit host-owned child of protected state. A writable command cannot
+  work in the workspace root, which contains `.guildbotics`; use a safe project
+  directory or the member's clone. Only the running member's clone
   is mounted, and a read-only command gets none.
 - **Inspected workspace state**: only for the turns of a command that
   declares it (`inspects`), parts of the workspace's own state are bound
@@ -200,10 +246,10 @@ On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into 
   spelled as the environment names it (`/c/...` on Windows, never `C:\...`), so
   the agent opens it as written.
   **This device's own settings**: extra paths (absolute paths allowed, must
-  exist) and `deny` entries that close a corner of what is open, in
+  exist) and `deny` entries that protect directories from sharing, in
   `local/cli_agent_filesystem_grants.yml`, never synchronized. Credential
-  directories (`~/.ssh`, a provider's own directory) and the workspace's own
-  `.guildbotics` are always closed by a built-in deny. Nothing else of the host exists inside: not its PATH, not
+  directories (`~/.ssh`, a provider's own directory) and registered workspace
+  state are protected by the same source checks. Nothing else of the host exists inside: not its PATH, not
   its other clones, not its keychain. The agent's tools are the environment's
   own, declared in `config/intelligences/agent_environment.yml` (see
   [`guildbotics environment`](cli_reference.md#guildbotics-environment)).
@@ -223,7 +269,7 @@ On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into 
     - path: .cache/uv
       access: read_write
   deny:
-    - Documents/shared-documents/private
+    - Documents/private
   ```
 
 - **Resources**: `resources:` in `intelligences/agent_environment.yml` assigns
@@ -288,8 +334,7 @@ On Windows, directories under `%LOCALAPPDATA%\Temp` cannot be bind-mounted into 
   confines it the same way whatever provider runs it. Every directory bound from the host is
   read-only, the exchange directory and `read_write` grants included, and the
   working directory is an empty directory of the microVM's own: writable,
-  holding nothing of the host, and discarded with the microVM, like the empty
-  directory that covers a denied corner. The workspace's `network:`
+  holding nothing of the host, and discarded with the microVM. The workspace's `network:`
   does not apply: only the provider's API domains and the member broker are
   reachable. Its sessions are bound from a store of its own
   (`agent_environment/<provider>/read-only/`), so the conversation resumes,
@@ -380,9 +425,8 @@ credentials, or a later successful turn by any member, clears the failure.
 Other errors leave the last known result unchanged. Past failures are guidance,
 not startup refusals, so another turn can retry. A file bound from the store (an
 account file) follows a file rewritten in place, but renaming another file over it
-fails. A name in the store is used only when what it resolves to on the device lies
-inside the store: a link a login or a turn left names a place on the device rather than
-in the guest, and following it would bind a directory of the device into a turn.
+fails. Each store path component is opened without following links; a link left
+by a login or turn refuses startup.
 
 ### Logins kept outside the microVM
 

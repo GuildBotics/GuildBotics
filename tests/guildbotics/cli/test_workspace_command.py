@@ -1,11 +1,74 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from guildbotics.cli import main
 from guildbotics.cli.workspace import workspace
+
+
+@pytest.mark.parametrize("entry", ["use", "member"])
+def test_workspace_permission_refusal_is_a_click_error(monkeypatch, tmp_path, entry):
+    from guildbotics.intelligences.agent_environment import contract
+    from guildbotics.utils import workspace_state
+    from guildbotics.utils.safe_paths import (
+        HostPathPermissionError,
+        filesystem_permission_problem,
+    )
+
+    denied = tmp_path / "protected"
+    problem = filesystem_permission_problem(denied)
+
+    def refuse(*args, **kwargs):
+        raise HostPathPermissionError(denied)
+
+    monkeypatch.setattr(workspace_state, "inspect_host_path", refuse)
+    monkeypatch.setattr(contract, "inspect_host_path", refuse)
+    args = (
+        ["workspace", "use", str(denied)]
+        if entry == "use"
+        else ["member", "--workspace", str(denied), "help"]
+    )
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 1
+    assert problem in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("scope", ["config/intelligences", "local"])
+def test_workspace_use_can_select_and_repair_bad_grants(monkeypatch, tmp_path, scope):
+    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "repair"
+    path = project / ".guildbotics" / scope / "cli_agent_filesystem_grants.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text("documents: [")
+    result = CliRunner().invoke(main, ["workspace", "use", str(project)])
+    assert result.exit_code == 0, result.output
+    assert project.exists()
+
+
+@pytest.mark.parametrize("command", [["environment", "status"], ["secrets", "status"]])
+@pytest.mark.parametrize("explicit", [True, False])
+def test_every_cli_workspace_selection_refuses_exchange_locations(
+    monkeypatch, command, explicit
+):
+    from guildbotics.utils.workspace_state import registered_workspaces
+
+    target = Path.home() / "Documents/GuildBotics/workspace"
+    target.mkdir(parents=True)
+    before = registered_workspaces()
+    args = [*command]
+    if explicit:
+        args = [command[0], "--workspace", str(target), *command[1:]]
+    else:
+        monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(target))
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "inside granted directory" in result.output
+    assert registered_workspaces() == before
 
 
 def test_workspace_use_persists_active_workspace(monkeypatch, tmp_path):

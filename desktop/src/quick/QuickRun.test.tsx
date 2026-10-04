@@ -182,6 +182,7 @@ beforeEach(() => {
         reachable: true,
         guest_path: path,
         grant: null,
+        problem: "",
       })),
     }));
   vi.mocked(getTeam)

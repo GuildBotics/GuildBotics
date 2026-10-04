@@ -131,7 +131,11 @@ const MEMORY_FOCUS_SEARCH_PARAMS = [
 export function App() {
   const { t, i18n } = useTranslation();
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfigStatus,
+    refetchInterval: (query) => (query.state.data?.input_store_problem ? 2000 : false),
+  });
   const configured = Boolean(config.data?.project_file_exists);
   const runtimeStatus = useQuery({
     queryKey: ["scheduler"],
@@ -218,6 +222,17 @@ export function App() {
       </aside>
 
       <section className="workspace" style={{ position: "relative" }}>
+        {config.data?.workspace_problem ? (
+          <Alert color="danger" role="alert">
+            {config.data.workspace_problem}
+          </Alert>
+        ) : null}
+        {config.data?.input_store_problem &&
+        config.data.input_store_problem !== config.data.workspace_problem ? (
+          <Alert color="danger" role="alert">
+            {config.data.input_store_problem}
+          </Alert>
+        ) : null}
         <div
           data-tauri-drag-region
           style={{

@@ -30,11 +30,13 @@ from guildbotics.commands.discovery import resolve_named_command
 from guildbotics.commands.errors import CommandError, CommandFailedError
 from guildbotics.commands.metadata import CommandAccess, command_access
 from guildbotics.commands.models import CommandOutcome
-from guildbotics.intelligences.agent_environment.contract import exchange_dir
-from guildbotics.intelligences.agent_environment.spec import guest_path
-from guildbotics.intelligences.agent_environment.status import (
-    filesystem_permission_problem,
+from guildbotics.intelligences.agent_environment.contract import (
+    AccessContractError,
+    exchange_dir,
+    protected_paths,
+    validate_mount_source,
 )
+from guildbotics.intelligences.agent_environment.spec import guest_path
 from guildbotics.intelligences.agent_runtime.environment import (
     command_environment,
     command_path,
@@ -60,6 +62,7 @@ from guildbotics.runtime.workflow_invocation import (
     WorkflowSource,
 )
 from guildbotics.utils.fileio import get_member_clone_path, get_workspace_root
+from guildbotics.utils.safe_paths import normalize_host_path
 
 __all__ = [
     "HostRunLedger",
@@ -137,9 +140,9 @@ def host_command_cwd() -> Path:
     """
     cwd = exchange_dir()
     try:
-        cwd.mkdir(parents=True, exist_ok=True)
-    except PermissionError as exc:
-        raise CommandError(filesystem_permission_problem(cwd)) from exc
+        cwd = validate_mount_source(cwd, protected_paths(), grant=True, create=True)
+    except AccessContractError as exc:
+        raise CommandError(str(exc)) from exc
     return cwd
 
 
@@ -197,7 +200,7 @@ def _prepared(
         context,
         command_name,
         [str(arg) for arg in command_args],
-        cwd,
+        normalize_host_path(cwd),
         path,
         command_access(path),
     )

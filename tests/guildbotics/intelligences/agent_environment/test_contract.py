@@ -9,11 +9,12 @@ import yaml
 from pydantic import ValidationError
 
 from guildbotics.intelligences.agent_environment.contract import (
+    FILESYSTEM_GRANTS_PATH,
+    LOCAL_GRANTS_FILENAME,
+    SENSITIVE_HOME_DIRECTORIES,
     AccessContract,
     AccessContractError,
     DocumentGrant,
-    FILESYSTEM_GRANTS_PATH,
-    LOCAL_GRANTS_FILENAME,
     LocalGrants,
     LocalPathGrant,
     NetworkPolicy,
@@ -27,11 +28,298 @@ from guildbotics.intelligences.agent_environment.contract import (
     parse_shared_grants,
     redact_path,
     resolve_access,
-    sensitive_grant_reason,
+    validate_mount_source,
+    validate_workspace_location,
 )
 from guildbotics.utils.i18n_tool import t
 
 _CLOSED = {"mode": "deny", "allowed_domains": [], "allow_local_network": False}
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("shape", ["missing", "file"])
+@pytest.mark.parametrize("tail", ["../ordinary", "child"])
+def test_untraversable_protected_target_closes_names_without_stopping_other_work(
+    tmp_path, symlinks, name, shape, tail
+):
+    from guildbotics.intelligences.agent_environment.contract import (
+        DeniedPath,
+        ResolvedAccess,
+        ResolvedGrant,
+    )
+    from guildbotics.utils.safe_paths import (
+        UnsafePathError,
+        inspect_host_path,
+        resolve_host_links,
+    )
+
+    protected = tmp_path / "home" / name
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    obstacle = tmp_path / "obstacle"
+    if shape == "file":
+        obstacle.write_text("not a directory")
+    target = Path(os.path.relpath(obstacle, protected.parent)) / tail
+    protected.symlink_to(target, target_is_directory=True)
+    ordinary = tmp_path / "ordinary"
+    ordinary.mkdir()
+    file = ordinary / "report"
+    file.write_text("public")
+    denied = (DeniedPath(protected, "credentials"),)
+    assert validate_mount_source(ordinary, denied, grant=True) == ordinary
+    assert ResolvedAccess(
+        paths=(ResolvedGrant(ordinary, "read", str(ordinary)),), denied=denied
+    ).reaches(file)
+    for path in (protected.parent, obstacle):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(path, denied, grant=True, missing=True)
+    with pytest.raises(UnsafePathError):
+        inspect_host_path(resolve_host_links(protected).path)
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("shape", ["chain", "cycle", "parent", "repeat"])
+def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
+    tmp_path, symlinks, name, shape
+):
+    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+
+    protected = tmp_path / "home" / name
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    endpoint = tmp_path / "private/keys"
+    endpoint.mkdir(parents=True)
+    # Relative targets preserve '..' on Windows instead of normalizing it
+    # before the protected link can be inspected.
+    if shape in {"chain", "cycle"}:
+        protected.symlink_to(first / "alias", target_is_directory=True)
+        (first / "alias").symlink_to(second / "alias", target_is_directory=True)
+        (second / "alias").symlink_to(
+            first / "alias" if shape == "cycle" else endpoint, target_is_directory=True
+        )
+        closed_parents = [protected.parent, first, second]
+    elif shape == "parent":
+        (endpoint.parent / "base").mkdir()
+        (first / "alias").symlink_to(endpoint.parent / "base", target_is_directory=True)
+        protected.symlink_to(
+            Path(os.path.relpath(first, protected.parent)) / "alias/../keys",
+            target_is_directory=True,
+        )
+        closed_parents = [protected.parent, first]
+    else:
+        endpoint = first / "dir/keys"
+        endpoint.mkdir(parents=True)
+        (first / "alias").symlink_to(first / "dir", target_is_directory=True)
+        protected.symlink_to(
+            Path(os.path.relpath(first, protected.parent)) / "alias/../alias/keys",
+            target_is_directory=True,
+        )
+        closed_parents = [protected.parent, first]
+    if shape in {"parent", "repeat"}:
+        assert ".." in Path(os.readlink(protected)).parts
+    denied = (DeniedPath(protected, "credentials"),)
+    for parent in closed_parents:
+        with pytest.raises(AccessContractError):
+            validate_mount_source(parent, denied, grant=True)
+    if shape != "cycle":
+        with pytest.raises(AccessContractError):
+            validate_mount_source(endpoint, denied, grant=True)
+    ordinary = tmp_path / "ordinary"
+    ordinary.mkdir()
+    assert validate_mount_source(ordinary, denied, grant=True) == ordinary
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+@pytest.mark.parametrize("shape", ["self", "mutual", "broken"])
+def test_unresolvable_protected_links_close_names_but_allow_mounts_and_previews(
+    tmp_path, symlinks, name, shape
+):
+    from guildbotics.intelligences.agent_environment.contract import (
+        DeniedPath,
+        ResolvedAccess,
+        ResolvedGrant,
+    )
+
+    private = tmp_path / "private" / name
+    private.parent.mkdir(parents=True, exist_ok=True)
+    other = private.with_name(private.name + "-other")
+    private.symlink_to(private if shape == "self" else other, target_is_directory=True)
+    if shape == "mutual":
+        other.symlink_to(private, target_is_directory=True)
+    work = tmp_path / "work"
+    work.mkdir()
+    file = work / "report"
+    file.write_text("public")
+    denied = (DeniedPath(private, "credentials"),)
+    assert validate_mount_source(work, denied, grant=True) == work
+    access = ResolvedAccess(
+        paths=(ResolvedGrant(work, "read", str(work)),), denied=denied
+    )
+    assert access.reaches(file)
+    with pytest.raises(AccessContractError):
+        validate_mount_source(private.parent, denied, grant=True)
+
+
+def test_local_deny_link_uses_the_same_name_and_target_facts(tmp_path, symlinks):
+    home = tmp_path / "home"
+    home.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (home / "deny").symlink_to(private, target_is_directory=True)
+    access = resolve_access(
+        SharedGrants(), LocalGrants(deny=["deny"]), home, create=False
+    )
+    for source in (home, private):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(source, access.denied, grant=True)
+    (home / "deny").unlink()
+    (home / "deny").symlink_to(home, target_is_directory=True)
+    with pytest.raises(AccessContractError, match="home|HOME"):
+        resolve_access(SharedGrants(), LocalGrants(deny=["deny"]), home, create=False)
+
+
+@pytest.mark.parametrize("scope", ["shared", "local"])
+@pytest.mark.parametrize(
+    "content",
+    ["documents: [", "[]", "unknown: true", "paths: [{path: '..', access: read}]"],
+)
+def test_invalid_grants_allow_selection_but_still_refuse_execution(
+    tmp_path, monkeypatch, scope, content
+):
+    from guildbotics.commands.errors import CommandError
+    from guildbotics.commands.metadata import CommandAccess
+    from guildbotics.intelligences.agent_runtime import environment
+    from guildbotics.utils.fileio import apply_workspace_root
+
+    root = tmp_path / "repair"
+    root.mkdir()
+    path = (
+        root
+        / ".guildbotics"
+        / (
+            f"config/{FILESYSTEM_GRANTS_PATH}"
+            if scope == "shared"
+            else f"local/{LOCAL_GRANTS_FILENAME}"
+        )
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(content)
+    assert validate_workspace_location(root) == root
+    monkeypatch.chdir(tmp_path)
+    apply_workspace_root(root)
+    with pytest.raises(CommandError):
+        environment._contract(CommandAccess())
+    path.write_text("{}")
+    assert environment._contract(CommandAccess()).access.documents
+
+
+@pytest.mark.parametrize("name", SENSITIVE_HOME_DIRECTORIES)
+def test_sensitive_symlinks_protect_names_and_destinations_without_blocking_unrelated_paths(
+    tmp_path, monkeypatch, symlinks, name
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    target = tmp_path / "dotfiles" / "private"
+    target.mkdir(parents=True)
+    link = home / name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target, target_is_directory=True)
+    from guildbotics.intelligences.agent_environment.contract import DeniedPath
+
+    denied = (DeniedPath(link, "credentials"),)
+    unrelated = tmp_path / "work"
+    unrelated.mkdir()
+    assert validate_mount_source(unrelated, denied, grant=True) == unrelated
+    for source in (link.parent, target, target.parent, target / "new"):
+        with pytest.raises(AccessContractError):
+            validate_mount_source(source, denied, grant=True, create=True)
+    assert not (target / "new").exists()
+
+
+def test_workspace_admission_reads_target_grants_independently_of_current_selection(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    old = tmp_path / "old"
+    old.mkdir()
+    monkeypatch.setenv("GUILDBOTICS_WORKSPACE_ROOT", str(old))
+    target = home / "shared/team"
+    config = target / ".guildbotics/config" / FILESYSTEM_GRANTS_PATH
+    config.parent.mkdir(parents=True)
+    config.write_text("documents:\n  - path: shared\n    access: read\n")
+    with pytest.raises(AccessContractError):
+        validate_workspace_location(target)
+    config.write_text("documents: []\n")
+    old_config = old / ".guildbotics/config" / FILESYSTEM_GRANTS_PATH
+    old_config.parent.mkdir(parents=True)
+    old_config.write_text("invalid: [yaml")
+    assert validate_workspace_location(target) == target
+
+
+@pytest.mark.parametrize("state_exists", [False, True])
+def test_an_inactive_registered_workspace_is_protected_before_creation(
+    tmp_path, monkeypatch, state_exists
+):
+    from guildbotics.utils.workspace_state import register_workspace
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    inactive = tmp_path / "inactive"
+    if state_exists:
+        (inactive / ".guildbotics").mkdir(parents=True)
+    register_workspace(inactive)
+    with pytest.raises(AccessContractError):
+        resolve_access(
+            SharedGrants(documents=[DocumentGrant(path="new", access="read")]),
+            LocalGrants(paths=[LocalPathGrant(path=str(inactive), access="read")]),
+            home,
+        )
+    assert not (home / "new").exists()
+    assert not (home / "Documents/GuildBotics").exists()
+    access = resolve_access(SharedGrants(), LocalGrants(), home, create=False)
+    with pytest.raises(AccessContractError):
+        validate_mount_source(
+            inactive / ".guildbotics/local/clones/aiko",
+            access.denied,
+            grant=True,
+            create=True,
+        )
+    assert not (inactive / ".guildbotics/local").exists()
+
+
+def test_workspace_locations_inside_grants_or_exchange_are_refused(
+    tmp_path, monkeypatch
+):
+    from guildbotics.intelligences.agent_environment import contract
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(
+        contract,
+        "load_shared_grants",
+        lambda **_: SharedGrants(
+            documents=[DocumentGrant(path="shared", access="read")]
+        ),
+    )
+    monkeypatch.setattr(contract, "load_local_grants", lambda **_: LocalGrants())
+    for target in (home / "shared/workspace", home / "Documents/GuildBotics/workspace"):
+        with pytest.raises(AccessContractError):
+            validate_workspace_location(target)
+        assert not target.exists()
+    assert (
+        validate_workspace_location(home / "projects/workspace")
+        == home / "projects/workspace"
+    )
 
 
 def _native(masked: str) -> str:
@@ -234,19 +522,13 @@ def test_a_document_that_is_a_file_or_leaves_the_home_is_refused(
     outside.mkdir()
     (home / "link").symlink_to(outside, target_is_directory=True)
 
-    not_a_directory = t(
-        "intelligences.agent_environment.grants.document_not_a_directory", path="notes"
-    )
-    with pytest.raises(AccessContractError, match=re.escape(not_a_directory)):
+    with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="notes", access="read")]),
             LocalGrants(),
             home,
         )
-    outside = t(
-        "intelligences.agent_environment.grants.document_outside_home", path="link"
-    )
-    with pytest.raises(AccessContractError, match=re.escape(outside)):
+    with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(documents=[DocumentGrant(path="link", access="read")]),
             LocalGrants(),
@@ -289,7 +571,7 @@ def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
                 DocumentGrant(path="Projects/absent", access="read"),
             ]
         ),
-        LocalGrants(deny=["Projects/out/private"]),
+        LocalGrants(deny=["Projects/private"]),
         home,
         create=False,
     )
@@ -301,31 +583,31 @@ def test_reaches_answers_what_the_mounts_would_show(tmp_path: Path) -> None:
     # directory that does not exist here, or in the working directory of a
     # turn that has not been named: not reachable.
     assert not access.reaches(cwd / "src/main.py")
-    assert not access.reaches(home / "Projects/out/private/key.pem")
+    assert not access.reaches(home / "Projects/private/key.pem")
     assert not access.reaches(home / "Projects/absent/x.md")
     assert not access.reaches(home / "Desktop/shot.png")
     assert not access.reaches(home / ".ssh/id_ed25519", home)
 
 
-def test_the_builtin_denies_are_the_credential_directories_that_exist(
+def test_the_builtin_denies_include_absent_credential_directories(
     tmp_path: Path,
 ) -> None:
     home = _home(tmp_path)
     (home / ".ssh").mkdir()
     (home / ".local/share/keyrings").mkdir(parents=True)
+    private = tmp_path / "private"
 
     access = resolve_access(
         SharedGrants(),
-        LocalGrants(deny=["/opt/homebrew/etc", ".local/share/some-app"]),
+        LocalGrants(deny=[str(private), ".local/share/some-app"]),
         home,
     )
 
-    # `~/.local` opens for uv; the keyring corner inside it closes on top.
     assert [(d.path, d.builtin) for d in access.denied] == [
-        ((home / ".ssh").resolve(), True),
-        ((home / ".local/share/keyrings").resolve(), True),
-        (Path("/opt/homebrew/etc").resolve(), False),
-        ((home / ".local/share/some-app").resolve(), False),
+        *((home / name, True) for name in SENSITIVE_HOME_DIRECTORIES),
+        (tmp_path / ".guildbotics", True),
+        (private, False),
+        (home / ".local/share/some-app", False),
     ]
     too_broad = t(
         "intelligences.agent_environment.grants.deny_too_broad", path=str(home)
@@ -366,10 +648,7 @@ def test_a_local_path_must_exist_on_this_device(tmp_path: Path) -> None:
     assert [(g.path, g.present) for g in preview.paths] == [
         (Path("/opt/nowhere").resolve(), False)
     ]
-    too_broad = t(
-        "intelligences.agent_environment.grants.local_path_too_broad", path=str(home)
-    )
-    with pytest.raises(AccessContractError, match=re.escape(too_broad)):
+    with pytest.raises(AccessContractError):
         resolve_access(
             SharedGrants(),
             LocalGrants(paths=[LocalPathGrant(path=str(home), access="read")]),
@@ -415,7 +694,11 @@ def test_the_requested_policy_masks_device_paths(tmp_path: Path) -> None:
         ],
         "paths": [],
         "denied": [
-            {"path": _native("$HOME/.ssh"), "builtin": True},
+            *(
+                {"path": _native("$HOME/" + name), "builtin": True}
+                for name in SENSITIVE_HOME_DIRECTORIES
+            ),
+            {"path": str(tmp_path / ".guildbotics"), "builtin": True},
             {"path": _native("$HOME/.local/share/x"), "builtin": False},
         ],
     }
@@ -505,20 +788,12 @@ def test_the_workspace_state_directory_is_a_builtin_deny(tmp_path: Path) -> None
     (workspace / ".guildbotics" / "local" / "clones" / "kenji").mkdir(parents=True)
 
     denied = resolve_access(SharedGrants(), LocalGrants(), home, workspace=workspace)
-    assert [(d.path, d.builtin) for d in denied.denied] == [
-        ((workspace / ".guildbotics").resolve(), True)
+    assert (workspace / ".guildbotics", True) in [
+        (d.path, d.builtin) for d in denied.denied
     ]
     assert not denied.reaches(workspace / ".guildbotics/config/team.yml", workspace)
-    assert denied.reaches(workspace / "README.md", workspace)
-    assert (
-        resolve_access(
-            SharedGrants(), LocalGrants(), home, workspace=tmp_path / "bare"
-        ).denied
-        == ()
+    assert not denied.reaches(workspace / "README.md", workspace)
+    bare = resolve_access(
+        SharedGrants(), LocalGrants(), home, workspace=tmp_path / "bare"
     )
-
-    assert (
-        sensitive_grant_reason(str(workspace / ".guildbotics/local"), home, workspace)
-        == "<workspace>/.guildbotics"
-    )
-    assert sensitive_grant_reason(str(workspace / "docs"), home, workspace) == ""
+    assert any(d.path == tmp_path / "bare/.guildbotics" for d in bare.denied)

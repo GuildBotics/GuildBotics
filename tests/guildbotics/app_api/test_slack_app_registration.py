@@ -191,8 +191,11 @@ def test_verify_defaults_missing_tokens_to_a_missing_result(client: TestClient) 
 
 
 @pytest.mark.usefixtures("slack_ok")
+@pytest.mark.parametrize(
+    "person_id", ["alice", "Alice", "alice.bak", "alice backup", "あいこ"]
+)
 def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, person_id: str
 ) -> None:
     """Empty fields mean "keep the stored token", so they are not missing."""
     seen: dict = {}
@@ -207,11 +210,12 @@ def test_verify_checks_the_stored_tokens_of_the_member_being_edited(
 
     response = client.post(
         "/config/members/slack-app/verify",
-        json={"bot_token": "", "app_token": "", "person_id": "alice"},
+        json={"bot_token": "", "app_token": "", "person_id": person_id},
         headers=AUTH_HEADERS,
     )
 
-    assert seen["person_id"] == "alice"
+    assert response.status_code == HTTP_OK
+    assert seen["person_id"] == person_id
     body = response.json()
     assert body["bot_ok"] is True
     assert body["app_token_ok"] is True

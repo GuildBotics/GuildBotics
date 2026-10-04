@@ -11,6 +11,7 @@ from guildbotics.utils.fileio import (
     get_primary_config_path,
     get_template_path,
 )
+from guildbotics.utils.person_id import person_config_directory
 
 
 def get_shared_commands_root() -> Path:
@@ -41,7 +42,9 @@ def iter_candidate_paths(
     extensions = [""] if identifier_path.suffix else list(get_command_extensions())
     rel_bases: list[str] = []
     if person_id is not None:
-        rel_bases.append(f"team/members/{person_id}/commands/{identifier}")
+        rel_bases.append(
+            (person_config_directory(person_id) / "commands" / identifier).as_posix()
+        )
     rel_bases.append(f"commands/{identifier}")
 
     primary_dir = get_primary_config_dir()

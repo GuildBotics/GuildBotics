@@ -95,6 +95,7 @@ function described(
     reachable,
     guest_path: path,
     grant,
+    problem: "",
   }));
 }
 
@@ -147,7 +148,7 @@ describe("CommandInput", () => {
       path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
       guest_path: "/Users/me/Documents/GuildBotics/tmp/s1/ab12-shot.png",
     });
-    renderInput("describe");
+    renderInput("describe", "/work/clone");
     const input = screen.getByRole("textbox", { name: t("commands.message") });
 
     await drop(input, ["/Users/me/Desktop/shot.png", "/Users/me/gone.txt"]);
@@ -167,6 +168,27 @@ describe("CommandInput", () => {
       ),
     );
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("shows the protection reason and refuses copying or granting a private path", async () => {
+    checkMock.mockResolvedValue({
+      paths: [
+        {
+          ...described([["/home/u/.ssh/key", "file", false]])[0],
+          problem: "Private credentials are protected",
+        },
+      ],
+    });
+    renderInput();
+    const input = screen.getByRole("textbox", { name: t("commands.message") });
+    await drop(input, ["/home/u/.ssh/key"]);
+    expect(await screen.findByText("Private credentials are protected")).toBeInTheDocument();
+    const copy = screen.getByRole("button", { name: t("commands.inputPathCopy") });
+    expect(copy).toBeDisabled();
+    expect(screen.queryByRole("button", { name: t("commands.inputPathGrant") })).toBeNull();
+    fireEvent.click(copy);
+    expect(copyMock).not.toHaveBeenCalled();
+    expect(input).toHaveValue("");
   });
 
   it("keeps the original and opens its folder's grant when the user allows it; a folder is never copied", async () => {
@@ -245,6 +267,7 @@ describe("CommandInput", () => {
         reachable: true,
         guest_path: path,
         grant: null,
+        problem: "",
       })),
     }));
     Object.defineProperty(window, "devicePixelRatio", { configurable: true, value: 2 });
@@ -349,6 +372,7 @@ describe("appendCommandInputPaths", () => {
           reachable: false,
           guest_path: "/c/Users/me/Desktop/shot.png",
           grant: { scope: "document", path: "Desktop" },
+          problem: "",
         },
       ],
     });

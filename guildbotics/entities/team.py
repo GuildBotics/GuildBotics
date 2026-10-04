@@ -4,9 +4,10 @@ from typing import Any, ClassVar
 
 import langcodes
 from langcodes import Language
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from guildbotics.entities.task import ScheduledCommand
+from guildbotics.utils.person_id import validate_person_id
 
 KNOWN_LANGUAGE_NAMES = {
     "en": "English",
@@ -229,6 +230,8 @@ class Person(BaseModel):
     DEFINED_ROLES: ClassVar[dict[str, Role]] = {}
 
     person_id: str = Field(..., description="The unique identifier for the person.")
+
+    _person_id = field_validator("person_id")(validate_person_id)
     name: str = Field(..., description="The name of the person.")
     is_active: bool = Field(
         default=False,

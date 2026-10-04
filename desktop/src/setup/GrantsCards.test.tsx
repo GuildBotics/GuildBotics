@@ -105,7 +105,6 @@ function evaluation(overrides: Partial<GrantEvaluation>): GrantEvaluation {
     valid: true,
     reason: "",
     present: true,
-    sensitive: "",
     ...overrides,
   };
 }
@@ -129,7 +128,8 @@ beforeEach(() => {
       path,
       access,
       present: path !== "Projects/new",
-      sensitive: path.startsWith(".ssh") ? "~/.ssh" : "",
+      valid: !path.startsWith(".ssh"),
+      reason: path.startsWith(".ssh") ? "Protected path: ~/.ssh" : "",
     });
   });
 });
@@ -405,7 +405,7 @@ describe("directory access cards", () => {
     ).toBeDisabled();
   });
 
-  it("judges a typed document path, warns on sensitive ones, and adds it", async () => {
+  it("rejects a protected path and adds an ordinary document path", async () => {
     const { user, settle } = userOnFakeClock();
     const onShared = vi.fn();
     render(<Harness onShared={onShared} />);
@@ -420,12 +420,17 @@ describe("directory access cards", () => {
     await user.clear(path);
     await user.type(path, ".ssh");
     await settle();
-    await documents.findByText(t("setup.intelligence.grants.sensitiveTitle"));
+    await documents.findByText("Protected path: ~/.ssh");
+    expect(add).toBeDisabled();
+    expect(onShared).not.toHaveBeenCalled();
+    await user.clear(path);
+    await user.type(path, "Documents/notes");
+    await settle();
     await waitFor(() => expect(add).toBeEnabled());
     await user.click(add);
 
     expect(onShared).toHaveBeenLastCalledWith({
-      documents: [{ path: ".ssh", access: "read" }],
+      documents: [{ path: "Documents/notes", access: "read" }],
     });
     // The emptied field does not flash "already added" while the old text settles.
     expect(path).toHaveValue("");

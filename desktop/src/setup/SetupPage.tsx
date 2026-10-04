@@ -750,6 +750,7 @@ export function SetupPage() {
 
   return (
     <Stack gap="lg">
+      {teamSummary?.problem ? <Alert color="danger">{teamSummary.problem}</Alert> : null}
       <Group justify="space-between" align="flex-start">
         <Box>
           <Title order={2}>

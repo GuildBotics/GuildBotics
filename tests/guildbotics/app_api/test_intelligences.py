@@ -42,6 +42,27 @@ def _template_codex_effort() -> dict:
     return dict(data.get("effort", {}))
 
 
+def test_saving_a_protected_parent_refuses_the_whole_update(tmp_path: Path) -> None:
+    from guildbotics.utils.workspace_state import register_workspace
+
+    inactive = tmp_path / "data/workspace"
+    register_workspace(inactive)
+    config = tmp_path / "config"
+    request = IntelligenceConfigUpdateRequest(
+        config_dir=config,
+        filesystem_grants=SharedGrants(
+            documents=[DocumentGrant(path="safe-new", access="read")]
+        ),
+        local_grants=LocalGrants(
+            paths=[LocalPathGrant(path=str(inactive.parent), access="read")]
+        ),
+    )
+    with pytest.raises(SetupServiceError):
+        IntelligenceConfigService().update_config(request)
+    assert not config.exists()
+    assert not (Path.home() / "safe-new").exists()
+
+
 def _write_yaml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     save_yaml_file(path, data)
@@ -409,6 +430,7 @@ def test_team_environment_update_preserves_all_intelligence_settings(
     tmp_path: Path,
 ) -> None:
     """A partial environment save leaves every omitted intelligence field intact."""
+    (Path.home() / ".cache/uv").mkdir(parents=True)
     service = IntelligenceConfigService()
     service.update_config(_team_update_request(tmp_path))
     base = _team_intelligences(tmp_path)
@@ -1355,6 +1377,8 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / "config"
+    (Path.home() / ".cache/uv").mkdir(parents=True)
+    private = tmp_path / "private"
     grants_file = _team_intelligences(config_dir) / "cli_agent_filesystem_grants.yml"
     local_file = tmp_path / "local/cli_agent_filesystem_grants.yml"
     _write_yaml(grants_file, {"documents": [{"path": "Documents", "access": "read"}]})
@@ -1372,7 +1396,7 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
             ),
             "local_grants": LocalGrants(
                 paths=[LocalPathGrant(path=".cache/uv", access="read_write")],
-                deny=["/opt/homebrew/etc"],
+                deny=[str(private)],
             ),
         }
     )
@@ -1384,8 +1408,8 @@ def test_a_team_save_replaces_the_grants_and_an_omitted_value_keeps_them(
     }
     # The device's own file lives beside the shared config, never inside it.
     assert load_yaml_file(local_file) == {
-        "paths": [{"path": ".cache/uv", "access": "read_write"}],
-        "deny": ["/opt/homebrew/etc"],
+        "paths": [{"path": str(Path(".cache/uv")), "access": "read_write"}],
+        "deny": [str(private)],
     }
 
 

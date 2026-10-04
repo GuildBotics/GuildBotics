@@ -46,6 +46,11 @@ from typing import Any
 from guildbotics.intelligences.agent_environment.auth_gateway import (
     CredentialUnavailableError,
 )
+from guildbotics.intelligences.agent_environment.contract import (
+    DeniedPath,
+    builtin_denied,
+    validate_mount_source,
+)
 from guildbotics.intelligences.agent_environment.credential_vault import (
     CredentialVaultError,
     HeldVaultLock,
@@ -77,6 +82,10 @@ from guildbotics.utils.fileio import (
     get_machine_state_path,
 )
 from guildbotics.utils.i18n_tool import t
+from guildbotics.utils.safe_paths import (
+    inspect_host_path,
+    read_host_file,
+)
 
 #: This device's per-provider stores, and the cache turns keep between them.
 STATE_ROOT = ("agent_environment",)
@@ -112,18 +121,10 @@ def cache_dir() -> Path:
     return get_machine_state_path(*STATE_ROOT, CACHE_DIR)
 
 
-def _inside(root: Path, entry: str) -> Path | None:
-    """``entry`` under ``root``, or None when it resolves to a place outside.
-
-    The store is bound by what its names resolve to on the device: the
-    runtime binds a mount's resolved path. A link in it was spelled for the
-    guest's file system by whatever wrote it -- a turn under a prompt's
-    direction, or an earlier GuildBotics' login -- and one that leads out of
-    the store would bind any place on the device into the environment. So
-    it is treated as absent, wherever on the way it stands.
-    """
+def _inside(root: Path, entry: str) -> Path:
+    """Inspect a persisted entry before reading or creating anything there."""
     path = root / entry
-    return path if path.resolve().is_relative_to(root.resolve()) else None
+    return inspect_host_path(path, missing=True, directory=False).path
 
 
 def credential_state(tool: CliAgentInfo) -> VaultState:
@@ -201,7 +202,11 @@ def read_only_state_dir(tool: CliAgentInfo) -> Path:
 
 
 def bind_state(
-    tool: CliAgentInfo, home: Path | None = None, *, read_only: bool = False
+    tool: CliAgentInfo,
+    home: Path | None = None,
+    *,
+    read_only: bool = False,
+    denied: tuple[DeniedPath, ...] | None = None,
 ) -> tuple[EnvironmentMount, ...]:
     """What a turn of ``tool`` binds of this device's store.
 
@@ -216,29 +221,35 @@ def bind_state(
     one read-only turn changes in them no turn reads.
     """
     provision = tool.provision
+    denied = tuple(
+        dict.fromkeys(
+            (
+                *(denied or ()),
+                *builtin_denied(home),
+            )
+        )
+    )
     shared = provider_state_dir(tool)
     store = read_only_state_dir(tool) if read_only else shared
     root = f"{guest_home(home)}/{provision.state_root}"
     mounts = []
     for entry in provision.persisted:
         host = _inside(store, entry.rstrip("/"))
-        if host is None:
-            continue
         if entry.endswith("/"):
-            host.mkdir(parents=True, exist_ok=True, mode=0o700)
+            validate_mount_source(host, denied, create=True)
         elif read_only:
             account = _inside(shared, entry)
-            if account is None or not account.is_file():
+            if not account.is_file():
                 host.unlink(missing_ok=True)
                 continue
-            host.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            atomic_write_bytes(host, account.read_bytes())
+            validate_mount_source(host.parent, denied, create=True)
+            atomic_write_bytes(host, read_host_file(account))
         elif not host.is_file():
             continue
         mounts.append(EnvironmentMount(f"{root}/{entry.rstrip('/')}", host, False))
     if not read_only:
         cache = cache_dir()
-        cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+        cache = validate_mount_source(cache, denied, create=True)
         mounts.append(EnvironmentMount(f"{guest_home(home)}/.cache", cache, False))
     return tuple(mounts)
 

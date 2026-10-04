@@ -37,12 +37,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mappin
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import replace
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-import guildbotics
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import CommandAccess, InspectionScope
 from guildbotics.intelligences.agent_environment.auth_gateway import (
@@ -55,6 +54,7 @@ from guildbotics.intelligences.agent_environment.contract import (
     load_local_grants,
     load_shared_grants,
     resolve_access,
+    validate_mount_source,
 )
 from guildbotics.intelligences.agent_environment.credential_vault import (
     CredentialVaultError,
@@ -83,7 +83,6 @@ from guildbotics.intelligences.agent_environment.spec import (
 from guildbotics.intelligences.agent_environment.status import (
     DeviceStatus,
     device_status,
-    filesystem_permission_problem,
 )
 from guildbotics.intelligences.agent_environment.toolchain import (
     ToolchainError,
@@ -113,6 +112,7 @@ from guildbotics.runtime.person_lease import (
     current_person_lease,
 )
 from guildbotics.utils.fileio import (
+    PACKAGE_ROOT,
     get_template_path,
     get_workspace_config_dir,
     get_workspace_local_path,
@@ -120,6 +120,7 @@ from guildbotics.utils.fileio import (
 from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.log_utils import get_logger
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
+from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
 
 #: What every provider process starts with, beside the tool's own state
 #: variables: git must never wait for a terminal that is not there.
@@ -150,8 +151,8 @@ _MAX_LOG_LINE_BYTES = 1 << 14
 _LOG_DRAIN_SECONDS = 2.0
 #: A line the entry logs: its level, then its message.
 _LOG_LINE = re.compile(r"(DEBUG|INFO|WARNING|ERROR|CRITICAL) (.*)", re.DOTALL)
-_PACKAGE = Path(guildbotics.__file__).resolve().parent
-CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / _PACKAGE.name), _PACKAGE, readonly=True)
+_PACKAGE = normalize_host_path(PACKAGE_ROOT)
+CODE_MOUNT = EnvironmentMount(str(CODE_ROOT / "guildbotics"), _PACKAGE, readonly=True)
 
 
 def code_path(path: Path) -> str:
@@ -211,7 +212,7 @@ def _inspected_mounts(
         name: EnvironmentMount(guest_path(path), path, readonly=True)
         for scope in sorted(scopes)
         for name, path in directories[scope].items()
-        if path.is_dir()
+        if inspect_host_path(path, missing=True).present
     }
 
 
@@ -308,10 +309,6 @@ def _contract(access: CommandAccess) -> AccessContract:
             access=resolve_access(load_shared_grants(), load_local_grants()),
             read_only=access.read_only,
         )
-    except PermissionError as exc:
-        raise CommandError(
-            filesystem_permission_problem(Path(exc.filename or Path.home()))
-        ) from exc
     except (AccessContractError, ToolchainError) as exc:
         raise CommandError(str(exc)) from exc
 
@@ -556,7 +553,10 @@ class _SharedEnvironment:
                 does not start.
         """
         try:
-            await self._boot(host)
+            try:
+                await self._boot(host)
+            except AccessContractError as exc:
+                raise CommandError(str(exc)) from exc
         except BaseException:
             gateways, self._gateways = self._gateways, {}
             for gateway in gateways.values():
@@ -585,7 +585,11 @@ class _SharedEnvironment:
             *(
                 mount
                 for each in tools
-                for mount in bind_state(each, read_only=self.contract.read_only)
+                for mount in bind_state(
+                    each,
+                    read_only=self.contract.read_only,
+                    denied=self.contract.access.denied,
+                )
             ),
             CODE_MOUNT,
             # The command reads the workspace's configuration, as it would on
@@ -597,7 +601,7 @@ class _SharedEnvironment:
         # What is mounted must exist before the microVM boots; a read-only
         # command mounts no clone and changes nothing on the host.
         if not self.contract.read_only:
-            self._clone.mkdir(parents=True, exist_ok=True)
+            validate_mount_source(self._clone, self.contract.access.denied, create=True)
         spec = build_environment_spec(
             self.contract,
             self._cwd,
@@ -919,12 +923,12 @@ def _reject_windows_temp_mounts(spec: AgentEnvironmentSpec) -> None:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if sys.platform != "win32" or not local_app_data:
         return
-    temporary = (Path(local_app_data) / "Temp").resolve()
-    temporary_path = PureWindowsPath(temporary)
+    temporary = normalize_host_path(Path(local_app_data) / "Temp")
+    temporary_facts = inspect_host_path(temporary, missing=True)
     for mount in spec.mounts:
-        if mount.host is not None and PureWindowsPath(
-            mount.host.resolve()
-        ).is_relative_to(temporary_path):
+        if mount.host is not None and temporary_facts.contains(
+            inspect_host_path(mount.host, directory=False)
+        ):
             raise CommandError(
                 t(
                     "intelligences.agent_environment.runtime.windows_temp_mount",
