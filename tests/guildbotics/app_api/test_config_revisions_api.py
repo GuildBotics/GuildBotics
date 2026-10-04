@@ -91,7 +91,8 @@ def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
     member.mkdir(parents=True)
     person = member / "person.yml"
     person.write_text(
-        f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n"
+        f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n",
+        encoding="utf-8",
     )
     with pytest.raises(MemberConfigError) as error:
         YamlTeamLoader(str(config_dir / "team")).load()
@@ -122,7 +123,9 @@ def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
         assert repaired in names
         assert (
             safe_load(
-                (config_dir / "team/members" / repaired / "person.yml").read_text()
+                (config_dir / "team/members" / repaired / "person.yml").read_text(
+                    encoding="utf-8"
+                )
             )["person_id"]
             == repaired
         )
@@ -156,7 +159,7 @@ def test_invalid_member_data_remains_listed_and_repairable(
     member = config_dir / "team/members/broken"
     member.mkdir(parents=True)
     person = member / "person.yml"
-    person.write_text(content)
+    person.write_text(content, encoding="utf-8")
     listing = client.get("/team", headers=AUTH_HEADERS)
     assert listing.status_code == HTTP_OK
     assert "broken" in [p["person_id"] for p in listing.json()["members"]]

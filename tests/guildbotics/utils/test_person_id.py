@@ -75,15 +75,7 @@ def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry
             == value
         )
         return
-    data = dict(
-        config_dir=tmp_path,
-        person_type="agent",
-        person_id=value,
-        person_name="Aiko",
-        is_active=True,
-        github_username="aiko",
-        git_email="aiko@example.com",
-    )
+    data = {**data_for(tmp_path), "person_id": value}
     with pytest.raises(ValueError):
         if entry == "person":
             Person(person_id=value, name="Aiko")
@@ -136,15 +128,15 @@ def test_member_identifiers_cannot_escape_any_person_path(tmp_path, value, entry
 
 
 def data_for(config_dir):
-    return dict(
-        config_dir=config_dir,
-        person_type="agent",
-        person_id="aiko",
-        person_name="Aiko",
-        is_active=True,
-        github_username="aiko",
-        git_email="aiko@example.com",
-    )
+    return {
+        "config_dir": config_dir,
+        "person_type": "agent",
+        "person_id": "aiko",
+        "person_name": "Aiko",
+        "is_active": True,
+        "github_username": "aiko",
+        "git_email": "aiko@example.com",
+    }
 
 
 def test_valid_member_identifier_is_preserved(tmp_path):
@@ -183,14 +175,17 @@ def test_member_config_messages_use_localized_keys(tmp_path, language, shape):
         team = tmp_path / "team"
         member = team / "members/alice"
         member.mkdir(parents=True)
-        (team / "project.yml").write_text("name: Test\nlanguage: en\n")
+        (team / "project.yml").write_text(
+            "name: Test\nlanguage: en\n", encoding="utf-8"
+        )
         path = member / "person.yml"
         path.write_text(
             {
                 "fields": "person_id: Alice\nname: Test\n",
                 "yaml": "person_id: [",
                 "mismatch": "person_id: bob\nname: Test\n",
-            }[shape]
+            }[shape],
+            encoding="utf-8",
         )
         with pytest.raises(MemberConfigError) as error:
             YamlTeamLoader(str(team)).load()
