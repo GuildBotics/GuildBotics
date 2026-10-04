@@ -146,8 +146,8 @@ def test_reference_states_cross_cutting_rules():
     assert "Never use `gh`" in text
     assert "When a needed read has no member command, ask a human" in text
     # Where a hand-over from the Desktop arrives, and where results go.
-    assert "`~/Documents/GuildBotics/tmp/`" in text
-    assert "never leave a result there" in text
+    assert "read-only copies GuildBotics keeps" in text
+    assert "never leave a result beside them" in text
     assert "under `~/Documents/GuildBotics/`" in text
 
 

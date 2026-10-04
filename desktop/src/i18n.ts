@@ -1893,7 +1893,7 @@ const resources = {
         inputPathGrant: "Allow this folder",
         inputPathDismiss: "Do not use this file",
         inputPathHint:
-          "Agents reach only the working directory and the folders allowed under Settings → AI. A copy is placed in ~/Documents/GuildBotics/tmp and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
+          "Agents reach only the working directory and the folders allowed under Settings → AI. A read-only copy is kept by GuildBotics and removed when the app closes: enough for reading. To let the agent work on the original, allow its folder instead; the path stays in the input.",
         advanced: "Detailed settings",
         cwd: "Working directory",
         cwdDescription: "Blank uses the exchange folder: {{cwd}}",
@@ -3940,7 +3940,7 @@ const resources = {
         inputPathGrant: "このフォルダを許可する",
         inputPathDismiss: "このファイルは使わない",
         inputPathHint:
-          "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは ~/Documents/GuildBotics/tmp に置かれアプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
+          "エージェントが届くのは、作業ディレクトリと、設定 → AI で許可したフォルダだけです。コピーは GuildBotics が読み取り専用で保持し、アプリの終了時に消えるので、読ませるだけなら十分です。原本をそのまま扱わせたいときはフォルダを許可してください。パスは入力欄に残ります。",
         advanced: "詳細設定",
         cwd: "作業ディレクトリ",
         cwdDescription: "空欄の場合は受け渡しフォルダを使います: {{cwd}}",

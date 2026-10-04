@@ -235,7 +235,7 @@ def test_api_starts_unselected_when_input_store_cannot_be_initialized(
 
     monkeypatch.setattr(store, "_start", fail)
     with TestClient(
-        api.create_app(session_token="secret", command_input_file_store=store)
+        create_app(session_token="secret", command_input_file_store=store)
     ) as client:
         response = client.get("/config/status", headers=AUTH_HEADERS)
         assert response.status_code == HTTP_OK
@@ -3431,3 +3431,39 @@ async def test_command_event_preserves_authentication_cause(
     assert events[-1][1]["code"] == (
         "cli_agent_authentication" if category == "authentication" else ""
     )
+
+
+@pytest.mark.asyncio
+async def test_a_desktop_run_reads_the_files_its_session_handed_over(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The App API's input session directory goes with every command it runs,
+    for the command's microVM to mount read-only."""
+    runtime = AppRuntime(EventBus())
+    store = CommandInputFileStore(root=tmp_path / "inputs")
+    create_app(session_token="secret", runtime=runtime, command_input_file_store=store)
+    team = Team(
+        project=Project(name="demo"),
+        members=[Person(person_id="bot", name="Bot", is_active=True)],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_get_context",
+        lambda message="": type("ContextStub", (), {"team": team})(),
+    )
+
+    ran: list[Any] = []
+
+    async def run(command: Any) -> CommandOutcome:
+        ran.append(command)
+        return CommandOutcome(result="done", text_output="done")
+
+    stub_commands(monkeypatch, run)
+    store.start()
+    try:
+        await runtime.run_command(CommandRunRequest(command="x", person="bot"))
+        [command] = ran
+        assert command.inputs == store.directory
+        assert command.inputs.parent == tmp_path / "inputs"
+    finally:
+        store.close()

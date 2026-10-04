@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -50,6 +49,7 @@ from guildbotics.runtime.member_invocation import (
     GuestProcessError,
     current_member_invocation,
 )
+from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.person_profile import build_member_communication_style
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
 
@@ -986,7 +986,7 @@ def _unpack(archive: IO[bytes], destination: Path) -> Unpacked:
             raise MemberCapabilityError(str(exc)) from exc
     # A process that ran out of time may still hold the copy open (on Windows
     # it cannot be deleted then); the failure is what the command reports.
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as held:
+    with host_temporary_directory("guildbotics-artifact-") as held:
         copy = Path(held) / "artifact.zip"
         with copy.open("wb") as file:
             copyfileobj(archive, file)

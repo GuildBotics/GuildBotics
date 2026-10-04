@@ -9,10 +9,13 @@ Filesystem: every granted directory -- the working directory, the documents,
 the device-local paths -- is mounted at the same path it has on the host, and
 the guest's home directory is the host's home path, so a path means the same
 thing on both sides: what the user typed, what the Desktop shows, and what the
-provider's session state records all agree. The working directory, and the
-worktrees the command works in beside it (the running member's clone), are
-read-write; a grant is read-only when it says so. A read-only contract makes
-every grant read-only, the working directory an empty directory of the
+provider's session state records all agree. The worktrees the command works
+in beside its working directory (the running member's clone) are read-write;
+a grant is read-only when it says so. The working directory itself opens
+nothing for writing: a command works in it directly only under a read-write
+grant, and anywhere else on a copy of it on the microVM's own disk, the host
+directory mounted read-only (:class:`WorktreeCopy`). A read-only contract
+makes every grant read-only, the working directory an empty directory of the
 microVM's own, and mounts no worktree, so what the turn may not change holds
 whatever provider runs it; only what
 GuildBotics binds itself (``mounts``) keeps its own access. Nothing else of the host is
@@ -48,19 +51,24 @@ from tzlocal import get_localzone_name, reload_localzone
 
 from guildbotics.intelligences.agent_environment.contract import (
     AccessContract,
+    AccessContractError,
     DeniedPath,
     NetworkPolicy,
     ResolvedAccess,
     builtin_denied,
     validate_mount_source,
 )
+from guildbotics.utils.i18n_tool import t
 from guildbotics.utils.os_language import os_ui_language
-from guildbotics.utils.safe_paths import normalize_host_path
+from guildbotics.utils.safe_paths import inspect_host_path, normalize_host_path
 
 #: How the guest names the host: the address at which a host port the policy
 #: opens (the member broker's) is reached from inside. The broker accepts it
 #: as a Host header, and a turn is told the broker's URL with it.
 GUEST_HOST_ALIAS = "host.microsandbox.internal"
+#: Where a working directory the command works on a copy of is mounted,
+#: read-only, for the copy to be made from (:class:`WorktreeCopy`).
+WORKTREE_SOURCE = "/run/guildbotics/worktree"
 
 _LOGGER = getLogger(__name__)
 
@@ -104,6 +112,22 @@ class EnvironmentNetwork:
 
 
 @dataclass(frozen=True, slots=True)
+class WorktreeCopy:
+    """A working directory the command works on a copy of.
+
+    No grant lets the command write there, so the host directory is mounted
+    read-only at :data:`WORKTREE_SOURCE` and copied onto the microVM's own
+    disk at the working directory's own path; what changed in the copy is
+    written back by the host when the command ends. ``excluded`` are the
+    directories under it, relative to it, that are mounts of their own (grants
+    nested in it): neither copied nor written back.
+    """
+
+    host: Path
+    excluded: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AgentEnvironmentSpec:
     """Everything the runtime needs to build one turn's microVM.
 
@@ -118,6 +142,17 @@ class AgentEnvironmentSpec:
     network: EnvironmentNetwork
     env: Mapping[str, str]
     denied: tuple[DeniedPath, ...] = ()
+    worktree: WorktreeCopy | None = None
+
+    @property
+    def directories(self) -> dict[str, bool]:
+        """The directories the microVM holds of its own, by where, and whether
+        read-only: its mounts, and the copy of the working directory on its
+        disk, which the command writes."""
+        held = {mount.guest: mount.readonly for mount in self.mounts}
+        if self.worktree is not None:
+            held[guest_path(self.worktree.host)] = False
+        return held
 
 
 def build_environment_spec(
@@ -169,15 +204,13 @@ def build_environment_spec(
     )
     cwd = normalize_host_path(cwd)
     access = ResolvedAccess(contract.access.documents, contract.access.paths, denied)
-    all_mounts = (
-        *_mounts(
-            access,
-            cwd,
-            () if contract.read_only else worktrees,
-            read_only=contract.read_only,
-        ),
-        *mounts,
+    opened, worktree = _mounts(
+        access,
+        cwd,
+        () if contract.read_only else worktrees,
+        read_only=contract.read_only,
     )
+    all_mounts = (*opened, *mounts)
     # Every host bind, including provider files and code/config mounts, uses
     # the same path and protected-ancestor check. Guest tmpfs needs no host.
     for mount in all_mounts:
@@ -199,6 +232,7 @@ def build_environment_spec(
         ),
         env={**host_environment(), **(env or {})},
         denied=denied,
+        worktree=worktree,
     )
 
 
@@ -294,15 +328,45 @@ def host_path(guest: str) -> Path:
 
 def _mounts(
     access: ResolvedAccess, cwd: Path, worktrees: Iterable[Path], *, read_only: bool
-) -> tuple[EnvironmentMount, ...]:
-    """The admitted host-backed mounts, outermost first.
+) -> tuple[tuple[EnvironmentMount, ...], WorktreeCopy | None]:
+    """The admitted host-backed mounts, outermost first, and the copy the
+    command works on when it works on one.
 
-    A read-only turn has nothing of its own to read, so its working directory
-    is an empty directory of the microVM's own rather than the host directory.
+    The working directory itself opens nothing for writing: only a grant
+    does. A read-only turn has nothing of its own to read, so its working
+    directory is an empty directory of the microVM's own. A command that may
+    write works in its working directory directly only under a read-write
+    grant; outside every grant it works on a copy, and the host directory --
+    its ``.git`` with it -- is mounted read-only (:class:`WorktreeCopy`).
+
+    Raises:
+        AccessContractError: For a command that may write, run in a directory
+            only a read-only grant opens.
     """
+    cwd_guest = guest_path(cwd)
+    granted = [g for g in (*access.documents, *access.paths) if g.present]
+    for grant in granted:
+        validate_mount_source(grant.path, access.denied, grant=True)
+    target = inspect_host_path(cwd, missing=True)
+    # The innermost grant holding the working directory decides, as its
+    # mount is the one over it.
+    covering = max(
+        (g for g in granted if inspect_host_path(g.path).contains(target)),
+        key=lambda g: len(g.path.parts),
+        default=None,
+    )
+    copied = not read_only and covering is None
+    if not read_only and covering is not None and covering.access == "read":
+        raise AccessContractError(
+            t("intelligences.agent_environment.runtime.read_only_cwd", path=cwd)
+        )
     opened: dict[str, EnvironmentMount] = {
-        guest_path(cwd): EnvironmentMount(
-            guest_path(cwd), None if read_only else cwd, readonly=False, user=True
+        cwd_guest: (
+            EnvironmentMount(WORKTREE_SOURCE, cwd, readonly=True, user=True)
+            if copied
+            else EnvironmentMount(
+                cwd_guest, None if read_only else cwd, readonly=False, user=True
+            )
         )
     }
     for worktree in worktrees:
@@ -310,22 +374,27 @@ def _mounts(
             guest_path(worktree),
             EnvironmentMount(guest_path(worktree), worktree, readonly=False),
         )
-    for grant in (*access.documents, *access.paths):
-        if grant.present:
-            validate_mount_source(grant.path, access.denied, grant=True)
-            opened.setdefault(
+    for grant in granted:
+        opened.setdefault(
+            guest_path(grant.path),
+            EnvironmentMount(
                 guest_path(grant.path),
-                EnvironmentMount(
-                    guest_path(grant.path),
-                    grant.path,
-                    readonly=read_only or grant.access == "read",
-                    user=True,
-                ),
-            )
-    mounts = list(opened.values())
-    return tuple(
-        sorted(mounts, key=lambda m: (len(PurePosixPath(m.guest).parts), m.guest))
+                grant.path,
+                readonly=read_only or grant.access == "read",
+                user=True,
+            ),
+        )
+    mounts = sorted(
+        opened.values(), key=lambda m: (len(PurePosixPath(m.guest).parts), m.guest)
     )
+    if not copied:
+        return tuple(mounts), None
+    excluded = tuple(
+        PurePosixPath(m.guest).relative_to(cwd_guest).as_posix()
+        for m in mounts
+        if PurePosixPath(m.guest).is_relative_to(cwd_guest)
+    )
+    return tuple(mounts), WorktreeCopy(cwd, excluded)
 
 
 def _network(

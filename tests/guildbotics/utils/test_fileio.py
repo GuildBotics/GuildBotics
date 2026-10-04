@@ -283,3 +283,21 @@ def test_get_config_path_uses_template_without_workspace(monkeypatch, tmp_path):
     resolved = get_config_path("team/project.yml")
 
     assert resolved == find_package_subdir(Path("templates")) / "team" / "project.yml"
+
+
+def test_the_host_keeps_its_temporary_files_under_its_own_state(
+    tmp_path, monkeypatch
+) -> None:
+    """Never in the OS temporary directory, which a grant may open."""
+    from guildbotics.utils.fileio import host_temporary_directory, host_temporary_root
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    root = host_temporary_root()
+
+    assert root == home / ".guildbotics" / "data" / "tmp"
+    assert root.is_dir()
+    with host_temporary_directory("x-") as held:
+        assert Path(held).parent == root

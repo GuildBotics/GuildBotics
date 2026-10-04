@@ -16,11 +16,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from guildbotics.hub import host
+from guildbotics.utils.fileio import host_temporary_directory
 from guildbotics.utils.openssh import (
     REMOTE_COMMAND_TIMEOUT_SECONDS,
     keygen_executable,
@@ -478,7 +478,7 @@ def _scan_host_keys(endpoint: HubEndpoint) -> list[str]:
     is ignored here. What the connection proves is which key was offered; being
     let in is a later question, asked by the hub commands.
     """
-    with tempfile.TemporaryDirectory(prefix="guildbotics-hostkey-") as directory:
+    with host_temporary_directory("guildbotics-hostkey-") as directory:
         store = Path(directory) / "known_hosts"
         command = [
             ssh_executable(),

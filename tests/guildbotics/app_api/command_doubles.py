@@ -41,6 +41,8 @@ class PreparedCommand:
     context: RunContext = field(repr=False)
     #: What the caller reads the command's result as, if it reads one.
     result_type: Any = None
+    #: The directory of the files the Desktop handed over for the command.
+    inputs: Path | None = None
 
 
 def stub_commands(

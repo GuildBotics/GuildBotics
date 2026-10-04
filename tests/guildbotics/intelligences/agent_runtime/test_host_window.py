@@ -251,7 +251,9 @@ async def test_a_turn_is_lent_its_login_and_what_it_was_refused_comes_back(
             (booted,) = _Booted.booted
             assert turn.home == booted.spec.home
             assert turn.mounts == {
-                mount.guest: mount.readonly for mount in booted.spec.mounts
+                **{mount.guest: mount.readonly for mount in booted.spec.mounts},
+                # The copy of the working directory, on the microVM's own disk.
+                guest_path(command.repository): False,
             }
             (base_url,) = {
                 turn.env[name] for name in tool.provision.credential_broker.base_url_env

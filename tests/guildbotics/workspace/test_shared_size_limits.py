@@ -138,6 +138,18 @@ NOT_SHARED = {
     "guildbotics/integrations/code_hosting_service.py:MAX_LOG_TAIL_BYTES": (
         "the local command output retained from one GitHub Actions job log"
     ),
+    "guildbotics/runtime/worktree_copy.py:MAX_WORKTREE_LIST_BYTES": (
+        "the list of files copied into a command's microVM, kept by the host"
+    ),
+    "guildbotics/runtime/worktree_copy.py:MAX_WORKTREE_CHANGE_BYTES": (
+        "a command's changes to its copy, into a temporary file of the host's"
+    ),
+    "guildbotics/runtime/worktree_copy.py:_CHUNK_BYTES": (
+        "how much of a copied file is hashed at a time"
+    ),
+    "guildbotics/intelligences/agent_runtime/worktree.py:_CHUNK_BYTES": (
+        "how much of a file in the working directory is hashed at a time"
+    ),
     "guildbotics/capabilities/artifact_archive.py:MAX_ARTIFACT_BYTES": (
         "a temporary GitHub Actions artifact outside shared workspace state"
     ),

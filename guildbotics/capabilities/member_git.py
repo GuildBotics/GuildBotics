@@ -24,7 +24,6 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -48,7 +47,11 @@ from guildbotics.runtime.member_invocation import (
     current_member_invocation,
 )
 from guildbotics.utils.advisory_lock import LockTimeoutError, held_lock
-from guildbotics.utils.fileio import get_member_clone_path, get_workspace_local_path
+from guildbotics.utils.fileio import (
+    get_member_clone_path,
+    get_workspace_local_path,
+    host_temporary_directory,
+)
 from guildbotics.utils.git_tool import (
     build_git_auth_environment,
     create_git_askpass_script,
@@ -845,7 +848,7 @@ def _send(origin: _Origin, clone: _GuestGit, refs: Mapping[str, str]) -> None:
     held = _present(clone, refs.values())
     wanted = sorted(ref for ref, name in refs.items() if name not in held)
     if wanted:
-        with tempfile.TemporaryDirectory(prefix="guildbotics-bundle-") as tmp:
+        with host_temporary_directory("guildbotics-bundle-") as tmp:
             bundle = Path(tmp, "send.bundle")
             origin.git(
                 "bundle",
@@ -907,7 +910,7 @@ def _receive(clone: _GuestGit, origin: _Origin, branch: str) -> str:
         origin.git("update-ref", ref, sha)
         return origin.head(branch)
     held = _present(clone, origin.refs().values())
-    with tempfile.TemporaryDirectory(prefix="guildbotics-bundle-") as tmp:
+    with host_temporary_directory("guildbotics-bundle-") as tmp:
         bundle = Path(tmp, "receive.bundle")
         clone(
             "bundle",

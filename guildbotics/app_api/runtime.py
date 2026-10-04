@@ -318,6 +318,9 @@ class AppRuntime:
         #: does not switch under any of them.
         self._accepted_command_ids: set[str] = set()
         self.on_workspace_changed: Callable[[Path], None] | None = None
+        #: The directory of the files the Desktop hands its commands, which
+        #: they read; none when this runtime hands over none.
+        self.command_inputs: Callable[[], Path | None] = lambda: None
         self._execution_status = ExecutionStatusPublisher()
         self._execution = TaskRunCoordinator(self._execution_status)
         self._cli_agent_usage = CliAgentUsageCache(
@@ -950,6 +953,7 @@ class AppRuntime:
                         execution.cwd(),
                     ),
                     result_type=execution.result_type,
+                    inputs=self.command_inputs(),
                 )
             except CommandError as exc:
                 raise execution.failure(exc) from exc

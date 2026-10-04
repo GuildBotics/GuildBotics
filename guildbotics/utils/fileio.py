@@ -59,6 +59,26 @@ def get_machine_state_path(*parts: str) -> Path:
     return get_machine_state_root().joinpath(*parts)
 
 
+def host_temporary_root() -> Path:
+    """Where the host keeps what it names by path for a moment: a script git
+    runs, a key a TLS context loads, a bundle git reads.
+
+    It is under the machine-local state root, which is protected state no
+    microVM ever mounts. The OS temporary directory is a place a grant may
+    open, and what the host runs or trusts there a command could change.
+    """
+    from guildbotics.utils.safe_paths import inspect_host_path
+
+    return inspect_host_path(get_machine_state_path("tmp"), create=True).path
+
+
+def host_temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
+    """A temporary directory under :func:`host_temporary_root`."""
+    return tempfile.TemporaryDirectory(
+        prefix=prefix, dir=host_temporary_root(), ignore_cleanup_errors=True
+    )
+
+
 #: What an in-progress atomic write is called while it exists. It is created
 #: beside its destination, which for a shared file means inside the tree the
 #: sync queue enumerates, so the queue has to be told to ignore it by name.

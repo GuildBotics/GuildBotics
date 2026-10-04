@@ -53,16 +53,10 @@ GrantAccess = Literal["read", "read_write"]
 #: The workspace-shared file: the directories under the home directory every
 #: agent may use for documents.
 FILESYSTEM_GRANTS_PATH = "intelligences/cli_agent_filesystem_grants.yml"
-#: The exchange directory, relative to the home: where what the user hands an
-#: agent from the Desktop is placed, and where an agent leaves what it makes
-#: for the user. Granted read-write to every workspace until its grants file
-#: says otherwise, so the two sides of a hand-over have one place to look.
+#: The exchange directory, relative to the home: where an agent leaves what it
+#: makes for the user, and the default working directory. Granted read-write
+#: to every workspace until its grants file says otherwise.
 EXCHANGE_DIRECTORY = "Documents/GuildBotics"
-#: Under the exchange directory: what GuildBotics itself placed there for one
-#: App API session -- pasted images, copies of files an agent could not
-#: otherwise reach -- emptied when that session ends. What is made for the
-#: user goes beside it, never inside.
-EXCHANGE_TMP_DIRECTORY = "tmp"
 #: The device-local file (under ``<workspace>/.guildbotics/local``): extra
 #: paths this machine alone opens or closes, never synchronized.
 LOCAL_GRANTS_FILENAME = "cli_agent_filesystem_grants.yml"
@@ -198,11 +192,6 @@ EXCHANGE_GRANT = DocumentGrant(path=EXCHANGE_DIRECTORY, access="read_write")
 def exchange_dir(home: Path | None = None) -> Path:
     """The exchange directory on this device."""
     return (home or Path.home()) / EXCHANGE_DIRECTORY
-
-
-def exchange_tmp_dir(home: Path | None = None) -> Path:
-    """Where GuildBotics places what it hands over for one App API session."""
-    return exchange_dir(home) / EXCHANGE_TMP_DIRECTORY
 
 
 class LocalGrants(BaseModel):
