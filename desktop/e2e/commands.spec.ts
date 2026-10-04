@@ -62,9 +62,9 @@ test("creates, edits and saves a shared command, and says why it cannot run here
 
   // Browser-preview mode cannot expose native dropped paths, but it exercises
   // the other half of the attachment contract: a pasted clipboard image is
-  // persisted by the REAL Local API in the exchange directory's tmp/ (under
-  // the stack's own HOME) and its path, as the environment spells it, enters
-  // the message.
+  // persisted by the REAL Local API in GuildBotics' own storage (under the
+  // stack's own HOME), which no microVM writes, and its path, as the
+  // environment spells it, enters the message.
   const message = page.getByRole("textbox", { name: "Input text" });
   await message.evaluate((element) => {
     const clipboard = new DataTransfer();
@@ -78,13 +78,13 @@ test("creates, edits and saves a shared command, and says why it cannot run here
     );
   });
   await expect(message).toHaveValue(
-    /[/\\]Documents[/\\]GuildBotics[/\\]tmp[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
+    /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\]session-[^/\\]+[/\\][a-f0-9]+\.png$/,
   );
   const pastedImage = await message.inputValue();
   const storedPath = pastedImage.match(/[/\\](session-[^/\\]+)[/\\]([a-f0-9]+\.png)$/);
   expect(storedPath).not.toBeNull();
   const [, session, name] = storedPath as RegExpMatchArray;
-  const storedImage = join(ctx.homeDir, "Documents", "GuildBotics", "tmp", session, name);
+  const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", session, name);
   expect(readFileSync(storedImage, "utf-8")).toBe("e2e-image");
 
   // The run is refused on this device, in the words the environment's
