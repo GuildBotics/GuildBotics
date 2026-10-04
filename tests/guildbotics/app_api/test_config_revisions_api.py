@@ -87,8 +87,10 @@ def test_invalid_stored_member_is_addressable_for_repair_but_never_execution(
     person.write_text(
         f"person_id: {'bob' if stored_name == 'alice' else stored_name}\nname: Legacy\nis_active: true\n"
     )
-    with pytest.raises(MemberConfigError, match=str(person)):
+    with pytest.raises(MemberConfigError) as error:
         YamlTeamLoader(str(config_dir / "team")).load()
+    assert error.value.filename == str(person)
+    assert str(person) in str(error.value)
     listing = client.get("/team", headers=AUTH_HEADERS)
     assert stored_name in [p["person_id"] for p in listing.json()["members"]]
     assert str(person) in listing.json()["problem"]

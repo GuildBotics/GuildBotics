@@ -32,13 +32,15 @@ def test_link_resolution_preserves_os_component_order(tmp_path, symlinks, shape)
     (public / "dir").mkdir()
     link = tmp_path / "link"
     callbacks = []
+    # Windows normalizes absolute link targets before storing them; relative
+    # targets retain the components whose traversal order this test verifies.
     if shape == "parent":
         (public / "alias").symlink_to(private / "base", target_is_directory=True)
-        link.symlink_to(public / "alias/../keys", target_is_directory=True)
+        link.symlink_to(Path("public/alias/../keys"), target_is_directory=True)
         expected = private / "keys"
     elif shape == "repeat":
         (public / "alias").symlink_to(public / "dir", target_is_directory=True)
-        link.symlink_to(public / "alias/../alias", target_is_directory=True)
+        link.symlink_to(Path("public/alias/../alias"), target_is_directory=True)
         expected = public / "dir"
     elif shape == "leaf":
         (public / "alias").symlink_to(private / "keys", target_is_directory=True)
@@ -47,7 +49,8 @@ def test_link_resolution_preserves_os_component_order(tmp_path, symlinks, shape)
     else:
         if shape == "file_parent":
             (public / "ordinary").write_text("file")
-        link.symlink_to(public / "ordinary/../dir", target_is_directory=True)
+        link.symlink_to(Path("public/ordinary/../dir"), target_is_directory=True)
+        assert ".." in Path(os.readlink(link)).parts
         if shape == "file_parent":
             with pytest.raises(UnsafePathError):
                 resolve_host_links(link)
@@ -57,6 +60,8 @@ def test_link_resolution_preserves_os_component_order(tmp_path, symlinks, shape)
         with pytest.raises(UnsafePathError):
             inspect_host_path(resolution.path)
         return
+    if shape != "leaf":
+        assert ".." in Path(os.readlink(link)).parts
     resolution = resolve_host_links(
         link, on_link=lambda path, leaf: callbacks.append((path, leaf))
     )

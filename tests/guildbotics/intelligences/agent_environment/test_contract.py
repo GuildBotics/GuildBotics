@@ -51,6 +51,8 @@ def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     second.mkdir()
     endpoint = tmp_path / "private/keys"
     endpoint.mkdir(parents=True)
+    # Relative targets preserve '..' on Windows instead of normalizing it
+    # before the protected link can be inspected.
     if shape in {"chain", "cycle"}:
         protected.symlink_to(first / "alias", target_is_directory=True)
         (first / "alias").symlink_to(second / "alias", target_is_directory=True)
@@ -61,14 +63,22 @@ def test_all_protected_links_close_intermediate_parents_and_actual_endpoint(
     elif shape == "parent":
         (endpoint.parent / "base").mkdir()
         (first / "alias").symlink_to(endpoint.parent / "base", target_is_directory=True)
-        protected.symlink_to(first / "alias/../keys", target_is_directory=True)
+        protected.symlink_to(
+            Path(os.path.relpath(first, protected.parent)) / "alias/../keys",
+            target_is_directory=True,
+        )
         closed_parents = [protected.parent, first]
     else:
         endpoint = first / "dir/keys"
         endpoint.mkdir(parents=True)
         (first / "alias").symlink_to(first / "dir", target_is_directory=True)
-        protected.symlink_to(first / "alias/../alias/keys", target_is_directory=True)
+        protected.symlink_to(
+            Path(os.path.relpath(first, protected.parent)) / "alias/../alias/keys",
+            target_is_directory=True,
+        )
         closed_parents = [protected.parent, first]
+    if shape in {"parent", "repeat"}:
+        assert ".." in Path(os.readlink(protected)).parts
     denied = (DeniedPath(protected, "credentials"),)
     for parent in closed_parents:
         with pytest.raises(AccessContractError):
